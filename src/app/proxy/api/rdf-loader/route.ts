@@ -1,3 +1,4 @@
+import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 
 function validateIri(value: unknown, field: string): string {
@@ -28,6 +29,7 @@ function validateIri(value: unknown, field: string): string {
 }
 
 export async function POST(request: Request) {
+  logProxyCaller(request, "rdf-loader.POST");
   try {
     const body = await request.json().catch(() => null);
     const sourceUrl = validateIri(body?.sourceUrl, "RDF source URL");

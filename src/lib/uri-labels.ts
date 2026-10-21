@@ -1,3 +1,5 @@
+import { proxyDebugHeaders } from "@/lib/proxy-debug";
+
 const STORAGE_KEY = "virtuoso-fct-uri-labels-v1";
 const uriToShortform = new Map<string, string>();
 const uriToLabel = new Map<string, string>();
@@ -6,18 +8,17 @@ let nextNamespaceNumber = 1;
 let hydrated = false;
 
 const observationQueue = new Map<string, { uri: string; isNamedGraph: boolean }>();
-let observationTimer: number | undefined;
+let observationLifecycleListenersRegistered = false;
 let observationFlushInFlight = false;
 const OBSERVATION_BATCH_SIZE = 500;
-const OBSERVATION_INTERVAL_MS = 15_000;
 
-function startObservationReporting() {
-  if (typeof window === "undefined" || observationTimer) return;
-  observationTimer = window.setInterval(() => { void flushUriObservations(); }, OBSERVATION_INTERVAL_MS);
+function registerObservationFlushOnPageExit() {
+  // URI observations are passive bookkeeping, not a polling task. Never issue
+  // periodic requests while the user is idle; flush only when the queue reaches
+  // its batch threshold or the page is actually leaving.
+  if (typeof window === "undefined" || observationLifecycleListenersRegistered) return;
+  observationLifecycleListenersRegistered = true;
   window.addEventListener("pagehide", () => { void flushUriObservations(true); });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") void flushUriObservations(true);
-  });
 }
 
 async function flushUriObservations(useBeacon = false) {
@@ -25,15 +26,23 @@ async function flushUriObservations(useBeacon = false) {
   const batch = Array.from(observationQueue.values()).slice(0, OBSERVATION_BATCH_SIZE);
   for (const item of batch) observationQueue.delete(item.uri);
   observationFlushInFlight = true;
-  const payload = JSON.stringify({ observations: batch });
+  const debug = proxyDebugHeaders("uri-observations", "UriLabelObservationBatch");
+  const payload = JSON.stringify({
+    observations: batch,
+    _debug: {
+      source: debug["X-Maestro-Debug-Source"],
+      component: debug["X-Maestro-Debug-Component"],
+      requestId: debug["X-Maestro-Debug-Request"],
+    },
+  });
   try {
     if (useBeacon && typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-      const sent = navigator.sendBeacon("/api/observations", new Blob([payload], { type: "application/json" }));
+      const sent = navigator.sendBeacon("/proxy/api/observations", new Blob([payload], { type: "application/json" }));
       if (!sent) for (const item of batch) observationQueue.set(item.uri, item);
     } else {
-      const response = await fetch("/api/observations", {
+      const response = await fetch("/proxy/api/observations", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...debug },
         body: payload,
         keepalive: useBeacon,
       });
@@ -107,7 +116,7 @@ export function rememberShortforms(input: unknown) {
     const isNamedGraph = record.isNamedGraph === true || /^(graph|ggg):\/\//i.test(uri);
     const priorObservation = observationQueue.get(uri);
     observationQueue.set(uri, { uri, isNamedGraph: isNamedGraph || priorObservation?.isNamedGraph === true });
-    startObservationReporting();
+    registerObservationFlushOnPageExit();
 
     // A label supplied by the FCT response takes precedence over compact
     // namespace labels and shortforms when one is available.

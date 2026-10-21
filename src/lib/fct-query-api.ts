@@ -1,10 +1,14 @@
 /**
- * Public query API. UI code reads the subscribed snapshot and performs mutations
- * through named operations exposed by useFctQuery(). Generic node operations are
- * available for schema-level edits; domain-specific operations preserve app
- * invariants such as scope and active-view placement.
+ * Public query API. UI code subscribes to the live source of truth through
+ * useFctQuery(). All derived-query construction and transformation is exposed
+ * through this module so UI components never edit query trees directly.
  */
-export { useFctQuery, serializeFctQuery, attachViewToPropertyInQueryTree } from "./fct-query";
+export {
+  useFctQuery,
+  serializeFctQuery,
+  attachViewToPropertyInQueryTree,
+  fctQueryTreeApi,
+} from "./fct-query";
 export type {
   FctQueryNode,
   FctQueryTree,
@@ -13,3 +17,16 @@ export type {
   FctValue,
   FctValueInput,
 } from "./fct-query";
+export {
+  createPropertyWidgetQuery,
+  createGroupValuesQuery,
+  createGroupMemberQuery,
+  createDistinctCountQuery,
+} from "./fct-query-derived";
+export type { QueryResultValue } from "./fct-query-derived";
+
+export {
+  setQueryViewAttributes,
+  createRecordDescriptionQuery,
+} from "./fct-query-derived";
+export type { DistinctCountKind } from "./fct-query-derived";

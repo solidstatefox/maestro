@@ -1,3 +1,4 @@
+import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 import { isIP } from "node:net";
 import { recordUriObservations } from "@/lib/uri-registry";
@@ -37,7 +38,11 @@ export async function POST(request: Request) {
     const endpoint = selectedEndpoint(request);
     if (!endpoint) return NextResponse.json({ error: "No FCT endpoint is configured." }, { status: 503 });
 
-    const body = await request.json().catch(() => null) as { observations?: unknown } | null;
+    const body = await request.json().catch(() => null) as {
+      observations?: unknown;
+      _debug?: { source?: unknown; component?: unknown; requestId?: unknown };
+    } | null;
+    logProxyCaller(request, "observations.POST", body?._debug);
     if (!Array.isArray(body?.observations)) {
       return NextResponse.json({ error: "Expected an observations array." }, { status: 400 });
     }

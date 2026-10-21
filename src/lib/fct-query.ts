@@ -129,6 +129,11 @@ function createValueNode(id: string, value: FctValueInput, defaultDatatype?: str
 }
 
 function serializeNode(node: FctQueryNode): string {
+  // An empty search means browse without full-text matching. Virtuoso FCT treats
+  // <text></text> as a search for the placeholder token (NULL), not as no filter.
+  // Keep the empty text node in the client query tree, but omit it on the wire.
+  if (node.name === "text" && !(node.text ?? "").trim() && node.children.length === 0) return "";
+
   const attributes = Object.entries(node.attributes)
     .map(([name, value]) => ` ${name}="${escapeXml(value)}"`)
     .join("");
@@ -180,6 +185,9 @@ export function serializeFctQuery(tree: FctQueryTree): string {
         : [node],
     );
   }
+
+  // Preserve <text></text> even when empty. The FCT API accepts an empty
+  // text element, and the proxy requires the element to be present.
 
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -281,8 +289,31 @@ export function attachViewToPropertyInQueryTree(
   return { ...sourceTree, attributes: { ...sourceTree.attributes }, children: attach(sourceTree.children) };
 }
 
-function createQueryStore() {
-  let state = createInitialState();
+function cloneQueryTree(tree: FctQueryTree): FctQueryTree {
+  const cloneNode = (node: FctQueryNode): FctQueryNode => ({
+    ...node,
+    attributes: { ...node.attributes },
+    children: node.children.map(cloneNode),
+  });
+  return {
+    ...tree,
+    attributes: { ...tree.attributes },
+    children: tree.children.map(cloneNode),
+  };
+}
+
+function isValidQueryTree(tree: unknown): tree is FctQueryTree {
+  if (!tree || typeof tree !== "object") return false;
+  const candidate = tree as Partial<FctQueryTree>;
+  return candidate.name === "query" &&
+    !!candidate.attributes && typeof candidate.attributes === "object" &&
+    Array.isArray(candidate.children);
+}
+
+function createQueryStore(initialTree?: FctQueryTree) {
+  let state: FctQueryState = initialTree
+    ? { tree: cloneQueryTree(initialTree), revision: 0 }
+    : createInitialState();
   const listeners = new Set<Listener>();
   function cloneNodes(nodes: FctQueryNode[]): FctQueryNode[] {
     return nodes.map((node) => ({
@@ -1561,6 +1592,109 @@ const globalForFctQuery = globalThis as typeof globalThis & {
 const fctQueryStore =
   globalForFctQuery.__fctQueryStoreV7 ??
   (globalForFctQuery.__fctQueryStoreV7 = createQueryStore());
+
+/**
+ * Tree-oriented facade over the same query manipulation engine used by the live
+ * store. Each operation receives a tree and returns a new tree; the supplied
+ * tree is cloned into an isolated store, so these operations never mutate the
+ * live source of truth. Omitting the tree starts from the current live query.
+ * An explicitly supplied empty query is valid and remains empty until edited.
+ */
+export const fctQueryTreeApi = {
+  getTree(tree?: FctQueryTree): FctQueryTree {
+    if (tree !== undefined) {
+      if (!isValidQueryTree(tree)) throw new TypeError("Invalid FCT query tree");
+      return cloneQueryTree(tree);
+    }
+    return cloneQueryTree(fctQueryStore.getSnapshot().tree);
+  },
+
+  setSearchText(tree: FctQueryTree | undefined, text: string): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setSearchText(text));
+  },
+  resetQuery(tree?: FctQueryTree): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.resetQuery());
+  },
+  setView(tree: FctQueryTree | undefined, type: string): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setView(type));
+  },
+  setQueryAttribute(tree: FctQueryTree | undefined, name: string, value: string | null): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setQueryAttribute(name, value));
+  },
+  setNodeAttribute(tree: FctQueryTree | undefined, nodeId: string, name: string, value: string | null): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setNodeAttribute(nodeId, name, value));
+  },
+  setNodeText(tree: FctQueryTree | undefined, nodeId: string, text: string | undefined): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setNodeText(nodeId, text));
+  },
+  insertNode(tree: FctQueryTree | undefined, parentId: string | null, node: FctQueryNode, index?: number): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.insertNode(parentId, node, index));
+  },
+  replaceNode(tree: FctQueryTree | undefined, nodeId: string, replacement: FctQueryNode): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.replaceQueryNode(nodeId, replacement));
+  },
+  removeNode(tree: FctQueryTree | undefined, nodeId: string): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.removeQueryNode(nodeId));
+  },
+  addProperty(tree: FctQueryTree | undefined, uri: string, parentId: string | null = null): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.addProperty(parentId, uri));
+  },
+  removeProperty(tree: FctQueryTree | undefined, uri: string, parentId: string | null = null): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.removeProperty(parentId, uri));
+  },
+  setPropertyValues(tree: FctQueryTree | undefined, parentId: string | null, uri: string, values: FctValueInput[]): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setPropertyValues(parentId, uri, values));
+  },
+  setPropertyValue(tree: FctQueryTree | undefined, parentId: string | null, uri: string, value: FctValueInput, checked: boolean): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setPropertyValue(parentId, uri, value, checked));
+  },
+  setRoleValue(tree: FctQueryTree | undefined, uri: string, value: FctValueInput, checked: boolean): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setRoleValue(uri, value, checked));
+  },
+  addNestedProperty(tree: FctQueryTree | undefined, uri: string): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.addNestedProperty(uri));
+  },
+  addNestedPropertyOf(tree: FctQueryTree | undefined, uri: string): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.addNestedPropertyOf(uri));
+  },
+  addClass(tree: FctQueryTree | undefined, parentId: string | null, uri: string): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.addClass(parentId, uri));
+  },
+  removeClass(tree: FctQueryTree | undefined, parentId: string | null, uri: string): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.removeClass(parentId, uri));
+  },
+  setRoleFilter(tree: FctQueryTree | undefined, uri: string, checked: boolean): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setRoleFilter(uri, checked));
+  },
+  setResultsPage(tree: FctQueryTree | undefined, limit: number, offset: number): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setResultsPage(limit, offset));
+  },
+  showClassResults(tree: FctQueryTree | undefined, uri: string, parentId: string | null = null): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.showClassResults(uri, parentId));
+  },
+  deleteNode(tree: FctQueryTree | undefined, nodeId: string): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.deleteNode(nodeId));
+  },
+};
+
+function applyTreeOperation(
+  sourceTree: FctQueryTree | undefined,
+  operation: (store: ReturnType<typeof createQueryStore>) => void,
+): FctQueryTree {
+  if (sourceTree !== undefined && !isValidQueryTree(sourceTree)) {
+    throw new TypeError("Invalid FCT query tree");
+  }
+  // No tree argument means this is an ordinary live-query operation: mutate
+  // the authoritative store and return its updated snapshot. A supplied tree,
+  // including an intentionally empty one, is handled in an isolated store.
+  if (sourceTree === undefined) {
+    operation(fctQueryStore);
+    return cloneQueryTree(fctQueryStore.getSnapshot().tree);
+  }
+  const isolatedStore = createQueryStore(sourceTree);
+  operation(isolatedStore);
+  return cloneQueryTree(isolatedStore.getSnapshot().tree);
+}
 
 export function useFctQuery() {
   const state = useSyncExternalStore(

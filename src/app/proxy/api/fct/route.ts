@@ -1,5 +1,6 @@
+import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
-import { XMLParser } from "fast-xml-parser";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 
 //export const runtime = "nodejs";
@@ -13,6 +14,37 @@ const parser = new XMLParser({
   parseTagValue: false,
   trimValues: true,
 });
+
+// Coalesce concurrent identical FCT requests before the completed response is
+// parsed and placed in the shared TTL cache. This prevents duplicate upstream
+// POSTs when several widgets request the same query during one render cycle.
+type FctUpstreamResult = { status: number; responseXml: string };
+const inFlightFctRequests = new Map<string, Promise<FctUpstreamResult>>();
+
+async function fetchFctOnce(endpoint: string, queryXml: string, cacheKey: string): Promise<FctUpstreamResult> {
+  let pending = inFlightFctRequests.get(cacheKey);
+  if (!pending) {
+    pending = (async () => {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/xml; charset=utf-8",
+          Accept: "text/xml",
+        },
+        body: queryXml,
+        cache: "no-store",
+        signal: AbortSignal.timeout(20000),
+      });
+      return { status: response.status, responseXml: await response.text() };
+    })();
+    inFlightFctRequests.set(cacheKey, pending);
+  }
+  try {
+    return await pending;
+  } finally {
+    if (inFlightFctRequests.get(cacheKey) === pending) inFlightFctRequests.delete(cacheKey);
+  }
+}
 
 
 type FctEndpoint = { id: string; label: string; url: string; group: string };
@@ -62,6 +94,7 @@ function getSelectedEndpointId(request: Request, endpoints: FctEndpoint[]) {
 }
 
 export async function GET(request: Request) {
+  logProxyCaller(request, "fct.GET");
   const endpoints = getConfiguredEndpoints();
   const url = new URL(request.url);
   const cookie = request.headers.get("cookie") ?? "";
@@ -142,6 +175,7 @@ function attribute(value: unknown, name: string): string {
 }
 
 export async function POST(request: Request) {
+  logProxyCaller(request, "fct.POST");
   try {
 
 
@@ -192,20 +226,17 @@ if (hasQueryXml) {
 
     const queryRoot = root as Record<string, unknown>;
 
-    const hasTextElement = /<text\b[^>]*>([\s\S]*?)<\/text>|<text\b[^>]*\/>/i.test(queryXml);
-    // Virtuoso's Facets documentation explicitly allows omitting <text> to
-    // disable full-text matching. Maestro normally keeps a text node in its
-    // authoritative query, but count-only queries may omit an empty one so FCT
-    // does not generate the placeholder bif:contains '(NULL)' pattern.
-    if ((!hasTextElement && viewType !== "describe" && body?.countOnly !== true) ||
-        (queryRoot.text !== undefined && typeof queryRoot.text !== "string")) {
-      throw new Error("The query XML must contain a text element unless this is a count-only query or describe view.");
+    // FCT allows <text> to be omitted to disable full-text matching. The client
+    // serializer omits its empty text node on the wire; accept that browse query
+    // here instead of requiring a <text> element and provoking bif:contains '(NULL)'.
+    if (queryRoot.text !== undefined && typeof queryRoot.text !== "string") {
+      throw new Error("The query XML text element must contain a string when present.");
     }
 
     searchText = typeof queryRoot.text === "string" ? queryRoot.text.trim() : "";
   } catch {
     return NextResponse.json(
-      { error: "Invalid query XML. A text element is required except for count-only queries and describe views." },
+      { error: "Invalid query XML. The query must have a query root and a string text value when a text element is present." },
       { status: 400 },
     );
   }
@@ -256,24 +287,77 @@ const outgoingQueryXml =
     const cachedResult = getQueryCache<Record<string, unknown>>(cacheKey);
     if (cachedResult) return NextResponse.json(cachedResult);
 
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        Accept: "text/xml",
-      },
-      body: outgoingQueryXml,
-      cache: "no-store",
-      signal: AbortSignal.timeout(20000),
-    });
+    const upstream = await fetchFctOnce(endpoint, outgoingQueryXml, cacheKey);
+    const responseStatus = upstream.status;
+    let responseXml = upstream.responseXml;
+    console.log("Virtuoso raw XML:", responseXml.slice(0, 8000));
 
-    const responseXml = await response.text();
-console.log("Virtuoso raw XML:", responseXml.slice(0, 8000));
+    if (responseStatus < 200 || responseStatus >= 300) {
+      console.error("Virtuoso Facets HTTP error:", responseStatus, responseXml.slice(0, 8000));
 
-    if (!response.ok) {
-      console.error("Virtuoso Facets HTTP error:", response.status);
+      // Virtuoso returns structured XML for FCT errors, for example:
+      // <error><code>37000</code><message>...</message><diagnostics>...</diagnostics></error>
+      // Expose both parsed fields and the untouched response body so debugging
+      // information is not lost if Virtuoso adds fields or returns another format.
+      let upstreamError: {
+        code?: string;
+        message?: string;
+        diagnostics?: string;
+      } | null = null;
+
+      try {
+        const parsedError = parser.parse(responseXml);
+        const errorRoot = parsedError?.error;
+        if (errorRoot && typeof errorRoot === "object" && !Array.isArray(errorRoot)) {
+          const errorRecord = errorRoot as Record<string, unknown>;
+          upstreamError = {
+            ...(errorRecord.code !== undefined ? { code: textOf(errorRecord.code) } : {}),
+            ...(errorRecord.message !== undefined ? { message: textOf(errorRecord.message) } : {}),
+            ...(errorRecord.diagnostics !== undefined ? { diagnostics: textOf(errorRecord.diagnostics) } : {}),
+          };
+        }
+      } catch {
+        // Keep the raw response below even when it is not parseable XML.
+      }
+
       return NextResponse.json(
-        { error: `Virtuoso returned HTTP ${response.status}.` },
+        {
+          error: `Virtuoso returned HTTP ${responseStatus}.`,
+          upstreamStatus: responseStatus,
+          upstreamError,
+          upstreamResponse: responseXml,
+        },
+        { status: 502 },
+      );
+    }
+
+    // TODO: Remove this workaround once the Virtuoso FCT endpoint stops
+    // prepending its selected-value SPARQL filter to otherwise valid XML.
+    // Some successful responses begin with e.g. `filter (?s3 = """Reviewed by""") .`
+    // immediately followed by the actual <fct:facets> document. Strip only that
+    // recognizable leading filter fragment; leave all other malformed responses
+    // untouched so the normal XML validation below can report them.
+    const facetsStart = responseXml.indexOf("<fct:facets");
+    if (facetsStart > 0) {
+      const leadingFragment = responseXml.slice(0, facetsStart).trim();
+      if (/^filter\s*\([\s\S]*\)\s*\.$/i.test(leadingFragment)) {
+        responseXml = responseXml.slice(facetsStart);
+      }
+    }
+
+    // Validate the complete XML document before parsing it. A 200 response can
+    // still contain malformed XML or an HTML/proxy error document.
+    const xmlValidation = XMLValidator.validate(responseXml);
+    if (xmlValidation !== true) {
+      console.error("Virtuoso Facets returned malformed XML.", xmlValidation);
+      const validationError = xmlValidation && typeof xmlValidation === "object"
+        ? xmlValidation as { err?: { msg?: string; line?: number; col?: number } }
+        : null;
+      const validationDetails = validationError?.err
+        ? `${validationError.err.msg ?? "XML validation failed"}${validationError.err.line ? ` (line ${validationError.err.line}${validationError.err.col ? `, column ${validationError.err.col}` : ""})` : ""}`
+        : "The upstream response was not a well-formed XML document.";
+      return NextResponse.json(
+        { error: "Virtuoso returned malformed FCT XML.", details: validationDetails },
         { status: 502 },
       );
     }
@@ -336,7 +420,9 @@ if (body?.graphOnly === true) {
   }
   const graphs = Array.from(graphUris);
   const responseData = { graphs, count: graphs.length, rowCount: normalizedRows.length, complete, sparql };
-  setQueryCache(cacheKey, responseData);
+  // A successful HTTP status is necessary but not sufficient: do not cache an
+  // incomplete FCT scan as though it were the completed shared result.
+  if (responseStatus === 200) setQueryCache(cacheKey, responseData);
   return NextResponse.json(responseData);
 }
 
@@ -662,7 +748,7 @@ const results = viewType === "list-count"
 // Return only the count metadata so the browser does not receive the whole set.
 if (body?.countOnly === true) {
   const countResponse = { totalCount: results.length, rowCount: normalizedRows.length, complete, sparql };
-  setQueryCache(cacheKey, countResponse);
+  if (responseStatus === 200) setQueryCache(cacheKey, countResponse);
   return NextResponse.json(countResponse);
 }
 
@@ -718,7 +804,9 @@ const responseData = {
   complete,
   sparql,
 };
-setQueryCache(cacheKey, responseData);
+// FCT can return HTTP 200 with a partial scan. Serve it to this caller, but
+// only share/cache it when the endpoint explicitly reports completion.
+if (responseStatus === 200) setQueryCache(cacheKey, responseData);
 return NextResponse.json(responseData);
 
   } catch (error) {

@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { proxyDebugHeaders } from "@/lib/proxy-debug";
 
 type Facet = {
   id: string;
@@ -68,7 +69,8 @@ export default function PathExplorer({ query }: { query: string }) {
           }))),
         });
 
-        const response = await fetch(`/api/fct?${params}`, {
+        const response = await fetch(`/proxy/api/fct?${params}`, {
+          headers: proxyDebugHeaders("path-explorer-facets", "PathExplorer.facets"),
           signal: controller.signal,
         });
         const data: ApiResponse = await response.json();
@@ -129,7 +131,7 @@ export default function PathExplorer({ query }: { query: string }) {
         }))),
       });
 
-      const response = await fetch(`/api/fct?${params}`);
+      const response = await fetch(`/proxy/api/fct?${params}`, { headers: proxyDebugHeaders("path-explorer-results", "PathExplorer.results") });
       const data: ApiResponse = await response.json();
 
       if (!response.ok || data.error) {

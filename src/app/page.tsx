@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { rememberShortforms, toLabel } from "@/lib/uri-labels";
+import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
+import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { ReactNode, Dispatch, SetStateAction } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -13,7 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Toggle } from "@/components/ui/toggle";
 import { Label } from "@/components/ui/label";
-import { Code2, Network, X } from "lucide-react";
+import { Code2, Network, Trash2, X } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -23,8 +25,8 @@ import xmlFormat from "xml-formatter";
 import hljs from "highlight.js/lib/core";
 import xmlLanguage from "highlight.js/lib/languages/xml";
 import sqlLanguage from "highlight.js/lib/languages/sql";
-import { useFctQuery, serializeFctQuery, attachViewToPropertyInQueryTree } from "@/lib/fct-query-api";
-import type { FctQueryNode, FctQueryTree } from "@/lib/fct-query-api";
+import { useFctQuery, serializeFctQuery, createPropertyWidgetQuery, createGroupMemberQuery, createGroupValuesQuery, createDistinctCountQuery, setQueryViewAttributes, createRecordDescriptionQuery } from "@/lib/fct-query-api";
+import type { FctQueryNode, FctQueryTree, DistinctCountKind } from "@/lib/fct-query-api";
 
 hljs.registerLanguage("xml", xmlLanguage);
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
@@ -71,28 +73,7 @@ const RESULTS_PAGE_SIZE_STORAGE_KEY = "maestro-results-page-size";
 const RESULTS_PAGE_SIZE_OPTIONS = [10, 20, 30, 50] as const;
 const RESULTS_BATCH_SIZE_OPTIONS = [30, 100, 250, 500, 1000] as const;
 
-function escapeXmlText(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&apos;");
-}
 
-function readFctTotalCount(data: unknown): number | null {
-  if (!data || typeof data !== "object") return null;
-  const response = data as Record<string, unknown>;
-  const candidates: unknown[] = [response.totalCount, response.total_count, response.count, response.processed];
-  if (Array.isArray(response.results) && response.results.length > 0) {
-    const first = response.results[0];
-    if (first && typeof first === "object") {
-      const row = first as Record<string, unknown>;
-      candidates.push(row.count, row.total, row.totalCount, row.value, row.title, row.uri);
-    }
-  }
-  for (const candidate of candidates) {
-    const parsed = typeof candidate === "number" ? candidate
-      : typeof candidate === "string" && candidate.trim() !== "" ? Number(candidate) : NaN;
-    if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
-  }
-  return null;
-}
 
 type FacetItem = {
   uri: string;
@@ -173,7 +154,7 @@ function groupValueBinding(value: FctResult): { text: string; datatype?: string;
     // shorthand, while language-tagged values are identified by xml:lang.
     ...(isUri ? { datatype: "uri" } : value.datatype
       ? { datatype: value.datatype }
-      : value.lang ? {} : { datatype: "http://www.openlinksw.com/schemas/facets/dtp/plainstring" }),
+      : value.lang ? {} : { datatype: "string" }),
     ...(value.lang ? { lang: value.lang } : {}),
   };
 }
@@ -193,378 +174,6 @@ type ScopeRelationship = { uri: string; direction: RelationshipDirection };
 type GroupByOption = ScopeRelationship & { key: string; label: string; nodeId: string; memberBindingNodeId?: string; ancestorRole?: boolean };
 type GroupMembersState = { results: FctResult[]; loading: boolean; error: string };
 
-function treeNodeContainsId(nodes: FctQueryNode[], ancestorId: string, targetId: string): boolean {
-  const contains = (node: FctQueryNode): boolean => node.id === targetId || node.children.some(contains);
-  const find = (node: FctQueryNode): boolean => node.id === ancestorId
-    ? contains(node)
-    : node.children.some(find);
-  return nodes.some(find);
-}
-
-function createPropertyWidgetQuery(
-  tree: FctQueryTree,
-  propertyUri: string,
-  direction: RelationshipDirection = "forward",
-  selectedNodeId?: string,
-): FctQueryTree {
-  const copyNode = (node: FctQueryNode): FctQueryNode => ({
-    ...node,
-    attributes: { ...node.attributes },
-    children: node.children.map(copyNode),
-  });
-  const selectedRoleIsAncestor = direction === "reverse" && Boolean(selectedNodeId) &&
-    treeNodeContainsId(tree.children, selectedNodeId!, "query-view");
-
-  // For an ordinary relationship, delegate insertion/reuse to the shared query
-  // API. It reuses a matching sibling relationship rather than manufacturing a
-  // second property node beside an existing constrained one.
-  if (!selectedRoleIsAncestor) {
-    const view = tree.children.length ? findQueryView(tree.children) : null;
-    if (!view) return tree;
-    let baseTree: FctQueryTree = {
-      ...tree,
-      attributes: { ...tree.attributes },
-      children: tree.children.map(copyNode),
-    };
-    if (direction === "reverse" && selectedNodeId) {
-      const removeSelectedSibling = (nodes: FctQueryNode[]): FctQueryNode[] => nodes
-        .filter((node) => node.id !== selectedNodeId)
-        .map((node) => ({ ...node, children: removeSelectedSibling(node.children) }));
-      baseTree = { ...baseTree, children: removeSelectedSibling(baseTree.children) };
-    }
-    const copiedView = copyNode(view);
-    return attachViewToPropertyInQueryTree(
-      baseTree,
-      propertyUri,
-      direction === "forward" ? "property" : "property-of",
-      copiedView,
-      `personal-${direction}-${encodeURIComponent(propertyUri)}`,
-    );
-  }
-
-  // For a reverse-role ancestor, the selected role already encloses the view;
-  // retain that ancestor and enumerate its values without adding another edge.
-  const wrapAncestor = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) => {
-    if (node.id === "query-view") {
-      const copiedView = copyNode(node);
-      const properties = copiedView.children.find((child) => child.name === "properties" || child.id === "query-view-properties");
-      const activeFilters = (properties?.children ?? []).filter((child) => child.name === "property" && child.id.startsWith("property-filter-"));
-      const filterIds = new Set(activeFilters.map((filter) => filter.id));
-      const ephemeralView: FctQueryNode = {
-        ...copiedView,
-        attributes: { ...copiedView.attributes, type: "text", offset: "0" },
-        children: copiedView.children.flatMap((child) => {
-          if (child.id !== properties?.id) return [child];
-          const remaining = child.children.filter((filter) => !filterIds.has(filter.id));
-          return remaining.length ? [{ ...child, children: remaining }] : [];
-        }),
-      };
-      return [...activeFilters, ephemeralView];
-    }
-    return [{ ...node, attributes: { ...node.attributes }, children: wrapAncestor(node.children) }];
-  });
-  return { ...tree, attributes: { ...tree.attributes }, children: wrapAncestor(tree.children) };
-}
-
-function findQueryView(nodes: FctQueryNode[]): FctQueryNode | null {
-  for (const node of nodes) {
-    if (node.id === "query-view") return node;
-    const nested = findQueryView(node.children);
-    if (nested) return nested;
-  }
-  return null;
-}
-
-/** Clone the source query for one group heading. For an ancestor reverse-role
- * breadcrumb, the source result is the heading (e.g. a paper), while the cloned
- * query must return values of that paper's publisher property. Move the active
- * view out of the <property-of> breadcrumb and onto its matching <property>.
- */
-function createGroupMemberQuery(
-  sourceTree: FctQueryTree,
-  option: GroupByOption,
-  groupValue: FctResult,
-): FctQueryTree {
-  const tree: FctQueryTree = {
-    ...sourceTree,
-    attributes: { ...sourceTree.attributes },
-    children: sourceTree.children.map(cloneQueryNode),
-  };
-  const binding = groupValueBinding(groupValue);
-  const valueNode: FctQueryNode = {
-    id: `group-value-${encodeURIComponent(option.uri)}-${encodeURIComponent(groupValueKey(groupValue))}`,
-    name: "value",
-    attributes: { ...(binding.datatype ? { datatype: binding.datatype } : {}), ...(binding.lang ? { "xml:lang": binding.lang } : {}) },
-    text: binding.text,
-    children: [],
-  };
-
-  if (option.direction === "reverse" && option.ancestorRole) {
-    let movedView: FctQueryNode | undefined;
-    const extractView = (node: FctQueryNode): FctQueryNode | undefined => {
-      if (node.id === "query-view") return node;
-      for (const child of node.children) {
-        const found = extractView(child);
-        if (found) return found;
-      }
-      return undefined;
-    };
-    const parentId = option.memberBindingNodeId;
-    const moveToParent = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => {
-      if (parentId && node.id === parentId) {
-        const role = node.children.find((child) => child.id === option.nodeId);
-        if (role) {
-          movedView = extractView(role);
-          const remaining = node.children.filter((child) => child.id !== option.nodeId);
-          return {
-            ...node,
-            children: [...remaining, valueNode, ...(movedView ? [movedView] : [])],
-          };
-        }
-      }
-      return { ...node, children: moveToParent(node.children) };
-    });
-    tree.children = moveToParent(tree.children);
-
-    // If the breadcrumb has no matching <property> parent, replace the
-    // <property-of> path node with a new property node carrying the group value
-    // and the view moved out of the reverse-role branch.
-    if (!parentId) {
-      const replaceRole = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) => {
-        if (node.id === option.nodeId) {
-          movedView = extractView(node);
-          return [{
-            id: `group-property-${encodeURIComponent(option.uri)}`,
-            name: "property",
-            attributes: { iri: option.uri },
-            children: [valueNode, ...(movedView ? [movedView] : [])],
-          }];
-        }
-        return [{ ...node, children: replaceRole(node.children) }];
-      });
-      tree.children = replaceRole(tree.children);
-    }
-    return tree;
-  }
-
-  function bind(nodes: FctQueryNode[]): FctQueryNode[] {
-    return nodes.map((node) => {
-      if (node.id === option.nodeId) {
-        return {
-          ...node,
-          children: [...node.children.filter((child) => child.name !== "value"), valueNode],
-        };
-      }
-      return { ...node, children: bind(node.children) };
-    });
-  }
-  return { ...tree, children: bind(tree.children) };
-}
-
-const COUNT_QUERY_LIMIT = 1000;
-type DistinctCountKind = "property" | "class" | "role" | "value";
-
-function cloneQueryNode(node: FctQueryNode): FctQueryNode {
-  return {
-    ...node,
-    attributes: { ...node.attributes },
-    children: node.children.map(cloneQueryNode),
-  };
-}
-
-function collectPropertyIris(tree: FctQueryTree): string[] {
-  const iris = new Set<string>();
-  function visit(nodes: FctQueryNode[]) {
-    for (const node of nodes) {
-      if (node.name === "property" && typeof node.attributes.iri === "string") {
-        iris.add(node.attributes.iri);
-      }
-      visit(node.children);
-    }
-  }
-  visit(tree.children);
-  return [...iris];
-}
-
-function queryContainsIri(
-  tree: FctQueryTree,
-  name: string,
-  iri: string,
-): boolean {
-  const visit = (nodes: FctQueryNode[]): boolean =>
-    nodes.some(
-      (node) =>
-        (node.name === name && node.attributes.iri === iri) ||
-        visit(node.children),
-    );
-  return visit(tree.children);
-}
-
-/** Build an isolated list-count query for one visible facet/value item. */
-function createDistinctCountQuery(
-  sourceTree: FctQueryTree,
-  kind: DistinctCountKind,
-  uri: string,
-  propertyUri?: string,
-  candidateValue?: FctResult,
-  viewType: "list-count" | "text" = "list-count",
-): FctQueryTree {
-  let tree: FctQueryTree = {
-    ...sourceTree,
-    attributes: { ...sourceTree.attributes },
-    children: sourceTree.children.map(cloneQueryNode),
-  };
-
-  // Virtuoso's FCT documentation states that when the entire <text> element is
-  // absent, it does not add a bif:contains pattern. Apply this to every isolated
-  // item-count query (Properties, Roles, Categories/classes, and bespoke widget
-  // values): an empty <text/> can make FCT emit the placeholder
-  // bif:contains '(NULL)' expression. Preserve non-empty text so real full-text
-  // searches remain scoped for all count types.
-  const hasSearchText = tree.children.some(
-    (node) => node.name === "text" && Boolean(node.text?.trim()),
-  );
-  if (!hasSearchText) {
-    tree = {
-      ...tree,
-      children: tree.children.filter((node) => node.name !== "text"),
-    };
-  }
-
-  if (kind === "property") {
-    const wrapView = (nodes: FctQueryNode[]): FctQueryNode[] =>
-      nodes.flatMap((node) => {
-        if (node.id === "query-view") {
-          return [
-            {
-              id: `count-property-${encodeURIComponent(uri)}`,
-              name: "property",
-              attributes: { iri: uri },
-              children: [node],
-            },
-          ];
-        }
-        return [{ ...node, children: wrapView(node.children) }];
-      });
-    tree = { ...tree, children: wrapView(tree.children) };
-  } else if (kind === "role") {
-    const wrapView = (nodes: FctQueryNode[]): FctQueryNode[] =>
-      nodes.flatMap((node) => {
-        if (node.id === "query-view") {
-          return [
-            {
-              id: `count-role-${encodeURIComponent(uri)}`,
-              name: "property-of",
-              attributes: { iri: uri },
-              children: [node],
-            },
-          ];
-        }
-        return [{ ...node, children: wrapView(node.children) }];
-      });
-    tree = { ...tree, children: wrapView(tree.children) };
-  } else if (kind === "class") {
-    if (!queryContainsIri(tree, "class", uri)) {
-      const classNode: FctQueryNode = {
-        id: `count-class-${encodeURIComponent(uri)}`,
-        name: "class",
-        attributes: { iri: uri },
-        children: [],
-      };
-      const addBesideView = (nodes: FctQueryNode[]): FctQueryNode[] => {
-        const output: FctQueryNode[] = [];
-        for (const node of nodes) {
-          if (node.id === "query-view") output.push(classNode);
-          output.push({ ...node, children: addBesideView(node.children) });
-        }
-        return output;
-      };
-      tree = { ...tree, children: addBesideView(tree.children) };
-    }
-  } else if (kind === "value" && propertyUri) {
-    const binding = candidateValue
-      ? groupValueBinding(candidateValue)
-      : { text: uri, datatype: "uri" };
-    const valueNode: FctQueryNode = {
-      id: `count-value-${encodeURIComponent(propertyUri)}-${encodeURIComponent(uri)}`,
-      name: "value",
-      attributes: {
-        ...(binding.datatype ? { datatype: binding.datatype } : {}),
-        ...(binding.lang ? { "xml:lang": binding.lang } : {}),
-      },
-      text: binding.text,
-      children: [],
-    };
-    const view = findQueryNode(tree.children, "query-view");
-    if (view) {
-      const properties = view.children.find(
-        (node) => node.id === "query-view-properties" || node.name === "properties",
-      );
-      const existingFilter = properties?.children.find(
-        (node) => node.name === "property" &&
-          node.id.startsWith("property-filter-") &&
-          node.attributes.iri === propertyUri,
-      );
-      // Facet counts are disjunctive: replace only this active view's binding
-      // with the candidate value, leaving all other filters intact. Never walk
-      // the whole tree by IRI: a same-IRI path or filter in another breadcrumb
-      // scope is a different structural constraint and must not be rewritten.
-      if (existingFilter && properties) {
-        const updatedView = {
-          ...view,
-          children: view.children.map((child) => child.id === properties.id
-            ? {
-                ...child,
-                children: child.children.map((filter) => filter.id === existingFilter.id
-                  ? { ...filter, children: [...filter.children.filter((item) => item.name !== "value"), valueNode] }
-                  : filter),
-              }
-            : child),
-        };
-        tree = { ...tree, children: updateQueryNode(tree.children, "query-view", () => updatedView) };
-      } else {
-        const filterNode: FctQueryNode = {
-          id: `property-filter-count-${encodeURIComponent(propertyUri)}`,
-          name: "property",
-          attributes: { iri: propertyUri },
-          children: [valueNode],
-        };
-        const propertiesNode: FctQueryNode = properties ?? {
-          id: "query-view-properties",
-          name: "properties",
-          attributes: {},
-          children: [],
-        };
-        const updatedView = {
-          ...view,
-          children: properties
-            ? view.children.map((child) => child.id === properties.id
-                ? { ...child, children: [...child.children, filterNode] }
-                : child)
-            : [...view.children, { ...propertiesNode, children: [filterNode] }],
-        };
-        tree = { ...tree, children: updateQueryNode(tree.children, "query-view", () => updatedView) };
-      }
-    }
-  }
-
-  const setCountView = (nodes: FctQueryNode[]): FctQueryNode[] =>
-    nodes.map((node) =>
-      node.id === "query-view"
-        ? {
-            ...node,
-            attributes: {
-              ...node.attributes,
-              type: viewType,
-              limit: String(COUNT_QUERY_LIMIT),
-              offset: "0",
-            },
-          }
-        : { ...node, children: setCountView(node.children) },
-    );
-
-  return { ...tree, children: setCountView(tree.children) };
-}
 
 /** Hover-only query inspector for any widget backed by an FCT or SPARQL request. */
 function QueryInspectorButton({
@@ -574,68 +183,21 @@ function QueryInspectorButton({
   label = "View query",
   countQuery,
   countFilename,
+  headerTone = false,
 }: {
   query: string;
   language?: "xml" | "sparql";
   filename: string;
   label?: string;
-  countQuery?: string;
+  countQuery?: string | null;
   countFilename?: string;
+  headerTone?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"widget" | "count">("widget");
-  const [countSparql, setCountSparql] = useState("");
-  const [countSparqlLoading, setCountSparqlLoading] = useState(false);
-  const [countSparqlError, setCountSparqlError] = useState("");
-
-  useEffect(() => {
-    if (!open || activeTab !== "count" || !countQuery?.trim()) return;
-    const controller = new AbortController();
-    let cancelled = false;
-    setCountSparql("");
-    setCountSparqlError("");
-    setCountSparqlLoading(true);
-
-    async function loadCountSparql() {
-      try {
-        const fctResponse = await fetch("/api/fct", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ queryXml: countQuery, countOnly: true }),
-          signal: controller.signal,
-        });
-        const fctData = await fctResponse.json();
-        if (!fctResponse.ok) throw new Error(fctData.error ?? "Could not generate the count query.");
-        if (typeof fctData.sparql !== "string" || !fctData.sparql.trim()) {
-          throw new Error("FCT did not return SPARQL for this count query.");
-        }
-        const sparqlResponse = await fetch("/api/sparql", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ facetValueCount: { sparql: fctData.sparql } }),
-          signal: controller.signal,
-        });
-        const sparqlData = await sparqlResponse.json();
-        if (!sparqlResponse.ok) throw new Error(sparqlData.error ?? "Could not generate the scalar count SPARQL.");
-        if (typeof sparqlData.query !== "string" || !sparqlData.query.trim()) {
-          throw new Error("The count endpoint did not return its generated SPARQL query.");
-        }
-        if (!cancelled) setCountSparql(sparqlData.query);
-      } catch (requestError) {
-        if (cancelled || (requestError instanceof Error && requestError.name === "AbortError")) return;
-        if (!cancelled) setCountSparqlError(requestError instanceof Error ? requestError.message : "Could not load count SPARQL.");
-      } finally {
-        if (!cancelled) setCountSparqlLoading(false);
-      }
-    }
-
-    void loadCountSparql();
-    return () => { cancelled = true; controller.abort(); };
-  }, [open, activeTab, countQuery]);
-
   if (!query.trim()) return null;
   const showingCount = Boolean(countQuery?.trim()) && activeTab === "count";
-  const displayedCode = showingCount ? (countSparql || countQuery!) : query;
+  const displayedCode = showingCount ? countQuery! : query;
   const displayedFilename = showingCount ? (countFilename ?? "first-item-count.sparql").replace(/\.xml$/i, ".sparql") : filename;
   const displayedLanguage = showingCount ? "sparql" : language;
   return (
@@ -645,7 +207,7 @@ function QueryInspectorButton({
         onClick={() => { setActiveTab("widget"); setOpen(true); }}
         aria-label={`${label}: ${filename}`}
         title={label}
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/header:opacity-100"
+        className={`inline-flex size-7 shrink-0 items-center justify-center rounded border opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/header:opacity-100 ${headerTone ? "border-sky-700 bg-sky-800 text-sky-50 hover:bg-sky-700 hover:text-sky-50 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100 dark:hover:bg-sky-900" : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground"}`}
       >
         <Code2 className="size-4" aria-hidden="true" />
       </button>
@@ -662,15 +224,10 @@ function QueryInspectorButton({
             {countQuery?.trim() && (
               <div role="tablist" aria-label="Widget queries" className="mb-3 flex gap-1 border-b">
                 <button type="button" role="tab" aria-selected={activeTab === "widget"} onClick={() => setActiveTab("widget")} className={`rounded-t-md px-3 py-2 text-sm ${activeTab === "widget" ? "border border-b-0 bg-background font-medium" : "text-muted-foreground hover:bg-accent/50"}`}>FCT result list</button>
-                <button type="button" role="tab" aria-selected={activeTab === "count"} onClick={() => setActiveTab("count")} className={`rounded-t-md px-3 py-2 text-sm ${activeTab === "count" ? "border border-b-0 bg-background font-medium" : "text-muted-foreground hover:bg-accent/50"}`}>Count source query</button>
+                <button type="button" role="tab" aria-selected={activeTab === "count"} onClick={() => setActiveTab("count")} className={`rounded-t-md px-3 py-2 text-sm ${activeTab === "count" ? "border border-b-0 bg-background font-medium" : "text-muted-foreground hover:bg-accent/50"}`}>Count SPARQL query</button>
               </div>
             )}
             <p className="mb-2 text-xs text-muted-foreground">{displayedFilename} · {displayedLanguage.toUpperCase()}</p>
-            {showingCount && countSparqlLoading ? (
-              <p className="mb-2 text-xs text-muted-foreground" role="status">Generating count SPARQL…</p>
-            ) : showingCount && countSparqlError ? (
-              <p className="mb-2 text-xs text-destructive" role="alert">{countSparqlError}</p>
-            ) : null}
             <CodeBlock className="min-h-0 flex-1" code={displayedCode} language={displayedLanguage} filename={displayedFilename} />
           </section>
         </div>
@@ -679,7 +236,7 @@ function QueryInspectorButton({
   );
 }
 
-/** Each visible item requests its own distinct-row count through the same-origin FCT proxy. */
+/** Each visible item requests its own distinct-row count through the same-origin SPARQL proxy. */
 function DistinctCount({
   tree,
   kind,
@@ -695,56 +252,35 @@ function DistinctCount({
 }) {
   const [count, setCount] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const sourceXml = serializeFctQuery(tree);
+  // Key this effect by the compiled scalar count query, not the full browsing
+  // query. The compiler deliberately ignores <view> limit/offset, so Results
+  // pagination does not refetch every facet count.
+  const countSparqlQuery = buildFctCountSparql(
+    createDistinctCountQuery(tree, kind, uri, propertyUri, candidateValue, "text"),
+  );
 
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
-    setCount(null);
-    setError("");
 
     async function loadCount() {
+      let stage = "building scalar count SPARQL from the query tree";
       try {
-        // Ask FCT for the scope-correct source query, then have /api/sparql
-        // execute a scalar aggregate. The SPARQL projection is only ?ct; the
-        // endpoint must not return the matching resources to the browser.
-        const countTree = createDistinctCountQuery(
-          tree,
-          kind,
-          uri,
-          propertyUri,
-          candidateValue,
-          "text",
-        );
-        const pagedTree = updateViewNode(countTree, (node) => ({
-          ...node,
-          attributes: { ...node.attributes, limit: String(COUNT_QUERY_LIMIT), offset: "0" },
-        }));
-        const response = await fetch("/api/fct", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            queryXml: serializeFctQuery(pagedTree),
-            countOnly: true,
-          }),
-          signal: controller.signal,
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? "Failed to load distinct count.");
-
-        if (typeof data.sparql !== "string" || !data.sparql.trim()) {
-          throw new Error("FCT did not return the SPARQL for this item count.");
+        if (!countSparqlQuery) {
+          throw new Error("The current FCT query tree contains a condition that cannot be compiled safely to SPARQL.");
         }
-        const sparqlResponse = await fetch("/api/sparql", {
+        stage = "executing scalar count SPARQL";
+        const sparqlResponse = await fetch("/proxy/api/sparql", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ facetValueCount: { sparql: data.sparql } }),
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("distinct-count-sparql", `DistinctCount:${kind}:${propertyUri ?? ""}:${uri}`) },
+          body: JSON.stringify({ facetValueCount: { sparql: countSparqlQuery } }),
           signal: controller.signal,
         });
         const sparqlData = await sparqlResponse.json();
         if (!sparqlResponse.ok) {
           throw new Error(sparqlData.error ?? "Failed to execute the item count against SPARQL.");
         }
+        stage = "validating scalar count response";
         const parsedCount = Number(sparqlData.count);
         if (!Number.isFinite(parsedCount) || parsedCount < 0) {
           throw new Error("The SPARQL endpoint returned an invalid item count.");
@@ -756,17 +292,38 @@ function DistinctCount({
           (requestError instanceof Error && requestError.name === "AbortError")
         )
           return;
-        setError(requestError instanceof Error ? requestError.message : "Could not load distinct count.");
+        const message = requestError instanceof Error ? requestError.message : "Could not load distinct count.";
+        console.warn("Maestro facet item count failed", { kind, uri, propertyUri, stage, error: message });
+        setError(`${stage}: ${message}`);
       }
     }
 
-    void loadCount();
+    // Query-tree edits can be emitted as a short sequence of intermediate states
+    // (for example, deleting a bespoke facet). Wait for that sequence to settle so
+    // one user action does not issue/flicker through several obsolete count queries.
+    console.info("Maestro DistinctCount effect scheduled", {
+      kind,
+      uri,
+      propertyUri,
+      countSparqlLength: countSparqlQuery?.length ?? 0,
+      countQueryFingerprint: countSparqlQuery ? proxyDebugFingerprint(countSparqlQuery) : "unsupported-query-tree",
+    });
+    const refreshTimer = window.setTimeout(() => {
+      if (cancelled) return;
+      console.info("Maestro DistinctCount request starting", { kind, uri, propertyUri });
+      setCount(null);
+      setError("");
+      void loadCount();
+    }, 45);
     return () => {
       cancelled = true;
+      window.clearTimeout(refreshTimer);
       controller.abort();
+      console.info("Maestro DistinctCount effect cleaned up", { kind, uri, propertyUri });
     };
-    // sourceXml is the serialized identity of the current query tree.
-  }, [sourceXml, tree, kind, uri, propertyUri, candidateValue?.termType, candidateValue?.datatype, candidateValue?.lang, candidateValue?.uri]);
+    // The compiled scalar count query is the semantic identity. Results paging,
+    // parent object identity, and other non-count UI changes do not restart it.
+  }, [countSparqlQuery]);
 
   return (
     <span
@@ -850,7 +407,7 @@ function PersonalWidgetQueryListener({
   setPersonalWidgets: Dispatch<SetStateAction<PersonalWidget[]>>;
 }) {
   const { tree } = useFctQuery();
-  const queryXml = serializeFctQuery(tree);
+  const widgetQueryXml = serializeFctQuery(createPropertyWidgetQuery(tree, propertyUri));
 
   useEffect(() => {
     // Reconcile every mounted widget against the active <view> scope. A widget
@@ -874,13 +431,12 @@ function PersonalWidgetQueryListener({
 
     async function refreshWidget() {
       try {
-        const ephemeralTree = createPropertyWidgetQuery(tree, propertyUri);
-        const response = await fetch("/api/fct", {
+        const response = await fetch("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("personal-widget-values", `PersonalWidgetQueryListener:${propertyUri}`) },
           body: JSON.stringify({
-            queryXml: serializeFctQuery(ephemeralTree),
+            queryXml: widgetQueryXml,
           }),
           signal: controller.signal,
         });
@@ -952,7 +508,7 @@ function PersonalWidgetQueryListener({
       cancelled = true;
       controller.abort();
     };
-  }, [tree, queryXml, propertyUri, setPersonalWidgets]);
+  }, [widgetQueryXml, propertyUri, setPersonalWidgets]);
 
   return null;
 }
@@ -967,28 +523,6 @@ function findQueryNode(
     if (found) return found;
   }
   return undefined;
-}
-
-function updateQueryNode(
-  nodes: FctQueryNode[],
-  nodeId: string,
-  update: (node: FctQueryNode) => FctQueryNode,
-): FctQueryNode[] {
-  return nodes.map((node) =>
-    node.id === nodeId
-      ? update(node)
-      : { ...node, children: updateQueryNode(node.children, nodeId, update) },
-  );
-}
-
-function updateViewNode(
-  tree: FctQueryTree,
-  update: (node: FctQueryNode) => FctQueryNode,
-): FctQueryTree {
-  return {
-    ...tree,
-    children: updateQueryNode(tree.children, "query-view", update),
-  };
 }
 
 type EndpointStatus = {
@@ -1074,6 +608,9 @@ export default function Home() {
   const [endpointStatuses, setEndpointStatuses] = useState<
     Record<string, EndpointStatus>
   >({});
+  // Only the selected endpoint's health may affect active query effects. A
+  // different endpoint finishing its health check must not restart these loads.
+  const selectedEndpointStatus = selectedEndpointId ? endpointStatuses[selectedEndpointId] : undefined;
   const [isCheckingEndpoints, setIsCheckingEndpoints] = useState(false);
   const [endpointChecksCompleted, setEndpointChecksCompleted] = useState(0);
   const [endpointChecksTotal, setEndpointChecksTotal] = useState(0);
@@ -1106,6 +643,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
 
   const [personalWidgets, setPersonalWidgets] = useState<PersonalWidget[]>([]);
+  const [focusWidgetsSuppressed, setFocusWidgetsSuppressed] = useState(false);
   const [groupByPropertyUri, setGroupByPropertyUri] = useState("");
   const [resultsUiPage, setResultsUiPage] = useState(0);
   const [groupUiPage, setGroupUiPage] = useState(0);
@@ -1139,6 +677,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     setRolesPage(0);
   }, [roleFacets.length]);
   const [isLoadingRoles, setIsLoadingRoles] = useState(false);
+  const [isLoadingGraphs, setIsLoadingGraphs] = useState(false);
   const [roleFacetError, setRoleFacetError] = useState("");
 
   const {
@@ -1153,8 +692,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     setRoleValue,
     addNestedProperty,
     addNestedPropertyOf,
-    navigateToPropertyPath,
-    moveViewToSibling,
+    navigateToPropertyPath: navigateToPropertyPathRaw,
+    moveViewToSibling: moveViewToSiblingRaw,
     addClass,
     removeClass,
     setSearchText: setSearch,
@@ -1183,7 +722,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       setEndpointChecksCompleted(0);
       try {
         // Load every configured endpoint first, so the menu appears before health checks finish.
-        const response = await fetch("/api/fct", { cache: "no-store" });
+        const response = await fetch("/proxy/api/fct", { cache: "no-store", headers: proxyDebugHeaders("endpoint-menu", "EndpointMenu") });
         const data = await response.json();
         rememberShortforms(data?.shortforms);
         if (!response.ok)
@@ -1240,8 +779,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         let status: EndpointStatus;
         try {
           const response = await fetch(
-            `/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}`,
-            { cache: "no-store" },
+            `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}`,
+            { cache: "no-store", headers: proxyDebugHeaders("endpoint-health", `EndpointHealth:${endpoint.id}`) },
           );
           const data = await response.json();
         rememberShortforms(data?.shortforms);
@@ -1280,9 +819,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       );
       if (firstReachable) {
         try {
-          const response = await fetch("/api/fct", {
+          const response = await fetch("/proxy/api/fct", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-auto-select", "EndpointMenu") },
             body: JSON.stringify({
               selectEndpointId: firstReachable.id,
             }),
@@ -1319,9 +858,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     if (!endpointId || endpointId === selectedEndpointId) return;
     setEndpointMenuError("");
     try {
-      const response = await fetch("/api/fct", {
+      const response = await fetch("/proxy/api/fct", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-select", "EndpointMenu") },
         body: JSON.stringify({ selectEndpointId: endpointId }),
       });
       const data = await response.json();
@@ -1347,6 +886,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   useEffect(() => {
     // Keep the Filters pane scoped to the properties directly attached to the
     // current <view>, which moves as the user navigates the breadcrumbs.
+    if (focusWidgetsSuppressed) {
+      setPersonalWidgets([]);
+      return;
+    }
     const propertyNodes = getActiveViewPropertyFilters(queryTree);
     setPersonalWidgets((current) => {
       const existingByUri = new Map(
@@ -1393,7 +936,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         return current;
       return next;
     });
-  }, [queryTree, propertyFacets]);
+  }, [queryTree, propertyFacets, focusWidgetsSuppressed]);
 
   const viewNode = findQueryNode(queryTree.children, "query-view");
   // Server batches and visible UI pages are independent. The active query view's
@@ -1455,40 +998,94 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const [groupValuesLoading, setGroupValuesLoading] = useState(false);
   const [groupValuesError, setGroupValuesError] = useState("");
   const [groupMembers, setGroupMembers] = useState<Record<string, GroupMembersState>>({});
+  const groupMemberRequestStates = useRef(new Map<string, "loading" | "loaded">());
   const sourceSparql = sparqlQuery || "# SPARQL will appear after the endpoint returns a query.";
   const queryWithoutPagingXml = serializeFctQuery(
-    updateViewNode(queryTree, (node) => ({
-      ...node,
-      attributes: { ...node.attributes, offset: "0" },
-    })),
+    setQueryViewAttributes(queryTree, { offset: "0" }),
   );
   // Ask FCT for the total independently of the current results page. The
   // count view uses the same active scope and filters, but never the page offset.
   const queryCountXml = serializeFctQuery(
-    updateViewNode(queryTree, (node) => ({
-      ...node,
-      attributes: { ...node.attributes, type: "text", limit: "1000", offset: "0" },
-    })),
+    setQueryViewAttributes(queryTree, { type: "text", limit: "1000", offset: "0" }),
   );
 
   const [results, setResults] = useState<FctResult[]>([]);
   const resultsBatchRequestPending = useRef(false);
-  const lastCountQueryRef = useRef("");
-  useEffect(() => {
-    if (lastCountQueryRef.current && lastCountQueryRef.current !== queryCountXml) {
-      setResultsUiPage(0);
-      setResults([]);
-      setGroupUiPage(0);
-      setGroupBatchOffset(0);
-      setGroupValues([]);
-      if (resultsOffset !== 0) setResultsPage(resultsBatchSize, 0);
-    }
-    lastCountQueryRef.current = queryCountXml;
-  }, [queryCountXml, resultsOffset, resultsBatchSize, setResultsPage]);
+  const activeQueryIdentityRef = useRef("");
+  const endpointReadyForQuery = Boolean(
+    selectedEndpointId &&
+    selectedEndpointStatus?.status != null &&
+    selectedEndpointStatus.status < 400
+  );
+
+  // Keep the active request identity current for stale-response protection, but
+  // do not clear widgets merely because arbitrary query state changed. The
+  // coordinated clear is invoked only by the explicit view-navigation actions.
+  useLayoutEffect(() => {
+    const queryIdentity = `${selectedEndpointId}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
+    activeQueryIdentityRef.current = queryIdentity;
+  }, [queryCountXml, selectedEndpointId, endpointReadyForQuery]);
+
+  function clearWidgetsForViewChange() {
+    setResultsUiPage(0);
+    setResults([]);
+    resultsBatchRequestPending.current = false;
+    setResultsPageMatchCount(0);
+    setResultsTotalCount(null);
+    setIsCountingResults(endpointReadyForQuery);
+    setIsSearching(endpointReadyForQuery);
+    setSearchError("");
+    setSparqlQuery("");
+    setSelectedUri("");
+    setDescribedRecord([]);
+    setIsDescribing(false);
+
+    // Keep the persistent facet widget shells/headers; clear only their data.
+    setPropertyFacets([]);
+    setClassFacets([]);
+    setRoleFacets([]);
+    setGraphFacets([]);
+    setPropertyFacetSparql("");
+    setRoleFacetSparql("");
+    setPropertyFacetError("");
+    setClassFacetError("");
+    setRoleFacetError("");
+    setIsLoadingProperties(endpointReadyForQuery);
+    setIsLoadingClasses(endpointReadyForQuery);
+    setIsLoadingRoles(endpointReadyForQuery);
+    setIsLoadingGraphs(endpointReadyForQuery);
+
+    setGroupUiPage(0);
+    setGroupBatchOffset(0);
+    setGroupHasMoreBatches(false);
+    setGroupValues([]);
+    setGroupValuesLoading(false);
+    setGroupValuesError("");
+    setGroupMembers({});
+    setFocusWidgetsSuppressed(true);
+    setPersonalWidgets([]);
+
+    replaceFacetAutofillCandidates("property", []);
+    replaceFacetAutofillCandidates("property-in", []);
+    setFacetAutofillCandidates({ property: [], "property-in": [] });
+
+    if (resultsOffset !== 0) setResultsPage(resultsBatchSize, 0);
+  }
+
+  function navigateToPropertyPath(targetId: string) {
+    const path = getPropertyPath();
+    const currentPathId = path[path.length - 1]?.id ?? "query-root";
+    if (targetId !== currentPathId) clearWidgetsForViewChange();
+    navigateToPropertyPathRaw(targetId);
+  }
+
+  function moveViewToSibling(currentFocusId: string, targetId: string) {
+    if (currentFocusId !== targetId) clearWidgetsForViewChange();
+    moveViewToSiblingRaw(currentFocusId, targetId);
+  }
   const [resultsTotalCount, setResultsTotalCount] = useState<number | null>(null);
   const [resultsPageMatchCount, setResultsPageMatchCount] = useState(0);
-  // Some FCT queries report a zero count while still returning rows when a graph
-  // binding is active. Never display fewer total results than rows already loaded.
+  // Never display fewer total results than rows already loaded while a count refreshes.
   const effectiveResultsTotalCount = resultsTotalCount === 0 && (results.length > 0 || resultsPageMatchCount > 0)
     ? Math.max(results.length, resultsPageMatchCount)
     : resultsTotalCount;
@@ -1501,12 +1098,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const [initialBrowseTriggered, setInitialBrowseTriggered] = useState(false);
   const [timeoutSeconds, setTimeoutSeconds] = useState(0);
 
+  const resultsCountSparql = buildFctCountSparql(queryTree);
+
   useEffect(() => {
-    const endpointReady = Boolean(
-      selectedEndpointId &&
-      endpointStatuses[selectedEndpointId]?.status != null &&
-      endpointStatuses[selectedEndpointId].status! < 400
-    );
+    const endpointReady = endpointReadyForQuery;
     if (!endpointReady) {
       setResultsTotalCount(null);
       setIsCountingResults(false);
@@ -1520,32 +1115,26 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
     async function loadTotalCount() {
       try {
-        let total = 0;
-        let offset = 0;
-        while (true) {
-          const pagedCountXml = serializeFctQuery(updateViewNode(queryTree, (node) => ({
-            ...node,
-            attributes: { ...node.attributes, type: "text", limit: "1000", offset: String(offset) },
-          })));
-          const response = await fetch("/api/fct", {
-            method: "POST", cache: "no-store",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ queryXml: pagedCountXml, countOnly: true }),
-            signal: controller.signal,
-          });
-          const data = await response.json();
-          rememberShortforms(data?.shortforms);
-          if (!response.ok) throw new Error(data.error ?? "Virtuoso count query failed.");
-          const pageCount = readFctTotalCount(data) ?? 0;
-          total += pageCount;
-          if (data.complete === true || data.complete === "yes" || (typeof data.rowCount === "number" ? data.rowCount : pageCount) < 1000) break;
-          offset += 1000;
+        if (!resultsCountSparql) {
+          throw new Error("The current FCT query tree contains a condition that cannot be compiled safely to SPARQL.");
         }
-        if (cancelled) return;
-        setResultsTotalCount(total);
+        const response = await fetch("/proxy/api/sparql", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("results-total-count", "ResultsTotalCount") },
+          body: JSON.stringify({ facetValueCount: { sparql: resultsCountSparql } }),
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? "Virtuoso SPARQL count query failed.");
+        const total = Number(data.count);
+        if (!Number.isSafeInteger(total) || total < 0) {
+          throw new Error("Virtuoso returned an invalid scalar count.");
+        }
+        if (!cancelled) setResultsTotalCount(total);
       } catch (error) {
-        if (cancelled || (error instanceof DOMException && error.name === "AbortError")) return;
-        console.warn("FCT result count query failed:", error);
+        if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
+        console.warn("SPARQL result count query failed:", error);
         setResultsTotalCount(null);
       } finally {
         if (!cancelled) setIsCountingResults(false);
@@ -1557,7 +1146,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       cancelled = true;
       controller.abort();
     };
-  }, [queryCountXml, selectedEndpointId, endpointStatuses]);
+  }, [resultsCountSparql, selectedEndpointId, endpointReadyForQuery]);
 
   // FCT query timeout is expressed in milliseconds in the XML. Keep the slider
   // in seconds for the UI, and sync it if the authoritative query tree changes.
@@ -1569,17 +1158,14 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   }, [queryTree.attributes.timeout]);
 
   const [isLoadingProperties, setIsLoadingProperties] = useState(false);
+  const hasPropertyFacetSnapshot = useRef(false);
   const [isLoadingClasses, setIsLoadingClasses] = useState(false);
   const [propertyFacetError, setPropertyFacetError] = useState("");
   const [classFacetError, setClassFacetError] = useState("");
   const [expandedUris, setExpandedUris] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    const endpointReady = Boolean(
-      selectedEndpointId &&
-      endpointStatuses[selectedEndpointId]?.status != null &&
-      endpointStatuses[selectedEndpointId].status! < 400
-    );
+    const endpointReady = endpointReadyForQuery;
     if (!endpointReady || initialBrowseTriggered) return;
 
     // Kick the same query-tree/search pipeline used by the search box, with an empty string.
@@ -1587,14 +1173,18 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     setSearch("");
     setInitialBrowseTriggered(true);
     setSearchPipelineRun((current) => current + 1);
-  }, [selectedEndpointId, endpointStatuses, initialBrowseTriggered, setSearch]);
+  }, [selectedEndpointId, endpointReadyForQuery, initialBrowseTriggered, setSearch]);
 
   useEffect(() => {
     const query = search.trim();
     let cancelled = false;
+    // One controller owns both stages of this Results run. When the query,
+    // endpoint, or page changes, cleanup aborts any in-flight client requests.
+    const controller = new AbortController();
+    const requestQueryIdentity = `${selectedEndpointId}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
 
     // Empty text is a valid initial browse query once an endpoint has passed its health check.
-    const endpointReady = Boolean(selectedEndpointId && endpointStatuses[selectedEndpointId]?.status != null && endpointStatuses[selectedEndpointId].status! < 400);
+    const endpointReady = endpointReadyForQuery;
     if (!query && !endpointReady) return;
     setSearchError("");
 
@@ -1603,13 +1193,19 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       setSearchError("");
 
       try {
-        const response = await fetch("/api/fct", {
+        console.info("Maestro Results search request starting", {
+          queryFingerprint: proxyDebugFingerprint(queryResultsXml),
+          queryXmlLength: queryResultsXml.length,
+        });
+        const response = await fetch("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
           headers: {
             "Content-Type": "application/json",
+            ...proxyDebugHeaders("results-search", `ResultsSearch:${proxyDebugFingerprint(queryResultsXml)}`),
           },
           body: JSON.stringify({ queryXml: queryResultsXml }),
+          signal: controller.signal,
         });
 
         const data = await response.json();
@@ -1637,6 +1233,13 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
           .map((node) => node.attributes.iri)
           .filter((iri): iri is string => typeof iri === "string" && Boolean(iri));
         const resourceUris = [...new Set(nextResults.map((item) => item.uri).filter(Boolean))];
+        console.info("Maestro Results enrichment inputs", {
+          queryFingerprint: proxyDebugFingerprint(queryResultsXml),
+          resourceCount: resourceUris.length,
+          propertyCount: new Set(selectedForward).size,
+          roleCount: new Set(selectedReverse).size,
+          firstResource: resourceUris[0] ?? null,
+        });
         const relationships: ScopeValue[] = [
           ...[...new Set(selectedForward)].map((property) => ({
             property,
@@ -1663,16 +1266,16 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
         try {
           if (resourceUris.length && (selectedForward.length || selectedReverse.length)) {
-            const enrichmentResponse = await fetch("/api/sparql", {
+            const enrichmentResponse = await fetch("/proxy/api/sparql", {
               method: "POST",
               cache: "no-store",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", ...proxyDebugHeaders("results-enrichment", `ResultsEnrichment:${proxyDebugFingerprint(queryResultsXml)}`) },
               body: JSON.stringify({
                 resources: resourceUris,
                 properties: [...new Set(selectedForward)],
                 roles: [...new Set(selectedReverse)],
               }),
-              signal: AbortSignal.timeout(20000),
+              signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]),
             });
             const enrichmentData = await enrichmentResponse.json();
             if (!enrichmentResponse.ok) {
@@ -1734,6 +1337,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
             }));
           }
         } catch (enrichmentRequestError) {
+          // Aborting this Results run is expected during query/endpoint changes;
+          // do not report it as an enrichment failure.
+          if (controller.signal.aborted || cancelled) return;
+
           // A missing/unavailable SPARQL protocol endpoint must not discard the
           // authoritative FCT search results. Log the failure for diagnostics;
           // selected relationship labels remain visible with dash placeholders.
@@ -1752,6 +1359,11 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
             error: enrichmentRequestError,
           });
         }
+
+        // Enrichment may take much longer than the FCT response. Never allow
+        // a completed request for an older breadcrumb/endpoint to repopulate
+        // the widgets after the coordinated transition has cleared them.
+        if (cancelled || requestQueryIdentity !== activeQueryIdentityRef.current) return;
 
         setSparqlQuery(typeof data.sparql === "string" ? data.sparql : "");
         setResultsPageMatchCount(Number.isFinite(Number(data.matchCount)) ? Number(data.matchCount) : nextResults.length);
@@ -1784,8 +1396,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      controller.abort();
     };
-  }, [search, queryResultsXml, resultsOffset, selectedEndpointId, endpointStatuses, searchPipelineRun]);
+  }, [search, queryResultsXml, queryCountXml, resultsOffset, selectedEndpointId, endpointReadyForQuery, searchPipelineRun]);
 
   useEffect(() => {
     setGroupUiPage(0);
@@ -1793,6 +1406,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     setGroupHasMoreBatches(false);
     setGroupValues([]);
     setGroupMembers({});
+    groupMemberRequestStates.current.clear();
     setGroupValuesError("");
   }, [queryCountXml, selectedGroupByOption?.key]);
 
@@ -1800,8 +1414,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // tree with the selected relationship used to enumerate its values.
   useEffect(() => {
     let cancelled = false;
-    if (!selectedGroupByOption) {
-      setGroupValues([]);
+    if (centralTab !== "groups" || !selectedGroupByOption) {
       setGroupValuesLoading(false);
       setGroupValuesError("");
       return;
@@ -1811,16 +1424,15 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     setGroupValuesError("");
     (async () => {
       try {
-        const groupTreeBase = createPropertyWidgetQuery(queryTree, selectedGroupByOption.uri, selectedGroupByOption.direction, selectedGroupByOption.nodeId);
-        const groupTree = updateViewNode(groupTreeBase, (node) => ({
-          ...node,
+        const groupTreeBase = createGroupValuesQuery(queryTree, selectedGroupByOption);
+        const groupTree = setQueryViewAttributes(groupTreeBase, {
           // Group headings enumerate the selected relationship's distinct
           // values (including RDF literals), not text-search result resources.
-          attributes: { ...node.attributes, type: "list", limit: String(groupBatchSize), offset: String(groupBatchOffset) },
-        }));
-        const response = await fetch("/api/fct", {
+          type: "list", limit: String(groupBatchSize), offset: String(groupBatchOffset),
+        });
+        const response = await fetch("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("group-values", "GroupsValues") },
           body: JSON.stringify({ queryXml: serializeFctQuery(groupTree) }),
           signal: controller.signal,
         });
@@ -1846,7 +1458,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       }
     })();
     return () => { cancelled = true; controller.abort(); };
-  }, [search, queryCountXml, groupByPropertyUri, selectedGroupByOption?.key, groupBatchSize, groupBatchOffset]);
+  }, [centralTab, search, queryCountXml, groupByPropertyUri, selectedGroupByOption?.key, groupBatchSize, groupBatchOffset]);
 
   // Each group member list is another FCT request: clone the complete source
   // query, bind only this group's value to the selected relationship, and keep
@@ -1856,40 +1468,57 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       setGroupMembers({});
       return;
     }
+    // Do not populate the Groups tab while another tab is active, and do not
+    // fetch members for group cards that are not currently visible.
+    if (centralTab !== "groups" || visibleGroupValues.length === 0) return;
     let cancelled = false;
     const controller = new AbortController();
-    const activeKeys = new Set(groupValues.map((value) => `${selectedGroupByOption.key}::${groupValueKey(value)}`));
-    setGroupMembers((current) => Object.fromEntries(Object.entries(current).filter(([key]) => activeKeys.has(key))));
-    for (const groupValue of groupValues) {
+    const requestKeys: string[] = [];
+    for (const groupValue of visibleGroupValues) {
       const key = `${selectedGroupByOption.key}::${groupValueKey(groupValue)}`;
+      const requestState = groupMemberRequestStates.current.get(key);
+      if (requestState === "loaded" || requestState === "loading") continue;
+      requestKeys.push(key);
+      groupMemberRequestStates.current.set(key, "loading");
       setGroupMembers((current) => ({ ...current, [key]: { results: current[key]?.results ?? [], loading: true, error: "" } }));
       void (async () => {
         try {
           const memberTree = createGroupMemberQuery(queryTree, selectedGroupByOption, groupValue);
-          const response = await fetch("/api/fct", {
+          const response = await fetch("/proxy/api/fct", {
             method: "POST", cache: "no-store",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("group-members", "GroupsMembers") },
             body: JSON.stringify({ queryXml: serializeFctQuery(memberTree) }),
             signal: controller.signal,
           });
           const data = await response.json();
         rememberShortforms(data?.shortforms);
           if (!response.ok) throw new Error(data.error ?? `Failed to load items for ${groupValue.title || groupValue.uri}.`);
-          if (!cancelled) setGroupMembers((current) => ({ ...current, [key]: { results: Array.isArray(data.results) ? data.results : [], loading: false, error: "" } }));
+          if (!cancelled) {
+            groupMemberRequestStates.current.set(key, "loaded");
+            setGroupMembers((current) => ({ ...current, [key]: { results: Array.isArray(data.results) ? data.results : [], loading: false, error: "" } }));
+          }
         } catch (error) {
-          if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
+          if (error instanceof Error && error.name === "AbortError") return;
+          groupMemberRequestStates.current.delete(key);
+          if (cancelled) return;
           setGroupMembers((current) => ({ ...current, [key]: { results: [], loading: false, error: error instanceof Error ? error.message : "Failed to load group items." } }));
         }
       })();
     }
-    return () => { cancelled = true; controller.abort(); };
-  }, [search, queryXml, selectedGroupByOption?.key, groupValues.map(groupValueKey).join("|")]);
+    return () => {
+      cancelled = true;
+      for (const key of requestKeys) {
+        if (groupMemberRequestStates.current.get(key) === "loading") groupMemberRequestStates.current.delete(key);
+      }
+      controller.abort();
+    };
+  }, [centralTab, search, queryXml, selectedGroupByOption?.key, visibleGroupValues.map(groupValueKey).join("|")]);
 
   useEffect(() => {
     const query = search.trim();
     let cancelled = false;
 
-    const endpointReady = Boolean(selectedEndpointId && endpointStatuses[selectedEndpointId]?.status != null && endpointStatuses[selectedEndpointId].status! < 400);
+    const endpointReady = endpointReadyForQuery;
     if (!query && !endpointReady) {
       setPropertyFacets([]);
       setClassFacets([]);
@@ -1905,6 +1534,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       setIsLoadingProperties(false);
       setIsLoadingClasses(false);
       setIsLoadingRoles(false);
+      setIsLoadingGraphs(false);
+      setFocusWidgetsSuppressed(false);
       return;
     }
 
@@ -1919,9 +1550,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     setFacetAutofillCandidates({ property: [], "property-in": [] });
     const controller = new AbortController();
     const timer = setTimeout(async () => {
-      setIsLoadingProperties(true);
+      if (!hasPropertyFacetSnapshot.current) setIsLoadingProperties(true);
       setIsLoadingClasses(true);
       setIsLoadingRoles(true);
+      setIsLoadingGraphs(true);
       setPropertyFacetError("");
       setClassFacetError("");
       setRoleFacetError("");
@@ -1929,9 +1561,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       async function loadFacet(view: "properties" | "classes" | "roles") {
         // Incoming predicates are the inverse-property (Roles) facet.
         // Virtuoso exposes these with view type="properties-in".
-        const response = await fetch("/api/fct", {
+        const response = await fetch("/proxy/api/fct", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("facet-load", "FacetLoader") },
           body: JSON.stringify({
             queryXml: queryWithoutPagingXml,
             view: view === "roles" ? "properties-in" : view,
@@ -1961,13 +1593,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
             const allGraphs = new Set<string>();
             let offset = 0;
             while (true) {
-              const graphQueryXml = serializeFctQuery(updateViewNode(queryTree, (node) => ({
-                ...node,
-                attributes: { ...node.attributes, type: "text", limit: "1000", offset: String(offset) },
-              })));
-              const response = await fetch("/api/fct", {
+              const graphQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, { type: "text", limit: "1000", offset: String(offset) }));
+              const response = await fetch("/proxy/api/fct", {
                 method: "POST", cache: "no-store",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-list", "GraphList") },
                 body: JSON.stringify({ queryXml: graphQueryXml, graphOnly: true }),
                 signal: controller.signal,
               });
@@ -1987,10 +1616,11 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         setPropertyFacets(
           Array.isArray(propertiesResult.value.items) ? propertiesResult.value.items : [],
         );
+        hasPropertyFacetSnapshot.current = true;
         setPropertyFacetSparql(propertiesResult.value.sparql);
       } else {
-        setPropertyFacets([]);
-        setPropertyFacetSparql("");
+        // Preserve the last successful Focus list during transient query failures.
+        // The error remains visible, but the pane does not flash empty.
         setPropertyFacetError(
           propertiesResult.reason instanceof Error
             ? propertiesResult.reason.message
@@ -2034,6 +1664,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       setIsLoadingProperties(false);
       setIsLoadingClasses(false);
       setIsLoadingRoles(false);
+      setIsLoadingGraphs(false);
+      setFocusWidgetsSuppressed(false);
     }, 250);
 
     return () => {
@@ -2041,7 +1673,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       clearTimeout(timer);
       controller.abort();
     };
-  }, [search, queryWithoutPagingXml, queryCountXml, selectedEndpointId, endpointStatuses]);
+  }, [search, queryWithoutPagingXml, queryCountXml, selectedEndpointId, endpointReadyForQuery]);
 
 
 
@@ -2096,13 +1728,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     const controller = new AbortController();
     setDescribedRecord([]);
     setIsDescribing(true);
-    const queryRoot = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="" same-as=""><text></text><value datatype="uri">[${escapeXmlText(selectedUri)}]</value>`;
 
     async function postFctQuery(queryXml: string) {
-      const response = await fetch("/api/fct", {
+      const response = await fetch("/proxy/api/fct", {
         method: "POST",
         cache: "no-store",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-description", "RecordDescription") },
         body: JSON.stringify({ queryXml }),
         signal: controller.signal,
       });
@@ -2116,12 +1747,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         // A fixed subject cannot be described with FCT's `describe` view alone:
         // the documented query requires a property/class view or a relationship.
         // Fetch its predicates first, then fetch each predicate's values.
-        const propertyData = await postFctQuery(`${queryRoot}<view type="properties" limit="1000" offset="0"/></query>`);
+        const propertyData = await postFctQuery(serializeFctQuery(createRecordDescriptionQuery(selectedUri, "properties")));
         const properties = Array.isArray(propertyData.properties) ? propertyData.properties : [];
         const rows = await Promise.all(properties.map(async (property) => {
           const predicate = property.uri || property.label;
           if (!predicate) return [] as { property: string; value: string }[];
-          const valueData = await postFctQuery(`${queryRoot}<property iri="${escapeXmlText(predicate)}"><view type="list" limit="100" offset="0"/></property></query>`);
+          const valueData = await postFctQuery(serializeFctQuery(createRecordDescriptionQuery(selectedUri, "list", predicate)));
           const values = Array.isArray(valueData.results) ? valueData.results : [];
           return values.map((item) => ({
             property: property.label || predicate,
@@ -2170,6 +1801,15 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       .filter((iri): iri is string => typeof iri === "string"),
   );
   const selectedClasses = new Set(getClassesAtNode(activeLeafId));
+  // Keep query-selected Categories visible even if the classes endpoint omits
+  // them from its current candidate list. Only current-scope <class> nodes are
+  // considered; classes from another query-tree branch are deliberately ignored.
+  const classDisplayFacets = [
+    ...Array.from(selectedClasses)
+      .filter((uri) => !classFacets.some((item) => item.uri === uri))
+      .map((uri) => ({ uri, label: uri, count: 0 })),
+    ...classFacets,
+  ];
   const autoConfigureFacetCount =
     facetAutofillCandidates.property.filter((uri) => !selectedProperties.has(uri)).length +
     facetAutofillCandidates["property-in"].filter((uri) => !selectedRoles.has(uri)).length;
@@ -2312,6 +1952,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       return;
     }
 
+    // Adding a relationship path relocates the active <view>, so clear all
+    // query-scoped widget results as part of this explicit view transition.
+    clearWidgetsForViewChange();
     if (direction === "forward") {
       // Preserve Properties behavior: ensure its filter is selected before the
       // query API promotes it into a forward path.
@@ -2554,7 +2197,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   className="flex min-w-0 flex-col"
 >
             <header className="group/header flex items-start justify-between gap-2 border-b px-3 py-2">
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <button
                     type="button"
@@ -2568,6 +2211,27 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                   >
                     {widget.label}
                   </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <QueryInspectorButton
+                      query={serializeFctQuery(createPropertyWidgetQuery(queryTree, widget.uri))}
+                      filename={`facet-${toLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}.xml`}
+                      countQuery={widget.values[0] ? buildFctCountSparql(createDistinctCountQuery(queryTree, "value", widget.values[0].uri, widget.uri, widget.values[0])) : undefined}
+                      countFilename={`facet-${toLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}-first-item-count.xml`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const pathNode = findPropertyPathNode(widget.uri);
+                        if (pathNode) deleteNode(pathNode.id);
+                        else removeProperty(activeLeafId, widget.uri);
+                        setPersonalWidgets((current) => current.filter((item) => item.uri !== widget.uri));
+                      }}
+                      className="shrink-0 px-2 py-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
+                      aria-label={`Remove ${widget.label} widget`}
+                    >
+                      <Trash2 className="size-4" aria-hidden="true" />
+                    </button>
+                  </div>
                   {widget.loading && (
                     <span
                       className="text-xs text-sky-100/80 dark:text-sky-200/80"
@@ -2592,32 +2256,6 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                   {widget.uri}
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <QueryInspectorButton
-                  query={serializeFctQuery(createPropertyWidgetQuery(queryTree, widget.uri))}
-                  filename={`facet-${toLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}.xml`}
-                  countQuery={widget.values[0] ? serializeFctQuery(createDistinctCountQuery(queryTree, "value", widget.values[0].uri, widget.uri, widget.values[0])) : undefined}
-                  countFilename={`facet-${toLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}-first-item-count.xml`}
-                />
-                <button
-                type="button"
-                onClick={() => {
-                  // If this property is represented by a relationship path in
-                  // the query tree, remove that actual node. Removing only from
-                  // activeLeafId can leave the original filter in another scope.
-                  const pathNode = findPropertyPathNode(widget.uri);
-                  if (pathNode) deleteNode(pathNode.id);
-                  else removeProperty(activeLeafId, widget.uri);
-                  setPersonalWidgets((current) =>
-                    current.filter((item) => item.uri !== widget.uri),
-                  );
-                }}
-                className="shrink-0 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-                aria-label={`Remove ${widget.label} widget`}
-              >
-                Remove
-                </button>
-              </div>
             </header>
             <div className="min-h-0 flex-1 overflow-auto p-2">
               {!widget.loading &&
@@ -2631,12 +2269,54 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                 !widget.error &&
                 widget.values.length > 0 &&
                 (() => {
+                  // Query XML is the source of truth for checked values. Read
+                  // this property's <value> children from the active view scope
+                  // before ordering/paging endpoint results; selectedValues is a
+                  // reconciled UI cache and can lag a render behind query changes.
+                  const queryFilter = activePropertyFilters.find(
+                    (node) => node.attributes.iri === widget.uri,
+                  );
+                  const checkedValueNodes = (queryFilter?.children ?? [])
+                    .filter((child) => child.name === "value" && Boolean(child.text));
+                  const queryValueKey = (node: FctQueryNode) => {
+                    const datatype = node.attributes.datatype;
+                    const lang = node.attributes["xml:lang"];
+                    const effectiveDatatype = datatype ?? (lang ? undefined : "string");
+                    return fctTermKey(node.text ?? "", effectiveDatatype, lang);
+                  };
+                  const checkedValueKeys = new Set(checkedValueNodes.map(queryValueKey));
+                  const endpointValueKeys = new Set(widget.values.map(facetValueKey));
+                  // Place query-selected values first in query order. Do not sort
+                  // endpoint results: all unchecked values retain proxy order.
+                  const endpointValuesByKey = new Map(
+                    widget.values.map((value) => [facetValueKey(value), value] as const),
+                  );
+                  const checkedValuesFromQuery: FctResult[] = checkedValueNodes.map((node) => {
+                    const key = queryValueKey(node);
+                    const endpointValue = endpointValuesByKey.get(key);
+                    if (endpointValue) return endpointValue;
+                    const datatype = node.attributes.datatype;
+                    const lang = node.attributes["xml:lang"];
+                    const value = node.text ?? "";
+                    return {
+                      uri: value,
+                      title: value,
+                      termType: datatype === "uri" ? "uri" : "literal",
+                      ...(datatype ? { datatype } : {}),
+                      ...(lang ? { lang } : {}),
+                      matches: [],
+                    };
+                  });
+                  const orderedValues = [
+                    ...checkedValuesFromQuery,
+                    ...widget.values.filter((value) => !checkedValueKeys.has(facetValueKey(value))),
+                  ];
                   const pageCount = Math.max(
                     1,
-                    Math.ceil(widget.values.length / FACET_PAGE_SIZE),
+                    Math.ceil(orderedValues.length / FACET_PAGE_SIZE),
                   );
                   const page = Math.min(widget.page, pageCount - 1);
-                  const pageValues = widget.values.slice(
+                  const pageValues = orderedValues.slice(
                     page * FACET_PAGE_SIZE,
                     (page + 1) * FACET_PAGE_SIZE,
                   );
@@ -2968,9 +2648,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                 setRdfLoadMessage("");
                 setRdfLoadError(false);
                 try {
-                  const response = await fetch("/api/rdf-loader", {
+                  const response = await fetch("/proxy/api/rdf-loader", {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: { "Content-Type": "application/json", ...proxyDebugHeaders("rdf-loader", "RdfLoader") },
                     body: JSON.stringify({
                       sourceUrl: rdfSourceUrl.trim(),
                       targetGraph: rdfTargetGraph.trim(),
@@ -3283,11 +2963,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                     {((Object.keys(facets) as FacetName[]).filter((group) => group !== "Classes" && group !== "Graphs") as FacetName[]).sort((a, b) => {
                       const order = focusListOrder === "Properties" ? ["Properties", "Roles", "Graphs"] : ["Roles", "Properties", "Graphs"];
                       return order.indexOf(a) - order.indexOf(b);
-                    }).filter((group) =>
-                      group === "Properties" ? propertyFacets.length > 0 :
-                      group === "Roles" ? roleFacets.length > 0 : true
-                    ).map((group) => {
-                      const items: { key: string; label: string; count: number | null }[] =
+                    }).map((group) => {
+                      let items: { key: string; label: string; count: number | null }[] =
                         group === "Properties"
                           ? propertyFacets.map((item) => ({
                               key: item.uri,
@@ -3309,6 +2986,24 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                               : group === "Graphs"
                                 ? graphFacets.map((item) => ({ key: item.uri, label: item.uri, count: item.count }))
                                 : [];
+
+                      // Query-selected Properties/Roles lead the widget in query
+                      // order; never sort the proxy response. The unselected items
+                      // remain in exactly the order supplied by FCT.
+                      if (group === "Properties" || group === "Roles") {
+                        const selected = group === "Properties" ? selectedProperties : selectedRoles;
+                        const selectedInQueryOrder = Array.from(selected, (key) =>
+                          items.find((item) => item.key === key) ?? {
+                            key,
+                            label: toLabel(key),
+                            count: null,
+                          },
+                        );
+                        items = [
+                          ...selectedInQueryOrder,
+                          ...items.filter((item) => !selected.has(item.key)),
+                        ];
+                      }
 
                       const currentPage =
                         group === "Properties"
@@ -3341,11 +3036,13 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                               ? setGraphsPage
                               : setRolesPage;
 
+                      if ((group === "Properties" || group === "Roles") && items.length === 0) return null;
+
                       return (
                         <section key={group} className="mb-5">
-                          <div className="group/header mb-2 flex w-full items-stretch border-b">
+                          <div className={`group/header mb-2 flex w-full items-center gap-1 border-b ${group === "Properties" || group === "Roles" ? "bg-sky-800 dark:bg-sky-950" : ""}`}>
                             <button
-                              className={`flex min-w-0 flex-1 items-center justify-between px-3 py-2 text-left text-sm font-medium ${
+                              className={`flex min-w-0 items-center px-3 py-2 text-left text-sm font-medium ${
                                 group === "Properties" || group === "Roles"
                                   ? "bg-sky-800 text-sky-50 dark:bg-sky-950 dark:text-sky-100"
                                   : selectedFacet === group
@@ -3354,45 +3051,16 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                               }`}
                               onClick={() => setSelectedFacet(group)}
                             >
-                              <span className="min-w-0 truncate">{group}</span>
-                              <span
-                                className={`ml-auto shrink-0 text-xs font-normal ${(group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError) ? "text-destructive" : group === "Properties" || group === "Roles" ? "text-sky-100/80 dark:text-sky-200/80" : "text-muted-foreground"}`}
-                                aria-live="polite"
-                                title={
-                                  group === "Properties"
-                                    ? propertyFacetError
-                                    : group === "Classes"
-                                      ? classFacetError
-                                      : group === "Roles"
-                                        ? roleFacetError
-                                        : undefined
-                                }
-                              >
-                                {(group === "Properties" && isLoadingProperties) ||
-                                (group === "Classes" && isLoadingClasses) ||
-                                (group === "Roles" && isLoadingRoles)
-                                  ? "Updating…"
-                                  : (group === "Properties" &&
-                                        propertyFacetError) ||
-                                      (group === "Classes" && classFacetError) ||
-                                      (group === "Roles" && roleFacetError)
-                                    ? "Update failed"
-                                    : group === "Properties"
-                                      ? propertyFacets.length
-                                      : group === "Classes"
-                                        ? classFacets.length
-                                        : group === "Roles"
-                                          ? roleFacets.length
-                                          : items.length}
-                              </span>
+                              <span className="truncate">{group}</span>
                             </button>
                             {group === "Properties" && (
                               <QueryInspectorButton
                                 query={`${queryWithoutPagingXml}\n<!-- FCT API option: view=properties -->`}
                                 filename="properties-fct-query.xml"
                                 label="View Properties widget query"
-                                countQuery={propertyFacets[0]?.uri ? serializeFctQuery(createDistinctCountQuery(queryTree, "property", propertyFacets[0].uri, undefined, undefined, "text")) : undefined}
-                                countFilename="properties-first-item-count-fct-query.xml"
+                                headerTone
+                                countQuery={propertyFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "property", propertyFacets[0].uri, undefined, undefined, "text")) : undefined}
+                                countFilename="properties-first-item-count.sparql"
                               />
                             )}
                             {group === "Roles" && (
@@ -3400,10 +3068,22 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                                 query={`${queryWithoutPagingXml}\n<!-- FCT API option: view=properties-in -->`}
                                 filename="roles-fct-query.xml"
                                 label="View Roles widget query"
-                                countQuery={roleFacets[0]?.uri ? serializeFctQuery(createDistinctCountQuery(queryTree, "role", roleFacets[0].uri, undefined, undefined, "text")) : undefined}
-                                countFilename="roles-first-item-count-fct-query.xml"
+                                headerTone
+                                countQuery={roleFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "role", roleFacets[0].uri, undefined, undefined, "text")) : undefined}
+                                countFilename="roles-first-item-count.sparql"
                               />
                             )}
+                            <span
+                              className={`ml-auto shrink-0 px-2 text-xs font-normal ${(group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError) ? "text-destructive" : group === "Properties" || group === "Roles" ? "text-sky-100/80 dark:text-sky-200/80" : "text-muted-foreground"}`}
+                              aria-live="polite"
+                              title={group === "Properties" ? propertyFacetError : group === "Classes" ? classFacetError : group === "Roles" ? roleFacetError : undefined}
+                            >
+                              {(group === "Properties" && isLoadingProperties) || (group === "Classes" && isLoadingClasses) || (group === "Roles" && isLoadingRoles)
+                                ? "Updating…"
+                                : (group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError)
+                                  ? "Update failed"
+                                  : group === "Properties" ? propertyFacets.length : group === "Classes" ? classFacets.length : group === "Roles" ? roleFacets.length : items.length}
+                            </span>
                           </div>
 
                           {(group === "Properties" ||
@@ -3557,10 +3237,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
                 {defaultLeftTab === "personal" && (
                   <div className="space-y-3">
-                    {classFacets.length > 0 && (
                     <article className="flex min-w-0 flex-col">
                       <header className="group/header flex items-start justify-between gap-2 border-b px-2 py-2">
-                        <div className="flex min-w-0 items-center gap-1"><h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml}\n<!-- FCT API option: view=classes -->`} filename="categories-fct-query.xml" countQuery={classFacets[0]?.uri ? serializeFctQuery(createDistinctCountQuery(queryTree, "class", classFacets[0].uri, undefined, undefined, "text")) : undefined} countFilename="categories-first-item-count.sparql" /></div>
+                        <div className="flex min-w-0 items-center gap-1"><h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml}\n<!-- FCT API option: view=classes -->`} filename="categories-fct-query.xml" countQuery={classDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", classDisplayFacets[0].uri, undefined, undefined, "text")) : undefined} countFilename="categories-first-item-count.sparql" /></div>
                         <span
                           className={`text-xs ${classFacetError ? "text-destructive" : "text-muted-foreground"}`}
                           aria-live="polite"
@@ -3570,16 +3249,16 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                             ? "Updating…"
                             : classFacetError
                               ? "Update failed"
-                              : classFacets.length}
+                              : classDisplayFacets.length}
                         </span>
                       </header>
                       {classFacetError ? (
                         <p className="text-xs text-destructive">{classFacetError}</p>
-                      ) : classFacets.length === 0 && !isLoadingClasses ? (
+                      ) : classDisplayFacets.length === 0 && !isLoadingClasses ? (
                         <p className="text-xs text-muted-foreground">No classes found for this query.</p>
                       ) : (
                         <>
-                          {classFacets.length > FACET_PAGE_SIZE && (
+                          {classDisplayFacets.length > FACET_PAGE_SIZE && (
                             <div className="mb-2 flex items-center justify-between gap-2 text-xs">
                               <button
                                 type="button"
@@ -3590,20 +3269,22 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                                 Previous
                               </button>
                               <span className="text-muted-foreground">
-                                Page {Math.min(classesPage + 1, Math.ceil(classFacets.length / FACET_PAGE_SIZE))} of {Math.max(1, Math.ceil(classFacets.length / FACET_PAGE_SIZE))}
+                                Page {Math.min(classesPage + 1, Math.ceil(classDisplayFacets.length / FACET_PAGE_SIZE))} of {Math.max(1, Math.ceil(classDisplayFacets.length / FACET_PAGE_SIZE))}
                               </span>
                               <button
                                 type="button"
                                 className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
-                                onClick={() => setClassesPage((page) => Math.min(Math.ceil(classFacets.length / FACET_PAGE_SIZE) - 1, page + 1))}
-                                disabled={classesPage >= Math.ceil(classFacets.length / FACET_PAGE_SIZE) - 1}
+                                onClick={() => setClassesPage((page) => Math.min(Math.ceil(classDisplayFacets.length / FACET_PAGE_SIZE) - 1, page + 1))}
+                                disabled={classesPage >= Math.ceil(classDisplayFacets.length / FACET_PAGE_SIZE) - 1}
                               >
                                 Next
                               </button>
                             </div>
                           )}
                           <div className="space-y-1">
-                            {classFacets
+                            {classDisplayFacets
+                              // classDisplayFacets already puts current-scope
+                              // query <class> nodes first, followed by proxy order.
                               .slice(classesPage * FACET_PAGE_SIZE, (classesPage + 1) * FACET_PAGE_SIZE)
                               .map((item) => (
                                 <div key={item.uri} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50">
@@ -3632,60 +3313,58 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                         </>
                       )}
                     </article>
-                    )}
-                    {activeRoleFilters.map((roleNode) => {
+                    {!focusWidgetsSuppressed && activeRoleFilters.map((roleNode) => {
                       const uri = roleNode.attributes.iri ?? "";
                       const label = roleFacets.find((item) => item.uri === uri)?.label || compactIri(uri);
                       return (
                         <article key={roleNode.id} className="flex min-w-0 flex-col">
                           <header className="group/header flex items-start justify-between gap-2 border-b px-3 py-2">
-                            <div className="min-w-0">
-                              <button
-                                type="button"
-                                className="cursor-pointer text-left text-sm font-semibold underline-offset-2 hover:underline"
-                                onClick={() => navigateToPropertyPath(roleNode.id)}
-                                title={`Navigate to role scope ${label}`}
-                              >
-                                Role filter: {label}
-                              </button>
-                              <p className="mt-1 break-all text-xs text-sky-100/80 dark:text-sky-200/80" title={uri}>{uri}</p>
-                            </div>
-                            <div className="flex shrink-0 items-center gap-1"><QueryInspectorButton query={roleFacetSparql} language="sparql" filename="roles-facet.sparql" />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1">
+                                <button
+                                  type="button"
+                                  className="cursor-pointer text-left text-sm font-semibold underline-offset-2 hover:underline"
+                                  onClick={() => navigateToPropertyPath(roleNode.id)}
+                                  title={`Navigate to role scope ${label}`}
+                                >
+                                  Role filter: {label}
+                                </button>
+                                <QueryInspectorButton query={roleFacetSparql} language="sparql" filename="roles-facet.sparql" />
                             <button
                               type="button"
-                              className="shrink-0 px-2 py-1 text-xs text-sky-100/80 hover:text-white dark:text-sky-200/80 dark:hover:text-white cursor-pointer"
+                              className="shrink-0 px-2 py-1 text-xs text-sky-100/80 opacity-0 transition-opacity hover:text-white focus-visible:opacity-100 group-hover/header:opacity-100 dark:text-sky-200/80 dark:hover:text-white cursor-pointer"
                               onClick={() => deleteNode(roleNode.id)}
                               aria-label={`Remove role filter ${label}`}
                             >
                               Remove
                             </button></div>
+                              <p className="mt-1 break-all text-xs text-sky-100/80 dark:text-sky-200/80" title={uri}>{uri}</p>
+                            </div>
                           </header>
                         </article>
                       );
                     })}
-                    {renderPersonalWidgetCards("column")}
-                    {graphFacets.length > 0 && (
+                    {!focusWidgetsSuppressed && renderPersonalWidgetCards("column")}
                     <article className="flex min-w-0 flex-col">
                       <header className="group/header flex items-center justify-between gap-2 px-2 py-2">
-                        <div className="flex min-w-0 items-center gap-1"><h2 className="text-sm font-semibold">Datasites</h2><QueryInspectorButton query={`${queryWithoutPagingXml}\n<!-- FCT API option: graphOnly=true -->`} filename="datasites-fct-query.xml" /></div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground" aria-live="polite">
-                            {graphFacets.length}
-                          </span>
+                        <div className="flex min-w-0 items-center gap-1"><h2 className="text-sm font-semibold">Datasites</h2><QueryInspectorButton query={`${queryWithoutPagingXml}\n<!-- FCT API option: graphOnly=true -->`} filename="datasites-fct-query.xml" />
                           {queryTree.attributes.graph && (
                             <button
                               type="button"
                               onClick={clearGraph}
-                              className="rounded border px-2 py-1 text-xs hover:bg-accent"
+                              className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
                               aria-label="Clear graph selection"
                               title="Clear datasite selection and Datasite field"
-                            >Clear</button>
+                            ><X className="size-4" aria-hidden="true" /></button>
                           )}
                         </div>
+                        <span className="text-xs text-muted-foreground" aria-live="polite">
+                          {isLoadingGraphs ? "Updating…" : graphFacets.length}
+                        </span>
                       </header>
                       {graphFacets.length === 0 ? (
                         <p className="px-2 text-xs text-muted-foreground">
-                          No registered graphs yet.
+                          {isLoadingGraphs ? "Loading datasites…" : "No registered graphs yet."}
                         </p>
                       ) : (
                         <>
@@ -3715,7 +3394,6 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                         </>
                       )}
                     </article>
-                    )}
                   </div>
                 )}
 

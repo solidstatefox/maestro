@@ -1,3 +1,4 @@
+import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 
@@ -16,17 +17,18 @@ function getConfiguredEndpoints(): FctEndpoint[] {
       const separator = entry.indexOf("=");
       if (separator <= 0) return null;
       const left = entry.slice(0, separator).trim();
-      const url = entry.slice(separator + 1).trim();
-      if (!left || !/^https?:\/\//i.test(url)) return null;
+      const rawUrl = entry.slice(separator + 1).trim();
+      if (!left || !/^https?:\/\//i.test(rawUrl)) return null;
       const groupSeparator = left.indexOf("::");
       const group = groupSeparator >= 0 ? left.slice(0, groupSeparator).trim() : "Endpoints";
       const label = (groupSeparator >= 0 ? left.slice(groupSeparator + 2) : left).trim();
       if (!label) return null;
+
       return {
         id: groupSeparator >= 0 ? slugify(`${group}-${label}`) : slugify(label),
         group: group || "Endpoints",
         label,
-        url,
+        url: rawUrl,
       };
     })
     .filter((endpoint): endpoint is FctEndpoint => Boolean(endpoint));
@@ -111,9 +113,6 @@ function buildFacetIntersectionQuery(sourceQuery: string, candidates: string[]):
  * replace this workaround once the local /sparql endpoint is fixed.
  */
 function decodeSparqlHtmlEntities(sourceQuery: string): string {
-  // FCT may serialize generated SPARQL with HTML entities inside its text
-  // payload. Decode once before parsing/executing; keep &amp; last so entities
-  // that are themselves encoded are not recursively decoded.
   return sourceQuery
     .replace(/&#39;|&#x27;/gi, "'")
     .replace(/&quot;/gi, '"')
@@ -122,59 +121,73 @@ function decodeSparqlHtmlEntities(sourceQuery: string): string {
     .replace(/&amp;/gi, "&");
 }
 
-function buildFacetValueCountQuery(sourceQuery: string): string | null {
-  const sparql = decodeSparqlHtmlEntities(sourceQuery).trim();
-  if (!sparql || sparql.length > 100_000 || !/^\s*(?:DEFINE\s+[^\n]+\s+)*SELECT\b/i.test(sparql)) return null;
-  if (/\b(?:SERVICE|LOAD|INSERT|DELETE|CLEAR|CREATE|DROP|MOVE|COPY|ADD|WITH)\b/i.test(sparql)) return null;
+function validateFacetValueCountQuery(query: string): string | null {
+  const sparseQuery = query.trim();
+  if (!sparseQuery || sparseQuery.length > 100_000) return null;
 
-  const selectMatch = /\bSELECT\b([\s\S]*?)\bWHERE\s*\{/i.exec(sparql);
-  if (!selectMatch) return null;
-  const projection = selectMatch[1];
-  // FCT text queries project the matching resource as the first variable. Do
-  // not count an alias variable (e.g. ?c1) if the projection uses AS.
-  const variableMatch = projection.match(/\?([A-Za-z_][A-Za-z0-9_]*)/);
-  if (!variableMatch) return null;
-  const variable = variableMatch[1];
-  const whereStart = (selectMatch.index ?? 0) + selectMatch[0].lastIndexOf("{");
-
-  let depth = 0;
-  let whereEnd = -1;
-  let inString: "'" | '"' | null = null;
-  let inIri = false;
-  let escaped = false;
-  for (let i = whereStart; i < sparql.length; i++) {
-    const char = sparql[i];
-    if (inIri) {
-      if (char === ">") inIri = false;
-      continue;
-    }
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === inString) inString = null;
-      continue;
-    }
-    if (char === "<" && i + 1 < sparql.length && !/\s/.test(sparql[i + 1])) {
-      const closeIri = sparql.indexOf(">", i + 1);
-      const lineBreak = sparql.indexOf("\n", i + 1);
-      if (closeIri >= 0 && (lineBreak < 0 || closeIri < lineBreak)) { inIri = true; continue; }
-    }
-    if (char === "'" || char === '"') { inString = char; continue; }
-    if (char === "{") depth++;
-    else if (char === "}") {
-      depth--;
-      if (depth === 0) { whereEnd = i; break; }
-    }
+  // FCT-generated Virtuoso queries may start with BASE, PREFIX, and/or DEFINE
+  // prologue declarations. Validate the SELECT shape after those declarations,
+  // but forward the original query unchanged so graph settings and prefixes
+  // are preserved at the endpoint.
+  let selectQuery = sparseQuery;
+  while (true) {
+    selectQuery = selectQuery.trimStart();
+    const prologue = selectQuery.match(
+      /^(?:BASE\s+<[^>]*>|PREFIX\s+(?:[A-Za-z_][A-Za-z0-9_-]*)?:\s*<[^>]*>|DEFINE\s+[A-Za-z_][A-Za-z0-9_-]*:[A-Za-z_][A-Za-z0-9_-]*\s+(?:<[^>]*>|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+))\s*/i,
+    );
+    if (!prologue) break;
+    selectQuery = selectQuery.slice(prologue[0].length);
   }
-  if (whereEnd <= whereStart) return null;
 
-  const whereBody = sparql.slice(whereStart + 1, whereEnd).trim();
-  if (!whereBody) return null;
-  return `SELECT (COUNT(DISTINCT ?${variable}) AS ?ct) WHERE {\n${whereBody}\n}`;
+  // The client owns query construction. The proxy accepts only the scalar
+  // COUNT query shape for this operation and forwards it unchanged.
+  if (!/^SELECT\s*\(\s*COUNT\s*\(\s*DISTINCT\s+\?[A-Za-z_][A-Za-z0-9_]*\s*\)\s+AS\s+\?ct\s*\)\s+WHERE\s*\{/i.test(selectQuery)) return null;
+  // Ignore operation-looking words inside RDF IRIs, string literals, and
+  // comments. Count text searches may legitimately contain terms such as
+  // "with", "delete", or "create"; they are not SPARQL update operations.
+  const syntaxOnly = sparseQuery.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|<[^>]*>|#[^\r\n]*/g, " ");
+  if (/\b(?:SERVICE|LOAD|INSERT|DELETE|CLEAR|CREATE|DROP|MOVE|COPY|ADD|WITH|UPDATE)\b/i.test(syntaxOnly)) return null;
+  return sparseQuery;
 }
 
-async function querySparql(endpoint: string, query: string): Promise<{ responseText: string; response: Response }> {
-  const key = queryCacheKey("sparql", endpoint, query);
+type SparqlQueryResult = { responseText: string; response: Response; key: string };
+const inFlightSparqlRequests = new Map<string, Promise<SparqlQueryResult>>();
+
+function parseSparqlResults(responseText: string): {
+  head: { vars: string[] };
+  results: { bindings: Record<string, { type?: string; value?: string; datatype?: string }>[] };
+} | null {
+  try {
+    const parsed: unknown = JSON.parse(responseText);
+    if (!parsed || typeof parsed !== "object") return null;
+    const value = parsed as {
+      head?: { vars?: unknown };
+      results?: { bindings?: unknown };
+    };
+    if (!value.head || !Array.isArray(value.head.vars) ||
+        !value.head.vars.every((item) => typeof item === "string") ||
+        !value.results || !Array.isArray(value.results.bindings)) return null;
+    for (const binding of value.results.bindings) {
+      if (!binding || typeof binding !== "object" || Array.isArray(binding)) return null;
+      for (const term of Object.values(binding as Record<string, unknown>)) {
+        if (!term || typeof term !== "object" || Array.isArray(term) ||
+            typeof (term as { value?: unknown }).value !== "string" ||
+            typeof (term as { type?: unknown }).type !== "string") return null;
+      }
+    }
+    return value as {
+      head: { vars: string[] };
+      results: { bindings: Record<string, { type?: string; value?: string; datatype?: string }>[] };
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function querySparql(endpoint: string, query: string, isSplitDs = false): Promise<SparqlQueryResult> {
+  const sparqlUrl = new URL("/sparql", endpoint);
+  if (isSplitDs) sparqlUrl.port = "2001";
+  const key = queryCacheKey("sparql", sparqlUrl.toString(), query);
   const cached = getQueryCache<string>(key);
   if (cached !== undefined) {
     return {
@@ -183,33 +196,45 @@ async function querySparql(endpoint: string, query: string): Promise<{ responseT
         status: 200,
         headers: { "Content-Type": "application/sparql-results+json; charset=utf-8" },
       }),
+      key,
     };
   }
 
-  const sparqlUrl = new URL("/sparql", endpoint);
-  const response = await fetch(sparqlUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-      Accept: "application/sparql-results+json, application/json;q=0.9",
-    },
-    body: new URLSearchParams({ query }).toString(),
-    cache: "no-store",
-    signal: AbortSignal.timeout(20000),
-  });
-  const responseText = await response.text();
-  if (response.ok && (response.headers.get("content-type") ?? "").toLowerCase().includes("json")) {
-    setQueryCache(key, responseText);
+  // Coalesce identical upstream requests, but never cache here: the caller must
+  // validate the operation-specific result before it becomes shared cache data.
+  const pending = inFlightSparqlRequests.get(key);
+  if (pending) return pending;
+
+  const requestPromise = (async () => {
+    const response = await fetch(sparqlUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        Accept: "application/sparql-results+json, application/json;q=0.9",
+      },
+      body: new URLSearchParams({ query }).toString(),
+      cache: "no-store",
+      signal: AbortSignal.timeout(20000),
+    });
+    return { responseText: await response.text(), response, key };
+  })();
+  inFlightSparqlRequests.set(key, requestPromise);
+  try {
+    return await requestPromise;
+  } finally {
+    if (inFlightSparqlRequests.get(key) === requestPromise) inFlightSparqlRequests.delete(key);
   }
-  return { responseText, response };
 }
 
 export async function POST(request: Request) {
+  logProxyCaller(request, "sparql.POST");
   try {
     const body = await request.json().catch(() => null);
     const endpointList = getConfiguredEndpoints();
     const endpointId = getSelectedEndpointId(request, endpointList);
-    const fctEndpoint = endpointList.find((item) => item.id === endpointId)?.url;
+    const selectedEndpoint = endpointList.find((item) => item.id === endpointId);
+    const fctEndpoint = selectedEndpoint?.url;
+    const isSplitDs = selectedEndpoint?.label.toLowerCase() === "split ds";
     if (!fctEndpoint) {
       return NextResponse.json({ error: "No FCT endpoints are configured." }, { status: 500 });
     }
@@ -217,14 +242,14 @@ export async function POST(request: Request) {
     if (body?.facetValueCount && typeof body.facetValueCount === "object") {
       const sourceQuery = body.facetValueCount.sparql;
       if (typeof sourceQuery !== "string") {
-        return NextResponse.json({ error: "The FCT-generated source SPARQL query is required." }, { status: 400 });
+        return NextResponse.json({ error: "The client-generated scalar count SPARQL query is required." }, { status: 400 });
       }
-      const countQuery = buildFacetValueCountQuery(sourceQuery);
+      const countQuery = validateFacetValueCountQuery(sourceQuery);
       if (!countQuery) {
-        return NextResponse.json({ error: "Could not safely translate the FCT-generated SELECT into a facet count query." }, { status: 400 });
+        return NextResponse.json({ error: "The client must provide a scalar COUNT(DISTINCT ...) AS ?ct SPARQL query." }, { status: 400 });
       }
 
-      const { responseText, response } = await querySparql(fctEndpoint, countQuery);
+      const { responseText, response, key } = await querySparql(fctEndpoint, countQuery, isSplitDs);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
         return NextResponse.json(
@@ -238,12 +263,14 @@ export async function POST(request: Request) {
           { status: 502 },
         );
       }
-      const parsed = JSON.parse(responseText) as { results?: { bindings?: Record<string, { type?: string; value?: string }>[] } };
-      const countValue = parsed.results?.bindings?.[0]?.ct?.value;
-      const count = Number(countValue ?? 0);
-      if (!Number.isFinite(count) || count < 0) {
-        return NextResponse.json({ error: "Virtuoso returned an invalid facet count." }, { status: 502 });
+      const parsed = parseSparqlResults(responseText);
+      const countValue = parsed?.results.bindings[0]?.ct?.value;
+      const count = countValue !== undefined && /^\d+$/.test(countValue) ? Number(countValue) : NaN;
+      if (!parsed || !parsed.head.vars.includes("ct") || parsed.results.bindings.length !== 1 ||
+          !Number.isSafeInteger(count) || count < 0) {
+        return NextResponse.json({ error: "Virtuoso returned an invalid SPARQL count result." }, { status: 502 });
       }
+      if (response.status === 200) setQueryCache(key, responseText);
       return NextResponse.json({ count, query: countQuery });
     }
 
@@ -262,7 +289,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Could not safely add the high-frequency facets to the generated SPARQL query." }, { status: 400 });
       }
 
-      const { responseText, response } = await querySparql(fctEndpoint, built.query);
+      const { responseText, response, key } = await querySparql(fctEndpoint, built.query, isSplitDs);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
         return NextResponse.json(
@@ -276,11 +303,15 @@ export async function POST(request: Request) {
           { status: 502 },
         );
       }
-      const parsed = JSON.parse(responseText) as { results?: { bindings?: Record<string, { type?: string; value?: string }>[] } };
-      const bindings = Array.isArray(parsed.results?.bindings) ? parsed.results!.bindings! : [];
+      const parsed = parseSparqlResults(responseText);
+      if (!parsed || !parsed.head.vars.includes(built.variable)) {
+        return NextResponse.json({ error: "Virtuoso returned an invalid SPARQL facet-intersection result." }, { status: 502 });
+      }
+      const bindings = parsed.results.bindings;
       const uris = [...new Set(bindings
         .map((binding) => binding[built.variable]?.value)
         .filter((value): value is string => typeof value === "string" && value.length > 0))];
+      if (response.status === 200) setQueryCache(key, responseText);
       return NextResponse.json({ uris });
     }
 
@@ -308,7 +339,7 @@ export async function POST(request: Request) {
       branches.push(`{ VALUES ?resource { ${resourceValues} } VALUES ?property { ${iriList(roles)} } ?value ?property ?resource . BIND("reverse" AS ?direction) }`);
     }
     const query = `SELECT DISTINCT ?resource ?property ?direction ?value WHERE { ${branches.join(" UNION ")} }`;
-    const { responseText, response } = await querySparql(fctEndpoint, query);
+    const { responseText, response, key } = await querySparql(fctEndpoint, query, isSplitDs);
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.ok) {
       return NextResponse.json(
@@ -323,6 +354,10 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!parseSparqlResults(responseText)) {
+      return NextResponse.json({ error: "Virtuoso returned invalid SPARQL results JSON." }, { status: 502 });
+    }
+    if (response.status === 200) setQueryCache(key, responseText);
     return new NextResponse(responseText, {
       status: 200,
       headers: { "Content-Type": "application/sparql-results+json; charset=utf-8", "Cache-Control": "no-store" },

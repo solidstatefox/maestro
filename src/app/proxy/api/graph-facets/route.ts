@@ -1,3 +1,4 @@
+import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 import { getGraphFacets } from "@/lib/uri-registry";
 
@@ -21,6 +22,7 @@ function getConfiguredEndpoints(): Array<{ id: string; url: string }> {
 }
 
 export async function GET(request: Request) {
+  logProxyCaller(request, "graph-facets.GET");
   const endpoints = getConfiguredEndpoints();
   const cookie = request.headers.get("cookie") ?? "";
   const match = cookie.match(/(?:^|;\s*)fct_endpoint=([^;]+)/);

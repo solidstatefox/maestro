@@ -28,7 +28,7 @@ function cloneQueryNode(node: FctQueryNode): FctQueryNode {
   return {
     ...node,
     attributes: { ...node.attributes },
-    children: node.children.map(cloneQueryNode),
+    children: node.name === "view" ? [] : node.children.map(cloneQueryNode),
   };
 }
 
@@ -84,7 +84,7 @@ export function createPropertyWidgetQuery(
   const copyNode = (node: FctQueryNode): FctQueryNode => ({
     ...node,
     attributes: { ...node.attributes },
-    children: node.children.map(copyNode),
+    children: node.name === "view" ? [] : node.children.map(copyNode),
   });
   const selectedRoleIsAncestor = direction === "reverse" && Boolean(selectedNodeId) &&
     treeNodeContainsId(tree.children, selectedNodeId!, "query-view");
@@ -120,20 +120,12 @@ export function createPropertyWidgetQuery(
   // retain that ancestor and enumerate its values without adding another edge.
   const wrapAncestor = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) => {
     if (node.id === "query-view") {
-      const copiedView = copyNode(node);
-      const properties = copiedView.children.find((child) => child.name === "properties" || child.id === "query-view-properties");
-      const activeFilters = (properties?.children ?? []).filter((child) => child.name === "property" && child.id.startsWith("property-filter-"));
-      const filterIds = new Set(activeFilters.map((filter) => filter.id));
       const ephemeralView: FctQueryNode = {
-        ...copiedView,
-        attributes: { ...copiedView.attributes, type: "text", offset: "0" },
-        children: copiedView.children.flatMap((child) => {
-          if (child.id !== properties?.id) return [child];
-          const remaining = child.children.filter((filter) => !filterIds.has(filter.id));
-          return remaining.length ? [{ ...child, children: remaining }] : [];
-        }),
+        ...copyNode(node),
+        attributes: { ...node.attributes, type: "text", offset: "0" },
+        children: [],
       };
-      return [...activeFilters, ephemeralView];
+      return [ephemeralView];
     }
     return [{ ...node, attributes: { ...node.attributes }, children: wrapAncestor(node.children) }];
   });
@@ -272,7 +264,7 @@ export function createDistinctCountQuery(
   uri: string,
   propertyUri?: string,
   candidateValue?: QueryResultValue,
-  viewType: "list-count" | "text" = "list-count",
+  viewType: "list-count" | "text" | "properties" | "properties-in" | "classes" = "list-count",
 ): FctQueryTree {
   let tree: FctQueryTree = {
     ...sourceTree,
@@ -286,43 +278,29 @@ export function createDistinctCountQuery(
   if (kind === "property" || kind === "role") {
     const relationshipName = kind === "property" ? "property" : "property-of";
     const relationshipId = `${kind === "property" ? "count-property" : "count-role"}-${encodeURIComponent(uri)}`;
+    const relationshipNode: FctQueryNode = {
+      id: relationshipId,
+      name: relationshipName,
+      attributes: { iri: uri },
+      children: [],
+    };
 
-    // The view's property-filter-* nodes constrain the resource represented by
-    // the view before this count query adds a relationship around it. If those
-    // filters stay inside the view, the SPARQL compiler evaluates them against
-    // the relationship's value instead of the original scoped resource. This
-    // silently produces valid but incorrect zero counts whenever active facets
-    // are present. Lift only the active view's filters to the same parent scope
-    // as the new relationship, matching the semantics of FCT query serialization.
-    const wrapView = (nodes: FctQueryNode[]): FctQueryNode[] =>
-      nodes.flatMap((node) => {
-        if (node.id === "query-view") {
-          const liftedFilters: FctQueryNode[] = [];
-          const viewWithoutFilters: FctQueryNode = {
-            ...node,
-            children: node.children.flatMap((child) => {
-              if (child.name !== "properties" && child.id !== "query-view-properties") return [child];
-              const remaining = child.children.filter((filter) => {
-                const isActiveFilter = filter.name === "property" && filter.id.startsWith("property-filter-");
-                if (isActiveFilter) liftedFilters.push(filter);
-                return !isActiveFilter;
-              });
-              return remaining.length ? [{ ...child, children: remaining }] : [];
-            }),
-          };
-          return [
-            ...liftedFilters,
-            {
-              id: relationshipId,
-              name: relationshipName,
-              attributes: { iri: uri },
-              children: [viewWithoutFilters],
-            },
-          ];
+    // The candidate facet is a condition on the current result resource, not
+    // a parent of <view>. Wrapping <view> changes the counted variable to the
+    // related object and can make every property count mirror Results.
+    let inserted = false;
+    const addBesideView = (nodes: FctQueryNode[]): FctQueryNode[] => {
+      const output: FctQueryNode[] = [];
+      for (const node of nodes) {
+        output.push({ ...node, children: addBesideView(node.children) });
+        if (node.id === "query-view" && !inserted) {
+          output.push(relationshipNode);
+          inserted = true;
         }
-        return [{ ...node, children: wrapView(node.children) }];
-      });
-    tree = { ...tree, children: wrapView(tree.children) };
+      }
+      return output;
+    };
+    tree = { ...tree, children: addBesideView(tree.children) };
   } else if (kind === "class") {
     if (!queryContainsIri(tree, "class", uri)) {
       const classNode: FctQueryNode = {
@@ -355,56 +333,40 @@ export function createDistinctCountQuery(
       text: binding.text,
       children: [],
     };
-    const view = findQueryNode(tree.children, "query-view");
-    if (view) {
-      const properties = view.children.find(
-        (node) => node.id === "query-view-properties" || node.name === "properties",
-      );
-      const existingFilter = properties?.children.find(
-        (node) => node.name === "property" &&
-          node.id.startsWith("property-filter-") &&
-          node.attributes.iri === propertyUri,
-      );
-      // Facet counts are disjunctive: replace only this active view's binding
-      // with the candidate value, leaving all other filters intact. Never walk
-      // the whole tree by IRI: a same-IRI path or filter in another breadcrumb
-      // scope is a different structural constraint and must not be rewritten.
-      if (existingFilter && properties) {
-        const updatedView = {
-          ...view,
-          children: view.children.map((child) => child.id === properties.id
-            ? {
-                ...child,
-                children: child.children.map((filter) => filter.id === existingFilter.id
-                  ? { ...filter, children: [...filter.children.filter((item) => item.name !== "value"), valueNode] }
-                  : filter),
-              }
-            : child),
-        };
-        tree = { ...tree, children: updateQueryNode(tree.children, "query-view", () => updatedView) };
-      } else {
-        const filterNode: FctQueryNode = {
-          id: `property-filter-count-${encodeURIComponent(propertyUri)}`,
-          name: "property",
+    // The value must constrain the relationship's related variable. The
+    // relationship and <view> are commonly siblings, so looking for a
+    // property node whose *children* contain the view silently misses the
+    // candidate and produces an unfiltered count (often identical to Results).
+    // Insert the value under the matching relationship in the same sibling
+    // scope as the active view. Support both forward <property> and reverse
+    // <property-of> facets.
+    let inserted = false;
+    const addValueToActiveScope = (nodes: FctQueryNode[]): FctQueryNode[] => {
+      const hasActiveView = nodes.some((node) => node.id === "query-view");
+      return nodes.map((node) => {
+        const isTargetRelationship = hasActiveView && !inserted &&
+          (node.name === "property" || node.name === "property-of") &&
+          node.attributes.iri === propertyUri;
+        if (isTargetRelationship) {
+          inserted = true;
+          return { ...node, children: [...node.children, valueNode] };
+        }
+        return { ...node, children: addValueToActiveScope(node.children) };
+      });
+    };
+    tree = { ...tree, children: addValueToActiveScope(tree.children) };
+    if (!inserted) {
+      // Fail closed: never silently issue a count for the whole result set
+      // when the candidate value could not be attached to its relationship.
+      tree = {
+        ...tree,
+        children: [...tree.children, {
+          id: `count-value-scope-missing-${encodeURIComponent(propertyUri)}`,
+          name: "count-value-scope-missing",
           attributes: { iri: propertyUri },
-          children: [valueNode],
-        };
-        const propertiesNode: FctQueryNode = properties ?? {
-          id: "query-view-properties",
-          name: "properties",
-          attributes: {},
           children: [],
-        };
-        const updatedView = {
-          ...view,
-          children: properties
-            ? view.children.map((child) => child.id === properties.id
-                ? { ...child, children: [...child.children, filterNode] }
-                : child)
-            : [...view.children, { ...propertiesNode, children: [filterNode] }],
-        };
-        tree = { ...tree, children: updateQueryNode(tree.children, "query-view", () => updatedView) };
-      }
+        }],
+      };
     }
   }
 

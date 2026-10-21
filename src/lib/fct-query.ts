@@ -138,6 +138,8 @@ function serializeNode(node: FctQueryNode): string {
     .map(([name, value]) => ` ${name}="${escapeXml(value)}"`)
     .join("");
 
+  if (node.name === "view") return `<view${attributes}/>`;
+
   const content = [
     node.text ? escapeXml(node.text) : "",
     ...node.children.map(serializeNode),
@@ -150,49 +152,10 @@ export function serializeFctQuery(tree: FctQueryTree): string {
   const attributes = Object.entries(tree.attributes)
     .map(([name, value]) => ` ${name}="${escapeXml(value)}"`)
     .join("");
-
-  // At the root scope, FCT query filters are siblings of <view>, not children
-  // of <view><properties>. Keep the editor/store model scoped to the active
-  // view, but serialize those active root filters in the query-level position
-  // Virtuoso applies to the result set. When <view> is nested under a property
-  // path, its filters stay nested with that scope.
-  const rootView = tree.children.find((node) => node.id === "query-view");
-  const properties = rootView?.children.find(
-    (node) => node.name === "properties" || node.id === "query-view-properties",
-  );
-  const rootFilters = (properties?.children ?? []).filter(
-    (node) =>
-      node.name === "property" && node.id.startsWith("property-filter-"),
-  );
-
-  let children = tree.children;
-  if (rootView && properties && rootFilters.length > 0) {
-    const filterIds = new Set(rootFilters.map((node) => node.id));
-    const serializedView: FctQueryNode = {
-      ...rootView,
-      children: rootView.children.map((child) =>
-        child.id === properties.id
-          ? {
-              ...child,
-              children: child.children.filter((node) => !filterIds.has(node.id)),
-            }
-          : child,
-      ),
-    };
-    children = tree.children.flatMap((node) =>
-      node.id === "query-view"
-        ? [...rootFilters, serializedView]
-        : [node],
-    );
-  }
-
-  // Preserve <text></text> even when empty. The FCT API accepts an empty
-  // text element, and the proxy requires the element to be present.
-
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
     `<query${attributes}>` +
-    children.map(serializeNode).join("") +
+    tree.children.map(serializeNode).join("") +
     `</query>`
   );
 }
@@ -217,71 +180,26 @@ export function attachViewToPropertyInQueryTree(
   view: FctQueryNode,
   relationshipId: string,
 ): FctQueryTree {
-  const activeFilters: FctQueryNode[] = [];
-  const propertiesId = "query-view-properties";
-  const viewWithFiltersSeparated: FctQueryNode = {
+  const leafView: FctQueryNode = {
     ...view,
     attributes: { ...view.attributes, type: "text", offset: "0" },
-    children: view.children.flatMap((child) => {
-      if (child.name !== "properties" && child.id !== propertiesId) return [child];
-      activeFilters.push(...child.children.filter((item) => item.name === "property" && item.id.startsWith("property-filter-")));
-      const remaining = child.children.filter((item) => !(item.name === "property" && item.id.startsWith("property-filter-")));
-      return remaining.length ? [{ ...child, children: remaining }] : [];
-    }),
+    children: [],
   };
-  const containsView = (node: FctQueryNode): boolean => node.id === view.id || node.id === "query-view" || node.children.some(containsView);
   const attach = (nodes: FctQueryNode[]): FctQueryNode[] => {
-    // If the view is already wrapped by a relationship node, first normalize
-    // duplicate sibling wrappers by moving that wrapper's non-view constraints
-    // and view onto the existing same-IRI node in this exact parent scope.
-    const wrappedIndex = nodes.findIndex((node) =>
-      node.name === relationship && node.attributes.iri === iri && containsView(node),
-    );
-    if (wrappedIndex >= 0) {
-      const wrapped = nodes[wrappedIndex];
-      const existing = nodes.find((node, index) => index !== wrappedIndex &&
-        node.name === relationship && node.attributes.iri === iri);
-      if (existing) {
-        const movedChildren = wrapped.children.filter((child) => child.id !== "query-view");
-        const extractViewFrom = (node: FctQueryNode): FctQueryNode[] => node.id === "query-view" ? [] :
-          [{ ...node, children: node.children.flatMap(extractViewFrom) }];
-        const viewNode = (() => {
-          const find = (node: FctQueryNode): FctQueryNode | undefined => node.id === "query-view" ? node : node.children.map(find).find(Boolean);
-          return find(wrapped);
-        })();
-        const merged: FctQueryNode[] = nodes.flatMap((node, index) => {
-          if (index === wrappedIndex) return [];
-          if (index === nodes.indexOf(existing)) {
-            return [{
-              ...node,
-              children: [
-                ...node.children,
-                ...movedChildren.filter((child) => child.id !== "query-view"),
-                ...(viewNode ? [viewWithFiltersSeparated] : []),
-              ],
-            }];
-          }
-          return [node];
-        });
-        return merged;
-      }
-    }
     const viewIndex = nodes.findIndex((node) => node.id === view.id || node.id === "query-view");
     if (viewIndex >= 0) {
-      const existing = nodes.find((node) =>
-        node.name === relationship && node.attributes.iri === iri && node.id !== view.id && node.id !== "query-view",
-      );
       const withoutView = nodes.filter((node) => node.id !== view.id && node.id !== "query-view");
+      const existing = withoutView.find((node) => node.name === relationship && node.attributes.iri === iri);
       if (existing) {
         return withoutView.map((node) => node.id === existing.id
-          ? { ...node, children: [...node.children.filter((child) => child.id !== view.id && child.id !== "query-view"), ...activeFilters, viewWithFiltersSeparated] }
+          ? { ...node, children: [...node.children.filter((child) => child.id !== "query-view"), leafView] }
           : node);
       }
-      return [...withoutView, ...activeFilters, {
+      return [...withoutView, {
         id: relationshipId,
         name: relationship,
         attributes: { iri },
-        children: [viewWithFiltersSeparated],
+        children: [leafView],
       }];
     }
     return nodes.map((node) => ({ ...node, children: attach(node.children) }));
@@ -293,7 +211,7 @@ function cloneQueryTree(tree: FctQueryTree): FctQueryTree {
   const cloneNode = (node: FctQueryNode): FctQueryNode => ({
     ...node,
     attributes: { ...node.attributes },
-    children: node.children.map(cloneNode),
+    children: node.name === "view" ? [] : node.children.map(cloneNode),
   });
   return {
     ...tree,
@@ -319,30 +237,24 @@ function createQueryStore(initialTree?: FctQueryTree) {
     return nodes.map((node) => ({
       ...node,
       attributes: { ...node.attributes },
-      children: cloneNodes(node.children),
+      children: node.name === "view" ? [] : cloneNodes(node.children),
     }));
   }
 
-  /** Keep at most one <value> child per parent; the last value wins. */
+  /** Preserve all selected <value> children throughout the query tree. */
   function normalizeValueChildren(nodes: FctQueryNode[]): FctQueryNode[] {
-    let lastValueIndex = -1;
-    nodes.forEach((node, index) => {
-      if (node.name === "value") lastValueIndex = index;
-    });
-    return nodes
-      .filter((node, index) => node.name !== "value" || index === lastValueIndex)
-      .map((node) => ({ ...node, children: normalizeValueChildren(node.children) }));
+    // A property may have multiple <value> children when the user selects
+    // multiple facet items. Normalization must preserve every selected value.
+    return nodes.map((node) => ({
+      ...node,
+      children: normalizeValueChildren(node.children),
+    }));
   }
 
   function normalizeTreeValues(tree: FctQueryTree): FctQueryTree {
     return { ...tree, children: normalizeValueChildren(tree.children) };
   }
 
-  function propertiesGroup(tree: FctQueryTree): FctQueryNode | undefined {
-    return findNodeInTree(tree, "query-view")?.children.find(
-      (node) => node.id === "query-view-properties" || node.name === "properties",
-    );
-  }
 
   function notify() {
     for (const listener of listeners) {
@@ -423,7 +335,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
         ...node,
         id: node.id,
         attributes: { ...node.attributes },
-        children: node.children.map(clone),
+        children: node.name === "view" ? [] : node.children.map(clone),
       });
       const stableReplacement = clone({ ...replacement, id: nodeId });
       function replace(nodes: FctQueryNode[]): FctQueryNode[] {
@@ -571,25 +483,6 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     return findNodeInTree(tree, "query-view");
   }
 
-  function ensurePropertiesParent(tree: FctQueryTree): FctQueryTree {
-    const view = getViewNode(tree);
-    if (!view || view.children.some((node) => node.id === "query-view-properties")) {
-      return tree;
-    }
-    const propertiesNode: FctQueryNode = {
-      id: "query-view-properties",
-      name: "properties",
-      attributes: {},
-      children: [],
-    };
-    return {
-      ...tree,
-      children: updateNodeRecursively(tree.children, "query-view", (node) => ({
-        ...node,
-        children: [...node.children, propertiesNode],
-      })),
-    };
-  }
 
   function getPropertyPath(): { id: string; uri: string; name: string }[] {
     const path: FctQueryNode[] = [];
@@ -618,19 +511,17 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     return path.map((node) => ({ id: node.id, uri: node.attributes.iri ?? "", name: node.name }));
   }
 
-  function getPropertiesParent(tree: FctQueryTree = state.tree): FctQueryNode | null {
-    const view = getViewNode(tree);
-    return view?.children.find((node) => node.id === "query-view-properties") ?? null;
+  function getActiveViewScopeParent(tree: FctQueryTree = state.tree): FctQueryNode | null {
+    const parent = findParentOfNode(tree.children, "query-view");
+    return parent?.parentId ? findNodeInTree(tree, parent.parentId) : null;
   }
 
   function getPropertiesAtNode(parentId: string | null = null): string[] {
-    // The checkbox selection represents only sibling filter nodes in the
-    // <view><properties> group; nested drill-down path nodes are separate.
-    const parent = parentId ? findNodeInTree(state.tree, parentId) : getPropertiesParent();
-    const local = (parent?.children ?? []).filter(
-      (node) => node.name === "property" && node.id.startsWith("property-filter-") && typeof node.attributes.iri === "string",
-    );
-    return [...new Set(local.map((node) => node.attributes.iri))];
+    const parent = parentId ? findNodeInTree(state.tree, parentId) : getActiveViewScopeParent();
+    const children = parent ? parent.children : state.tree.children;
+    return [...new Set(children.filter((node) =>
+      node.name === "property" && node.id.startsWith("property-filter-") && typeof node.attributes.iri === "string",
+    ).map((node) => node.attributes.iri))];
   }
 
   function getClassesAtNode(parentId: string | null = null): string[] {
@@ -644,192 +535,43 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
   /**
    * The only method allowed to insert a <property> node into the query tree.
    * It always checks the current authoritative tree by IRI before insertion.
-   * Filter properties belong to the active view's <properties> group; path
    * properties wrap the active <view> at its current scope.
    */
-  function addProperty(
-    uri: string,
-    kind: "filter" | "path",
-    parentId: string | null = null,
-  ): void {
+  function addProperty(uri: string, kind: "filter" | "path", parentId: string | null = null): void {
     const normalizedUri = uri.trim();
     if (!normalizedUri) return;
-
-    updateTree((originalTree) => {
+    updateTree((tree) => {
+      const viewParent = findParentOfNode(tree.children, "query-view");
+      const scopeParentId = parentId ?? viewParent?.parentId ?? null;
+      const scopeParent = scopeParentId ? findNodeInTree(tree, scopeParentId) : null;
+      const scope = scopeParent ? scopeParent.children : tree.children;
+      const view = findNodeInTree(tree, "query-view");
+      if (!view) return tree;
       if (kind === "filter") {
-        // A property already used as a drill-down path cannot also be added
-        // as an active-view filter. The API is the enforcement boundary for
-        // this invariant; callers must not have to remember to check it.
-        if (getPropertyPathFromTree(originalTree).some((item) => item.uri === normalizedUri)) {
-          return originalTree;
-        }
-
-        const tree = ensurePropertiesParent(originalTree);
-        const parent = parentId ? findNodeInTree(tree, parentId) : getPropertiesParent(tree);
-        if (!parent) return tree;
-        // The active view's <properties> wrapper is the authoritative filter
-        // scope even when callers identify that scope by its path-node ID.
-        // Search it before insertion so a filter is reused rather than copied
-        // into a second location under the path node.
-        const activeViewProperties = getPropertiesParent(tree);
-        const alreadyInActiveView = (activeViewProperties?.children ?? []).some(
-          (node) => node.name === "property" && node.attributes.iri === normalizedUri,
-        );
-        // Also check the requested scope and legacy root-level property nodes.
-        const alreadyInScope = parent.children.some(
-          (node) => node.name === "property" && node.attributes.iri === normalizedUri,
-        );
-        const legacyRootFilter = parentId == null && tree.children.some(
-          (node) => node.name === "property" && node.attributes.iri === normalizedUri,
-        );
-        if (alreadyInActiveView || alreadyInScope || legacyRootFilter) return tree;
-
-        const property: FctQueryNode = {
+        if (scope.some((node) => node.name === "property" && node.attributes.iri === normalizedUri)) return tree;
+        const filter: FctQueryNode = {
           id: `property-filter-${encodeURIComponent(normalizedUri)}`,
           name: "property",
           attributes: { iri: normalizedUri },
           children: [],
         };
-        const targetParent = parent;
-        function insertFilter(nodes: FctQueryNode[]): FctQueryNode[] {
-          return nodes.map((node) => node.id === targetParent.id
-            ? { ...node, children: [...node.children, property] }
-            : { ...node, children: insertFilter(node.children) });
-        }
-        return { ...tree, children: insertFilter(tree.children) };
+        return updateChildrenAtParent(tree, scopeParentId, (children) => [...children, filter]);
       }
-
-      const originalView = findNodeInTree(originalTree, "query-view");
-      if (!originalView) return originalTree;
-      const currentPath = getPropertyPathFromTree(originalTree);
-      const pathAlreadyExists = currentPath.some((item) => item.uri === normalizedUri);
-
-      // If this predicate is used as the drill-down path, its active filter
-      // would serialize as a second <property iri="..."> inside the path's
-      // <view>. Convert it to the path representation by removing only the
-      // matching active-view filter before wrapping. Preserve all other
-      // filters and value bindings.
-      const isPropertiesGroup = (node: FctQueryNode) =>
-        node.name === "properties" || node.id === "query-view-properties";
-      const isMatchingFilter = (node: FctQueryNode) =>
-        node.name === "property" && node.attributes.iri === normalizedUri;
-      const filterWasRemoved = originalView.children.some(
-        (child) => isPropertiesGroup(child) && child.children.some(isMatchingFilter),
-      );
-      const viewWithoutDuplicateFilter: FctQueryNode = {
-        ...originalView,
-        // Remove the <properties> container too if its last filter was removed.
-        // Empty containers are not meaningful query state and should not be serialized.
-        children: originalView.children.flatMap((child) => {
-          if (!isPropertiesGroup(child)) return [child];
-          const remainingFilters = child.children.filter(
-            (filter) => !isMatchingFilter(filter),
-          );
-          return remainingFilters.length > 0
-            ? [{ ...child, children: remainingFilters }]
-            : [];
-        }),
-      };
-      const treeWithoutDuplicateFilter = filterWasRemoved
-        ? {
-            ...originalTree,
-            children: replaceNode(originalTree.children, "query-view", viewWithoutDuplicateFilter),
-          }
-        : originalTree;
-
-      // When entering a path from the query root, filters attached to the root
-      // view are root-scope constraints, not filters for the destination path.
-      // Move every remaining property-filter out of the root view's <properties>
-      // wrapper before moving the view under the selected path. Otherwise an
-      // unrelated root checkbox (e.g. dct:issued) accidentally becomes a filter
-      // inside the newly visited dct:creator scope.
-      let treeForPath = treeWithoutDuplicateFilter;
-      const rootView = treeForPath.children.find((node) => node.id === "query-view");
-      if (rootView) {
-        const rootProperties = rootView.children.find(isPropertiesGroup);
-        const rootFilters = (rootProperties?.children ?? []).filter(
-          (node) => node.name === "property" && node.id.startsWith("property-filter-"),
-        );
-        if (rootFilters.length > 0 && rootProperties) {
-          const filterIds = new Set(rootFilters.map((node) => node.id));
-          const viewWithoutRootFilters: FctQueryNode = {
-            ...rootView,
-            children: rootView.children.flatMap((child) => {
-              if (child.id !== rootProperties.id) return [child];
-              const remaining = child.children.filter((node) => !filterIds.has(node.id));
-              return remaining.length > 0 ? [{ ...child, children: remaining }] : [];
-            }),
-          };
-          treeForPath = {
-            ...treeForPath,
-            children: [
-              ...treeForPath.children.filter((node) => node.id !== "query-view"),
-              ...rootFilters,
-              viewWithoutRootFilters,
-            ],
-          };
-        }
-      }
-
-      // Repeated Goto clicks for an existing path are idempotent. Remove a
-      // matching legacy root-level filter if an older UI version left it beside
-      // the existing path, otherwise XML can contain duplicate predicates.
-      if (pathAlreadyExists) {
-        const rootHasPath = treeForPath.children.some((node) =>
-          node.name === "property" && node.id.startsWith("property-path-") &&
-          node.attributes.iri === normalizedUri,
-        );
-        if (!rootHasPath) return treeForPath;
-        return {
-          ...treeForPath,
-          children: treeForPath.children.filter((node) => !(
-            node.name === "property" && node.id.startsWith("property-filter-") &&
-            node.attributes.iri === normalizedUri
-          )),
-        };
-      }
-
-      const viewParent = findParentOfNode(treeForPath.children, "query-view");
-      if (!viewParent) return treeForPath;
-      const parentNode = viewParent.parentId
-        ? findNodeInTree(treeForPath, viewParent.parentId)
-        : null;
-      const siblings = parentNode ? parentNode.children : treeForPath.children;
-      if (
-        siblings.some(
-          (node) =>
-            node.name === "property" &&
-            node.id.startsWith("property-path-") &&
-            node.attributes.iri === normalizedUri,
-        )
-      ) {
-        return treeForPath;
-      }
-
-      const view = findNodeInTree(treeForPath, "query-view");
-      if (!view) return treeForPath;
-
-      // Reuse a matching property node already present beside the active view
-      // in this scope. In particular, legacy root-level property-filter nodes
-      // must be promoted into the path instead of leaving a duplicate behind.
-      const existingScopedProperty = siblings.find((node) =>
-        node.name === "property" && node.attributes.iri === normalizedUri,
-      );
-      const propertyNode: FctQueryNode = {
+      if (getPropertyPathFromTree(tree).some((item) => item.uri === normalizedUri)) return tree;
+      const relationship: FctQueryNode = {
         id: `property-path-${Date.now()}-${encodeURIComponent(normalizedUri)}`,
         name: "property",
         attributes: { iri: normalizedUri },
-        children: [view],
+        children: [{ ...view, children: [] }],
       };
-      function wrapView(nodes: FctQueryNode[]): FctQueryNode[] {
-        return nodes.flatMap((node) => {
-          if (node.id === "query-view") return existingScopedProperty ? [] : [propertyNode];
-          if (existingScopedProperty && node.id === existingScopedProperty.id) return [propertyNode];
-          if (existingScopedProperty && node.name === "property" && node.attributes.iri === normalizedUri) return [];
-          return [{ ...node, children: wrapView(node.children) }];
-        });
-      }
-      return { ...treeForPath, children: wrapView(treeForPath.children) };
+      const withoutView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) =>
+        node.id === "query-view" ? [] : [{ ...node, children: withoutView(node.children) }],
+      );
+      const base = { ...tree, children: withoutView(tree.children) };
+      return updateChildrenAtParent(base, scopeParentId, (children) => [
+        ...children.filter((node) => !(node.name === "property" && node.attributes.iri === normalizedUri)),
+        relationship,
+      ]);
     });
   }
 
@@ -847,8 +589,16 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
       uniqueValues.set(fctValueKey(value), value);
     }
     updateTree((tree) => {
-      const parent = parentId ? findNodeInTree(tree, parentId) : getPropertiesParent(tree);
-      const scopedProperty = (parent?.children ?? []).find(
+      const parent = parentId ? findNodeInTree(tree, parentId) : getActiveViewScopeParent(tree);
+      // At query root the active <view> has no parent node, so the scoped
+      // property filters are direct children of tree.children. Treat null as
+      // the root scope instead of searching an empty array.
+      const scopeChildren = parentId
+        ? (parent?.children ?? [])
+        : parent
+          ? parent.children
+          : tree.children;
+      const scopedProperty = scopeChildren.find(
         (node) => node.name === "property" && node.attributes.iri === normalizedUri,
       );
       const rootPathProperty = !parentId && tree.children.some((node) => node.id === "query-view")
@@ -859,12 +609,11 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
       const target = scopedProperty ?? rootPathProperty;
       if (!target) return tree;
       const values = [...uniqueValues.values()];
-      const value = values[values.length - 1];
-      const valueNodes = value ? [createValueNode(
+      const valueNodes = values.map((value) => createValueNode(
         `property-value-${encodeURIComponent(normalizedUri)}-${encodeURIComponent(fctValueKey(value))}`,
         value,
         typeof value === "string" ? "uri" : undefined,
-      )] : [];
+      ));
       return { ...tree, children: replaceNode(tree.children, target.id, {
         ...target,
         children: [...target.children.filter((node) => node.name !== "value"), ...valueNodes],
@@ -877,8 +626,13 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     const normalizedValue = normalizeFctValue(value);
     if (!normalizedUri || !normalizedValue.text.trim()) return;
     const tree = state.tree;
-    const parent = parentId ? findNodeInTree(tree, parentId) : getPropertiesParent(tree);
-    const scopedProperty = (parent?.children ?? []).find(
+    const parent = parentId ? findNodeInTree(tree, parentId) : getActiveViewScopeParent(tree);
+    const scopeChildren = parentId
+      ? (parent?.children ?? [])
+      : parent
+        ? parent.children
+        : tree.children;
+    const scopedProperty = scopeChildren.find(
       (node) => node.name === "property" && node.attributes.iri === normalizedUri,
     );
     const rootPathProperty = !parentId && tree.children.some((node) => node.id === "query-view")
@@ -911,7 +665,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     if (!normalizedUri) return;
 
     updateTree((tree) => {
-      const parent = parentId ? findNodeInTree(tree, parentId) : getPropertiesParent(tree);
+      const parent = parentId ? findNodeInTree(tree, parentId) : getActiveViewScopeParent(tree);
       const hasLocalFilter = Boolean(
         parent?.children.some(
           (child) =>
@@ -948,7 +702,6 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
 
       // Compatibility with legacy/root-level filter nodes. The serializer
       // emits view-owned filters as query-level <property> siblings, and older
-      // trees may store those siblings directly instead of under <properties>.
       if (!parentId && tree.children.some((node) => node.id === "query-view")) {
         return {
           ...tree,
@@ -968,102 +721,29 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
   }
 
   function navigateToPropertyPath(targetId: string) {
-    updateTree((originalTree) => {
-      const view = findNodeInTree(originalTree, "query-view");
-      if (!view) return originalTree;
-      // Capture the narrowed node with an explicit non-null type before using it
-      // inside nested tree-walking callbacks (TypeScript otherwise widens it).
-      const activeView: FctQueryNode = view;
-
+    updateTree((tree) => {
+      const view = findNodeInTree(tree, "query-view");
+      if (!view) return tree;
       if (targetId === "query-root") {
-        function removeView(nodes: FctQueryNode[]): FctQueryNode[] {
-          return nodes
-            .filter((node) => node.id !== "query-view")
-            .map((node) => ({ ...node, children: removeView(node.children) }));
-        }
-        return { ...originalTree, children: [...removeView(originalTree.children), view] };
-      }
-
-      const properties = view.children.find(
-        (node) => node.id === "query-view-properties" || node.name === "properties",
-      );
-      const selectedFilter = properties?.children.find(
-        (node) => node.id === targetId && node.name === "property" &&
-          node.id.startsWith("property-filter-") && typeof node.attributes.iri === "string",
-      );
-
-      // A filter selected as a breadcrumb destination must become a path node,
-      // not remain a property-filter hidden inside <view><properties>. Move all
-      // filters for the old scope beside the new path, promote the selected
-      // relationship to a path node, and attach a filter-free view beneath it.
-      // This keeps the tree structurally faithful to the FCT XML and avoids
-      // same-IRI filter/path nodes competing to represent one relationship.
-      if (selectedFilter && properties) {
-        const activeFilters = properties.children.filter(
-          (node) => node.name === "property" && node.id.startsWith("property-filter-"),
+        const removeView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) =>
+          node.id === "query-view" ? [] : [{ ...node, children: removeView(node.children) }],
         );
-        const viewWithoutFilters: FctQueryNode = {
-          ...view,
-          children: view.children.flatMap((child) => {
-            if (child.id !== properties.id) return [child];
-            const remaining = child.children.filter(
-              (node) => !(node.name === "property" && node.id.startsWith("property-filter-")),
-            );
-            return remaining.length ? [{ ...child, children: remaining }] : [];
-          }),
-        };
-        const pathNode: FctQueryNode = {
-          ...selectedFilter,
-          id: `property-path-${Date.now()}-${encodeURIComponent(selectedFilter.attributes.iri)}`,
-          children: [...selectedFilter.children.filter((child) => child.name === "value"), viewWithoutFilters],
-        };
-
-        const viewParent = findParentOfNode(originalTree.children, "query-view");
-        if (!viewParent) return originalTree;
-        const removeViewAndSelectedFilter = (nodes: FctQueryNode[]): FctQueryNode[] =>
-          nodes.flatMap((node) => {
-            if (node.id === "query-view") return [];
-            if (node.id === properties.id) {
-              const remaining = node.children.filter((child) => child.id !== targetId);
-              return remaining.length ? [{ ...node, children: remaining }] : [];
-            }
-            return [{ ...node, children: removeViewAndSelectedFilter(node.children) }];
-          });
-        const withoutView = removeViewAndSelectedFilter(originalTree.children);
-        const scopeParentId = viewParent.parentId;
-        const additions = [...activeFilters.filter((node) => node.id !== targetId), pathNode];
-        if (scopeParentId === null) {
-          return { ...originalTree, children: [...withoutView, ...additions] };
+        return { ...tree, children: [...removeView(tree.children), { ...view, children: [] }] };
+      }
+      let found = false;
+      const removeView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) =>
+        node.id === "query-view" ? [] : [{ ...node, children: removeView(node.children) }],
+      );
+      const base = { ...tree, children: removeView(tree.children) };
+      const insert = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => {
+        if (node.id === targetId && (node.name === "property" || node.name === "property-of")) {
+          found = true;
+          return { ...node, children: [...node.children, { ...view, children: [] }] };
         }
-        const insertAtScope = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) =>
-          node.id === scopeParentId
-            ? { ...node, children: [...node.children, ...additions] }
-            : { ...node, children: insertAtScope(node.children) },
-        );
-        return { ...originalTree, children: insertAtScope(withoutView) };
-      }
-
-      // Existing navigation-path nodes are resolved by their actual tree ID.
-      // The view is moved to that node without treating arbitrary same-IRI nodes
-      // as interchangeable.
-      function removeView(nodes: FctQueryNode[]): FctQueryNode[] {
-        return nodes
-          .filter((node) => node.id !== "query-view")
-          .map((node) => ({ ...node, children: removeView(node.children) }));
-      }
-      const withoutView = removeView(originalTree.children);
-      let targetFound = false;
-      function insertView(nodes: FctQueryNode[]): FctQueryNode[] {
-        return nodes.map((node): FctQueryNode => {
-          if (node.id === targetId && (node.name === "property" || node.name === "property-of")) {
-            targetFound = true;
-            return { ...node, children: [...node.children, activeView] };
-          }
-          return { ...node, children: insertView(node.children) };
-        });
-      }
-      const children = insertView(withoutView);
-      return targetFound ? { ...originalTree, children } : originalTree;
+        return { ...node, children: insert(node.children) };
+      });
+      const children = insert(base.children);
+      return found ? { ...base, children } : tree;
     });
   }
 
@@ -1071,99 +751,16 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
    * Move the active <view> to a relationship chosen from the breadcrumb's
    * sibling menu. The target is resolved only within the requested focus node's
    * scope: either a sibling at the same parent level, or a relationship exposed
-   * by the focus node's own <view>/<properties> group.
    *
-   * When the target lives inside the focused view, <properties> is a transparent
    * wrapper for navigation. Its children are lifted into the focus node's scope,
    * and the existing view node is attached to the selected relationship. Other
    * query nodes are preserved; all changes go through updateTree/listeners.
    */
   function moveViewToSibling(currentFocusId: string, targetId: string) {
-    const findNodeAndParent = (
-      nodes: FctQueryNode[],
-      target: string,
-      parent: FctQueryNode | FctQueryTree | null = null,
-    ): { node: FctQueryNode; parent: FctQueryNode | FctQueryTree | null } | null => {
-      for (const node of nodes) {
-        if (node.id === target) return { node, parent };
-        const found = findNodeAndParent(node.children, target, node);
-        if (found) return found;
-      }
-      return null;
-    };
-
-    const focusMatch = findNodeAndParent(state.tree.children, currentFocusId, state.tree);
-    if (!focusMatch) return;
-    const focus = focusMatch.node;
-    const view = focus.children.find((node) => node.id === "query-view" || node.name === "view");
-    const isRelationship = (node: FctQueryNode) =>
-      node.name === "property" || node.name === "property-of";
-
-    // Case 1: the menu is showing relationships inside this focus node's own
-    // view. Do not search elsewhere in the tree for the target.
-    if (view) {
-      const exposedChildren = view.children.flatMap((child) =>
-        child.name === "properties" || child.id === "query-view-properties"
-          ? child.children
-          : [child],
-      );
-      const targetIsInFocusScope = exposedChildren.some(
-        (node) => node.id === targetId && isRelationship(node),
-      );
-      if (targetIsInFocusScope) {
-        updateTree((tree) => {
-          let moved = false;
-          const transformFocus = (nodes: FctQueryNode[]): FctQueryNode[] =>
-            nodes.map((node) => {
-              if (node.id !== currentFocusId) {
-                return { ...node, children: transformFocus(node.children) };
-              }
-
-              const activeView = node.children.find(
-                (child) => child.id === "query-view" || child.name === "view",
-              );
-              if (!activeView) return node;
-              const liftedChildren = activeView.children.flatMap((child) =>
-                child.name === "properties" || child.id === "query-view-properties"
-                  ? child.children
-                  : [child],
-              );
-              if (!liftedChildren.some((child) => child.id === targetId && isRelationship(child))) {
-                return node;
-              }
-
-              const siblings = node.children.flatMap((child) =>
-                child.id === activeView.id ? liftedChildren : [child],
-              );
-              const withViewMoved = siblings.map((child) => {
-                if (child.id !== targetId) return child;
-                moved = true;
-                return { ...child, children: [...child.children, activeView] };
-              });
-              return { ...node, children: withViewMoved };
-            });
-
-          const children = transformFocus(tree.children);
-          return moved ? { ...tree, children } : tree;
-        });
-        return;
-      }
-    }
-
-    // Case 2: the target is a relationship sibling of the breadcrumb node.
-    // Reuse the established navigation operation, but only if both nodes share
-    // the same immediate parent; this prevents accidental cross-scope matches.
-    const targetMatch = findNodeAndParent(state.tree.children, targetId, state.tree);
-    if (
-      targetMatch &&
-      focusMatch.parent &&
-      targetMatch.parent &&
-      focusMatch.parent === targetMatch.parent &&
-      isRelationship(focusMatch.node) &&
-      isRelationship(targetMatch.node)
-    ) {
-      navigateToPropertyPath(targetId);
-    }
+    const focusMatch = findParentOfNode(state.tree.children, currentFocusId);
+    const targetMatch = findParentOfNode(state.tree.children, targetId);
+    if (!focusMatch || !targetMatch || focusMatch.parentId !== targetMatch.parentId) return;
+    navigateToPropertyPath(targetId);
   }
 
   function findParentOfNode(nodes: FctQueryNode[], targetId: string, parentId: string | null = null): { parentId: string | null } | null {
@@ -1350,7 +947,6 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     updateTree((tree) => {
       // Locate the parent that directly contains the active view. Role filters
       // are siblings of that view, just as forward filters are attached to its
-      // <properties> group. This prevents a selection in one breadcrumb scope
       // from leaking into every other scope.
       function findViewParent(nodes: FctQueryNode[]): { parentId: string | null; children: FctQueryNode[] } | null {
         for (const node of nodes) {

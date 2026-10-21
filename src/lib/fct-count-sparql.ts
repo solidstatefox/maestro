@@ -3,6 +3,8 @@ import type { FctQueryNode, FctQueryTree } from "./fct-query";
 type CompilerState = {
   nextVariable: number;
   viewVariable: string | null;
+  /** Related value selected by a per-property/role facet count, when present. */
+  countVariable: string | null;
   patterns: string[];
   errors: string[];
 };
@@ -85,11 +87,6 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
         compileNodes(node.children, subject, state);
         break;
       }
-      case "properties":
-        // <properties> is a structural container; its filters apply to the
-        // subject at the current query-tree scope.
-        compileNodes(node.children, subject, state);
-        break;
       case "property":
       case "property-of": {
         const predicate = iriTerm(node.attributes.iri);
@@ -101,6 +98,16 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
         state.patterns.push(node.name === "property"
           ? `${subject} ${predicate} ${related} .`
           : `${related} ${predicate} ${subject} .`);
+        // A facet item count measures the distinct values on the candidate
+        // relationship, not the number of current result resources. Counting
+        // viewVariable here made many Properties counts equal the Results count
+        // whenever each result resource had the property. For reverse roles,
+        // the related variable is the distinct incoming subject.
+        if (node.id.startsWith("count-property-") || node.id.startsWith("count-role-")) {
+          // A facet header counts the distinct related values. A per-value role
+          // count instead counts current view resources matching that value.
+          if (!node.id.startsWith("count-role-value-")) state.countVariable = related;
+        }
         compileNodes(node.children, related, state);
         break;
       }
@@ -139,6 +146,7 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
   const state: CompilerState = {
     nextVariable: 0,
     viewVariable: null,
+    countVariable: null,
     patterns: [],
     errors: [],
   };
@@ -163,6 +171,6 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
     whereBody = `GRAPH ${graphIri} {\n    ${whereBody.replace(/\n/g, "\n    ")}\n  }`;
   }
 
-  const countQuery = `SELECT (COUNT(DISTINCT ${state.viewVariable}) AS ?ct) WHERE {\n  ${whereBody.replace(/\n/g, "\n  ")}\n}`;
+  const countQuery = `SELECT (COUNT(DISTINCT ${state.countVariable ?? state.viewVariable}) AS ?ct) WHERE {\n  ${whereBody.replace(/\n/g, "\n  ")}\n}`;
   return [...queryAttributes, countQuery].join("\n");
 }

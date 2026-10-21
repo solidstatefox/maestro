@@ -25,7 +25,7 @@ import xmlFormat from "xml-formatter";
 import hljs from "highlight.js/lib/core";
 import xmlLanguage from "highlight.js/lib/languages/xml";
 import sqlLanguage from "highlight.js/lib/languages/sql";
-import { useFctQuery, serializeFctQuery, createPropertyWidgetQuery, createGroupMemberQuery, createGroupValuesQuery, createDistinctCountQuery, setQueryViewAttributes, createRecordDescriptionQuery } from "@/lib/fct-query-api";
+import { useFctQuery, serializeFctQuery, createPropertyWidgetQuery, createGroupMemberQuery, createGroupValuesQuery, createDistinctCountQuery, setQueryViewAttributes } from "@/lib/fct-query-api";
 import type { FctQueryNode, FctQueryTree, DistinctCountKind } from "@/lib/fct-query-api";
 
 hljs.registerLanguage("xml", xmlLanguage);
@@ -655,6 +655,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const [classFacets, setClassFacets] = useState<FacetItem[]>([]);
   const [roleFacets, setRoleFacets] = useState<FacetItem[]>([]);
   const [graphFacets, setGraphFacets] = useState<FacetItem[]>([]);
+  const [graphHasMore, setGraphHasMore] = useState(false);
   const [propertyFacetSparql, setPropertyFacetSparql] = useState("");
   const [roleFacetSparql, setRoleFacetSparql] = useState("");
   const [facetAutofillCandidates, setFacetAutofillCandidates] = useState<FacetAutofillCandidates>({ property: [], "property-in": [] });
@@ -708,7 +709,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
   useEffect(() => {
     setGraphsPage(0);
-  }, [graphFacets.length, queryTree.attributes.graph]);
+  }, [queryTree.attributes.graph]);
 
   const search =
     queryTree.children.find(
@@ -1090,6 +1091,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     ? Math.max(results.length, resultsPageMatchCount)
     : resultsTotalCount;
   const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string }[]>([]);
+  const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
+  const RECORD_DESCRIPTION_PAGE_SIZE = 20;
   const [isDescribing, setIsDescribing] = useState(false);
   const [isCountingResults, setIsCountingResults] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -1534,13 +1537,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       setIsLoadingProperties(false);
       setIsLoadingClasses(false);
       setIsLoadingRoles(false);
-      setIsLoadingGraphs(false);
       setFocusWidgetsSuppressed(false);
       return;
     }
 
-    // Every query/endpoint change invalidates the previous query-specific graph list.
-    // The replacement is loaded from the active query's full result set below.
+    // Every query/endpoint change resets the graph page and invalidates its old rows.
+    setGraphsPage(0);
     setGraphFacets([]);
 
     // A new source query means the previous scope's Autofill intersection is stale.
@@ -1553,7 +1555,6 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       if (!hasPropertyFacetSnapshot.current) setIsLoadingProperties(true);
       setIsLoadingClasses(true);
       setIsLoadingRoles(true);
-      setIsLoadingGraphs(true);
       setPropertyFacetError("");
       setClassFacetError("");
       setRoleFacetError("");
@@ -1584,30 +1585,11 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         };
       }
 
-      const [propertiesResult, classesResult, rolesResult, graphResult] =
+      const [propertiesResult, classesResult, rolesResult] =
         await Promise.allSettled([
           loadFacet("properties"),
           loadFacet("classes"),
           loadFacet("roles"),
-          (async () => {
-            const allGraphs = new Set<string>();
-            let offset = 0;
-            while (true) {
-              const graphQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, { type: "text", limit: "1000", offset: String(offset) }));
-              const response = await fetch("/proxy/api/fct", {
-                method: "POST", cache: "no-store",
-                headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-list", "GraphList") },
-                body: JSON.stringify({ queryXml: graphQueryXml, graphOnly: true }),
-                signal: controller.signal,
-              });
-              const data = await response.json();
-              if (!response.ok) throw new Error(data.error ?? "Failed to load datasites for the current query.");
-              for (const graph of Array.isArray(data.graphs) ? data.graphs : []) allGraphs.add(graph);
-              if (data.complete === true || data.complete === "yes" || (typeof data.rowCount === "number" && data.rowCount < 1000)) break;
-              offset += 1000;
-            }
-            return Array.from(allGraphs);
-          })(),
         ]);
 
       if (cancelled) return;
@@ -1655,16 +1637,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
             : "Failed to load role facets.",
         );
       }
-      if (graphResult.status === "fulfilled") {
-        setGraphFacets(graphResult.value.map((uri: string) => ({ uri, label: uri, count: 0 })));
-      } else {
-        setGraphFacets([]);
-      }
-
       setIsLoadingProperties(false);
       setIsLoadingClasses(false);
       setIsLoadingRoles(false);
-      setIsLoadingGraphs(false);
       setFocusWidgetsSuppressed(false);
     }, 250);
 
@@ -1675,7 +1650,62 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     };
   }, [search, queryWithoutPagingXml, queryCountXml, selectedEndpointId, endpointReadyForQuery]);
 
+  // Fetch only the graph page the user requested; never scan the entire result set.
+  useEffect(() => {
+    if (!endpointReadyForQuery || !selectedEndpointId) {
+      setGraphFacets([]);
+      setGraphHasMore(false);
+      setIsLoadingGraphs(false);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    setIsLoadingGraphs(true);
+    async function loadGraphPage() {
+      try {
+        const limit = FACET_PAGE_SIZE;
+        const offset = graphsPage * limit;
+        const graphQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
+          type: "text", limit: String(limit), offset: String(offset),
+        }));
+        const response = await fetch("/proxy/api/fct", {
+          method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-list", "GraphList") },
+          body: JSON.stringify({ queryXml: graphQueryXml, graphOnly: true }),
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? "Failed to load datasites for the current query.");
+        if (cancelled) return;
+        //const graphs = Array.isArray(data.graphs) ? [...new Set(data.graphs.filter((value: unknown): value is string => typeof value === "string"))] : [];
+       // setGraphFacets(graphs.map((uri: string) => ({ uri, label: uri, count: 0 })));
 
+const graphs: string[] = Array.isArray(data.graphs)
+  ? Array.from(
+      new Set<string>(
+        (data.graphs as unknown[]).filter(
+          (value): value is string => typeof value === "string"
+        )
+      )
+    )
+  : [];
+
+setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
+
+        setGraphHasMore(!(data.complete === true || data.complete === "yes") && (typeof data.rowCount !== "number" || data.rowCount >= limit));
+      } catch (error) {
+        if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
+          console.warn("Graph page load failed:", error);
+          setGraphFacets([]);
+          setGraphHasMore(false);
+        }
+      } finally {
+        if (!cancelled) setIsLoadingGraphs(false);
+      }
+    }
+    void loadGraphPage();
+    return () => { cancelled = true; controller.abort(); };
+  }, [graphsPage, queryWithoutPagingXml, selectedEndpointId, endpointReadyForQuery]);
 
 
   // Defensively merge duplicate resource rows by URI. The API normally groups
@@ -1715,66 +1745,63 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
   const selectedResult = visibleResultsPage.find((item) => item.uri === selectedUri);
 
-  // Virtuoso FCT supports a native describe view. Query the selected URI as the
-  // fixed subject so the right pane shows its RDF properties, not just its excerpt.
+  // Load the selected resource once with SPARQL DESCRIBE; pagination is local to
+  // the returned property/value pairs and does not trigger another server query.
   useEffect(() => {
     if (!selectedUri || !selectedEndpointId) {
       setDescribedRecord([]);
+      setRecordDescriptionPage(0);
       setIsDescribing(false);
       return;
     }
-
     let cancelled = false;
     const controller = new AbortController();
     setDescribedRecord([]);
+    setRecordDescriptionPage(0);
     setIsDescribing(true);
-
-    async function postFctQuery(queryXml: string) {
-      const response = await fetch("/proxy/api/fct", {
-        method: "POST",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-description", "RecordDescription") },
-        body: JSON.stringify({ queryXml }),
-        signal: controller.signal,
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Virtuoso record query failed.");
-      return data as { properties?: { uri: string; label: string; count: number }[]; results?: { uri: string; title: string }[] };
-    }
-
     async function loadDescription() {
       try {
-        // A fixed subject cannot be described with FCT's `describe` view alone:
-        // the documented query requires a property/class view or a relationship.
-        // Fetch its predicates first, then fetch each predicate's values.
-        const propertyData = await postFctQuery(serializeFctQuery(createRecordDescriptionQuery(selectedUri, "properties")));
-        const properties = Array.isArray(propertyData.properties) ? propertyData.properties : [];
-        const rows = await Promise.all(properties.map(async (property) => {
-          const predicate = property.uri || property.label;
-          if (!predicate) return [] as { property: string; value: string }[];
-          const valueData = await postFctQuery(serializeFctQuery(createRecordDescriptionQuery(selectedUri, "list", predicate)));
-          const values = Array.isArray(valueData.results) ? valueData.results : [];
-          return values.map((item) => ({
-            property: property.label || predicate,
-            value: item.title || item.uri,
-          })).filter((item) => item.value);
-        }));
-        if (!cancelled) setDescribedRecord(rows.flat());
+        const response = await fetch("/proxy/api/describe", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-description", "RecordDescription") },
+          body: JSON.stringify({ iri: selectedUri }),
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? "SPARQL DESCRIBE failed.");
+        if (typeof data.rdfXml !== "string") throw new Error("SPARQL DESCRIBE returned no RDF/XML document.");
+        const xml = new DOMParser().parseFromString(data.rdfXml, "application/xml");
+        if (xml.querySelector("parsererror")) throw new Error("The DESCRIBE response was not valid XML.");
+        const rdfNs = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+        const rows: { property: string; value: string }[] = [];
+        // RDF/XML may represent a subject as rdf:Description or as a typed node
+        // (for example foaf:Person), so inspect each direct child of rdf:RDF.
+        const rdfRoot = xml.documentElement.localName === "RDF"
+          ? xml.documentElement
+          : xml.getElementsByTagNameNS(rdfNs, "RDF")[0];
+        const subjects = rdfRoot ? Array.from(rdfRoot.children) : [];
+        for (const subject of subjects) {
+          for (const predicate of Array.from(subject.children)) {
+            const property = predicate.namespaceURI ? `${predicate.namespaceURI}${predicate.localName}` : predicate.tagName;
+            const resource = predicate.getAttributeNS(rdfNs, "resource");
+            const nodeId = predicate.getAttributeNS(rdfNs, "nodeID");
+            const value = resource || (nodeId ? `_:${nodeId}` : predicate.textContent?.trim() || "");
+            if (value) rows.push({ property: toLabel(property), value });
+          }
+        }
+        if (!cancelled) setDescribedRecord(rows);
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
-          console.warn("FCT record description failed:", error);
+          console.warn("SPARQL DESCRIBE failed:", error);
           setDescribedRecord([]);
         }
       } finally {
         if (!cancelled) setIsDescribing(false);
       }
     }
-
     void loadDescription();
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
+    return () => { cancelled = true; controller.abort(); };
   }, [selectedUri, selectedEndpointId]);
 
   // The active scope is the property-path node that currently contains the
@@ -3368,11 +3395,11 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                         </p>
                       ) : (
                         <>
-                          {graphFacets.length > FACET_PAGE_SIZE && (
+                          {(graphsPage > 0 || graphHasMore) && (
                             <div className="mb-2 flex items-center justify-between gap-2 px-2 text-xs">
-                              <button type="button" className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setGraphsPage((page) => Math.max(0, page - 1))} disabled={graphsPage === 0}>Previous</button>
-                              <span className="text-muted-foreground">Page {Math.min(graphsPage + 1, Math.ceil(graphFacets.length / FACET_PAGE_SIZE))} of {Math.max(1, Math.ceil(graphFacets.length / FACET_PAGE_SIZE))}</span>
-                              <button type="button" className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setGraphsPage((page) => Math.min(Math.ceil(graphFacets.length / FACET_PAGE_SIZE) - 1, page + 1))} disabled={graphsPage >= Math.ceil(graphFacets.length / FACET_PAGE_SIZE) - 1}>Next</button>
+                              <button type="button" className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setGraphsPage((page) => Math.max(0, page - 1))} disabled={graphsPage === 0 || isLoadingGraphs}>Previous</button>
+                              <span className="text-muted-foreground">Page {graphsPage + 1}</span>
+                              <button type="button" className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setGraphsPage((page) => page + 1)} disabled={!graphHasMore || isLoadingGraphs}>Next</button>
                             </div>
                           )}
                           <div className="space-y-1">
@@ -3383,7 +3410,6 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                                 if (b.uri === selectedGraph) return 1;
                                 return 0;
                               })
-                              .slice(graphsPage * FACET_PAGE_SIZE, (graphsPage + 1) * FACET_PAGE_SIZE)
                               .map((item) => (
                               <label key={item.uri} className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 cursor-pointer">
                                 <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri} onChange={() => bindGraph(item.uri)} aria-label={`Bind datasite ${item.uri}`} className="size-4 shrink-0 accent-current" />
@@ -3782,9 +3808,17 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                 </p>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-4">
-                <h3 className="mb-3 text-sm font-semibold">
-                  Properties and values
-                </h3>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">Properties and values</h3>
+                  {describedRecord.length > 0 && <span className="text-xs text-muted-foreground">{describedRecord.length} values</span>}
+                </div>
+                {describedRecord.length > RECORD_DESCRIPTION_PAGE_SIZE && (
+                  <div className="mb-3 flex items-center justify-between gap-2 text-xs">
+                    <button type="button" className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setRecordDescriptionPage((page) => Math.max(0, page - 1))} disabled={recordDescriptionPage === 0}>Previous</button>
+                    <span className="text-muted-foreground">Page {recordDescriptionPage + 1} of {Math.ceil(describedRecord.length / RECORD_DESCRIPTION_PAGE_SIZE)}</span>
+                    <button type="button" className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setRecordDescriptionPage((page) => Math.min(Math.ceil(describedRecord.length / RECORD_DESCRIPTION_PAGE_SIZE) - 1, page + 1))} disabled={recordDescriptionPage >= Math.ceil(describedRecord.length / RECORD_DESCRIPTION_PAGE_SIZE) - 1}>Next</button>
+                  </div>
+                )}
                 <table className="w-full border-collapse text-left text-sm">
                   <thead>
                     <tr className="border-b text-muted-foreground">
@@ -3793,7 +3827,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
                     </tr>
                   </thead>
                   <tbody>
-                    {describedRecord.map((item, index) => (
+                    {describedRecord.slice(recordDescriptionPage * RECORD_DESCRIPTION_PAGE_SIZE, (recordDescriptionPage + 1) * RECORD_DESCRIPTION_PAGE_SIZE).map((item, index) => (
                       <tr
                         key={`${item.property}-${index}`}
                         className="border-b"

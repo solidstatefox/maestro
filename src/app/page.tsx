@@ -655,6 +655,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
 
   const [personalWidgets, setPersonalWidgets] = useState<PersonalWidget[]>([]);
+  const [breadcrumbTrail, setBreadcrumbTrail] = useState<
+  { id: string; uri: string; name: string }[]
+>([]);
+
   const [focusWidgetsSuppressed, setFocusWidgetsSuppressed] = useState(false);
   const [groupByPropertyUri, setGroupByPropertyUri] = useState("");
   const [resultsUiPage, setResultsUiPage] = useState(0);
@@ -727,6 +731,60 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     queryTree.children.find(
       (node) => node.name === "text" && node.id === "query-text",
     )?.text ?? "";
+
+  useEffect(() => {
+    const activePath = getPropertyPath();
+
+    // Collect IDs of relationship nodes that still exist in the query tree.
+    const existingIds = new Set<string>();
+
+    function collectIds(nodes: FctQueryNode[]) {
+      for (const node of nodes) {
+        if (
+          (node.name === "property" || node.name === "property-of") &&
+          typeof node.attributes.iri === "string" &&
+          node.attributes.iri.length > 0
+        ) {
+          existingIds.add(node.id);
+        }
+
+        collectIds(node.children);
+      }
+    }
+
+    collectIds(queryTree.children);
+
+    setBreadcrumbTrail((current) => {
+      // Remove breadcrumbs whose relationship nodes were deleted.
+      const retained = current.filter((crumb) => existingIds.has(crumb.id));
+
+      // If the active path is a prefix of the remembered trail,
+      // the user navigated backward. Keep the suffix visible.
+      const isNavigatingBackward =
+        activePath.length <= retained.length &&
+        activePath.every((crumb, index) => crumb.id === retained[index]?.id);
+
+      if (isNavigatingBackward) {
+        return retained.length === current.length ? current : retained;
+      }
+
+      // A new branch was selected or the user drilled farther down.
+      // Replace the remembered trail with the active path.
+      const unchanged =
+        current.length === activePath.length &&
+        current.every(
+          (crumb, index) =>
+            crumb.id === activePath[index]?.id &&
+            crumb.uri === activePath[index]?.uri &&
+            crumb.name === activePath[index]?.name,
+        );
+
+      return unchanged ? current : activePath;
+    });
+  }, [queryTree, getPropertyPath]);
+
+
+
 
   useEffect(() => {
     let cancelled = false;
@@ -1138,6 +1196,18 @@ useEffect(() => {
   const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string }[]>([]);
   const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
   const RECORD_DESCRIPTION_PAGE_SIZE = 20;
+  
+  // First pass: collect every value under its property URI.
+const describedProperties = Array.from(
+  describedRecord.reduce((grouped, item) => {
+    const values = grouped.get(item.property) ?? [];
+    values.push(item.value);
+    grouped.set(item.property, values);
+    return grouped;
+  }, new Map<string, string[]>()),
+  ([property, values]) => ({ property, values }),
+);
+  
   const [isDescribing, setIsDescribing] = useState(false);
   const [isCountingResults, setIsCountingResults] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -1832,7 +1902,8 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
             const resource = predicate.getAttributeNS(rdfNs, "resource");
             const nodeId = predicate.getAttributeNS(rdfNs, "nodeID");
             const value = resource || (nodeId ? `_:${nodeId}` : predicate.textContent?.trim() || "");
-            if (value) rows.push({ property: toLabel(property), value });
+            //if (value) rows.push({ property: toLabel(property), value });
+			if (value) rows.push({ property, value });
           }
         }
         if (!cancelled) setDescribedRecord(rows);
@@ -1851,12 +1922,24 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
 
   // The active scope is the property-path node that currently contains the
   // authoritative <view>; at the root, scope is represented by null.
-  const activePropertyPath = getPropertyPath();
-  const activeLeafId: string | null =
-    activePropertyPath.length > 0
-      ? activePropertyPath[activePropertyPath.length - 1].id
-      : null;
-  // Derive checked state from the authoritative query tree, including path
+// The active scope is the property-path node that currently contains the
+// authoritative <view>; at the root, scope is represented by null.
+const activePropertyPath = getPropertyPath();
+
+const activeLeafId: string | null =
+  activePropertyPath.length > 0
+    ? activePropertyPath[activePropertyPath.length - 1].id
+    : null;
+
+const displayedBreadcrumbPath =
+  activePropertyPath.length <= breadcrumbTrail.length &&
+  activePropertyPath.every(
+    (crumb, index) => crumb.id === breadcrumbTrail[index]?.id,
+  )
+    ? breadcrumbTrail
+    : activePropertyPath;
+
+const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked state from the authoritative query tree, including path
   // properties left at the root when a breadcrumb moves the view elsewhere.
   const activePropertyFilters = getActiveViewPropertyFilters(queryTree);
   const activeRoleFilters = getActiveViewRoleFilters(queryTree);
@@ -2857,7 +2940,8 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
         </button>
 
         </span>
-        {getPropertyPath().map((crumb, index) => {
+        {displayedBreadcrumbPath.map((crumb, index) => {
+  const isInactiveSuffix = index > activeBreadcrumbIndex;
           const breadcrumbClasses = classBreadcrumbLabels(crumb.id);
           const breadcrumbLabel = (
             roleFacets.find((item) => item.uri === crumb.uri)?.label ??
@@ -2874,11 +2958,17 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
                 <button
                   type="button"
                   onClick={() => navigateToPropertyPath(crumb.id)}
-                  className={`relative cursor-pointer rounded-none border-0 px-2.5 pb-1.5 pt-4 text-sm hover:bg-accent ${index === getPropertyPath().length - 1 ? "bg-accent font-medium" : "bg-background"}`}
+                  className={`relative cursor-pointer rounded-none border-0 px-2.5 pb-1.5 pt-4 text-sm hover:bg-accent ${
+  index === activeBreadcrumbIndex
+    ? "bg-accent font-medium text-foreground"
+    : isInactiveSuffix
+      ? "bg-background text-muted-foreground"
+      : "bg-background text-foreground"
+}`}
                   title={`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}
                   aria-current={
-                    index === getPropertyPath().length - 1 ? "location" : undefined
-                  }
+  index === activeBreadcrumbIndex ? "location" : undefined
+}
                 >
                   {breadcrumbClasses.length > 0 && (
                     <span className="absolute left-1 top-0 max-w-[calc(100%-8px)] truncate text-left text-[9px] font-normal leading-3 text-muted-foreground" aria-label={`Classes: ${breadcrumbClasses.join(", ")}`}>
@@ -2905,7 +2995,9 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
                           type="button"
                           aria-label={`Choose a sibling for ${compactIri(crumb.uri)}`}
                           title="Choose a sibling relationship"
-                          className="flex h-auto min-h-10 w-8 shrink-0 self-stretch items-center justify-center rounded-none border-0 bg-background p-0 text-foreground outline-none hover:bg-accent focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=open]:bg-accent"
+                          className={`flex h-auto min-h-10 w-8 shrink-0 self-stretch items-center justify-center rounded-none border-0 bg-background p-0 ${
+  isInactiveSuffix ? "text-muted-foreground" : "text-foreground"
+} outline-none hover:bg-accent focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=open]:bg-accent`}
                         >
                           <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m4 6 4 4 4-4" /></svg>
                         </button>
@@ -3854,16 +3946,44 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-4">
                 <div className="mb-3 flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">Properties and values</h3>
-                  {describedRecord.length > 0 && <span className="text-xs text-muted-foreground">{describedRecord.length} values</span>}
+                  
+                 
+				  {describedRecord.length > 0 && (
+  <span className="text-xs text-muted-foreground">
+    {describedProperties.length} properties · {describedRecord.length} values
+  </span>
+)}
                 </div>
-                {describedRecord.length > RECORD_DESCRIPTION_PAGE_SIZE && (
-                  <div className="mb-3 flex items-center justify-between gap-2 text-xs">
-                    <button type="button" className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setRecordDescriptionPage((page) => Math.max(0, page - 1))} disabled={recordDescriptionPage === 0}>Previous</button>
-                    <span className="text-muted-foreground">Page {recordDescriptionPage + 1} of {Math.ceil(describedRecord.length / RECORD_DESCRIPTION_PAGE_SIZE)}</span>
-                    <button type="button" className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setRecordDescriptionPage((page) => Math.min(Math.ceil(describedRecord.length / RECORD_DESCRIPTION_PAGE_SIZE) - 1, page + 1))} disabled={recordDescriptionPage >= Math.ceil(describedRecord.length / RECORD_DESCRIPTION_PAGE_SIZE) - 1}>Next</button>
-                  </div>
-                )}
+                {describedProperties.length > RECORD_DESCRIPTION_PAGE_SIZE && (
+  <div className="mb-3 flex items-center justify-between gap-2 text-xs">
+    <button
+      type="button"
+      className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+      onClick={() => setRecordDescriptionPage((page) => Math.max(0, page - 1))}
+      disabled={recordDescriptionPage === 0}
+    >
+      Previous
+    </button>
+
+    <span className="text-muted-foreground">
+      Page {recordDescriptionPage + 1} of {Math.ceil(describedProperties.length / RECORD_DESCRIPTION_PAGE_SIZE)}
+    </span>
+
+    <button
+      type="button"
+      className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+      onClick={() => setRecordDescriptionPage((page) =>
+        Math.min(
+          Math.ceil(describedProperties.length / RECORD_DESCRIPTION_PAGE_SIZE) - 1,
+          page + 1,
+        )
+      )}
+      disabled={recordDescriptionPage >= Math.ceil(describedProperties.length / RECORD_DESCRIPTION_PAGE_SIZE) - 1}
+    >
+      Next
+    </button>
+  </div>
+)}
                 <table className="w-full border-collapse text-left text-sm">
                   <thead>
                     <tr className="border-b text-muted-foreground">
@@ -3872,27 +3992,44 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
                     </tr>
                   </thead>
                   <tbody>
-                    {describedRecord.slice(recordDescriptionPage * RECORD_DESCRIPTION_PAGE_SIZE, (recordDescriptionPage + 1) * RECORD_DESCRIPTION_PAGE_SIZE).map((item, index) => (
-                      <tr
-                        key={`${item.property}-${index}`}
-                        className="border-b"
-                      >
-                        <td className="break-all px-3 py-3 align-top font-medium">
-                          {item.property}
-                        </td>
-                        <td className="break-all px-3 py-3 align-top">
-                          {item.value}
-                        </td>
-                      </tr>
-                    ))}
-                    {describedRecord.length === 0 && (
-                      <tr>
-                        <td colSpan={2} className="px-3 py-4 text-sm text-muted-foreground">
-                          {isDescribing ? "Loading record description…" : selectedUri ? "No description data returned." : "Select a result to describe it."}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
+  {describedProperties
+    .slice(
+      recordDescriptionPage * RECORD_DESCRIPTION_PAGE_SIZE,
+      (recordDescriptionPage + 1) * RECORD_DESCRIPTION_PAGE_SIZE,
+    )
+    .flatMap((item) =>
+      item.values.map((value, index) => (
+        <tr
+          key={`${item.property}-${index}`}
+          className="border-b"
+        >
+          {index === 0 && (
+            <td
+              rowSpan={item.values.length}
+              className="whitespace-nowrap px-3 py-3 align-top font-medium"
+            >
+              {toLabel(item.property)}
+            </td>
+          )}
+          <td className="break-all px-3 py-3 align-top">
+            {value}
+          </td>
+        </tr>
+      )),
+    )}
+
+  {describedRecord.length === 0 && (
+    <tr>
+      <td colSpan={2} className="px-3 py-4 text-sm text-muted-foreground">
+        {isDescribing
+          ? "Loading record description…"
+          : selectedUri
+            ? "No description data returned."
+            : "Select a result to describe it."}
+      </td>
+    </tr>
+  )}
+</tbody>
                 </table>
               </div>
             </section>

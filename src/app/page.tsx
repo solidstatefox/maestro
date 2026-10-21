@@ -145,19 +145,31 @@ function facetValueKey(value: FctResult): string {
   return fctTermKey(binding.text, binding.datatype, binding.lang);
 }
 
-function groupValueBinding(value: FctResult): { text: string; datatype?: string; lang?: string } {
+function groupValueBinding(value: FctResult): {
+  text: string;
+  datatype?: string;
+  lang?: string;
+} {
   const isUri = value.termType === "uri";
+  const datatype =
+    value.datatype ===
+    "http://www.openlinksw.com/schemas/facets/dtp/plainstring"
+      ? "string"
+      : value.datatype;
+
   return {
     text: value.uri,
-    // FCT uses datatype="uri" for resources. Literal values should carry
-    // their actual RDF datatype; plain strings use the documented "string"
-    // shorthand, while language-tagged values are identified by xml:lang.
-    ...(isUri ? { datatype: "uri" } : value.datatype
-      ? { datatype: value.datatype }
-      : value.lang ? {} : { datatype: "string" }),
+    ...(isUri
+      ? { datatype: "uri" }
+      : datatype
+        ? { datatype }
+        : value.lang
+          ? {}
+          : { datatype: "string" }),
     ...(value.lang ? { lang: value.lang } : {}),
   };
 }
+
 
 type PersonalWidget = {
   uri: string;
@@ -1013,6 +1025,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const [results, setResults] = useState<FctResult[]>([]);
   const resultsBatchRequestPending = useRef(false);
   const activeQueryIdentityRef = useRef("");
+  const previousResultsQueryIdentityRef = useRef("");
   const endpointReadyForQuery = Boolean(
     selectedEndpointId &&
     selectedEndpointStatus?.status != null &&
@@ -1026,6 +1039,38 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     const queryIdentity = `${selectedEndpointId}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
     activeQueryIdentityRef.current = queryIdentity;
   }, [queryCountXml, selectedEndpointId, endpointReadyForQuery]);
+
+useEffect(() => {
+  const nextIdentity = `${selectedEndpointId}\u0000${queryCountXml}`;
+  const previousIdentity = previousResultsQueryIdentityRef.current;
+
+  previousResultsQueryIdentityRef.current = nextIdentity;
+
+  // Keep the initial load; reset only when an existing query changes.
+  if (!previousIdentity || previousIdentity === nextIdentity) return;
+
+  setResultsUiPage(0);
+  setResults([]);
+  resultsBatchRequestPending.current = false;
+  setResultsPageMatchCount(0);
+  setResultsTotalCount(null);
+  setSelectedUri("");
+  setDescribedRecord([]);
+  setRecordDescriptionPage(0);
+  setSparqlQuery("");
+  setSearchError("");
+
+  // Restart server-side paging at offset zero for the new query.
+  if (resultsOffset !== 0) {
+    setResultsPage(resultsBatchSize, 0);
+  }
+}, [
+  queryCountXml,
+  selectedEndpointId,
+  resultsOffset,
+  resultsBatchSize,
+  setResultsPage,
+]);
 
   function clearWidgetsForViewChange() {
     setResultsUiPage(0);

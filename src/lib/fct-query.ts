@@ -140,8 +140,16 @@ function serializeNode(node: FctQueryNode): string {
 
   if (node.name === "view") return `<view${attributes}/>`;
 
+  // Virtuoso FCT emits selected URI values into its generated SPARQL filter.
+  // It expects an IRI reference there, including angle brackets; serializing
+  // the bare URI causes output such as `filter (?s2 = http://example/id)` and
+  // the selected value is not applied to the result set.
+  const textContent = node.text ?? "";
+  const serializedText = node.name === "value" && node.attributes.datatype === "uri" && textContent.trim()
+    ? escapeXml(/^<.*>$/.test(textContent.trim()) ? textContent.trim() : `<${textContent.trim()}>`)
+    : textContent ? escapeXml(textContent) : "";
   const content = [
-    node.text ? escapeXml(node.text) : "",
+    serializedText,
     ...node.children.map(serializeNode),
   ].join("");
 
@@ -241,20 +249,6 @@ function createQueryStore(initialTree?: FctQueryTree) {
     }));
   }
 
-  /** Preserve all selected <value> children throughout the query tree. */
-  function normalizeValueChildren(nodes: FctQueryNode[]): FctQueryNode[] {
-    // A property may have multiple <value> children when the user selects
-    // multiple facet items. Normalization must preserve every selected value.
-    return nodes.map((node) => ({
-      ...node,
-      children: normalizeValueChildren(node.children),
-    }));
-  }
-
-  function normalizeTreeValues(tree: FctQueryTree): FctQueryTree {
-    return { ...tree, children: normalizeValueChildren(tree.children) };
-  }
-
 
   function notify() {
     for (const listener of listeners) {
@@ -265,7 +259,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
   function updateTree(
     update: (tree: FctQueryTree) => FctQueryTree,
   ) {
-    const nextTree = normalizeTreeValues(update(state.tree));
+    const nextTree = update(state.tree);
     state = {
       ...state,
       tree: nextTree,
@@ -579,6 +573,26 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     addProperty(uri, "filter", parentId);
   }
 
+  /**
+   * Resolve a property filter in the active view's scope. At the query root,
+   * filters are siblings of <view>; inside a property path, they are children
+   * of the path node that contains <view>.
+   */
+  function findScopedProperty(
+    tree: FctQueryTree,
+    parentId: string | null,
+    uri: string,
+  ): FctQueryNode | null {
+    const parent = parentId
+      ? findNodeInTree(tree, parentId)
+      : getActiveViewScopeParent(tree);
+    if (parentId && !parent) return null;
+    const siblings = parent ? parent.children : tree.children;
+    return siblings.find(
+      (node) => node.name === "property" && node.attributes.iri === uri,
+    ) ?? null;
+  }
+
   function setPropertyValues(parentId: string | null, uri: string, valuesInput: FctValueInput[]) {
     const normalizedUri = uri.trim();
     if (!normalizedUri) return;
@@ -589,35 +603,20 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
       uniqueValues.set(fctValueKey(value), value);
     }
     updateTree((tree) => {
-      const parent = parentId ? findNodeInTree(tree, parentId) : getActiveViewScopeParent(tree);
-      // At query root the active <view> has no parent node, so the scoped
-      // property filters are direct children of tree.children. Treat null as
-      // the root scope instead of searching an empty array.
-      const scopeChildren = parentId
-        ? (parent?.children ?? [])
-        : parent
-          ? parent.children
-          : tree.children;
-      const scopedProperty = scopeChildren.find(
-        (node) => node.name === "property" && node.attributes.iri === normalizedUri,
-      );
-      const rootPathProperty = !parentId && tree.children.some((node) => node.id === "query-view")
-        ? tree.children.find(
-            (node) => node.name === "property" && node.id.startsWith("property-path-") && node.attributes.iri === normalizedUri,
-          )
-        : undefined;
-      const target = scopedProperty ?? rootPathProperty;
+      const target = findScopedProperty(tree, parentId, normalizedUri);
       if (!target) return tree;
-      const values = [...uniqueValues.values()];
-      const valueNodes = values.map((value) => createValueNode(
+      const valueNodes = [...uniqueValues.values()].map((value) => createValueNode(
         `property-value-${encodeURIComponent(normalizedUri)}-${encodeURIComponent(fctValueKey(value))}`,
         value,
         typeof value === "string" ? "uri" : undefined,
       ));
-      return { ...tree, children: replaceNode(tree.children, target.id, {
-        ...target,
-        children: [...target.children.filter((node) => node.name !== "value"), ...valueNodes],
-      }) };
+      return {
+        ...tree,
+        children: replaceNode(tree.children, target.id, {
+          ...target,
+          children: [...target.children.filter((node) => node.name !== "value"), ...valueNodes],
+        }),
+      };
     });
   }
 
@@ -625,39 +624,46 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     const normalizedUri = uri.trim();
     const normalizedValue = normalizeFctValue(value);
     if (!normalizedUri || !normalizedValue.text.trim()) return;
-    const tree = state.tree;
-    const parent = parentId ? findNodeInTree(tree, parentId) : getActiveViewScopeParent(tree);
-    const scopeChildren = parentId
-      ? (parent?.children ?? [])
-      : parent
-        ? parent.children
-        : tree.children;
-    const scopedProperty = scopeChildren.find(
-      (node) => node.name === "property" && node.attributes.iri === normalizedUri,
-    );
-    const rootPathProperty = !parentId && tree.children.some((node) => node.id === "query-view")
-      ? tree.children.find(
-          (node) => node.name === "property" && node.id.startsWith("property-path-") && node.attributes.iri === normalizedUri,
-        )
-      : undefined;
-    const property = scopedProperty ?? rootPathProperty;
-    const values = (property?.children ?? [])
-      .filter((node) => node.name === "value")
-      .map((node) => ({
-        text: node.text ?? "",
-        datatype: node.attributes.datatype,
-        lang: node.attributes["xml:lang"],
-        op: node.attributes.op,
-        attributes: Object.fromEntries(Object.entries(node.attributes).filter(([name]) =>
-          !["datatype", "xml:lang", "op"].includes(name))),
-      }))
-      .filter((item) => item.text);
-    const currentKey = fctValueKey(value);
-    const existing = values.some((item) => fctValueKey(item) === currentKey);
-    const nextValues = checked
-      ? existing ? values : [...values, value]
-      : values.filter((item) => fctValueKey(item) !== currentKey);
-    setPropertyValues(parentId, normalizedUri, nextValues);
+
+    // Read and write against the same current tree. This avoids a stale read
+    // between deriving the existing bindings and applying the checkbox toggle.
+    updateTree((tree) => {
+      const property = findScopedProperty(tree, parentId, normalizedUri);
+      if (!property) return tree;
+
+      const values: FctValueInput[] = property.children
+        .filter((node) => node.name === "value" && Boolean(node.text))
+        .map((node) => ({
+          text: node.text ?? "",
+          datatype: node.attributes.datatype ?? (node.attributes["xml:lang"] ? undefined : "string"),
+          lang: node.attributes["xml:lang"],
+          op: node.attributes.op,
+          attributes: Object.fromEntries(Object.entries(node.attributes).filter(([name]) =>
+            !["datatype", "xml:lang", "op"].includes(name))),
+        }));
+      const currentKey = fctValueKey(value);
+      const existing = values.some((item) => fctValueKey(item) === currentKey);
+      const nextValues = checked
+        ? existing ? values : [...values, value]
+        : values.filter((item) => fctValueKey(item) !== currentKey);
+      const uniqueValues = new Map<string, FctValueInput>();
+      for (const item of nextValues) {
+        const normalized = normalizeFctValue(item);
+        if (normalized.text.trim()) uniqueValues.set(fctValueKey(item), item);
+      }
+      const valueNodes = [...uniqueValues.values()].map((item) => createValueNode(
+        `property-value-${encodeURIComponent(normalizedUri)}-${encodeURIComponent(fctValueKey(item))}`,
+        item,
+        typeof item === "string" ? "uri" : undefined,
+      ));
+      return {
+        ...tree,
+        children: replaceNode(tree.children, property.id, {
+          ...property,
+          children: [...property.children.filter((node) => node.name !== "value"), ...valueNodes],
+        }),
+      };
+    });
   }
 
   function removePropertyFromNode(parentId: string | null, uri: string) {

@@ -21,6 +21,8 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { CodeBlock } from "@/components/ui/code-block";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import xmlFormat from "xml-formatter";
 import hljs from "highlight.js/lib/core";
 import xmlLanguage from "highlight.js/lib/languages/xml";
@@ -248,6 +250,24 @@ function QueryInspectorButton({
   );
 }
 
+/** Build the exact count query used as the identity for a candidate's live-scope count. */
+function distinctCountQueryFor(
+  tree: FctQueryTree,
+  kind: DistinctCountKind,
+  uri: string,
+  propertyUri?: string,
+  candidateValue?: FctResult,
+): string {
+  const viewType =
+    kind === "property" ? "properties"
+      : kind === "role" ? "properties-in"
+        : kind === "class" ? "classes"
+          : "list-count";
+  return buildFctCountSparql(
+    createDistinctCountQuery(tree, kind, uri, propertyUri, candidateValue, viewType),
+  ) ?? "";
+}
+
 /** Each visible item requests its own distinct-row count through the same-origin SPARQL proxy. */
 function DistinctCount({
   tree,
@@ -255,25 +275,22 @@ function DistinctCount({
   uri,
   propertyUri,
   candidateValue,
+  onCountChange,
 }: {
   tree: FctQueryTree;
   kind: DistinctCountKind;
   uri: string;
   propertyUri?: string;
   candidateValue?: FctResult;
+  onCountChange?: (query: string, count: number | null) => void;
 }) {
   const [count, setCount] = useState<number | null>(null);
   const [error, setError] = useState("");
   // Key this effect by the compiled scalar count query, not the full browsing
   // query. The compiler deliberately ignores <view> limit/offset, so Results
   // pagination does not refetch every facet count.
-  const countViewType =
-    kind === "property" ? "properties"
-      : kind === "role" ? "properties-in"
-        : kind === "class" ? "classes"
-          : "list-count";
-  const countSparqlQuery = buildFctCountSparql(
-    createDistinctCountQuery(tree, kind, uri, propertyUri, candidateValue, countViewType),
+  const countSparqlQuery = distinctCountQueryFor(
+    tree, kind, uri, propertyUri, candidateValue,
   );
 
   useEffect(() => {
@@ -302,7 +319,10 @@ function DistinctCount({
         if (!Number.isFinite(parsedCount) || parsedCount < 0) {
           throw new Error("The SPARQL endpoint returned an invalid item count.");
         }
-        if (!cancelled) setCount(parsedCount);
+        if (!cancelled) {
+          setCount(parsedCount);
+          onCountChange?.(countSparqlQuery, parsedCount);
+        }
       } catch (requestError) {
         if (
           cancelled ||
@@ -329,6 +349,7 @@ function DistinctCount({
       if (cancelled) return;
       console.info("Maestro DistinctCount request starting", { kind, uri, propertyUri });
       setCount(null);
+      onCountChange?.(countSparqlQuery, null);
       setError("");
       void loadCount();
     }, 45);
@@ -543,6 +564,9 @@ function PersonalRoleWidget({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [page, setPage] = useState(0);
+  // Counts are keyed by the full compiled query, so a new live query scope can
+  // never accidentally reuse a candidate's stale count from the prior scope.
+  const [candidateCounts, setCandidateCounts] = useState<Record<string, number | null>>({});
 
   const unconstrainedTree: FctQueryTree = {
     ...tree,
@@ -594,16 +618,28 @@ function PersonalRoleWidget({
     }
     void loadValues();
     return () => { cancelled = true; controller.abort(); };
-  }, [uri, widgetQueryXml]);
+  }, [uri, widgetQueryXml, tree]);
 
-  const pageCount = Math.max(1, Math.ceil(values.length / 10));
-  const pageValues = values.slice(page * 10, (page + 1) * 10);
+  const visibleValues = values.filter((value) => {
+    const binding = groupValueBinding(value);
+    const countQuery = distinctCountQueryFor(tree, "value", value.uri, uri, value);
+    const count = candidateCounts[countQuery];
+    const valueKey = fctTermKey(binding.text, binding.datatype, binding.lang);
+    // Keep a selected value available to uncheck even if the current query has
+    // become empty; hide only confirmed zero-count alternatives.
+    return selectedKeys.includes(valueKey) || count !== 0;
+  });
+  const pageCount = Math.max(1, Math.ceil(visibleValues.length / 10));
+  const pageValues = visibleValues.slice(page * 10, (page + 1) * 10);
+  useEffect(() => {
+    setPage((current) => Math.min(current, Math.max(0, pageCount - 1)));
+  }, [pageCount]);
   return (
     <div className="min-h-0 flex-1 overflow-auto p-2">
       {loading && <p className="px-2 py-1 text-xs text-muted-foreground" aria-live="polite">Updating…</p>}
       {error && <p className="px-2 py-1 text-xs text-destructive" title={error}>Update failed: {error}</p>}
-      {!loading && !error && values.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">No values found for this role.</p>}
-      {values.length > 10 && (
+      {!loading && !error && visibleValues.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">No matching values for this role.</p>}
+      {visibleValues.length > 10 && (
         <div className="mb-2 flex items-center justify-between gap-2 px-1 text-xs">
           <button type="button" className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40" disabled={page === 0} onClick={() => setPage((current) => Math.max(0, current - 1))}>Previous</button>
           <span className="text-muted-foreground">{page + 1}/{pageCount}</span>
@@ -624,6 +660,11 @@ function PersonalRoleWidget({
                 uri={value.uri}
                 propertyUri={uri}
                 candidateValue={value}
+                onCountChange={(query, count) =>
+                  setCandidateCounts((current) =>
+                    current[query] === count ? current : { ...current, [query]: count },
+                  )
+                }
               />
             </label>
           );
@@ -725,6 +766,7 @@ function replaceFacetAutofillCandidates(kind: "property" | "property-in", uris: 
 }
 
 export default function Home() {
+  const [controlsSheetOpen, setControlsSheetOpen] = useState(false);
   const [selectedUri, setSelectedUri] = useState("");
   const [fctEndpoints, setFctEndpoints] = useState<EndpointOption[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState("");
@@ -781,6 +823,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const FACET_PAGE_SIZE = 10;
   const [propertyFacets, setPropertyFacets] = useState<FacetItem[]>([]);
   const [classFacets, setClassFacets] = useState<FacetItem[]>([]);
+  const [classCandidateCounts, setClassCandidateCounts] = useState<Record<string, number | null>>({});
   const [roleFacets, setRoleFacets] = useState<FacetItem[]>([]);
   const [graphFacets, setGraphFacets] = useState<FacetItem[]>([]);
   const [graphHasMore, setGraphHasMore] = useState(false);
@@ -1184,15 +1227,15 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const groupMemberRequestStates = useRef(new Map<string, "loading" | "loaded">());
   const sourceSparql = sparqlQuery || "# SPARQL will appear after the endpoint returns a query.";
   const queryWithoutPagingXml = useCallback(
-    (viewType?: string) =>
-      serializeFctQuery(
-        setQueryViewAttributes(queryTree, {
-          ...(viewType ? { type: viewType } : {}),
-          offset: "0",
-        }),
-      ),
-    [queryTree],
-  );
+  (viewType?: string) =>
+    serializeFctQuery(
+      setQueryViewAttributes(queryTree, {
+        ...(viewType ? { type: viewType } : {}),
+        offset: "0",
+      }),
+    ),
+  [queryTree],
+);
   // Snapshot the semantic facet requests. Effects depend on their serialized XML,
   // not queryWithoutPagingXml's callback identity (which changes on every tree edit).
   const propertyFacetQueryXml = queryWithoutPagingXml("properties");
@@ -1218,9 +1261,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // do not clear widgets merely because arbitrary query state changed. The
   // coordinated clear is invoked only by the explicit view-navigation actions.
   useLayoutEffect(() => {
-    const queryIdentity = `${selectedEndpointId}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
-    activeQueryIdentityRef.current = queryIdentity;
-  }, [queryCountXml, selectedEndpointId, endpointReadyForQuery]);
+const queryIdentity = `${selectedEndpointId}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
+activeQueryIdentityRef.current = queryIdentity;
+}, [queryCountXml, selectedEndpointId, endpointReadyForQuery]);
 
 useEffect(() => {
   const nextIdentity = `${selectedEndpointId}\u0000${queryCountXml}`;
@@ -1247,7 +1290,7 @@ useEffect(() => {
     setResultsPage(resultsBatchSize, 0);
   }
 }, [
-  queryCountXml,
+  queryResultsXml,
   selectedEndpointId,
   resultsOffset,
   resultsBatchSize,
@@ -1313,10 +1356,11 @@ useEffect(() => {
   }
   const [resultsTotalCount, setResultsTotalCount] = useState<number | null>(null);
   const [resultsPageMatchCount, setResultsPageMatchCount] = useState(0);
-  // Never display fewer total results than rows already loaded while a count refreshes.
-  const effectiveResultsTotalCount = resultsTotalCount === 0 && (results.length > 0 || resultsPageMatchCount > 0)
-    ? Math.max(results.length, resultsPageMatchCount)
-    : resultsTotalCount;
+  // The displayed total must never under-report distinct result resources already loaded.
+  // The FCT result list is deduplicated by URI below before it is stored in state.
+  const effectiveResultsTotalCount = resultsTotalCount === null
+    ? null
+    : Math.max(resultsTotalCount, results.length);
   const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string }[]>([]);
   const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
   const RECORD_DESCRIPTION_PAGE_SIZE = 20;
@@ -1341,6 +1385,11 @@ const describedProperties = Array.from(
   const [timeoutSeconds, setTimeoutSeconds] = useState(0);
 
   const resultsCountSparql = buildFctCountSparql(queryTree);
+  const resultsCountRequestIdentity = `${selectedEndpointId}\u0000${resultsCountSparql ?? ""}`;
+  const latestResultsCountRequestIdentityRef = useRef(resultsCountRequestIdentity);
+  // Update during render, not in an effect, so a response from an older query
+  // cannot win the small interval between a new render and effect cleanup.
+  latestResultsCountRequestIdentityRef.current = resultsCountRequestIdentity;
 
   useEffect(() => {
     const endpointReady = endpointReadyForQuery;
@@ -1352,10 +1401,10 @@ const describedProperties = Array.from(
 
     let cancelled = false;
     const controller = new AbortController();
-    setResultsTotalCount(null);
-    setIsCountingResults(true);
 
     async function loadTotalCount() {
+      if (cancelled) return;
+      setIsCountingResults(true);
       try {
         if (!resultsCountSparql) {
           throw new Error("The current FCT query tree contains a condition that cannot be compiled safely to SPARQL.");
@@ -1373,22 +1422,33 @@ const describedProperties = Array.from(
         if (!Number.isSafeInteger(total) || total < 0) {
           throw new Error("Virtuoso returned an invalid scalar count.");
         }
-        if (!cancelled) setResultsTotalCount(total);
+        if (!cancelled && latestResultsCountRequestIdentityRef.current === resultsCountRequestIdentity) {
+          setResultsTotalCount(total);
+        }
       } catch (error) {
         if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
         console.warn("SPARQL result count query failed:", error);
-        setResultsTotalCount(null);
+        if (!cancelled && latestResultsCountRequestIdentityRef.current === resultsCountRequestIdentity) {
+          setResultsTotalCount(null);
+        }
       } finally {
-        if (!cancelled) setIsCountingResults(false);
+        if (!cancelled && latestResultsCountRequestIdentityRef.current === resultsCountRequestIdentity) {
+          setIsCountingResults(false);
+        }
       }
     }
 
-    void loadTotalCount();
+    // Query-tree operations can emit several intermediate revisions during one
+    // user action. Debounce the scalar count so Virtuoso only receives the
+    // settled query; cleanup also prevents a late response from replacing the
+    // count belonging to a newer query.
+    const timer = window.setTimeout(() => { void loadTotalCount(); }, 350);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
       controller.abort();
     };
-  }, [resultsCountSparql, selectedEndpointId, endpointReadyForQuery]);
+  }, [resultsCountSparql, resultsCountRequestIdentity, selectedEndpointId, endpointReadyForQuery]);
 
   // FCT query timeout is expressed in milliseconds in the XML. Keep the slider
   // in seconds for the UI, and sync it if the authoritative query tree changes.
@@ -1460,9 +1520,20 @@ const describedProperties = Array.from(
 
         if (cancelled) return;
 
-        let nextResults: FctResult[] = Array.isArray(data.results)
+        const rawResults: FctResult[] = Array.isArray(data.results)
           ? data.results
           : [];
+        const uniqueResults = new Map<string, FctResult>();
+        for (const item of rawResults) {
+          const previous = uniqueResults.get(item.uri);
+          uniqueResults.set(
+            item.uri,
+            previous
+              ? { ...previous, ...item, matches: [...previous.matches, ...item.matches] }
+              : { ...item, matches: [...item.matches] },
+          );
+        }
+        const nextResults = Array.from(uniqueResults.values());
 
         // Enrichment may take much longer than the FCT response. Never allow
         // a completed request for an older breadcrumb/endpoint to repopulate
@@ -2078,6 +2149,17 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
       .map((uri) => ({ uri, label: uri, count: 0 })),
     ...classFacets,
   ];
+  const visibleClassDisplayFacets = classDisplayFacets.filter((item) => {
+    const countQuery = distinctCountQueryFor(queryTree, "class", item.uri);
+    // Selected classes stay visible so they can be unchecked; unselected classes
+    // disappear once their count against this exact live query is confirmed 0.
+    return selectedClasses.has(item.uri) || classCandidateCounts[countQuery] !== 0;
+  });
+  useEffect(() => {
+    setClassesPage((current) =>
+      Math.min(current, Math.max(0, Math.ceil(visibleClassDisplayFacets.length / FACET_PAGE_SIZE) - 1)),
+    );
+  }, [visibleClassDisplayFacets.length]);
   const autoConfigureFacetCount =
     facetAutofillCandidates.property.filter((uri) => !selectedProperties.has(uri)).length +
     facetAutofillCandidates["property-in"].filter((uri) => !selectedRoles.has(uri)).length;
@@ -2705,143 +2787,149 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
               className="shrink-0 rounded-none border-l border-input px-3 data-[state=on]:bg-green-100 data-[state=on]:text-green-800 data-[state=on]:hover:bg-green-200 dark:data-[state=on]:bg-green-950 dark:data-[state=on]:text-green-300 dark:data-[state=on]:hover:bg-green-900"
             ><Network aria-hidden="true" /></Toggle>
           </div>
-          <button
-            type="button"
-            onClick={clearGraph}
-            className="shrink-0 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-            title="Clear graph field and query graph"
-          >Clear</button>
-          <button
-            type="button"
-            onClick={applyGraphText}
-            className="shrink-0 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-          >Go</button>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          <ThemeToggle />
-          <button
-            type="button"
-            onClick={() => {
-              try {
-                window.localStorage.removeItem(FACET_ADD_COUNTS_STORAGE_KEY);
-                window.localStorage.removeItem(FACET_AUTOFILL_STORAGE_KEY);
-                setFacetAutofillCandidates({ property: [], "property-in": [] });
-                setFacetUsageRevision((revision) => revision + 1);
-                setAutoResetMessage("Auto-configure was reset.");
-              } catch {
-                setAutoResetMessage("Auto-configure could not be reset because browser storage is unavailable.");
-              }
-            }}
-            className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent cursor-pointer"
-            title="Reset Auto-configure learning history and saved candidates"
-          >
-            Reset Auto
-          </button>
-          <div className="flex items-center gap-2 rounded-md border px-2.5 py-1.5" title="FCT query execution timeout">
-            <label htmlFor="fct-query-timeout" className="whitespace-nowrap text-xs text-muted-foreground">Timeout</label>
-            <div className="w-24">
-              <Slider
-                id="fct-query-timeout"
-                aria-label="Query timeout in seconds"
-                min={0}
-                max={60}
-                step={1}
-                value={[timeoutSeconds]}
-                onValueChange={(values) => setTimeoutSeconds(values[0] ?? 0)}
-                onValueCommit={(values) => setQueryAttribute("timeout", String((values[0] ?? 0) * 1000))}
-              />
-            </div>
-            <output htmlFor="fct-query-timeout" className="w-8 text-right text-xs tabular-nums">{timeoutSeconds}s</output>
-          </div>
-          <div className="flex items-center gap-2 rounded-md border px-2.5 py-1.5">
-            <label htmlFor="fct-query-same-as" className="whitespace-nowrap text-xs text-muted-foreground">Aliases</label>
-            <Switch
-              id="fct-query-same-as"
-              checked={queryTree.attributes["same-as"] === "yes"}
-              onCheckedChange={(checked) => setQueryAttribute("same-as", checked ? "yes" : "no")}
-              aria-label="Include owl:sameAs relationships"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setIsRdfLoaderOpen(true);
-              setRdfLoadMessage("");
-              setRdfLoadError(false);
-            }}
-            className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent cursor-pointer"
-          >
-            RDF Loader
-          </button>
-          <div className="flex items-center gap-2">
-            <Label htmlFor="fct-endpoint" className="whitespace-nowrap text-xs text-muted-foreground">
-              Data server:
-            </Label>
-            <select
-              id="fct-endpoint"
-              value={selectedEndpointId}
-              onChange={(event) =>
-                void chooseFctEndpoint(event.currentTarget.value)
-              }
-              className="max-w-[280px] rounded-md border bg-background px-2.5 py-1.5 text-xs"
-              title="Choose which FCT endpoint receives queries"
-            >
-              {fctEndpoints.length === 0 && (
-                <option value="">
-                  {isCheckingEndpoints
-                    ? "Loading endpoints and checking servers…"
-                    : "No endpoints configured"}
-                </option>
-              )}
-              {[...new Set(fctEndpoints.map((endpoint) => endpoint.group || "Endpoints"))].map((group) => (
-                <optgroup key={group} label={group}>
-                  {fctEndpoints.filter((endpoint) => (endpoint.group || "Endpoints") === group).map((endpoint) => {
-                    const status = endpointStatuses[endpoint.id];
-                    const mark =
-                      status?.status === 200
-                        ? "🟢 "
-                        : status?.state === "server-error"
-                          ? "🔴 "
-                          : status && ["unreachable", "timeout"].includes(status.state)
-                            ? "🟠 "
-                            : "";
-                    const statusText =
-                      status?.status != null
-                        ? ` (${new URL(endpoint.url).protocol.replace(":", "").toUpperCase()} ${status.status})`
-                        : status
-                          ? ` (${status.state})`
-                          : "";
-                    return (
-                      <option key={endpoint.id} value={endpoint.id}>
-                        {mark}{endpoint.label}{statusText}
-                      </option>
-                    );
-                  })}
-                </optgroup>
-              ))}
-            </select>
-            {isCheckingEndpoints && (
-              <span
-                className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground"
-                role="status"
-                aria-live="polite"
-              >
-                <span className="sr-only">{fctEndpoints.length === 0 ? "Loading FCT servers" : "Updating FCT servers"}</span>
-                <Progress className="h-2 w-24" value={endpointChecksTotal ? (endpointChecksCompleted / endpointChecksTotal) * 100 : 0} indeterminate={endpointChecksTotal === 0 || endpointChecksCompleted === 0} aria-label="FCT endpoint checks" />
-                {fctEndpoints.length === 0 ? "Loading FCT servers…" : `Updating… ${endpointChecksCompleted}/${endpointChecksTotal}`}
-              </span>
-            )}
+          <ButtonGroup>
             <button
               type="button"
-              onClick={() => void checkFctEndpoints()}
-              disabled={isCheckingEndpoints || fctEndpoints.length === 0}
-              className="rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50 cursor-pointer"
-              title="Check each server with a small FCT query"
-            >
-              {isCheckingEndpoints ? "Checking…" : "Check servers"}
-            </button>
-          </div>
+              onClick={clearGraph}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+              title="Clear graph field and query graph"
+            >Clear</button>
+            <button
+              type="button"
+              onClick={applyGraphText}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+            >Go</button>
+          </ButtonGroup>
         </div>
+        <Sheet open={controlsSheetOpen} onOpenChange={setControlsSheetOpen}>
+          <SheetTrigger
+            render={
+              <Button variant="outline" className="inline-flex shrink-0 items-center gap-2" aria-label="Open controls">
+                <Code2 className="size-4" aria-hidden="true" />
+                Controls
+              </Button>
+            }
+          />
+          <SheetContent side="right" className="w-[min(92vw,28rem)] overflow-y-auto sm:max-w-md">
+            <SheetHeader>
+              <SheetTitle>Maestro controls</SheetTitle>
+              <SheetDescription>Query behavior, appearance, and data server settings.</SheetDescription>
+            </SheetHeader>
+            <div className="flex flex-col gap-4 px-4 pb-4">
+              <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                <Label>Appearance</Label>
+                <ThemeToggle />
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                <div className="min-w-0">
+                  <Label>Auto-configure</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">Clear learned facet usage and saved candidates.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      window.localStorage.removeItem(FACET_ADD_COUNTS_STORAGE_KEY);
+                      window.localStorage.removeItem(FACET_AUTOFILL_STORAGE_KEY);
+                      setFacetAutofillCandidates({ property: [], "property-in": [] });
+                      setFacetUsageRevision((revision) => revision + 1);
+                      setAutoResetMessage("Auto-configure was reset.");
+                    } catch {
+                      setAutoResetMessage("Auto-configure could not be reset because browser storage is unavailable.");
+                    }
+                  }}
+                  className="shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                  title="Reset Auto-configure learning history and saved candidates"
+                >Reset Auto</button>
+              </div>
+              <div className="flex flex-col gap-3 rounded-md border p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <Label htmlFor="fct-query-timeout">Query timeout</Label>
+                  <output htmlFor="fct-query-timeout" className="text-sm tabular-nums">{timeoutSeconds}s</output>
+                </div>
+                <Slider
+                  id="fct-query-timeout"
+                  aria-label="Query timeout in seconds"
+                  min={0}
+                  max={60}
+                  step={1}
+                  value={[timeoutSeconds]}
+                  onValueChange={(values) => setTimeoutSeconds(values[0] ?? 0)}
+                  onValueCommit={(values) => setQueryAttribute("timeout", String((values[0] ?? 0) * 1000))}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                <div className="min-w-0">
+                  <Label htmlFor="fct-query-same-as">Aliases</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">Include owl:sameAs relationships.</p>
+                </div>
+                <Switch
+                  id="fct-query-same-as"
+                  checked={queryTree.attributes["same-as"] === "yes"}
+                  onCheckedChange={(checked) => setQueryAttribute("same-as", checked ? "yes" : "no")}
+                  aria-label="Include owl:sameAs relationships"
+                />
+              </div>
+              <div className="flex flex-col gap-3 rounded-md border p-3">
+                <Label htmlFor="fct-endpoint">Data server</Label>
+                <select
+                  id="fct-endpoint"
+                  value={selectedEndpointId}
+                  onChange={(event) => void chooseFctEndpoint(event.currentTarget.value)}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  title="Choose which FCT endpoint receives queries"
+                >
+                  {fctEndpoints.length === 0 && (
+                    <option value="">
+                      {isCheckingEndpoints ? "Loading endpoints and checking servers…" : "No endpoints configured"}
+                    </option>
+                  )}
+                  {[...new Set(fctEndpoints.map((endpoint) => endpoint.group || "Endpoints"))].map((group) => (
+                    <optgroup key={group} label={group}>
+                      {fctEndpoints.filter((endpoint) => (endpoint.group || "Endpoints") === group).map((endpoint) => {
+                        const status = endpointStatuses[endpoint.id];
+                        const mark =
+                          status?.status === 200 ? "🟢 " :
+                          status?.state === "server-error" ? "🔴 " :
+                          status && ["unreachable", "timeout"].includes(status.state) ? "🟠 " : "";
+                        const statusText = status?.status != null
+                          ? ` (${new URL(endpoint.url).protocol.replace(":", "").toUpperCase()} ${status.status})`
+                          : status ? ` (${status.state})` : "";
+                        return <option key={endpoint.id} value={endpoint.id}>{mark}{endpoint.label}{statusText}</option>;
+                      })}
+                    </optgroup>
+                  ))}
+                </select>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  {isCheckingEndpoints && (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground" role="status" aria-live="polite">
+                      <span className="sr-only">{fctEndpoints.length === 0 ? "Loading FCT servers" : "Updating FCT servers"}</span>
+                      <Progress className="h-2 w-24" value={endpointChecksTotal ? (endpointChecksCompleted / endpointChecksTotal) * 100 : 0} indeterminate={endpointChecksTotal === 0 || endpointChecksCompleted === 0} aria-label="FCT endpoint checks" />
+                      {fctEndpoints.length === 0 ? "Loading FCT servers…" : `Updating… ${endpointChecksCompleted}/${endpointChecksTotal}`}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void checkFctEndpoints()}
+                    disabled={isCheckingEndpoints || fctEndpoints.length === 0}
+                    className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+                    title="Check each server with a small FCT query"
+                  >{isCheckingEndpoints ? "Checking…" : "Check servers"}</button>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsRdfLoaderOpen(true);
+                  setRdfLoadMessage("");
+                  setRdfLoadError(false);
+                  setControlsSheetOpen(false);
+                }}
+                className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent"
+              >RDF Loader</button>
+            </div>
+          </SheetContent>
+        </Sheet>
       </header>
 
       {autoResetMessage && (
@@ -3507,7 +3595,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                   <div className="space-y-3">
                     <article className="flex min-w-0 flex-col">
                       <header className="group/header flex items-start justify-between gap-2 border-b px-2 py-2">
-                        <div className="flex min-w-0 items-center gap-1"><h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes")}\n<!-- FCT API option: view=classes -->`} filename="categories-fct-query.xml" countQuery={classDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", classDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /></div>
+                        <div className="flex min-w-0 items-center gap-1"><h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes")}\n<!-- FCT API option: view=classes -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /></div>
                         <span
                           className={`text-xs ${classFacetError ? "text-destructive" : "text-muted-foreground"}`}
                           aria-live="polite"
@@ -3517,16 +3605,16 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                             ? "Updating…"
                             : classFacetError
                               ? "Update failed"
-                              : classDisplayFacets.length}
+                              : visibleClassDisplayFacets.length}
                         </span>
                       </header>
                       {classFacetError ? (
                         <p className="text-xs text-destructive">{classFacetError}</p>
-                      ) : classDisplayFacets.length === 0 && !isLoadingClasses ? (
+                      ) : visibleClassDisplayFacets.length === 0 && !isLoadingClasses ? (
                         <p className="text-xs text-muted-foreground">No classes found for this query.</p>
                       ) : (
                         <>
-                          {classDisplayFacets.length > FACET_PAGE_SIZE && (
+                          {visibleClassDisplayFacets.length > FACET_PAGE_SIZE && (
                             <div className="mb-2 flex items-center justify-between gap-2 text-xs">
                               <button
                                 type="button"
@@ -3537,20 +3625,20 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                 Previous
                               </button>
                               <span className="text-muted-foreground">
-                                Page {Math.min(classesPage + 1, Math.ceil(classDisplayFacets.length / FACET_PAGE_SIZE))} of {Math.max(1, Math.ceil(classDisplayFacets.length / FACET_PAGE_SIZE))}
+                                Page {Math.min(classesPage + 1, Math.ceil(visibleClassDisplayFacets.length / FACET_PAGE_SIZE))} of {Math.max(1, Math.ceil(visibleClassDisplayFacets.length / FACET_PAGE_SIZE))}
                               </span>
                               <button
                                 type="button"
                                 className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
-                                onClick={() => setClassesPage((page) => Math.min(Math.ceil(classDisplayFacets.length / FACET_PAGE_SIZE) - 1, page + 1))}
-                                disabled={classesPage >= Math.ceil(classDisplayFacets.length / FACET_PAGE_SIZE) - 1}
+                                onClick={() => setClassesPage((page) => Math.min(Math.ceil(visibleClassDisplayFacets.length / FACET_PAGE_SIZE) - 1, page + 1))}
+                                disabled={classesPage >= Math.ceil(visibleClassDisplayFacets.length / FACET_PAGE_SIZE) - 1}
                               >
                                 Next
                               </button>
                             </div>
                           )}
                           <div className="space-y-1">
-                            {classDisplayFacets
+                            {visibleClassDisplayFacets
                               // classDisplayFacets already puts current-scope
                               // query <class> nodes first, followed by proxy order.
                               .slice(classesPage * FACET_PAGE_SIZE, (classesPage + 1) * FACET_PAGE_SIZE)
@@ -3574,7 +3662,16 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                   >
                                     {toLabel(item.uri)}
                                   </button>
-                                  <DistinctCount tree={queryTree} kind="class" uri={item.uri} />
+                                  <DistinctCount
+                                    tree={queryTree}
+                                    kind="class"
+                                    uri={item.uri}
+                                    onCountChange={(query, count) =>
+                                      setClassCandidateCounts((current) =>
+                                        current[query] === count ? current : { ...current, [query]: count },
+                                      )
+                                    }
+                                  />
                                 </div>
                               ))}
                           </div>

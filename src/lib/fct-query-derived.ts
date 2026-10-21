@@ -349,7 +349,16 @@ export function createDistinctCountQuery(
           node.attributes.iri === propertyUri;
         if (isTargetRelationship) {
           inserted = true;
-          return { ...node, children: [...node.children, valueNode] };
+          // Reverse-role item counts must count matching resources in the active
+          // view, not the single related value. The count compiler recognizes
+          // this ID prefix and therefore keeps the view variable as its target.
+          return {
+            ...node,
+            ...(node.name === "property-of"
+              ? { id: `count-role-value-${encodeURIComponent(propertyUri)}` }
+              : {}),
+            children: [...node.children, valueNode],
+          };
         }
         return { ...node, children: addValueToActiveScope(node.children) };
       });

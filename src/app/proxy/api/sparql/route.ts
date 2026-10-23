@@ -141,7 +141,7 @@ function validateFacetValueCountQuery(query: string): string | null {
 
   // The client owns query construction. The proxy accepts only the scalar
   // COUNT query shape for this operation and forwards it unchanged.
-  if (!/^SELECT\s*\(\s*COUNT\s*\(\s*DISTINCT\s+\?[A-Za-z_][A-Za-z0-9_]*\s*\)\s+AS\s+\?ct\s*\)\s+WHERE\s*\{/i.test(selectQuery)) return null;
+  if (!/^SELECT\s*\(\s*COUNT\s*\(\s*(?:DISTINCT\s+\?[A-Za-z_][A-Za-z0-9_]*|\*)\s*\)\s+AS\s+\?ct\s*\)\s+WHERE\s*\{/i.test(selectQuery)) return null;
   // Ignore operation-looking words inside RDF IRIs, string literals, and
   // comments. Count text searches may legitimately contain terms such as
   // "with", "delete", or "create"; they are not SPARQL update operations.
@@ -185,7 +185,7 @@ function parseSparqlResults(responseText: string): {
 }
 
 async function querySparql(endpoint: string, query: string): Promise<SparqlQueryResult> {
-  const sparqlUrl = new URL("/sparql", endpoint);
+  const sparqlUrl = endpoint;
   const key = queryCacheKey("sparql", sparqlUrl.toString(), query);
   const cached = getQueryCache<string>(key);
   if (cached !== undefined) {
@@ -275,7 +275,7 @@ export async function POST(request: Request) {
       }
       const countQuery = validateFacetValueCountQuery(sourceQuery);
       if (!countQuery) {
-        return NextResponse.json({ error: "The client must provide a scalar COUNT(DISTINCT ...) AS ?ct SPARQL query." }, { status: 400 });
+        return NextResponse.json({ error: "The client must provide a scalar COUNT(...) AS ?ct SPARQL query." }, { status: 400 });
       }
 
       const { responseText, response, key } = await querySparql(fctEndpoint, countQuery);

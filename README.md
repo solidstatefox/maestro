@@ -23,14 +23,14 @@ cd maestro
 npm ci
 ```
 
-### 3. Configure FCT Endpoints
+### 3. Configure SPARQL Endpoints
 
-The application uses the `FCT_ENDPOINTS` environment variable to define the Virtuoso Faceted Browser endpoints available in the dashboard.
+The application uses the `SPARQL_ENDPOINTS` environment variable to define the SPARQL endpoints available in the dashboard.
 
 Create a `.env.local` file in the project root and add your endpoints:
 
 ```env
-FCT_ENDPOINTS=Local Virtuoso=http://localhost:8890/fct/service;Featured::DBpedia=https://dbpedia.org/fct/service;Featured::Wikidata=https://query.wikidata.org/fct/service
+SPARQL_ENDPOINTS=Local Virtuoso=http://localhost:8890/sparql;Featured::DBpedia=https://dbpedia.org/sparql;Featured::Wikidata=https://query.wikidata.org/sparql
 ```
 
 #### Endpoint format
@@ -48,17 +48,15 @@ Each endpoint follows the format:
 
 For example:
 
-- `Local Virtuoso=http://localhost:8890/fct/service` adds a local endpoint named `Local Virtuoso`.
-- `Featured::DBpedia=https://dbpedia.org/fct/service` adds DBpedia under the `Featured` category.
-- `Featured::URIBurner (UB)=https://linkeddata.uriburner.com/fct/service` adds URIBurner under the `Featured` category, using `URIBurner (UB)` as its display name.
+- `Local Virtuoso=http://localhost:8890/sparql` adds a local endpoint named `Local Virtuoso`.
+- `Featured::DBpedia=https://dbpedia.org/sparql` adds DBpedia under the `Featured` category.
+- `Featured::URIBurner (UB)=https://linkeddata.uriburner.com/sparql` adds URIBurner under the `Featured` category, using `URIBurner (UB)` as its display name.
 
 Endpoint names without `::` appear as standalone endpoints. Names containing `::` use the text before `::` as the category and the text after it as the endpoint name.
 
-Make sure each endpoint URL is correct and accessible from your environment. The local example assumes Virtuoso is running on port `8890` with the FCT service available at `/fct/service`.
+Make sure each endpoint URL is correct and accessible from your environment. The local example assumes Virtuoso is running on port `8890` with the SPARQL service available at `/sparql`.
 
 Restart the development server after changing `.env.local` so the updated configuration takes effect.
-
-Restart the development server after changing .env.local so the updated configuration takes effect.
 
 **Note:** Environment variables are loaded when the development server starts. Restart the server after changing `.env.local`.
 
@@ -104,3 +102,5 @@ npx shadcn@latest init
 - [shadcn/ui Documentation](https://ui.shadcn.com/docs)
 - [Virtuoso Documentation](https://docs.openlinksw.com/virtuoso/)
 - [Virtuoso Faceted Browser](https://vos.openlinksw.com/owiki/wiki/VOS/VirtuosoFacetsWebService)
+- [SPARQL Query Language](https://www.w3.org/TR/sparql11-query/)
+- [Resource Description Framework (RDF)](https://www.w3.org/TR/rdf11-concepts/)

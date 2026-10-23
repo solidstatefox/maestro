@@ -20,7 +20,6 @@ type GroupByOption = {
   nodeId: string;
   memberBindingNodeId?: string;
   ancestorRole?: boolean;
-  rdfType?: boolean;
 };
 export type DistinctCountKind = "property" | "class" | "role" | "value";
 const COUNT_QUERY_LIMIT = 1000;
@@ -81,6 +80,7 @@ export function createPropertyWidgetQuery(
   propertyUri: string,
   direction: RelationshipDirection = "forward",
   selectedNodeId?: string,
+  forPersonalFacet = false,
 ): FctQueryTree {
   const copyNode = (node: FctQueryNode): FctQueryNode => ({
     ...node,
@@ -108,13 +108,25 @@ export function createPropertyWidgetQuery(
       baseTree = { ...baseTree, children: removeSelectedSibling(baseTree.children) };
     }
     const copiedView = copyNode(view);
-    return attachViewToPropertyInQueryTree(
+    const widgetTree = attachViewToPropertyInQueryTree(
       baseTree,
       propertyUri,
       direction === "forward" ? "property" : "property-of",
       copiedView,
       `personal-${direction}-${encodeURIComponent(propertyUri)}`,
     );
+    // A personal facet still needs to enumerate values for an excluded
+    // relationship. The exclusion remains untouched in the authoritative query;
+    // remove it only from this derived widget query so the edge can bind values.
+    const clearWidgetExclusion = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => {
+      const containsView = treeNodeContainsId([node], node.id, "query-view");
+      const isTargetRelationship = node.name === (direction === "forward" ? "property" : "property-of") &&
+        node.attributes.iri === propertyUri && containsView;
+      const attributes = { ...node.attributes };
+      if (forPersonalFacet && isTargetRelationship) delete attributes.exclude;
+      return { ...node, attributes, children: clearWidgetExclusion(node.children) };
+    });
+    return { ...widgetTree, children: clearWidgetExclusion(widgetTree.children) };
   }
 
   // For a reverse-role ancestor, the selected role already encloses the view;
@@ -128,7 +140,11 @@ export function createPropertyWidgetQuery(
       };
       return [ephemeralView];
     }
-    return [{ ...node, attributes: { ...node.attributes }, children: wrapAncestor(node.children) }];
+    const attributes = { ...node.attributes };
+    // As above, this is a facet-values query rather than the authoritative
+    // result query, so an excluded ancestor role must be bindable here.
+    if (forPersonalFacet && node.id === selectedNodeId && node.name === "property-of") delete attributes.exclude;
+    return [{ ...node, attributes, children: wrapAncestor(node.children) }];
   });
   return { ...tree, attributes: { ...tree.attributes }, children: wrapAncestor(tree.children) };
 }
@@ -155,11 +171,6 @@ export function createGroupValuesQuery(
   sourceTree: FctQueryTree,
   option: GroupByOption,
 ): FctQueryTree {
-  // rdf:type is a furniture option: its headings come from the FCT classes
-  // view, not from a property/list view attached to a synthetic relationship.
-  if (option.rdfType) {
-    return cloneQueryTree(sourceTree);
-  }
   const removeSelectedValues = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => ({
     ...node,
     attributes: { ...node.attributes },
@@ -187,11 +198,27 @@ export function createGroupMemberQuery(
   option: GroupByOption,
   groupValue: QueryResultValue,
 ): FctQueryTree {
-  const tree: FctQueryTree = {
+  let tree: FctQueryTree = {
     ...sourceTree,
     attributes: { ...sourceTree.attributes },
     children: sourceTree.children.map(cloneQueryNode),
   };
+  let bindingNodeId = option.nodeId;
+  // Group-by furniture (such as rdf:type) can be selected even when that
+  // relationship is not already a filter in the live query. Build the same
+  // ordinary relationship/view shape used by dynamic options, then bind its value.
+  if (!findQueryNode(tree.children, bindingNodeId)) {
+    tree = createPropertyWidgetQuery(tree, option.uri, option.direction, option.nodeId);
+    const findBindingNode = (nodes: FctQueryNode[]): FctQueryNode | null => {
+      for (const node of nodes) {
+        if ((node.name === "property" || node.name === "property-of") && node.attributes.iri === option.uri && treeNodeContainsId([node], node.id, "query-view")) return node;
+        const nested = findBindingNode(node.children);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    bindingNodeId = findBindingNode(tree.children)?.id ?? bindingNodeId;
+  }
   const binding = groupValueBinding(groupValue);
   const valueNode: FctQueryNode = {
     id: `group-value-${encodeURIComponent(option.uri)}-${encodeURIComponent(groupValueKey(groupValue))}`,
@@ -200,27 +227,6 @@ export function createGroupMemberQuery(
     text: binding.text,
     children: [],
   };
-
-  if (option.rdfType) {
-    // The synthetic rdf:type option has no node in the live query. Add a
-    // real property/value constraint beside the active view in its current
-    // scope, so the cloned FCT request actually filters members by class.
-    const classBinding: FctQueryNode = {
-      id: `group-rdf-type-${encodeURIComponent(groupValue.uri)}`,
-      name: "property",
-      attributes: { iri: option.uri },
-      children: [valueNode],
-    };
-    const addBesideView = (nodes: FctQueryNode[]): FctQueryNode[] => {
-      const output: FctQueryNode[] = [];
-      for (const node of nodes) {
-        if (node.id === "query-view") output.push(classBinding);
-        output.push({ ...node, children: addBesideView(node.children) });
-      }
-      return output;
-    };
-    return { ...tree, children: addBesideView(tree.children) };
-  }
 
   if (option.direction === "reverse" && option.ancestorRole) {
     let movedView: FctQueryNode | undefined;
@@ -272,7 +278,7 @@ export function createGroupMemberQuery(
 
   function bind(nodes: FctQueryNode[]): FctQueryNode[] {
     return nodes.map((node) => {
-      if (node.id === option.nodeId) {
+      if (node.id === bindingNodeId) {
         return {
           ...node,
           children: [...node.children.filter((child) => child.name !== "value"), valueNode],
@@ -312,9 +318,9 @@ export function createDistinctCountQuery(
       children: [],
     };
 
-    // The candidate facet is a condition on the current result resource, not
-    // a parent of <view>. Wrapping <view> changes the counted variable to the
-    // related object and can make every property count mirror Results.
+    // Mirror the click action: add the candidate relationship beside the live
+    // <view> at its current scope, constraining focus resources without changing
+    // which variable the count compiler measures.
     let inserted = false;
     const addBesideView = (nodes: FctQueryNode[]): FctQueryNode[] => {
       const output: FctQueryNode[] = [];

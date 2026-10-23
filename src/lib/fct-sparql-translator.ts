@@ -42,14 +42,13 @@ type SparqlPattern =
   | { kind: "triple"; subject: SparqlTerm; predicate: SparqlTerm; object: SparqlTerm; options?: SparqlDirective[] }
   | { kind: "full-text"; value: SparqlTerm; search: SparqlTerm }
   | { kind: "filter"; expression: SparqlExpression }
-  | { kind: "not-exists"; patterns: SparqlPattern[] }
   | { kind: "group"; patterns: SparqlPattern[] }
   | { kind: "graph"; graph: SparqlTerm; patterns: SparqlPattern[] }
   | { kind: "quad-map"; map: SparqlTerm; graph: SparqlTerm; patterns: SparqlPattern[] };
 
 type SparqlProjection = { expression: SparqlExpression; as?: SparqlTerm };
 type SparqlOrder = { expression: SparqlExpression; direction: "ASC" | "DESC" };
-type SparqlDirective = { name: "input:inference" | "input:same-as" | "input:default-graph-uri"; value: string };
+type SparqlDirective = { name: "input:inference" | "input:same-as"; value: string };
 type SparqlSelectQuery = {
   kind: "select" | "describe";
   describe?: SparqlTerm;
@@ -137,7 +136,6 @@ function serializePattern(pattern: SparqlPattern, depth = 0): string {
     }
     case "full-text": return `${indent}${serializeTerm(pattern.value)} bif:contains ${serializeTerm(pattern.search)} .`;
     case "filter": return `${indent}FILTER ${serializeExpression(pattern.expression)}`;
-    case "not-exists": return `${indent}FILTER NOT EXISTS {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "group": return `${indent}{\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "graph": return `${indent}GRAPH ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "quad-map": return `${indent}quad map ${serializeTerm(pattern.map)} { graph ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 2)).join("\n")}\n${indent}  } }`;
@@ -146,7 +144,7 @@ function serializePattern(pattern: SparqlPattern, depth = 0): string {
 
 function serializeSparqlQuery(document: SparqlDocument): string {
   const query = document.query;
-  const lines = query.directives.map((directive) => `DEFINE ${directive.name} ${directive.name === "input:default-graph-uri" ? serializeTerm(iriTerm(directive.value)) : serializeTerm(literalTerm(directive.value))}`);
+  const lines = query.directives.map((directive) => `DEFINE ${directive.name} ${serializeTerm(literalTerm(directive.value))}`);
   const projection = query.projections.map((item) => item.as
     ? `${serializeExpression(item.expression)} AS ${serializeTerm(item.as)}`
     : serializeExpression(item.expression)).join("\n       ");
@@ -251,7 +249,6 @@ function compileConstraints(nodes: XmlNode[], subject: SparqlTerm, patterns: Spa
         errors.push(`The FCT <${node.name}> node has a missing or invalid IRI.`);
         continue;
       }
-      const excluded = node.attributes.exclude?.trim().toLowerCase() === "yes";
       const related = variable(`s${state.next++}`);
       const options: SparqlDirective[] = [];
       const inference = node.attributes.inference?.trim();
@@ -259,28 +256,16 @@ function compileConstraints(nodes: XmlNode[], subject: SparqlTerm, patterns: Spa
       if (["yes", "true", "1"].includes((node.attributes.same_as ?? "").trim().toLowerCase())) {
         options.push({ name: "input:same-as", value: "yes" });
       }
-      const relationshipPattern: SparqlPattern = node.name === "property"
+      patterns.push(node.name === "property"
         ? { kind: "triple", subject, predicate, object: related, ...(options.length ? { options } : {}) }
-        : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) };
-      if (excluded) {
-        // Official FCT compiles excluded relationships to FILTER NOT EXISTS;
-        // an excluded edge does not bind a child scope.
-        patterns.push({ kind: "not-exists", patterns: [relationshipPattern] });
-      } else {
-        patterns.push(relationshipPattern);
-        compileConstraints(node.children, related, patterns, errors, state);
-      }
+        : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) });
+      compileConstraints(node.children, related, patterns, errors, state);
     } else if (node.name === "class") {
       const classIri = iri(node.attributes.iri ?? "");
       if (!classIri) errors.push("The FCT <class> node has a missing or invalid IRI.");
       else {
         const inference = node.attributes.inference?.trim();
-        const classPattern: SparqlPattern = { kind: "triple", subject, predicate: iriTerm(RDF_TYPE), object: classIri, ...(inference ? { options: [{ name: "input:inference", value: inference }] } : {}) };
-        if (node.attributes.exclude?.trim().toLowerCase() === "yes") {
-          patterns.push({ kind: "not-exists", patterns: [classPattern] });
-        } else {
-          patterns.push(classPattern);
-        }
+        patterns.push({ kind: "triple", subject, predicate: iriTerm(RDF_TYPE), object: classIri, ...(inference ? { options: [{ name: "input:inference", value: inference }] } : {}) });
       }
       compileConstraints(node.children, subject, patterns, errors, state);
     } else if (node.name === "value") {
@@ -311,14 +296,6 @@ function queryDirectives(root: XmlNode): SparqlDirective[] {
   if (inference) result.push({ name: "input:inference", value: inference });
   const sameAs = (root.attributes["same-as"] ?? "").trim().toLowerCase();
   if (["yes", "true", "1"].includes(sameAs)) result.push({ name: "input:same-as", value: "yes" });
-
-  // facet.sql expresses graph scope through DEFINE clauses, not a GRAPH wrapper.
-  const graph = root.attributes.graph?.trim();
-  if (graph) result.push({ name: "input:default-graph-uri", value: graph });
-  for (let index = 1; root.attributes[`graph${index}`] !== undefined; index += 1) {
-    const namedGraph = root.attributes[`graph${index}`].trim();
-    if (namedGraph) result.push({ name: "input:default-graph-uri", value: namedGraph });
-  }
   return result;
 }
 
@@ -390,10 +367,7 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   const graph = root.attributes.graph?.trim();
   const graphTerm = graph ? iri(graph) : null;
   if (graph && !graphTerm) throw new Error("The query graph attribute is not a valid IRI.");
-  for (let index = 1; root.attributes[`graph${index}`] !== undefined; index += 1) {
-    if (!iri(root.attributes[`graph${index}`])) throw new Error(`The query graph${index} attribute is not a valid IRI.`);
-  }
-  const scopedWhere = where;
+  const scopedWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: where } satisfies SparqlPattern] : where;
   const directives = queryDirectives(root);
   const countProjection = (term: SparqlTerm): SparqlProjection => ({ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(term) }, as: variable("n") });
   let query: string;
@@ -409,18 +383,7 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       graphWhere = [{ kind: "graph", graph: variable("g"), patterns: constraints.length ? constraints : [{ kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") }] }];
     }
     if (graphTerm) graphWhere.push({ kind: "filter", expression: binary("=", termExpr(variable("g")), termExpr(graphTerm)) });
-    query = buildSelectQuery({
-      directives,
-      projections: [
-        { expression: termExpr(variable("g")), as: variable("c1") },
-        { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
-      ],
-      where: graphWhere,
-      groupBy: [termExpr(variable("g"))],
-      orderBy: [{ expression: termExpr(variable("n")), direction: "DESC" }],
-      limit,
-      offset,
-    });
+    query = buildSelectQuery({ directives, distinct: true, projections: [{ expression: termExpr(variable("g")), as: variable("c1") }], where: graphWhere, orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(variable("g"))] }, direction: "ASC" }], limit, offset });
   } else if (countOnly) {
     let counted: SparqlTerm;
     let countWhere = scopedWhere;
@@ -441,19 +404,11 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     const predicate = view === "classes" ? iriTerm(RDF_TYPE) : view === "properties-in" ? facet : facet;
     const object = view === "properties-in" ? target : view === "classes" ? facet : variable("o");
     const facetWhere = [...scopedWhere, { kind: "triple", subject, predicate, object } satisfies SparqlPattern];
-    // Match facet.sql: properties normally count distinct object values; with
-    // root-level inference enabled they count distinct focus subjects instead.
-    // Incoming properties always count distinct focus subjects, not related nodes.
-    const facetCountTerm = view === "properties-in"
-      ? target
-      : view === "properties" && !(root.attributes.inference ?? "").trim()
-        ? variable("o")
-        : target;
     query = buildSelectQuery({
       directives,
       projections: [
         { expression: termExpr(facet), as: variable("c1") },
-        countProjection(facetCountTerm),
+        countProjection(view === "properties-in" ? variable("related") : target),
       ],
       where: facetWhere,
       groupBy: [termExpr(facet)],
@@ -481,36 +436,14 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     ], where: scopedWhere, groupBy: [bucket], orderBy: [{ expression: bucket, direction: "ASC" }], limit, offset });
   } else if (view === "geo") {
     const lat = variable("lat"); const long = variable("long");
-    const location = variable("location");
-    const locationProperty = (root.attributes["location-prop"] ?? "").trim();
-    const geoWhere: SparqlPattern[] = [...scopedWhere];
-    if (locationProperty && locationProperty !== "any") {
-      const locationPredicate = iri(locationProperty);
-      if (!locationPredicate) throw new Error("The FCT location-prop attribute must be an IRI or 'any'.");
-      geoWhere.push({ kind: "triple", subject: target, predicate: locationPredicate, object: location });
-      geoWhere.push({ kind: "triple", subject: location, predicate: iriTerm("http://www.w3.org/2003/01/geo/wgs84_pos#lat"), object: lat });
-      geoWhere.push({ kind: "triple", subject: location, predicate: iriTerm("http://www.w3.org/2003/01/geo/wgs84_pos#long"), object: long });
-    } else if (locationProperty === "any") {
-      geoWhere.push({ kind: "triple", subject: target, predicate: variable("anyloc"), object: location });
-      geoWhere.push({ kind: "triple", subject: location, predicate: iriTerm("http://www.w3.org/2003/01/geo/wgs84_pos#lat"), object: lat });
-      geoWhere.push({ kind: "triple", subject: location, predicate: iriTerm("http://www.w3.org/2003/01/geo/wgs84_pos#long"), object: long });
-    } else {
-      geoWhere.push({ kind: "triple", subject: target, predicate: iriTerm("http://www.w3.org/2003/01/geo/wgs84_pos#lat"), object: lat });
-      geoWhere.push({ kind: "triple", subject: target, predicate: iriTerm("http://www.w3.org/2003/01/geo/wgs84_pos#long"), object: long });
-    }
-    const rounded = (coordinate: SparqlTerm): SparqlExpression => binary(
-      "/",
-      { kind: "function", name: "ROUND", args: [binary(
-        "*",
-        { kind: "function", name: "xsd:float", args: [termExpr(coordinate)] },
-        termExpr({ kind: "raw-term", value: "10000" }),
-      )] },
-      termExpr({ kind: "raw-term", value: "10000" }),
-    );
+    const geoWhere: SparqlPattern[] = [...scopedWhere,
+      { kind: "triple", subject: target, predicate: iriTerm("http://www.w3.org/2003/01/geo/wgs84_pos#lat"), object: lat },
+      { kind: "triple", subject: target, predicate: iriTerm("http://www.w3.org/2003/01/geo/wgs84_pos#long"), object: long },
+    ];
     query = buildSelectQuery({ directives, distinct: true, projections: [
-      { expression: termExpr(target), as: variable("c1") },
-      { expression: rounded(lat), as: variable("c2") },
-      { expression: rounded(long), as: variable("c3") },
+      { expression: termExpr(lat), as: variable("c1") },
+      { expression: termExpr(long), as: variable("c2") },
+      { expression: termExpr(target), as: variable("c3") },
     ], where: geoWhere, limit, offset });
   } else if (view === "describe") {
     const document = new SparqlQueryDocument({ kind: "describe", describe: target, directives, projections: [], where: scopedWhere, limit, offset });
@@ -527,13 +460,9 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     // Virtuoso's FCT list view selects the RDF term. Its SQL/XML response
     // wrapper resolves the human-readable label; do not call the SQL-only
     // fct_label procedure from inside SPARQL.
-    query = buildSelectQuery({ directives, projections: [
+    query = buildSelectQuery({ directives, distinct: true, projections: [
       { expression: termExpr(target), as: variable("c1") },
-    ], where: scopedWhere, groupBy: [termExpr(target)], orderBy: [{
-      // Match facet.sql's IRI-rank ordering rather than lexical STR ordering.
-      expression: termExpr({ kind: "raw-term", value: `<LONG::IRI_RANK> (${serializeTerm(target)})` }),
-      direction: "DESC",
-    }], limit, offset });
+    ], where: scopedWhere, orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" }], limit, offset });
   } else {
     query = buildSelectQuery({ directives, distinct: true, projections: [{ expression: termExpr(target), as: variable("c1") }], where: scopedWhere, orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" }], limit, offset });
   }

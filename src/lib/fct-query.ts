@@ -42,6 +42,7 @@ export type FctQueryState = {
 };
 
 const QUERY_NAMESPACE = "http://openlinksw.com/services/facets/1.0";
+const RDFS_LABEL_URI = "http://www.w3.org/2000/01/rdf-schema#label";
 
 function createInitialState(): FctQueryState {
   return {
@@ -56,7 +57,7 @@ function createInitialState(): FctQueryState {
         {
           id: "query-text",
           name: "text",
-          attributes: {},
+          attributes: { property: RDFS_LABEL_URI },
           text: "",
           children: [],
         },
@@ -201,6 +202,10 @@ export function attachViewToPropertyInQueryTree(
   view: FctQueryNode,
   relationshipId: string,
 ): FctQueryTree {
+  // This query enumerates facet values, not result records. A text view also
+  // projects search excerpts, which can repeat the same RDF value when it
+  // matches multiple text fields. The list view projects only the target RDF
+  // term and lets SPARQL DISTINCT remove join multiplicity at the query level.
   const leafView: FctQueryNode = {
     ...view,
     attributes: { ...view.attributes, type: "list", offset: "0" },
@@ -276,6 +281,16 @@ function createQueryStore(initialTree?: FctQueryTree) {
     state = {
       ...state,
       tree: nextTree,
+      revision: state.revision + 1,
+    };
+    notify();
+  }
+
+  /** Replace the authoritative query with a validated snapshot, e.g. one restored from a share URL. */
+  function replaceTree(tree: FctQueryTree) {
+    if (!isValidQueryTree(tree)) throw new TypeError("Invalid FCT query tree");
+    state = {
+      tree: cloneQueryTree(tree),
       revision: state.revision + 1,
     };
     notify();
@@ -405,7 +420,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
       const textNode: FctQueryNode = {
         id: "query-text",
         name: "text",
-        attributes: {},
+        attributes: { property: RDFS_LABEL_URI },
         text: "",
         children: [],
       };
@@ -1159,6 +1174,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
 
   return {
     getSnapshot: () => state,
+    replaceTree,
 
     subscribe(listener: Listener) {
       listeners.add(listener);
@@ -1320,6 +1336,7 @@ export function useFctQuery() {
 
   return {
     ...state,
+    replaceTree: fctQueryStore.replaceTree,
     setSearchText: fctQueryStore.setSearchText,
     resetQuery: fctQueryStore.resetQuery,
     setView: fctQueryStore.setView,

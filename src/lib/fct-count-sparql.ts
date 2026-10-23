@@ -3,8 +3,6 @@ import type { FctQueryNode, FctQueryTree } from "./fct-query";
 type CompilerState = {
   nextVariable: number;
   viewVariable: string | null;
-  /** Related value selected by a per-property/role facet count, when present. */
-  countVariable: string | null;
   patterns: string[];
   errors: string[];
 };
@@ -95,26 +93,35 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
           break;
         }
         const related = nextVariable(state);
-        state.patterns.push(node.name === "property"
+        const relationshipPattern = node.name === "property"
           ? `${subject} ${predicate} ${related} .`
-          : `${related} ${predicate} ${subject} .`);
-        // A facet item count measures the distinct values on the candidate
-        // relationship, not the number of current result resources. Counting
-        // viewVariable here made many Properties counts equal the Results count
-        // whenever each result resource had the property. For reverse roles,
-        // the related variable is the distinct incoming subject.
-        if (node.id.startsWith("count-property-") || node.id.startsWith("count-role-")) {
-          // A facet header counts the distinct related values. A per-value role
-          // count instead counts current view resources matching that value.
-          if (!node.id.startsWith("count-role-value-")) state.countVariable = related;
+          : `${related} ${predicate} ${subject} .`;
+        if (node.attributes.exclude?.trim().toLowerCase() === "yes") {
+          // Exclusion is a negative condition; it must not bind the related
+          // variable or constrain counts to resources that have this edge.
+          state.patterns.push(`FILTER NOT EXISTS { ${relationshipPattern} }`);
+          break;
         }
+        state.patterns.push(relationshipPattern);
+        // Candidate facet counts must mirror the click action: the candidate
+        // relationship constrains the current focus resources, so count the
+        // distinct active-view variable rather than every related object. A
+        // multi-valued property can have many objects for one focus resource.
         compileNodes(node.children, related, state);
         break;
       }
       case "class": {
         const classIri = iriTerm(node.attributes.iri);
-        if (!classIri) state.errors.push("The FCT <class> node has a missing or unsupported IRI.");
-        else state.patterns.push(`${subject} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ${classIri} .`);
+        if (!classIri) {
+          state.errors.push("The query contains a class with a missing or unsupported IRI.");
+          break;
+        }
+        const classPattern = `${subject} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ${classIri} .`;
+        if (node.attributes.exclude?.trim().toLowerCase() === "yes") {
+          state.patterns.push(`FILTER NOT EXISTS { ${classPattern} }`);
+        } else {
+          state.patterns.push(classPattern);
+        }
         compileNodes(node.children, subject, state);
         break;
       }
@@ -146,7 +153,6 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
   const state: CompilerState = {
     nextVariable: 0,
     viewVariable: null,
-    countVariable: null,
     patterns: [],
     errors: [],
   };
@@ -171,6 +177,6 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
     whereBody = `GRAPH ${graphIri} {\n    ${whereBody.replace(/\n/g, "\n    ")}\n  }`;
   }
 
-  const countQuery = `SELECT (COUNT(DISTINCT ${state.countVariable ?? state.viewVariable}) AS ?ct) WHERE {\n  ${whereBody.replace(/\n/g, "\n  ")}\n}`;
+  const countQuery = `SELECT (COUNT(DISTINCT ${state.viewVariable}) AS ?ct) WHERE {\n  ${whereBody.replace(/\n/g, "\n  ")}\n}`;
   return [...queryAttributes, countQuery].join("\n");
 }

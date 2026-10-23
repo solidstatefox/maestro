@@ -75,9 +75,11 @@ function labelLanguage(term: SparqlBindingTerm): string {
 }
 
 function uriFallbackLabel(uri: string): string {
-  const withoutFragment = uri.replace(/[?#].*$/, "");
-  const lastSegment = withoutFragment.slice(withoutFragment.lastIndexOf("/") + 1);
-  const candidate = lastSegment || uri.slice(uri.lastIndexOf("#") + 1) || uri;
+  const hash = uri.lastIndexOf("#");
+  const fragment = hash >= 0 ? uri.slice(hash + 1).split(/[?]/, 1)[0] : "";
+  const withoutQueryOrFragment = uri.split(/[?#]/, 1)[0];
+  const pathSegment = withoutQueryOrFragment.slice(withoutQueryOrFragment.lastIndexOf("/") + 1);
+  const candidate = fragment || pathSegment || uri;
   try { return decodeURIComponent(candidate); } catch { return candidate; }
 }
 
@@ -92,10 +94,14 @@ async function resolveFctLabels(
   acceptLanguage: string | null,
   timeoutMs: number,
 ): Promise<Map<string, string>> {
-  const uris = [...new Set(bindings.map((row) => row.c1).filter(
+  // Resolve every URI term in the result rows, not just the primary list-view
+  // column. Properties, Roles, Classes, Graphs and DESCRIBE all need labels too.
+  const uris = [...new Set(bindings.flatMap((row) => Object.values(row)).filter(
     (term): term is SparqlBindingTerm => term?.type === "uri" && Boolean(term.value),
   ).map((term) => term.value))];
-  const labels = new Map<string, string>(uris.map((uri) => [uri, uriFallbackLabel(uri)]));
+  // Keep only authoritative labels in this map. The browser's toLabel() owns
+  // compact-IRI fallbacks when Virtuoso has no label for a URI.
+  const labels = new Map<string, string>();
   if (!uris.length) return labels;
 
   // Only use RDF IRIREF-safe values. Invalid terms retain the URI fallback.
@@ -110,7 +116,7 @@ async function resolveFctLabels(
     "  FILTER (isLiteral(?label))",
     "}",
     "ORDER BY STR(?s)",
-  ].join("\\n");
+  ].join("\n");
   try {
     const result = await executeSparql(endpoint, query, undefined, timeoutMs || 20000);
     if (!result.response.ok) return labels;
@@ -186,28 +192,36 @@ function fctError(message: string, status: number, details?: string): Response {
   return new Response(body, { status, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
 }
 
-function fctColumn(term: SparqlBindingTerm | undefined): string {
+function fctColumn(term: SparqlBindingTerm | undefined, label?: string): string {
   if (!term) return "<fct:column/>";
   const datatype = term.type === "uri" ? "uri" : term.type === "bnode" ? "bnode" : term.datatype;
-  const attrs = [datatype ? ` datatype="${xmlText(datatype)}"` : "", term["xml:lang"] ? ` xml:lang="${xmlText(term["xml:lang"])}"` : ""] .join("");
+  const safeLabel = term.type === "uri" && label && label !== term.value ? label : "";
+  const attrs = [
+    datatype ? ` datatype="${xmlText(datatype)}"` : "",
+    term["xml:lang"] ? ` xml:lang="${xmlText(term["xml:lang"])}"` : "",
+    safeLabel ? ` label="${xmlText(safeLabel)}"` : "",
+  ].join("");
   return `<fct:column${attrs}>${xmlText(term.value)}</fct:column>`;
 }
 
 function fctResponseXml(args: {
   query: string; view: string; limit: number; offset: number; bindings?: Record<string, SparqlBindingTerm>[];
-  vars?: string[]; elapsedMs: number; complete: boolean; timeoutMs?: number; graphOnly?: boolean; countOnly?: boolean; error?: string;
+  vars?: string[]; elapsedMs: number; complete: boolean; timeoutMs?: number; graphOnly?: boolean; countOnly?: boolean;
+  labels?: Map<string, string>; error?: string;
 }): string {
   const { query, view, limit, offset, elapsedMs, complete } = args;
   if (args.error) return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>no</fct:complete><fct:error>${xmlText(args.error)}</fct:error></fct:facets>`;
   const vars = args.vars ?? [];
   const bindings = args.bindings ?? [];
   let resultType = args.graphOnly ? "graphs" : args.countOnly ? "count" : view;
+  const labelFor = (term: SparqlBindingTerm | undefined) =>
+    term?.type === "uri" ? args.labels?.get(term.value) : undefined;
   const rows = bindings.map((binding) => {
     if (args.countOnly) {
       const count = binding.n ?? Object.values(binding)[0];
-      return `<fct:row>${fctColumn(count)}</fct:row>`;
+      return `<fct:row>${fctColumn(count, labelFor(count))}</fct:row>`;
     }
-    return `<fct:row>${vars.map((name) => fctColumn(binding[name])).join("")}</fct:row>`;
+    return `<fct:row>${vars.map((name) => fctColumn(binding[name], labelFor(binding[name]))).join("")}</fct:row>`;
   }).join("");
   return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${complete ? "yes" : "no"}</fct:complete><fct:timeout>${args.timeoutMs ?? 0}</fct:timeout><fct:db-activity/><fct:processed>${bindings.length}</fct:processed><fct:view offset="${offset}" limit="${limit}"/><fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;
 }
@@ -349,7 +363,9 @@ export async function POST(request: Request) {
       let bindings: Record<string, SparqlBindingTerm>[];
       try { bindings = parseDescribeRdfXml(text); }
       catch (error) { return fctError(error instanceof Error ? error.message : "Invalid DESCRIBE response", 502, text.slice(0, 1000)); }
-      const describeRows = bindings.map((binding) => `<fct:row>${fctColumn(binding.s)}${fctColumn(binding.p)}${fctColumn(binding.o)}</fct:row>`).join("");
+      const labels = await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
+      const labelFor = (term: SparqlBindingTerm | undefined) => term?.type === "uri" ? labels.get(term.value) : undefined;
+      const describeRows = bindings.map((binding) => `<fct:row>${fctColumn(binding.s, labelFor(binding.s))}${fctColumn(binding.p, labelFor(binding.p))}${fctColumn(binding.o, labelFor(binding.o))}</fct:row>`).join("");
       const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>yes</fct:complete><fct:timeout>${compiled.timeoutMs}</fct:timeout><fct:db-activity/><fct:processed>${bindings.length}</fct:processed><fct:view offset="${compiled.offset}" limit="${compiled.limit}"/><fct:result type="describe">${describeRows}</fct:result></fct:facets>`;
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
@@ -359,12 +375,16 @@ export async function POST(request: Request) {
     let bindings = parsed.results?.bindings ?? [];
     let vars = parsed.head?.vars ?? [];
     if (response.status === 200) setQueryCache(key, text);
+    const labels = countOnly
+      ? new Map<string, string>()
+      : await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
     if (compiled.view === "list" && !countOnly && !graphOnly) {
-      const labels = await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
       bindings = bindings.map((binding) => {
         const uri = binding.c1?.type === "uri" ? binding.c1.value : "";
-        const label = uri ? labels.get(uri) : undefined;
-        return label === undefined ? binding : { ...binding, c2: { type: "literal", value: label } };
+        if (!uri) return binding;
+        // FCT list views expose the label as column 2. If no RDF label exists,
+        // provide a compact URI-segment fallback instead of the full IRI.
+        return { ...binding, c2: { type: "literal", value: labels.get(uri) ?? uriFallbackLabel(uri) } };
       });
       if (!vars.includes("c2")) vars = [...vars, "c2"];
     }
@@ -373,7 +393,7 @@ export async function POST(request: Request) {
     const complete = response.status !== 206;
     const xml = fctResponseXml({
       query: compiled.query, view: compiled.view, limit: compiled.limit, offset: compiled.offset,
-      bindings, vars, elapsedMs, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly,
+      bindings, vars, elapsedMs, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly, labels,
     });
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
   } catch (error) {

@@ -283,7 +283,9 @@ type PersonalWidget = {
 
 type RelationshipDirection = "forward" | "reverse";
 type ScopeRelationship = { uri: string; direction: RelationshipDirection };
-type GroupByOption = ScopeRelationship & { key: string; label: string; nodeId: string; memberBindingNodeId?: string; ancestorRole?: boolean };
+type GroupByOption = ScopeRelationship & { key: string; label: string; nodeId: string; memberBindingNodeId?: string; ancestorRole?: boolean; rdfType?: boolean };
+
+const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 type GroupMembersState = { results: FctResult[]; loading: boolean; error: string };
 
 
@@ -463,8 +465,9 @@ function DistinctCount({
 
   return (
     <span
-      className={`shrink-0 text-xs ${error ? "text-destructive" : "text-muted-foreground"}`}
+      className={`shrink-0 text-xs ${error || count === 0 ? "text-destructive" : "text-muted-foreground"}`}
       aria-live="polite"
+      aria-invalid={count === 0 ? true : undefined}
       title={
         error
           ? `Could not load distinct count: ${error}`
@@ -484,7 +487,10 @@ function DistinctCount({
   );
 }
 
-/** Return property filter nodes from the sibling scope containing the empty view. */
+/** Return selected property nodes from the sibling scope containing the active view.
+ * The query tree's structure establishes scope; an internal ID prefix must not
+ * decide whether a serialized <property> sibling appears in the Selected list.
+ */
 function getActiveViewPropertyFilters(tree: FctQueryTree): FctQueryNode[] {
   function findScope(nodes: FctQueryNode[]): FctQueryNode[] | null {
     if (nodes.some((node) => node.id === "query-view")) return nodes;
@@ -495,7 +501,7 @@ function getActiveViewPropertyFilters(tree: FctQueryTree): FctQueryNode[] {
     return null;
   }
   return (findScope(tree.children) ?? []).filter((node) =>
-    node.name === "property" && node.id.startsWith("property-filter-") && typeof node.attributes.iri === "string",
+    node.name === "property" && typeof node.attributes.iri === "string" && node.attributes.iri.length > 0,
   );
 }
 
@@ -746,10 +752,12 @@ function PersonalRoleWidget({
         {pageValues.map((value) => {
           const binding = groupValueBinding(value);
           const valueKey = fctTermKey(binding.text, binding.datatype, binding.lang);
+          const countQuery = distinctCountQueryFor(tree, "value", value.uri, uri, value);
+          const isZeroCount = candidateCounts[countQuery] === 0;
           return (
             <label key={`${value.uri}:${value.datatype ?? ""}:${value.lang ?? ""}`} className="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50">
-              <input type="checkbox" checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current" aria-label={`Filter ${label} by ${value.title || value.uri}`} />
-              <span className="min-w-0 flex-1 break-words">{value.title || value.uri}</span>
+              <input type="checkbox" checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.title || value.uri}`} />
+              <span className={`min-w-0 flex-1 break-words ${isZeroCount ? "text-destructive" : ""}`}>{value.title || value.uri}</span>
               <DistinctCount
                 tree={tree}
                 kind="value"
@@ -920,6 +928,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const [propertyFacets, setPropertyFacets] = useState<FacetItem[]>([]);
   const [classFacets, setClassFacets] = useState<FacetItem[]>([]);
   const [classCandidateCounts, setClassCandidateCounts] = useState<Record<string, number | null>>({});
+  const [facetCandidateCounts, setFacetCandidateCounts] = useState<Record<string, number | null>>({});
   const [roleFacets, setRoleFacets] = useState<FacetItem[]>([]);
   const [graphFacets, setGraphFacets] = useState<FacetItem[]>([]);
   const [graphHasMore, setGraphHasMore] = useState(false);
@@ -1292,6 +1301,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const prettyQueryXml = xmlFormat(queryXml, { indentation: "  " });
   const groupByOptions: GroupByOption[] = [
     { key: "", uri: "", direction: "forward", label: "none", nodeId: "" },
+    { key: "rdf:type", uri: RDF_TYPE_URI, direction: "forward", label: "rdf:type", nodeId: "group-by-rdf-type", rdfType: true },
     ...getActiveViewPropertyFilters(queryTree).flatMap((node) => {
       const uri = node.attributes.iri;
       if (typeof uri !== "string" || !uri) return [];
@@ -1823,7 +1833,7 @@ const describedProperties = Array.from(
         const groupTree = setQueryViewAttributes(groupTreeBase, {
           // Group headings enumerate the selected relationship's distinct
           // values (including RDF literals), not text-search result resources.
-          type: "list", limit: String(groupBatchSize), offset: String(groupBatchOffset),
+          type: selectedGroupByOption.rdfType ? "classes" : "list", limit: String(groupBatchSize), offset: String(groupBatchOffset),
         });
         const groupValuesXml = serializeFctQuery(groupTree);
         const response = await fetch("/proxy/api/fct", {
@@ -1834,7 +1844,16 @@ const describedProperties = Array.from(
         });
         const data = await readFctResponse(response);
         if (!cancelled) {
-          const nextGroupValues: FctResult[] = Array.isArray(data.results) ? data.results : [];
+          const nextGroupValues: FctResult[] = selectedGroupByOption.rdfType
+            ? (Array.isArray(data.classes) ? data.classes : []).map((item) => ({
+                uri: item.uri,
+                title: item.label || item.uri,
+                label: item.label || item.uri,
+                termType: "uri" as const,
+                datatype: "uri",
+                matches: [],
+              }))
+            : Array.isArray(data.results) ? data.results : [];
           setGroupHasMoreBatches(nextGroupValues.length >= groupBatchSize);
           setGroupValues((current) => {
             if (groupBatchOffset === 0) return nextGroupValues;
@@ -2137,10 +2156,13 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
   const isRootView = queryTree.children.some((node) => node.id === "query-view");
   const visibleResultsPage = allLoadedResults.slice(resultsUiPage * resultsPageSize, (resultsUiPage + 1) * resultsPageSize);
   useEffect(() => {
-    if (visibleResultsPage.length > 0 && !visibleResultsPage.some((item) => item.uri === selectedUri)) {
+    // Group members can be selected even when they are not on the ordinary
+    // Results page. Do not let Results-page auto-selection override that pick
+    // while the Groups tab is active; restore page-local selection on return.
+    if (centralTab !== "groups" && visibleResultsPage.length > 0 && !visibleResultsPage.some((item) => item.uri === selectedUri)) {
       setSelectedUri(visibleResultsPage[0].uri);
     }
-  }, [resultsOffset, resultsPageSize, resultsUiPage, visibleResultsPage, selectedUri]);
+  }, [centralTab, resultsOffset, resultsPageSize, resultsUiPage, visibleResultsPage, selectedUri]);
 
   const selectedResult = visibleResultsPage.find((item) => item.uri === selectedUri);
 
@@ -2773,7 +2795,10 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                         </div>
                       )}
                       <div className="space-y-1">
-                        {pageValues.map((value) => (
+                        {pageValues.map((value) => {
+                          const countQuery = distinctCountQueryFor(queryTree, "value", value.uri, widget.uri, value);
+                          const isZeroCount = facetCandidateCounts[countQuery] === 0;
+                          return (
                           <label
                             key={value.uri}
                             className="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50"
@@ -2793,9 +2818,10 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                 );
                               }}
                               aria-label={`Bind ${widget.label} to ${value.title || value.uri}`}
-                              className="mt-0.5 size-4 shrink-0 accent-current"
+                              className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
+                              aria-invalid={isZeroCount ? true : undefined}
                             />
-                            <span className="min-w-0 flex-1 break-words">
+                            <span className={`min-w-0 flex-1 break-words ${isZeroCount ? "text-destructive" : ""}`}>
                               {value.title || value.uri}
                             </span>
                             <DistinctCount
@@ -2804,9 +2830,15 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                               uri={value.uri}
                               propertyUri={widget.uri}
                               candidateValue={value}
+                              onCountChange={(query, count) =>
+                                setFacetCandidateCounts((current) =>
+                                  current[query] === count ? current : { ...current, [query]: count },
+                                )
+                              }
                             />
                           </label>
-                        ))}
+                          );
+                        })}
                       </div>
                     </>
                   );
@@ -3528,6 +3560,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                       <input
                                         type="checkbox"
                                         checked
+                                        aria-invalid={item.count === 0 ? true : undefined}
                                         onChange={(event) => {
                                           if (group === "Properties") {
                                             handlePropertyCheckboxChange(item.key, event.currentTarget.checked);
@@ -3536,12 +3569,12 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                           }
                                         }}
                                         aria-label={`Unselect ${item.label}`}
-                                        className="size-4 shrink-0 accent-current"
+                                        className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
                                       />
                                       {group === "Properties" ? (
                                         <button
                                           type="button"
-                                          className="min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer"
+                                          className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${item.count === 0 ? "text-destructive" : ""}`}
                                           onClick={() => navigateIntoRelationship(item.key, "forward")}
                                           title={`Drill down through ${item.label}`}
                                         >
@@ -3550,7 +3583,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                       ) : (
                                         <button
                                           type="button"
-                                          className="min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer"
+                                          className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${item.count === 0 ? "text-destructive" : ""}`}
                                           onClick={() => navigateIntoRelationship(item.key, "reverse")}
                                           title={`Filter by role ${item.label}`}
                                         >
@@ -3558,7 +3591,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                         </button>
                                       )}
                                       {item.count !== null && (
-                                        <span className="shrink-0 text-xs text-muted-foreground">{item.count.toLocaleString()}</span>
+                                        <span className={`shrink-0 text-xs ${item.count === 0 ? "text-destructive" : "text-muted-foreground"}`}>{item.count.toLocaleString()}</span>
                                       )}
                                     </div>
                                   ))}
@@ -3601,7 +3634,12 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                             )}
 
                           <div className="space-y-1">
-                            {pageItems.map((item) => (
+                            {pageItems.map((item) => {
+                              const countKind: DistinctCountKind | null =
+                                group === "Properties" ? "property" : group === "Roles" ? "role" : group === "Classes" ? "class" : null;
+                              const countQuery = countKind ? distinctCountQueryFor(queryTree, countKind, item.key) : null;
+                              const isZeroCount = countQuery ? facetCandidateCounts[countQuery] === 0 : item.count === 0;
+                              return (
                               <div
                                 key={item.key}
                                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50"
@@ -3620,6 +3658,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                 group === "Roles" ? (
                                   <input
                                     type="checkbox"
+                                    aria-invalid={isZeroCount ? true : undefined}
                                     checked={
                                       group === "Properties"
                                         ? selectedProperties.has(item.key)
@@ -3646,15 +3685,15 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                     aria-label={`Filter by ${item.label}`}
                                     className={
                                       group === "Properties" || group === "Roles"
-                                        ? "relative size-4 shrink-0 appearance-none rounded-[3px] border border-blue-900 bg-transparent checked:border-blue-900 checked:bg-blue-500 checked:after:absolute checked:after:left-[4px] checked:after:top-0 checked:after:h-[8px] checked:after:w-[4px] checked:after:rotate-45 checked:after:border-b-2 checked:after:border-r-2 checked:after:border-white checked:after:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700"
-                                        : "size-4 shrink-0 accent-current"
+                                        ? "relative size-4 shrink-0 appearance-none rounded-[3px] border border-blue-900 bg-transparent checked:border-blue-900 checked:bg-blue-500 checked:after:absolute checked:after:left-[4px] checked:after:top-0 checked:after:h-[8px] checked:after:w-[4px] checked:after:rotate-45 checked:after:border-b-2 checked:after:border-r-2 checked:after:border-white checked:after:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 aria-invalid:!border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:!border-destructive/50 dark:aria-invalid:ring-destructive/40"
+                                        : "size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
                                     }
                                   />
                                 ) : null}
                                 {group === "Properties" ? (
                                   <button
                                     type="button"
-                                    className="min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer"
+                                    className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
                                     onClick={() => navigateIntoRelationship(item.key, "forward")}
                                     title={`Drill down through ${item.label}`}
                                   >
@@ -3663,7 +3702,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                 ) : group === "Roles" ? (
                                   <button
                                     type="button"
-                                    className="min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer"
+                                    className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
                                     onClick={() => navigateIntoRelationship(item.key, "reverse")}
                                     title={`Filter by role ${item.label}`}
                                   >
@@ -3672,7 +3711,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                 ) : group === "Classes" ? (
                                   <button
                                     type="button"
-                                    className="min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer"
+                                    className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
                                     onClick={() => {
                                       if (!selectedClasses.has(item.key)) toggleClass(item.key, true);
                                       showClassResults(item.key, activeLeafId);
@@ -3701,6 +3740,11 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                       group === "Properties" ? "property" : "role"
                                     }
                                     uri={item.key}
+                                    onCountChange={(query, count) =>
+                                      setFacetCandidateCounts((current) =>
+                                        current[query] === count ? current : { ...current, [query]: count },
+                                      )
+                                    }
                                   />
                                 )}
                                 {group === "Classes" && (
@@ -3708,10 +3752,16 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                     tree={queryTree}
                                     kind="class"
                                     uri={item.key}
+                                    onCountChange={(query, count) =>
+                                      setFacetCandidateCounts((current) =>
+                                        current[query] === count ? current : { ...current, [query]: count },
+                                      )
+                                    }
                                   />
                                 )}
                               </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </section>
                       );
@@ -3770,18 +3820,22 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                               // classDisplayFacets already puts current-scope
                               // query <class> nodes first, followed by proxy order.
                               .slice(classesPage * FACET_PAGE_SIZE, (classesPage + 1) * FACET_PAGE_SIZE)
-                              .map((item) => (
+                              .map((item) => {
+                                const countQuery = distinctCountQueryFor(queryTree, "class", item.uri);
+                                const isZeroCount = classCandidateCounts[countQuery] === 0;
+                                return (
                                 <div key={item.uri} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50">
                                   <input
                                     type="checkbox"
                                     checked={selectedClasses.has(item.uri)}
                                     onChange={(event) => toggleClass(item.uri, event.target.checked)}
                                     aria-label={`Filter by class ${toLabel(item.uri)}`}
-                                    className="size-4 shrink-0 accent-current"
+                                    className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
+                                    aria-invalid={isZeroCount ? true : undefined}
                                   />
                                   <button
                                     type="button"
-                                    className="min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer"
+                                    className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
                                     onClick={() => {
                                       if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true);
                                       showClassResults(item.uri, activeLeafId);
@@ -3801,7 +3855,8 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                     }
                                   />
                                 </div>
-                              ))}
+                                );
+                              })}
                           </div>
                         </>
                       )}
@@ -4161,7 +4216,9 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                         {visibleGroupValues.map((groupValue) => {
                           const memberKey = `${selectedGroupByOption!.key}::${groupValueKey(groupValue)}`;
                           const members = groupMembers[memberKey] ?? { results: [], loading: true, error: "" };
-                          const selectedRelationshipNode = findQueryNode(queryTree.children, selectedGroupByOption!.nodeId);
+                          const selectedRelationshipNode = selectedGroupByOption!.rdfType
+                            ? getActiveViewPropertyFilters(queryTree).find((node) => node.attributes.iri === RDF_TYPE_URI)
+                            : findQueryNode(queryTree.children, selectedGroupByOption!.nodeId);
                           const expectedBinding = groupValueBinding(groupValue);
                           const bound = (selectedRelationshipNode?.children ?? []).some((child) => child.name === "value" && child.text === expectedBinding.text && (child.attributes.datatype ?? "uri") === expectedBinding.datatype && (child.attributes["xml:lang"] ?? "") === (expectedBinding.lang ?? ""));
                           return <article key={memberKey} className="flex min-w-0 flex-col rounded-md border border-border">
@@ -4270,7 +4327,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                   <Toggle
                     pressed={centralTab === "query-tree" || centralTab === "view-query"}
                     onPressedChange={(pressed) => setCentralTab(pressed ? "query-tree" : (groupByPropertyUri ? "groups" : "results"))}
-                    className="group inline-flex shrink-0 items-center gap-1.5 rounded-md border border-input px-3 py-2 text-sm data-[state=on]:border-emerald-600 data-[state=on]:bg-emerald-600 data-[state=on]:text-white dark:data-[state=on]:border-emerald-500 dark:data-[state=on]:bg-emerald-700"
+                    className="group inline-flex shrink-0 items-center gap-1.5 rounded-md border border-input px-3 py-2 text-sm data-[state=on]:border-black data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:border-black dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
                     aria-label="Query"
                     title="Query"
                   >
@@ -4280,7 +4337,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                   <Toggle
                     pressed={showResultBadges}
                     onPressedChange={setShowResultBadges}
-                    className="shrink-0 rounded-md border border-input px-3 py-2 text-sm data-[state=on]:border-violet-600 data-[state=on]:bg-violet-600 data-[state=on]:text-white dark:data-[state=on]:border-violet-500 dark:data-[state=on]:bg-violet-700"
+                    className="shrink-0 rounded-md border border-input px-3 py-2 text-sm data-[state=on]:border-black data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:border-black dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
                     aria-label="Show Badges"
                     title="Show or hide selected property/value badges"
                   >

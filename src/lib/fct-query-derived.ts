@@ -20,6 +20,7 @@ type GroupByOption = {
   nodeId: string;
   memberBindingNodeId?: string;
   ancestorRole?: boolean;
+  rdfType?: boolean;
 };
 export type DistinctCountKind = "property" | "class" | "role" | "value";
 const COUNT_QUERY_LIMIT = 1000;
@@ -154,6 +155,11 @@ export function createGroupValuesQuery(
   sourceTree: FctQueryTree,
   option: GroupByOption,
 ): FctQueryTree {
+  // rdf:type is a furniture option: its headings come from the FCT classes
+  // view, not from a property/list view attached to a synthetic relationship.
+  if (option.rdfType) {
+    return cloneQueryTree(sourceTree);
+  }
   const removeSelectedValues = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => ({
     ...node,
     attributes: { ...node.attributes },
@@ -194,6 +200,27 @@ export function createGroupMemberQuery(
     text: binding.text,
     children: [],
   };
+
+  if (option.rdfType) {
+    // The synthetic rdf:type option has no node in the live query. Add a
+    // real property/value constraint beside the active view in its current
+    // scope, so the cloned FCT request actually filters members by class.
+    const classBinding: FctQueryNode = {
+      id: `group-rdf-type-${encodeURIComponent(groupValue.uri)}`,
+      name: "property",
+      attributes: { iri: option.uri },
+      children: [valueNode],
+    };
+    const addBesideView = (nodes: FctQueryNode[]): FctQueryNode[] => {
+      const output: FctQueryNode[] = [];
+      for (const node of nodes) {
+        if (node.id === "query-view") output.push(classBinding);
+        output.push({ ...node, children: addBesideView(node.children) });
+      }
+      return output;
+    };
+    return { ...tree, children: addBesideView(tree.children) };
+  }
 
   if (option.direction === "reverse" && option.ancestorRole) {
     let movedView: FctQueryNode | undefined;

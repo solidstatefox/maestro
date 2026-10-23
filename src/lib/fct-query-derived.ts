@@ -122,7 +122,7 @@ export function createPropertyWidgetQuery(
     if (node.id === "query-view") {
       const ephemeralView: FctQueryNode = {
         ...copyNode(node),
-        attributes: { ...node.attributes, type: "text", offset: "0" },
+        attributes: { ...node.attributes, type: "list", offset: "0" },
         children: [],
       };
       return [ephemeralView];

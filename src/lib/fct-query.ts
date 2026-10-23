@@ -140,17 +140,23 @@ function serializeNode(node: FctQueryNode): string {
 
   if (node.name === "view") return `<view${attributes}/>`;
 
-  // Virtuoso FCT emits selected URI values into its generated SPARQL filter.
-  // It expects an IRI reference there, including angle brackets; serializing
-  // the bare URI causes output such as `filter (?s2 = http://example/id)` and
-  // the selected value is not applied to the result set.
+  // Serialize the value text as supplied by the query tree. XML escaping
+  // protects the document syntax; it must not add SPARQL IRI delimiters.
   const textContent = node.text ?? "";
-  const serializedText = node.name === "value" && node.attributes.datatype === "uri" && textContent.trim()
-    ? escapeXml(/^<.*>$/.test(textContent.trim()) ? textContent.trim() : `<${textContent.trim()}>`)
-    : textContent ? escapeXml(textContent) : "";
+  const serializedText = textContent ? escapeXml(textContent) : "";
+  // FCT query filters must precede <view>. If a filter is appended after the
+  // view node (for example when a user checks a facet after initial browse),
+  // emitting the tree's raw child order can cause the endpoint to stop reading
+  // the query before it reaches that filter. Always serialize view last at each
+  // scope, without changing the authoritative query tree itself.
   const content = [
     serializedText,
-    ...node.children.map(serializeNode),
+    ...node.children
+      .filter((child) => child.name !== "view")
+      .map(serializeNode),
+    ...node.children
+      .filter((child) => child.name === "view")
+      .map(serializeNode),
   ].join("");
 
   return `<${node.name}${attributes}>${content}</${node.name}>`;
@@ -163,7 +169,14 @@ export function serializeFctQuery(tree: FctQueryTree): string {
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
     `<query${attributes}>` +
-    tree.children.map(serializeNode).join("") +
+    tree.children
+      .filter((child) => child.name !== "view")
+      .map(serializeNode)
+      .join("") +
+    tree.children
+      .filter((child) => child.name === "view")
+      .map(serializeNode)
+      .join("") +
     `</query>`
   );
 }
@@ -190,7 +203,7 @@ export function attachViewToPropertyInQueryTree(
 ): FctQueryTree {
   const leafView: FctQueryNode = {
     ...view,
-    attributes: { ...view.attributes, type: "text", offset: "0" },
+    attributes: { ...view.attributes, type: "list", offset: "0" },
     children: [],
   };
   const attach = (nodes: FctQueryNode[]): FctQueryNode[] => {

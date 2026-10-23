@@ -184,9 +184,8 @@ function parseSparqlResults(responseText: string): {
   }
 }
 
-async function querySparql(endpoint: string, query: string, isSplitDs = false): Promise<SparqlQueryResult> {
+async function querySparql(endpoint: string, query: string): Promise<SparqlQueryResult> {
   const sparqlUrl = new URL("/sparql", endpoint);
-  if (isSplitDs) sparqlUrl.port = "2001";
   const key = queryCacheKey("sparql", sparqlUrl.toString(), query);
   const cached = getQueryCache<string>(key);
   if (cached !== undefined) {
@@ -234,9 +233,39 @@ export async function POST(request: Request) {
     const endpointId = getSelectedEndpointId(request, endpointList);
     const selectedEndpoint = endpointList.find((item) => item.id === endpointId);
     const fctEndpoint = selectedEndpoint?.url;
-    const isSplitDs = selectedEndpoint?.label.toLowerCase() === "split ds";
     if (!fctEndpoint) {
       return NextResponse.json({ error: "No FCT endpoints are configured." }, { status: 500 });
+    }
+
+    // The Results pane compiles the authoritative FCT query tree to SPARQL on
+    // the client and submits that SELECT here; unlike /fct, this path returns
+    // the endpoint's SPARQL result bindings directly.
+    if (body?.resultsQuery && typeof body.resultsQuery === "object") {
+      const resultsQuery = body.resultsQuery.sparql;
+      if (typeof resultsQuery !== "string" || !/^\s*(?:DEFINE\s+[^\n]+\s+)*SELECT\b/i.test(resultsQuery) ||
+          !/\bAS\s+\?c1\b/i.test(resultsQuery) || /\b(?:INSERT|DELETE|CLEAR|LOAD|CREATE|DROP|MOVE|COPY|ADD)\b/i.test(resultsQuery)) {
+        return NextResponse.json({ error: "A client-generated SELECT Results SPARQL query with ?c1 is required." }, { status: 400 });
+      }
+      const { responseText, response, key } = await querySparql(fctEndpoint, resultsQuery);
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!response.ok) {
+        return NextResponse.json(
+          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}.`, details: responseText.slice(0, 2000) },
+          { status: 502 },
+        );
+      }
+      if (!contentType.toLowerCase().includes("json")) {
+        return NextResponse.json(
+          { error: "Virtuoso SPARQL endpoint did not return JSON results.", details: responseText.slice(0, 2000) },
+          { status: 502 },
+        );
+      }
+      const parsed = parseSparqlResults(responseText);
+      if (!parsed || !parsed.head.vars.includes("c1")) {
+        return NextResponse.json({ error: "Virtuoso returned invalid Results SPARQL JSON (expected ?c1)." }, { status: 502 });
+      }
+      if (response.status === 200) setQueryCache(key, responseText);
+      return NextResponse.json({ ...parsed, query: resultsQuery });
     }
 
     if (body?.facetValueCount && typeof body.facetValueCount === "object") {
@@ -249,7 +278,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "The client must provide a scalar COUNT(DISTINCT ...) AS ?ct SPARQL query." }, { status: 400 });
       }
 
-      const { responseText, response, key } = await querySparql(fctEndpoint, countQuery, isSplitDs);
+      const { responseText, response, key } = await querySparql(fctEndpoint, countQuery);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
         return NextResponse.json(
@@ -289,7 +318,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Could not safely add the high-frequency facets to the generated SPARQL query." }, { status: 400 });
       }
 
-      const { responseText, response, key } = await querySparql(fctEndpoint, built.query, isSplitDs);
+      const { responseText, response, key } = await querySparql(fctEndpoint, built.query);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
         return NextResponse.json(
@@ -339,7 +368,7 @@ export async function POST(request: Request) {
       branches.push(`{ VALUES ?resource { ${resourceValues} } VALUES ?property { ${iriList(roles)} } ?value ?property ?resource . BIND("reverse" AS ?direction) }`);
     }
     const query = `SELECT DISTINCT ?resource ?property ?direction ?value WHERE { ${branches.join(" UNION ")} }`;
-    const { responseText, response, key } = await querySparql(fctEndpoint, query, isSplitDs);
+    const { responseText, response, key } = await querySparql(fctEndpoint, query);
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.ok) {
       return NextResponse.json(

@@ -62,7 +62,6 @@ export async function POST(request: Request) {
     if (!endpoint) return NextResponse.json({ error: "No FCT endpoints are configured." }, { status: 500 });
 
     const sparqlUrl = new URL("/sparql", endpoint.url);
-    if (endpoint.label.toLowerCase() === "split ds") sparqlUrl.port = "2001";
     const response = await fetch(sparqlUrl, {
       method: "POST",
       headers: {

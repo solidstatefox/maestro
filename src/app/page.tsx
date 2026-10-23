@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { rememberShortforms, toLabel } from "@/lib/uri-labels";
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
+import { buildFctResultsSparql } from "@/lib/fct-results-sparql";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { ReactNode, Dispatch, SetStateAction } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -134,6 +135,103 @@ type FctResult = {
   lang?: string;
 };
 
+function escapeXmlText(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+type ParsedFctResponse = {
+  sparql: string;
+  viewType: string;
+  rows: FctResponseColumn[][];
+  complete: "yes" | "no";
+  rowCount: number;
+  results: FctResult[];
+  properties: { uri: string; label: string; count: number }[];
+  classes: { uri: string; label: string; count: number }[];
+  roles: { uri: string; label: string; count: number }[];
+  graphs: string[];
+  describe: { subject: FctResponseColumn; predicate: FctResponseColumn; object: FctResponseColumn }[];
+  count?: number;
+  shortforms: { uri: string; shortform?: string }[];
+  error?: string;
+};
+
+function parseFctResponse(xmlText: string): ParsedFctResponse {
+  const document = new DOMParser().parseFromString(xmlText, "application/xml");
+  if (document.querySelector("parsererror")) throw new Error("The FCT API returned malformed XML.");
+  const byLocalName = (root: ParentNode, name: string) => Array.from(root.childNodes).filter((node): node is Element => node.nodeType === 1 && (node as Element).localName === name);
+  const root = document.documentElement;
+  const getText = (name: string) => byLocalName(root, name)[0]?.textContent?.trim() ?? "";
+  const error = getText("error");
+  if (error) return { sparql: getText("sparql"), viewType: "error", rows: [], complete: "no", rowCount: 0, results: [], properties: [], classes: [], roles: [], graphs: [], describe: [], count: undefined, shortforms: [], error };
+  const resultNode = byLocalName(root, "result")[0];
+  const resultType = resultNode?.getAttribute("type") ?? "text";
+  const rows = resultNode ? byLocalName(resultNode, "row") : [];
+  const termColumn = (element: Element, index: number): FctResponseColumn => {
+    const attributes: Record<string, string> = {};
+    for (const attribute of Array.from(element.attributes)) attributes[attribute.name] = attribute.value;
+    const datatype = element.getAttribute("datatype") ?? undefined;
+    const lang = element.getAttributeNS("http://www.w3.org/XML/1998/namespace", "lang") ?? element.getAttribute("xml:lang") ?? undefined;
+    const shortform = element.getAttribute("shortform") ?? undefined;
+    const termType = datatype === "uri" || datatype === "url" ? "uri" : datatype === "bnode" ? "bnode" : "literal";
+    return { value: element.textContent ?? "", name: String(index + 1), termType, ...(datatype ? { datatype } : {}), ...(lang ? { lang } : {}), ...(shortform ? { shortform } : {}), attributes, raw: { "#text": element.textContent ?? "", ...attributes } };
+  };
+  const rowColumns = rows.map((row) => byLocalName(row, "column").map(termColumn));
+  const firstTerm = (columns: FctResponseColumn[]) => columns[0];
+  const results: FctResult[] = rowColumns.flatMap((columns) => {
+    const first = firstTerm(columns);
+    if (!first) return [];
+    const second = columns[1];
+    const third = columns[2];
+    const isText = resultType === "text";
+    const excerpt = isText ? (second?.value ?? "") : "";
+    const title = !isText && second ? second.value : first.termType === "uri" ? toLabel(first.value) : first.value;
+    const item: FctResult = {
+      uri: first.value,
+      title,
+      ...(first.shortform ? { shortform: first.shortform } : {}),
+      termType: first.termType ?? "literal",
+      ...(first.datatype ? { datatype: first.datatype } : {}),
+      ...(first.lang ? { lang: first.lang } : {}),
+      columns,
+      matches: excerpt ? [{ excerpt, columns: columns.slice(1) }] : [],
+    };
+    if (resultType === "list-count" && second) item.columns = columns;
+    if (third && resultType === "text") item.matches = [{ excerpt: third.value, columns: columns.slice(2) }];
+    return [item];
+  });
+  const facetItems = rowColumns.flatMap((columns) => {
+    if (!columns[0]) return [];
+    return [{ uri: columns[0].value, label: columns[0].shortform || columns[0].value, count: Number(columns[1]?.value ?? 0) }];
+  });
+  const describe = rowColumns.flatMap((columns) => columns.length >= 3 ? [{ subject: columns[0], predicate: columns[1], object: columns[2] }] : []);
+  const uris = new Map<string, string | undefined>();
+  for (const columns of rowColumns) for (const column of columns) if (column.termType === "uri") uris.set(column.value, column.shortform);
+  return {
+    sparql: getText("sparql"),
+    viewType: resultType,
+    rows: rowColumns,
+    complete: getText("complete") === "yes" ? "yes" : "no",
+    rowCount: Number(getText("processed") || rows.length),
+    results: resultType === "text" || resultType === "list" || resultType === "list-count" ? results : [],
+    properties: resultType === "properties" ? facetItems : [],
+    classes: resultType === "classes" ? facetItems : [],
+    roles: resultType === "properties-in" ? facetItems : [],
+    graphs: resultType === "graphs" ? rowColumns.flatMap((columns) => columns[0] ? [columns[0].value] : []) : [],
+    describe: resultType === "describe" ? describe : [],
+    count: resultType === "count" ? Number(rowColumns[0]?.[0]?.value ?? 0) : undefined,
+    shortforms: Array.from(uris, ([uri, shortform]) => ({ uri, ...(shortform ? { shortform } : {}) })),
+  };
+}
+
+async function readFctResponse(response: Response): Promise<ParsedFctResponse> {
+  const text = await response.text();
+  const data = parseFctResponse(text);
+  if (!response.ok) throw new Error(data.error || `FCT API returned HTTP ${response.status}.`);
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
 function groupValueKey(value: FctResult): string {
   return JSON.stringify([value.uri, value.termType ?? "uri", value.datatype ?? "", value.lang ?? ""]);
 }
@@ -237,7 +335,7 @@ function QueryInspectorButton({
             </header>
             {countQuery?.trim() && (
               <div role="tablist" aria-label="Widget queries" className="mb-3 flex gap-1 border-b">
-                <button type="button" role="tab" aria-selected={activeTab === "widget"} onClick={() => setActiveTab("widget")} className={`rounded-t-md px-3 py-2 text-sm ${activeTab === "widget" ? "border border-b-0 bg-background font-medium" : "text-muted-foreground hover:bg-accent/50"}`}>FCT result list</button>
+                <button type="button" role="tab" aria-selected={activeTab === "widget"} onClick={() => setActiveTab("widget")} className={`rounded-t-md px-3 py-2 text-sm ${activeTab === "widget" ? "border border-b-0 bg-background font-medium" : "text-muted-foreground hover:bg-accent/50"}`}>Results SPARQL</button>
                 <button type="button" role="tab" aria-selected={activeTab === "count"} onClick={() => setActiveTab("count")} className={`rounded-t-md px-3 py-2 text-sm ${activeTab === "count" ? "border border-b-0 bg-background font-medium" : "text-muted-foreground hover:bg-accent/50"}`}>Count SPARQL query</button>
               </div>
             )}
@@ -469,13 +567,11 @@ function PersonalWidgetQueryListener({
         const response = await fetch("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("personal-widget-values", `PersonalWidgetQueryListener:${propertyUri}`) },
-          body: JSON.stringify({
-            queryXml: widgetQueryXml,
-          }),
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("personal-widget-values", `PersonalWidgetQueryListener:${propertyUri}`) },
+          body: widgetQueryXml,
           signal: controller.signal,
         });
-        const data = await response.json();
+        const data = await readFctResponse(response);
         rememberShortforms(data?.shortforms);
         if (!response.ok)
           throw new Error(data.error ?? `Failed to load ${propertyUri}.`);
@@ -598,11 +694,11 @@ function PersonalRoleWidget({
         const response = await fetch("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("personal-role-widget-values", `PersonalRoleWidget:${uri}`) },
-          body: JSON.stringify({ queryXml: widgetQueryXml }),
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("personal-role-widget-values", `PersonalRoleWidget:${uri}`) },
+          body: widgetQueryXml,
           signal: controller.signal,
         });
-        const data = await response.json();
+        const data = await readFctResponse(response);
         rememberShortforms(data?.shortforms);
         if (!response.ok) throw new Error(data.error ?? `Failed to load role values for ${uri}.`);
         const fetched = Array.isArray(data.results) ? data.results as FctResult[] : [];
@@ -1278,6 +1374,7 @@ useEffect(() => {
   setResults([]);
   resultsBatchRequestPending.current = false;
   setResultsPageMatchCount(0);
+  setResultsPageComplete(false);
   setResultsTotalCount(null);
   setSelectedUri("");
   setDescribedRecord([]);
@@ -1302,6 +1399,7 @@ useEffect(() => {
     setResults([]);
     resultsBatchRequestPending.current = false;
     setResultsPageMatchCount(0);
+    setResultsPageComplete(false);
     setResultsTotalCount(null);
     setIsCountingResults(endpointReadyForQuery);
     setIsSearching(endpointReadyForQuery);
@@ -1356,11 +1454,15 @@ useEffect(() => {
   }
   const [resultsTotalCount, setResultsTotalCount] = useState<number | null>(null);
   const [resultsPageMatchCount, setResultsPageMatchCount] = useState(0);
-  // The displayed total must never under-report distinct result resources already loaded.
-  // The FCT result list is deduplicated by URI below before it is stored in state.
-  const effectiveResultsTotalCount = resultsTotalCount === null
-    ? null
-    : Math.max(resultsTotalCount, results.length);
+  // A short SPARQL result batch is the signal that this result stream has ended.
+  // The separate scalar count is used for the overall pager, not as a substitute
+  // for the actual result bindings returned by the current page query.
+  const [resultsPageComplete, setResultsPageComplete] = useState(false);
+  const effectiveResultsTotalCount = resultsPageComplete
+    ? results.length
+    : resultsTotalCount === null
+      ? null
+      : Math.max(resultsTotalCount, results.length);
   const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string }[]>([]);
   const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
   const RECORD_DESCRIPTION_PAGE_SIZE = 20;
@@ -1385,6 +1487,10 @@ const describedProperties = Array.from(
   const [timeoutSeconds, setTimeoutSeconds] = useState(0);
 
   const resultsCountSparql = buildFctCountSparql(queryTree);
+  const resultsSparql = buildFctResultsSparql(queryTree);
+  const resultsRequestXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
+    type: "text", limit: String(resultsBatchSize), offset: String(resultsOffset),
+  }));
   const resultsCountRequestIdentity = `${selectedEndpointId}\u0000${resultsCountSparql ?? ""}`;
   const latestResultsCountRequestIdentityRef = useRef(resultsCountRequestIdentity);
   // Update during render, not in an effect, so a response from an older query
@@ -1495,43 +1601,29 @@ const describedProperties = Array.from(
       setSearchError("");
 
       try {
-        console.info("Maestro Results search request starting", {
-          queryFingerprint: proxyDebugFingerprint(queryResultsXml),
-          queryXmlLength: queryResultsXml.length,
+        console.info("Maestro Results FCT request starting", {
+          queryFingerprint: proxyDebugFingerprint(resultsRequestXml),
+          queryLength: resultsRequestXml.length,
         });
         const response = await fetch("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
           headers: {
-            "Content-Type": "application/json",
-            ...proxyDebugHeaders("results-search", `ResultsSearch:${proxyDebugFingerprint(queryResultsXml)}`),
+            "Content-Type": "text/xml; charset=utf-8",
+            ...proxyDebugHeaders("results-search", `ResultsSearch:${proxyDebugFingerprint(resultsRequestXml)}`),
           },
-          body: JSON.stringify({ queryXml: queryResultsXml }),
+          body: resultsRequestXml,
           signal: controller.signal,
         });
-
-        const data = await response.json();
-        rememberShortforms(data?.shortforms);
-        console.log("FCT API response:", data);
-
-        if (!response.ok) {
-          throw new Error(data.error ?? "Virtuoso search failed.");
-        }
-
+        const data = await readFctResponse(response);
         if (cancelled) return;
-
-        const rawResults: FctResult[] = Array.isArray(data.results)
-          ? data.results
-          : [];
+        const rawResults: FctResult[] = Array.isArray(data.results) ? data.results : [];
         const uniqueResults = new Map<string, FctResult>();
         for (const item of rawResults) {
           const previous = uniqueResults.get(item.uri);
-          uniqueResults.set(
-            item.uri,
-            previous
-              ? { ...previous, ...item, matches: [...previous.matches, ...item.matches] }
-              : { ...item, matches: [...item.matches] },
-          );
+          uniqueResults.set(item.uri, previous
+            ? { ...previous, ...item, matches: [...previous.matches, ...item.matches] }
+            : { ...item, matches: [...item.matches] });
         }
         const nextResults = Array.from(uniqueResults.values());
 
@@ -1540,8 +1632,9 @@ const describedProperties = Array.from(
         // the widgets after the coordinated transition has cleared them.
         if (cancelled || requestQueryIdentity !== activeQueryIdentityRef.current) return;
 
-        setSparqlQuery(typeof data.sparql === "string" ? data.sparql : "");
-        setResultsPageMatchCount(Number.isFinite(Number(data.matchCount)) ? Number(data.matchCount) : nextResults.length);
+        setSparqlQuery(data.sparql || "");
+        setResultsPageMatchCount(nextResults.length);
+        setResultsPageComplete(rawResults.length < resultsBatchSize);
         setResults((current) => {
           if (resultsOffset === 0) return nextResults;
           const merged = new Map(current.map((item) => [item.uri, item]));
@@ -1573,7 +1666,7 @@ const describedProperties = Array.from(
       clearTimeout(timer);
       controller.abort();
     };
-  }, [search, queryResultsXml, queryCountXml, resultsOffset, selectedEndpointId, endpointReadyForQuery, searchPipelineRun]);
+  }, [search, resultsRequestXml, resultsBatchSize, queryCountXml, resultsOffset, selectedEndpointId, endpointReadyForQuery, searchPipelineRun]);
 
   // Result badges are optional SPARQL enrichment. Keep this separate from the
   // FCT search pipeline so toggling badges never reloads/flickers the result set.
@@ -1732,18 +1825,17 @@ const describedProperties = Array.from(
           // values (including RDF literals), not text-search result resources.
           type: "list", limit: String(groupBatchSize), offset: String(groupBatchOffset),
         });
+        const groupValuesXml = serializeFctQuery(groupTree);
         const response = await fetch("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("group-values", "GroupsValues") },
-          body: JSON.stringify({ queryXml: serializeFctQuery(groupTree) }),
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("group-values-fct", "GroupsValues") },
+          body: groupValuesXml,
           signal: controller.signal,
         });
-        const data = await response.json();
-        rememberShortforms(data?.shortforms);
-        if (!response.ok) throw new Error(data.error ?? "Failed to load group values.");
+        const data = await readFctResponse(response);
         if (!cancelled) {
           const nextGroupValues: FctResult[] = Array.isArray(data.results) ? data.results : [];
-          setGroupHasMoreBatches(nextGroupValues.length >= groupBatchSize && data.complete !== true);
+          setGroupHasMoreBatches(nextGroupValues.length >= groupBatchSize);
           setGroupValues((current) => {
             if (groupBatchOffset === 0) return nextGroupValues;
             const merged = new Map(current.map((item) => [groupValueKey(item), item]));
@@ -1786,18 +1878,25 @@ const describedProperties = Array.from(
       void (async () => {
         try {
           const memberTree = createGroupMemberQuery(queryTree, selectedGroupByOption, groupValue);
+          const memberXml = serializeFctQuery(setQueryViewAttributes(memberTree, {
+            type: "text", limit: String(resultsBatchSize), offset: "0",
+          }));
           const response = await fetch("/proxy/api/fct", {
             method: "POST", cache: "no-store",
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("group-members", "GroupsMembers") },
-            body: JSON.stringify({ queryXml: serializeFctQuery(memberTree) }),
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("group-members-fct", "GroupsMembers") },
+            body: memberXml,
             signal: controller.signal,
           });
-          const data = await response.json();
-        rememberShortforms(data?.shortforms);
-          if (!response.ok) throw new Error(data.error ?? `Failed to load items for ${groupValue.title || groupValue.uri}.`);
+          const data = await readFctResponse(response);
           if (!cancelled) {
+            const rawResults: FctResult[] = Array.isArray(data.results) ? data.results : [];
+            const uniqueResults = new Map<string, FctResult>();
+            for (const item of rawResults) {
+              const previous = uniqueResults.get(item.uri);
+              uniqueResults.set(item.uri, previous ? { ...previous, ...item, matches: [...previous.matches, ...item.matches] } : { ...item, matches: [...item.matches] });
+            }
             groupMemberRequestStates.current.set(key, "loaded");
-            setGroupMembers((current) => ({ ...current, [key]: { results: Array.isArray(data.results) ? data.results : [], loading: false, error: "" } }));
+            setGroupMembers((current) => ({ ...current, [key]: { results: Array.from(uniqueResults.values()), loading: false, error: "" } }));
           }
         } catch (error) {
           if (error instanceof Error && error.name === "AbortError") return;
@@ -1814,7 +1913,7 @@ const describedProperties = Array.from(
       }
       controller.abort();
     };
-  }, [centralTab, search, queryXml, selectedGroupByOption?.key, visibleGroupValues.map(groupValueKey).join("|")]);
+  }, [centralTab, search, queryXml, selectedGroupByOption?.key, visibleGroupValues.map(groupValueKey).join("|"), resultsBatchSize]);
 
   useEffect(() => {
     const query = search.trim();
@@ -1861,16 +1960,14 @@ const describedProperties = Array.from(
       async function loadFacet(view: "properties" | "classes" | "roles") {
         // Incoming predicates are the inverse-property (Roles) facet.
         // Virtuoso exposes these with view type="properties-in".
+        const facetXml = view === "roles" ? roleFacetQueryXml : view === "classes" ? classFacetQueryXml : propertyFacetQueryXml;
         const response = await fetch("/proxy/api/fct", {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("facet-load", "FacetLoader") },
-          body: JSON.stringify({
-            queryXml: view === "roles" ? roleFacetQueryXml : view === "classes" ? classFacetQueryXml : propertyFacetQueryXml,
-            view: view === "roles" ? "properties-in" : view,
-          }),
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader") },
+          body: facetXml,
           signal: controller.signal,
         });
-        const data = await response.json();
+        const data = await readFctResponse(response);
         rememberShortforms(data?.shortforms);
         if (!response.ok)
           throw new Error(data.error ?? `Failed to load ${view} facets.`);
@@ -1965,15 +2062,15 @@ const describedProperties = Array.from(
         const limit = FACET_PAGE_SIZE;
         const offset = graphsPage * limit;
         const graphQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
-          type: "text", limit: String(limit), offset: String(offset),
+          type: "graphs", limit: String(limit), offset: String(offset),
         }));
         const response = await fetch("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-list", "GraphList") },
-          body: JSON.stringify({ queryXml: graphQueryXml, graphOnly: true }),
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("graph-list", "GraphList") },
+          body: graphQueryXml,
           signal: controller.signal,
         });
-        const data = await response.json();
+        const data = await readFctResponse(response);
         if (!response.ok) throw new Error(data.error ?? "Failed to load datasites for the current query.");
         if (cancelled) return;
         //const graphs = Array.isArray(data.graphs) ? [...new Set(data.graphs.filter((value: unknown): value is string => typeof value === "string"))] : [];
@@ -1991,7 +2088,7 @@ const graphs: string[] = Array.isArray(data.graphs)
 
 setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
 
-        setGraphHasMore(!(data.complete === true || data.complete === "yes") && (typeof data.rowCount !== "number" || data.rowCount >= limit));
+        setGraphHasMore(typeof data.rowCount === "number" ? data.rowCount >= limit : graphs.length >= limit);
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
           console.warn("Graph page load failed:", error);
@@ -2035,6 +2132,9 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
     }, new Map<string, FctResult>()),
   ).map(([, item]) => item);
   const allLoadedResults = visibleResults;
+  // Match excerpts/counts are meaningful only for the root-level live <view>.
+  // A nested view represents a focused path, not a root text-search result set.
+  const isRootView = queryTree.children.some((node) => node.id === "query-view");
   const visibleResultsPage = allLoadedResults.slice(resultsUiPage * resultsPageSize, (resultsUiPage + 1) * resultsPageSize);
   useEffect(() => {
     if (visibleResultsPage.length > 0 && !visibleResultsPage.some((item) => item.uri === selectedUri)) {
@@ -2044,7 +2144,7 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
 
   const selectedResult = visibleResultsPage.find((item) => item.uri === selectedUri);
 
-  // Load the selected resource once with SPARQL DESCRIBE; pagination is local to
+  // Load the selected resource once through the FCT DESCRIBE view; pagination is local to
   // the returned property/value pairs and does not trigger another server query.
   useEffect(() => {
     if (!selectedUri || !selectedEndpointId) {
@@ -2060,40 +2160,24 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
     setIsDescribing(true);
     async function loadDescription() {
       try {
-        const response = await fetch("/proxy/api/describe", {
+        const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="30" offset="0"/></query>`;
+        const response = await fetch("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-description", "RecordDescription") },
-          body: JSON.stringify({ iri: selectedUri }),
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-description-fct", "RecordDescription") },
+          body: describeQueryXml,
           signal: controller.signal,
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? "SPARQL DESCRIBE failed.");
-        if (typeof data.rdfXml !== "string") throw new Error("SPARQL DESCRIBE returned no RDF/XML document.");
-        const xml = new DOMParser().parseFromString(data.rdfXml, "application/xml");
-        if (xml.querySelector("parsererror")) throw new Error("The DESCRIBE response was not valid XML.");
-        const rdfNs = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-        const rows: { property: string; value: string }[] = [];
-        // RDF/XML may represent a subject as rdf:Description or as a typed node
-        // (for example foaf:Person), so inspect each direct child of rdf:RDF.
-        const rdfRoot = xml.documentElement.localName === "RDF"
-          ? xml.documentElement
-          : xml.getElementsByTagNameNS(rdfNs, "RDF")[0];
-        const subjects = rdfRoot ? Array.from(rdfRoot.children) : [];
-        for (const subject of subjects) {
-          for (const predicate of Array.from(subject.children)) {
-            const property = predicate.namespaceURI ? `${predicate.namespaceURI}${predicate.localName}` : predicate.tagName;
-            const resource = predicate.getAttributeNS(rdfNs, "resource");
-            const nodeId = predicate.getAttributeNS(rdfNs, "nodeID");
-            const value = resource || (nodeId ? `_:${nodeId}` : predicate.textContent?.trim() || "");
-            //if (value) rows.push({ property: toLabel(property), value });
-			if (value) rows.push({ property, value });
-          }
-        }
+        const data = await readFctResponse(response);
+        const rows = data.describe.flatMap((triple) => {
+          const property = triple.predicate.value;
+          const object = triple.object.termType === "bnode" ? `_:${triple.object.value}` : triple.object.value;
+          return property && object ? [{ property, value: object }] : [];
+        });
         if (!cancelled) setDescribedRecord(rows);
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
-          console.warn("SPARQL DESCRIBE failed:", error);
+          console.warn("FCT DESCRIBE failed:", error);
           setDescribedRecord([]);
         }
       } finally {
@@ -2102,7 +2186,7 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: uri, count: 0 })));
     }
     void loadDescription();
     return () => { cancelled = true; controller.abort(); };
-  }, [selectedUri, selectedEndpointId]);
+  }, [selectedUri, selectedEndpointId, queryTree.attributes.inference, queryTree.attributes["same-as"]]);
 
   // The active scope is the property-path node that currently contains the
   // authoritative <view>; at the root, scope is represented by null.
@@ -2339,22 +2423,6 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
     }
   }
 
-
-  useEffect(() => {
-    const requiredResultCount = (resultsUiPage + 1) * resultsPageSize;
-    if (
-      centralTab === "results" &&
-      !isSearching &&
-      !resultsBatchRequestPending.current &&
-      results.length > 0 &&
-      results.length < requiredResultCount &&
-      results.length < (effectiveResultsTotalCount ?? Number.POSITIVE_INFINITY) &&
-      resultsPageMatchCount > 0
-    ) {
-      resultsBatchRequestPending.current = true;
-      setResultsPage(resultsBatchSize, resultsOffset + resultsPageMatchCount);
-    }
-  }, [centralTab, resultsUiPage, resultsPageSize, isSearching, results.length, effectiveResultsTotalCount, resultsPageMatchCount, resultsBatchSize, resultsOffset, setResultsPage]);
 
   function compactIri(value: string): string {
     return toLabel(value);
@@ -3343,23 +3411,22 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                 ? graphFacets.map((item) => ({ key: item.uri, label: item.uri, count: item.count }))
                                 : [];
 
-                      // Query-selected Properties/Roles lead the widget in query
-                      // order; never sort the proxy response. The unselected items
-                      // remain in exactly the order supplied by FCT.
-                      if (group === "Properties" || group === "Roles") {
-                        const selected = group === "Properties" ? selectedProperties : selectedRoles;
-                        const selectedInQueryOrder = Array.from(selected, (key) =>
-                          items.find((item) => item.key === key) ?? {
-                            key,
-                            label: toLabel(key),
-                            count: null,
-                          },
-                        );
-                        items = [
-                          ...selectedInQueryOrder,
-                          ...items.filter((item) => !selected.has(item.key)),
-                        ];
-                      }
+                      // Keep checked Properties/Roles in a separate pane above
+                      // pagination. Only unchecked items participate in paging;
+                      // preserve query order for selected items and FCT order below.
+                      const selectedItems =
+                        group === "Properties" || group === "Roles"
+                          ? Array.from(
+                              group === "Properties" ? selectedProperties : selectedRoles,
+                              (key) => items.find((item) => item.key === key) ?? {
+                                key,
+                                label: toLabel(key),
+                                count: null,
+                              },
+                            )
+                          : [];
+                      const selectedKeys = new Set(selectedItems.map((item) => item.key));
+                      const unselectedItems = items.filter((item) => !selectedKeys.has(item.key));
 
                       const currentPage =
                         group === "Properties"
@@ -3371,18 +3438,24 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                               : rolesPage;
                       const pageCount = Math.max(
                         1,
-                        Math.ceil(items.length / FACET_PAGE_SIZE),
+                        Math.ceil(
+                          (group === "Properties" || group === "Roles"
+                            ? unselectedItems.length
+                            : items.length) / FACET_PAGE_SIZE,
+                        ),
                       );
                       const pageItems =
-                        group === "Properties" ||
-                        group === "Classes" ||
-                        group === "Roles" ||
-                        group === "Graphs"
-                          ? items.slice(
+                        group === "Properties" || group === "Roles"
+                          ? unselectedItems.slice(
                               currentPage * FACET_PAGE_SIZE,
                               (currentPage + 1) * FACET_PAGE_SIZE,
                             )
-                          : items;
+                          : group === "Classes" || group === "Graphs"
+                            ? items.slice(
+                                currentPage * FACET_PAGE_SIZE,
+                                (currentPage + 1) * FACET_PAGE_SIZE,
+                              )
+                            : items;
                       const setPage =
                         group === "Properties"
                           ? setPropertiesPage
@@ -3442,10 +3515,61 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                             </span>
                           </div>
 
+                          {(group === "Properties" || group === "Roles") &&
+                            selectedItems.length > 0 && (
+                              <div className="mb-2 rounded-md border border-border/70 bg-background/80 p-2">
+                                <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">Selected</div>
+                                <div className="space-y-1">
+                                  {selectedItems.map((item) => (
+                                    <div
+                                      key={item.key}
+                                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked
+                                        onChange={(event) => {
+                                          if (group === "Properties") {
+                                            handlePropertyCheckboxChange(item.key, event.currentTarget.checked);
+                                          } else {
+                                            handleRoleCheckboxChange(item.key, event.currentTarget.checked);
+                                          }
+                                        }}
+                                        aria-label={`Unselect ${item.label}`}
+                                        className="size-4 shrink-0 accent-current"
+                                      />
+                                      {group === "Properties" ? (
+                                        <button
+                                          type="button"
+                                          className="min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer"
+                                          onClick={() => navigateIntoRelationship(item.key, "forward")}
+                                          title={`Drill down through ${item.label}`}
+                                        >
+                                          {item.label}
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className="min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer"
+                                          onClick={() => navigateIntoRelationship(item.key, "reverse")}
+                                          title={`Filter by role ${item.label}`}
+                                        >
+                                          {item.label}
+                                        </button>
+                                      )}
+                                      {item.count !== null && (
+                                        <span className="shrink-0 text-xs text-muted-foreground">{item.count.toLocaleString()}</span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
                           {(group === "Properties" ||
                             group === "Classes" ||
                             group === "Roles") &&
-                            items.length > FACET_PAGE_SIZE && (
+                            (group === "Properties" || group === "Roles" ? unselectedItems.length : items.length) > FACET_PAGE_SIZE && (
                               <div className="mb-2 flex items-center justify-between gap-2 px-2 text-xs">
                                 <button
                                   type="button"
@@ -3520,7 +3644,11 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                             )
                                     }
                                     aria-label={`Filter by ${item.label}`}
-                                    className="size-4 shrink-0 accent-current"
+                                    className={
+                                      group === "Properties" || group === "Roles"
+                                        ? "relative size-4 shrink-0 appearance-none rounded-[3px] border border-blue-900 bg-transparent checked:border-blue-900 checked:bg-blue-500 checked:after:absolute checked:after:left-[4px] checked:after:top-0 checked:after:h-[8px] checked:after:w-[4px] checked:after:rotate-45 checked:after:border-b-2 checked:after:border-r-2 checked:after:border-white checked:after:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700"
+                                        : "size-4 shrink-0 accent-current"
+                                    }
                                   />
                                 ) : null}
                                 {group === "Properties" ? (
@@ -3957,7 +4085,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                           )}
                         </button>
 
-                        {search.trim().length > 0 && (
+                        {isRootView && search.trim().length > 0 && (
                           <button
                             type="button"
                             onClick={() =>
@@ -3981,7 +4109,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                         )}
                       </div>
 
-                      {isExpanded && search.trim().length > 0 && (
+                      {isRootView && isExpanded && search.trim().length > 0 && (
                         <div className="border-t px-3 py-2">
                           {item.matches.map((match, index) => (
                             <div
@@ -4115,7 +4243,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                   <CodeBlock className="h-full min-h-0" language={querySourceFormat === "xml" ? "xml" : "sparql"} code={querySourceFormat === "xml" ? prettyQueryXml : sourceSparql} filename={querySourceFormat === "xml" ? "fct-query.xml" : "query.sparql"} />
                 </div>
               )}
-              <div className="group/header shrink-0 border-t p-3">
+              <div className="group/header shrink-0 border-t bg-muted p-3">
                 <div className="flex items-center gap-2">
                   <input
                     autoFocus
@@ -4142,7 +4270,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                   <Toggle
                     pressed={centralTab === "query-tree" || centralTab === "view-query"}
                     onPressedChange={(pressed) => setCentralTab(pressed ? "query-tree" : (groupByPropertyUri ? "groups" : "results"))}
-                    className="group inline-flex shrink-0 items-center gap-1.5 rounded-md border border-input px-3 py-2 text-sm"
+                    className="group inline-flex shrink-0 items-center gap-1.5 rounded-md border border-input px-3 py-2 text-sm data-[state=on]:border-emerald-600 data-[state=on]:bg-emerald-600 data-[state=on]:text-white dark:data-[state=on]:border-emerald-500 dark:data-[state=on]:bg-emerald-700"
                     aria-label="Query"
                     title="Query"
                   >
@@ -4152,13 +4280,13 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                   <Toggle
                     pressed={showResultBadges}
                     onPressedChange={setShowResultBadges}
-                    className="shrink-0 rounded-md border border-input px-3 py-2 text-sm"
+                    className="shrink-0 rounded-md border border-input px-3 py-2 text-sm data-[state=on]:border-violet-600 data-[state=on]:bg-violet-600 data-[state=on]:text-white dark:data-[state=on]:border-violet-500 dark:data-[state=on]:bg-violet-700"
                     aria-label="Show Badges"
                     title="Show or hide selected property/value badges"
                   >
                     <span>Show Badges</span>
                   </Toggle>
-                  <QueryInspectorButton query={queryResultsXml} filename="results-fct-query.xml" />
+                  <QueryInspectorButton query={resultsSparql ?? ""} language="sparql" filename="results-query.sparql" countQuery={resultsCountSparql} countFilename="results-count.sparql" />
                 </div>
                 {searchError && <p className="mt-2 text-sm text-destructive">{searchError}</p>}
               </div>

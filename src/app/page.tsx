@@ -77,6 +77,25 @@ const RESULTS_PAGE_SIZE_STORAGE_KEY = "maestro-results-page-size";
 const RESULTS_PAGE_SIZE_OPTIONS = [10, 20, 30, 50] as const;
 const RESULTS_BATCH_SIZE_OPTIONS = [30, 100, 250, 500, 1000] as const;
 
+/** Estimates localStorage key/value payload size; browsers do not expose exact quota usage. */
+function getLocalStorageUsageBytes(): number {
+  let bytes = 0;
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (key === null) continue;
+    const value = window.localStorage.getItem(key) ?? "";
+    // localStorage strings are commonly accounted for as UTF-16 code units.
+    bytes += (key.length + value.length) * 2;
+  }
+  return bytes;
+}
+
+function formatStorageBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 
 
 type FacetItem = {
@@ -1016,6 +1035,21 @@ function parseFctQueryXml(xml: string): FctQueryTree | null {
 
 export default function Home() {
   const [controlsSheetOpen, setControlsSheetOpen] = useState(false);
+  const [localStorageUsageBytes, setLocalStorageUsageBytes] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!controlsSheetOpen) return;
+    const refreshUsage = () => {
+      try {
+        setLocalStorageUsageBytes(getLocalStorageUsageBytes());
+      } catch {
+        setLocalStorageUsageBytes(null);
+      }
+    };
+    refreshUsage();
+    window.addEventListener("storage", refreshUsage);
+    return () => window.removeEventListener("storage", refreshUsage);
+  }, [controlsSheetOpen]);
   const [selectedUri, setSelectedUri] = useState("");
   const [urlStateInitialized, setUrlStateInitialized] = useState(false);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
@@ -2319,7 +2353,9 @@ const describedProperties = Array.from(
         const groupTree = setQueryViewAttributes(groupTreeBase, {
           // Group headings enumerate the selected relationship's distinct
           // values (including RDF literals), not text-search result resources.
-          type: "list", limit: String(groupBatchSize), offset: String(groupBatchOffset),
+          // Keep the Group By headings in the same server-side item-count order
+          // as the active facet widget. Sorting happens before LIMIT/OFFSET.
+          type: "list", sort: "count", limit: String(groupBatchSize), offset: String(groupBatchOffset),
         });
         const groupValuesXml = serializeFctQuery(groupTree);
         const response = await fetch("/proxy/api/fct", {
@@ -2471,7 +2507,7 @@ const describedProperties = Array.from(
       const facetXml = view === "roles" ? roleFacetQueryXml : view === "classes" ? classFacetQueryXml : propertyFacetQueryXml;
       const response = await fetch("/proxy/api/fct", {
         method: "POST",
-        headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader") },
+        headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", `FacetLoader:${view}`) },
         body: facetXml,
         signal: controller.signal,
       });
@@ -3679,6 +3715,44 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                 <Label>Appearance</Label>
                 <ThemeToggle />
               </div>
+              <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/40 p-3">
+                <div className="min-w-0">
+                  <Label>Clear cache</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">Remove all localStorage data saved by this site and reload Maestro.</p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Estimated localStorage usage: <span className="font-medium text-foreground">{localStorageUsageBytes === null ? "Unavailable" : formatStorageBytes(localStorageUsageBytes)}</span>
+                    <span className="block">Approximate key/value size; browser storage overhead is not included.</span>
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      try {
+                        setLocalStorageUsageBytes(getLocalStorageUsageBytes());
+                      } catch {
+                        setLocalStorageUsageBytes(null);
+                      }
+                    }}
+                  >Refresh size</Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    className="shrink-0"
+                    onClick={() => {
+                      if (!window.confirm("Clear all localStorage data for Maestro? This resets saved settings and reloads the app.")) return;
+                      try {
+                        window.localStorage.clear();
+                        window.location.reload();
+                      } catch {
+                        window.alert("Could not clear localStorage. Check your browser's site storage permissions.");
+                      }
+                    }}
+                  >Clear Cache</Button>
+                </div>
+              </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <Label>Auto-configure</Label>
@@ -4054,6 +4128,12 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                   </>
                 ) : (
                   <>
+                    {(isLoadingProperties && propertyFacets.length === 0) ||
+                    (isLoadingRoles && roleFacets.length === 0) ? (
+                      <span role="status" aria-live="polite" className="px-2 text-xs text-muted-foreground">
+                        Fetching configure controls…
+                      </span>
+                    ) : null}
                     {propertyFacets.length > 0 && (
                       <ButtonGroup aria-label="Configure properties">
                         <button type="button" onClick={() => { setFocusListOrder("Properties"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="px-2 text-xs font-medium hover:bg-accent">Configure Properties</button>
@@ -4088,12 +4168,6 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                         >{roleFacets.length}</button>
                       </ButtonGroup>
                     )}
-                    {(isLoadingProperties && propertyFacets.length === 0) ||
-                    (isLoadingRoles && roleFacets.length === 0) ? (
-                      <span role="status" aria-live="polite" className="px-2 text-xs text-muted-foreground">
-                        Fetching configure controls…
-                      </span>
-                    ) : null}
                     {autoConfigureFacetCount > 0 && (
                       <ButtonGroup aria-label="Auto-configure facets">
                         <button

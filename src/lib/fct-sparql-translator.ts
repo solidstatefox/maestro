@@ -477,7 +477,10 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       ...(viewNode?.attributes.sort === "count"
         ? {
             groupBy: [termExpr(target)],
-            orderBy: [{ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(state.targetParent ?? target) }, direction: "DESC" as const }],
+            orderBy: [
+              { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(state.targetParent ?? target) }, direction: "DESC" as const },
+              { expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const },
+            ],
           }
         : { orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }] }),
       limit,

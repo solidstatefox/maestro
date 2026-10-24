@@ -3553,22 +3553,6 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                       <Trash2 className="size-4" aria-hidden="true" />
                     </button>
                   </div>
-                  {widget.loading && (
-                    <span
-                      className="mt-1 break-all text-xs text-muted-foreground"
-                      aria-live="polite"
-                    >
-                      Updating…
-                    </span>
-                  )}
-                  {widget.error && (
-                    <span
-                      className="text-xs text-destructive"
-                      title={widget.error}
-                    >
-                      Update failed
-                    </span>
-                  )}
                 </div>
                 <p
                   className="mt-1 break-all text-xs text-muted-foreground"
@@ -3577,6 +3561,13 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                   {widget.uri}
                 </p>
               </div>
+              <span
+                className={`shrink-0 text-xs ${widget.error ? "text-destructive" : "text-muted-foreground"}`}
+                aria-live="polite"
+                title={widget.error || undefined}
+              >
+                {widget.loading ? "Updating…" : widget.error ? "Update failed" : widget.values.length}
+              </span>
             </header>
             <div className="min-h-0 flex-1 overflow-auto p-2">
               {!widget.loading &&

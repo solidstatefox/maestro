@@ -1,11 +1,20 @@
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
 
-const STORAGE_KEY = "virtuoso-fct-uri-labels-v1";
 const uriToShortform = new Map<string, string>();
 const uriToLabel = new Map<string, string>();
 const namespaceToPrefix = new Map<string, string>();
 let nextNamespaceNumber = 1;
 let hydrated = false;
+const MAX_URI_CACHE_ENTRIES = 10_000;
+
+/** Keep URI caches bounded so exploring a large RDF store cannot retain every URI forever. */
+function trimCache<T>(cache: Map<string, T>) {
+  while (cache.size > MAX_URI_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 
 const observationQueue = new Map<string, { uri: string; isNamedGraph: boolean }>();
 let observationLifecycleListenersRegistered = false;
@@ -56,46 +65,19 @@ async function flushUriObservations(useBeacon = false) {
 }
 
 function hydrate() {
+  // URI labels are derived from FCT responses and namespace splitting. Do not
+  // restore a monolithic persisted map: parsing it duplicates the entire cache
+  // in memory and was capable of triggering out-of-memory crashes on large stores.
   if (hydrated || typeof window === "undefined") return;
   hydrated = true;
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "null");
-    if (parsed && typeof parsed === "object") {
-      for (const [uri, shortform] of Object.entries(parsed.shortforms ?? {})) {
-        // Older cache entries may have stored the URI itself as its "shortform".
-        // Keep only useful labels; toLabel() will regenerate a compact fallback.
-        if (typeof shortform === "string" && shortform.trim() && shortform.trim() !== uri.trim()) {
-          uriToShortform.set(uri, shortform.trim());
-        }
-      }
-      for (const [uri, label] of Object.entries(parsed.labels ?? {})) {
-        if (typeof label === "string" && label.trim() && label.trim() !== uri.trim()) {
-          uriToLabel.set(uri, label.trim());
-        }
-      }
-      for (const [namespace, prefix] of Object.entries(parsed.namespaces ?? {})) {
-        if (typeof prefix === "string" && prefix) namespaceToPrefix.set(namespace, prefix);
-      }
-      const storedNext = Number(parsed.nextNamespaceNumber);
-      if (Number.isFinite(storedNext) && storedNext >= 1) nextNamespaceNumber = Math.floor(storedNext);
-    }
-  } catch {
-    // Ignore malformed or unavailable local storage; labels still work in memory.
-  }
 }
 
 function persist() {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      shortforms: Object.fromEntries(uriToShortform),
-      labels: Object.fromEntries(uriToLabel),
-      namespaces: Object.fromEntries(namespaceToPrefix),
-      nextNamespaceNumber,
-    }));
-  } catch {
-    // Storage may be disabled or full; the in-memory maps remain usable.
-  }
+  // This is an intentionally ephemeral, bounded cache. The source labels are
+  // returned by FCT again as needed, so persisting every URI is unnecessary.
+  trimCache(uriToShortform);
+  trimCache(uriToLabel);
+  trimCache(namespaceToPrefix);
 }
 
 export function rememberShortforms(input: unknown) {

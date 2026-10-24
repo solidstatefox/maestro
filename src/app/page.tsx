@@ -335,6 +335,7 @@ type ScopeRelationship = { uri: string; direction: RelationshipDirection };
 type GroupByOption = ScopeRelationship & { key: string; label: string; nodeId: string; memberBindingNodeId?: string; ancestorRole?: boolean };
 
 type GroupMembersState = { results: FctResult[]; count?: number; loading: boolean; error: string };
+type RoleWidgetStatus = { count: number; loading: boolean; error: string };
 
 
 /** Hover-only query inspector for any widget backed by an FCT or SPARQL request. */
@@ -721,12 +722,14 @@ function PersonalRoleWidget({
   label,
   isGroupByRole,
   onGroupValueClick,
+  setRoleWidgetStatuses,
 }: {
   tree: FctQueryTree;
   roleNode: FctQueryNode;
   label: string;
   isGroupByRole: boolean;
   onGroupValueClick: (value: FctResult) => void;
+  setRoleWidgetStatuses: Dispatch<SetStateAction<Record<string, RoleWidgetStatus>>>;
 }) {
   const { setRoleValue } = useFctQuery();
   const uri = roleNode.attributes.iri ?? "";
@@ -758,6 +761,18 @@ function PersonalRoleWidget({
   const selectedKeys = (roleNode.children ?? [])
     .filter((child) => child.name === "value" && Boolean(child.text))
     .map((child) => fctTermKey(child.text ?? "", child.attributes.datatype, child.attributes["xml:lang"]));
+
+  // Publish this widget's own result count and request status to its header.
+  // The global Roles facet list is a different query and can have a different count.
+  useEffect(() => {
+    const nextStatus: RoleWidgetStatus = { count: values.length, loading, error };
+    setRoleWidgetStatuses((current) => {
+      const previous = current[roleNode.id];
+      return previous && previous.count === nextStatus.count && previous.loading === nextStatus.loading && previous.error === nextStatus.error
+        ? current
+        : { ...current, [roleNode.id]: nextStatus };
+    });
+  }, [roleNode.id, values.length, loading, error, setRoleWidgetStatuses]);
 
   useEffect(() => {
     if (!uri) return;
@@ -1149,6 +1164,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const [classCandidateCounts, setClassCandidateCounts] = useState<Record<string, number | null>>({});
   const [facetCandidateCounts, setFacetCandidateCounts] = useState<Record<string, number | null>>({});
   const [roleFacets, setRoleFacets] = useState<FacetItem[]>([]);
+  const [roleWidgetStatuses, setRoleWidgetStatuses] = useState<Record<string, RoleWidgetStatus>>({});
   const [graphFacets, setGraphFacets] = useState<FacetItem[]>([]);
   const [graphHasMore, setGraphHasMore] = useState(false);
   const [propertyFacetSparql, setPropertyFacetSparql] = useState("");
@@ -4988,7 +5004,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                     query={`${queryWithoutPagingXml("properties-in")}\n<!-- FCT API option: view=properties-in -->`}
                                     filename="roles-fct-query.xml"
                                     label="View Roles widget query"
-                                    countQuery={buildFctCountSparql(createDistinctCountQuery(queryTree, "role", uri, undefined, undefined, "text"))}
+                                    countQuery={buildFctCountSparql(createDistinctCountQuery(queryTree, "role", uri, undefined, undefined, "properties-in"))}
                                     countFilename="roles-first-item-count.sparql"
                                   />
                                   {!excluded && (
@@ -5025,8 +5041,19 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                               </div>
                               <p className="mt-1 break-all text-xs text-muted-foreground" title={uri}>{uri}</p>
                             </div>
+                            <span
+                              className={`shrink-0 text-xs ${roleWidgetStatuses[roleNode.id]?.error ? "text-destructive" : "text-muted-foreground"}`}
+                              aria-live="polite"
+                              title={roleWidgetStatuses[roleNode.id]?.error || undefined}
+                            >
+                              {roleWidgetStatuses[roleNode.id]?.loading ?? true
+                                ? "Updating…"
+                                : roleWidgetStatuses[roleNode.id]?.error
+                                  ? "Update failed"
+                                  : roleWidgetStatuses[roleNode.id]?.count ?? 0}
+                            </span>
                           </header>
-                          <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} onGroupValueClick={scrollToGroupForFacetValue} />
+                          <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} />
                         </article>
                       );
                     })}
@@ -5626,7 +5653,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
     <tr>
       <td colSpan={2} className="px-3 py-4 text-sm text-muted-foreground">
         {isDescribing
-          ? "Loading record description…"
+          ? "Loading record…"
           : selectedUri
             ? "No description data returned."
             : "Select a result to describe it."}

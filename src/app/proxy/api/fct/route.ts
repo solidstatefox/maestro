@@ -152,29 +152,43 @@ async function resolveFctLabels(
   return labels;
 }
 
-async function executeSparql(endpoint: string, query: string, accept = "application/sparql-results+json, application/json;q=0.9", timeoutMs = 20000): Promise<{ response: Response; text: string; key: string }> {
+type ExecutedSparql = { response: Response; text: string; key: string };
+const inFlightFctSparql = new Map<string, Promise<ExecutedSparql>>();
+
+async function executeSparql(endpoint: string, query: string, accept = "application/sparql-results+json, application/json;q=0.9", timeoutMs = 20000): Promise<ExecutedSparql> {
   const url = endpoint;
-  const key = queryCacheKey("sparql", url, query);
+  const key = queryCacheKey("sparql", url, `${accept}\\u0000${query}`);
   const cached = getQueryCache<string>(key);
   if (cached !== undefined) {
     return {
-      response: new Response(cached, { status: 200, headers: { "Content-Type": "application/sparql-results+json; charset=utf-8" } }),
+      response: new Response(cached, { status: 200, headers: { "Content-Type": accept.toLowerCase().includes("xml") || accept.toLowerCase().includes("rdf") ? "application/rdf+xml; charset=utf-8" : "application/sparql-results+json; charset=utf-8" } }),
       text: cached,
       key,
     };
   }
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-      Accept: accept,
-    },
-    body: new URLSearchParams({ query, ...(timeoutMs >= 1000 ? { timeout: String(timeoutMs) } : {}) }).toString(),
-    cache: "no-store",
-    signal: AbortSignal.timeout(Math.max(1000, timeoutMs || 20000)),
-  });
-  const text = await response.text();
-  return { response, text, key };
+  const pending = inFlightFctSparql.get(key);
+  if (pending) return pending;
+
+  const requestPromise = (async (): Promise<ExecutedSparql> => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        Accept: accept,
+      },
+      body: new URLSearchParams({ query, ...(timeoutMs >= 1000 ? { timeout: String(timeoutMs) } : {}) }).toString(),
+      cache: "no-store",
+      signal: AbortSignal.timeout(Math.max(1000, timeoutMs || 20000)),
+    });
+    const text = await response.text();
+    return { response, text, key };
+  })();
+  inFlightFctSparql.set(key, requestPromise);
+  try {
+    return await requestPromise;
+  } finally {
+    if (inFlightFctSparql.get(key) === requestPromise) inFlightFctSparql.delete(key);
+  }
 }
 
 function xmlEscape(value: string): string {
@@ -352,14 +366,27 @@ export async function POST(request: Request) {
     const graphOnly = body?.graphOnly === true;
     const countOnly = body?.countOnly === true;
     const compiled = compileFctXmlToSparql(queryXml, view, graphOnly, countOnly);
+    const isDescribe = compiled.view === "describe";
+    const responseCacheKey = queryCacheKey(
+      "fct-response",
+      endpoint.url,
+      JSON.stringify([queryXml, view ?? null, graphOnly, countOnly, request.headers.get("accept-language") ?? ""]),
+    );
+    const cachedResponse = getQueryCache<{ body: string; contentType: string; status: number }>(responseCacheKey);
+    if (cachedResponse) {
+      return new Response(cachedResponse.body, {
+        status: cachedResponse.status,
+        headers: { "Content-Type": cachedResponse.contentType, "Cache-Control": "no-store", "X-Maestro-Cache": "HIT" },
+      });
+    }
     stage = "execute";
     const startedAt = Date.now();
-    const isDescribe = compiled.view === "describe";
     const { response, text, key } = await executeSparql(endpoint.url, compiled.query, isDescribe ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs || 20000);
     const elapsedMs = Date.now() - startedAt;
     if (!response.ok) return fctError(`Virtuoso SPARQL endpoint returned HTTP ${response.status}`, 502, text.slice(0, 2000));
 
     if (isDescribe) {
+      if (response.status === 200) setQueryCache(key, text);
       let bindings: Record<string, SparqlBindingTerm>[];
       try { bindings = parseDescribeRdfXml(text); }
       catch (error) { return fctError(error instanceof Error ? error.message : "Invalid DESCRIBE response", 502, text.slice(0, 1000)); }
@@ -367,7 +394,8 @@ export async function POST(request: Request) {
       const labelFor = (term: SparqlBindingTerm | undefined) => term?.type === "uri" ? labels.get(term.value) : undefined;
       const describeRows = bindings.map((binding) => `<fct:row>${fctColumn(binding.s, labelFor(binding.s))}${fctColumn(binding.p, labelFor(binding.p))}${fctColumn(binding.o, labelFor(binding.o))}</fct:row>`).join("");
       const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>yes</fct:complete><fct:timeout>${compiled.timeoutMs}</fct:timeout><fct:db-activity/><fct:processed>${bindings.length}</fct:processed><fct:view offset="${compiled.offset}" limit="${compiled.limit}"/><fct:result type="describe">${describeRows}</fct:result></fct:facets>`;
-      return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
+      if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+      return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS" } });
     }
 
     const parsed = parseResults(text);
@@ -395,7 +423,8 @@ export async function POST(request: Request) {
       query: compiled.query, view: compiled.view, limit: compiled.limit, offset: compiled.offset,
       bindings, vars, elapsedMs, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly, labels,
     });
-    return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
+    if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+    return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS" } });
   } catch (error) {
     console.error("FCT-to-SPARQL API error:", error);
     return fctError(error instanceof Error ? error.message : "Failed to compile or execute the FCT query as SPARQL.", stage === "compile" ? 400 : 502);

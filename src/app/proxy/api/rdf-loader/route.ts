@@ -1,5 +1,6 @@
 import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
+import { clearQueryCache } from "@/lib/query-cache";
 
 function validateIri(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -74,6 +75,8 @@ export async function POST(request: Request) {
       }, { status: 502 });
     }
 
+    // A successful data load makes previously cached query results potentially stale.
+    clearQueryCache();
     return NextResponse.json({
       ok: true,
       message: `Virtuoso accepted the LOAD request for ${sourceUrl}. Target graph: ${targetGraph}. Response: ${responseText || "(empty response)"}`,

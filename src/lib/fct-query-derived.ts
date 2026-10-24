@@ -157,33 +157,28 @@ function findQueryView(nodes: FctQueryNode[]): FctQueryNode | null {
  * query must return values of that paper's publisher property. Move the active
  * view out of the <property-of> breadcrumb and onto its matching <property>.
  */
-/** Build the distinct-value query for Group By. Remove the selected value
- * constraint from the chosen relationship before attaching the view; otherwise
- * Group By can only enumerate the value already checked in Focus. All other
- * query filters and the active view scope remain intact. */
+/** Build the distinct-value query for Group By. Clone the complete source
+ * query without dropping any selected <value> bindings: if Creator is bound to
+ * Alex Tabarrok, the Group By headings must remain scoped to Alex rather than
+ * silently broadening back out to every Creator. The derived widget query adds
+ * the list view while preserving all source filters and the active path. */
 export function createGroupValuesQuery(
   sourceTree: FctQueryTree,
   option: GroupByOption,
 ): FctQueryTree {
-  const removeSelectedValues = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => ({
-    ...node,
-    attributes: { ...node.attributes },
-    children: removeSelectedValues(
-      node.id === option.nodeId
-        ? node.children.filter((child) => child.name !== "value")
-        : node.children,
-    ),
-  }));
-  const unconstrainedTree: FctQueryTree = {
+  const sourceClone: FctQueryTree = {
     ...sourceTree,
     attributes: { ...sourceTree.attributes },
-    children: removeSelectedValues(sourceTree.children),
+    children: sourceTree.children.map(cloneQueryNode),
   };
   return createPropertyWidgetQuery(
-    unconstrainedTree,
+    sourceClone,
     option.uri,
     option.direction,
-    option.nodeId,
+    // For reverse roles, passing nodeId tells the personal-facet helper to
+    // remove that role before enumeration. Group By must instead retain the
+    // role and every value binding already attached to it.
+    option.direction === "reverse" ? undefined : option.nodeId,
   );
 }
 

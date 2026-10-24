@@ -42,7 +42,6 @@ type SparqlPattern =
   | { kind: "triple"; subject: SparqlTerm; predicate: SparqlTerm; object: SparqlTerm; options?: SparqlDirective[] }
   | { kind: "full-text"; value: SparqlTerm; search: SparqlTerm }
   | { kind: "filter"; expression: SparqlExpression }
-  | { kind: "not-exists"; patterns: SparqlPattern[] }
   | { kind: "group"; patterns: SparqlPattern[] }
   | { kind: "graph"; graph: SparqlTerm; patterns: SparqlPattern[] }
   | { kind: "quad-map"; map: SparqlTerm; graph: SparqlTerm; patterns: SparqlPattern[] };
@@ -137,7 +136,6 @@ function serializePattern(pattern: SparqlPattern, depth = 0): string {
     }
     case "full-text": return `${indent}${serializeTerm(pattern.value)} bif:contains ${serializeTerm(pattern.search)} .`;
     case "filter": return `${indent}FILTER ${serializeExpression(pattern.expression)}`;
-    case "not-exists": return `${indent}FILTER NOT EXISTS {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "group": return `${indent}{\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "graph": return `${indent}GRAPH ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "quad-map": return `${indent}quad map ${serializeTerm(pattern.map)} { graph ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 2)).join("\n")}\n${indent}  } }`;
@@ -238,7 +236,7 @@ function fullTextPatterns(searchText: string, textProperty?: string): SparqlPatt
   return patterns;
 }
 
-function compileConstraints(nodes: XmlNode[], subject: SparqlTerm, patterns: SparqlPattern[], errors: string[], state: { next: number; target: SparqlTerm | null }): void {
+function compileConstraints(nodes: XmlNode[], subject: SparqlTerm, patterns: SparqlPattern[], errors: string[], state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null }): void {
   for (const node of nodes) {
     if (node.name === "view") {
       state.target = subject;
@@ -258,28 +256,20 @@ function compileConstraints(nodes: XmlNode[], subject: SparqlTerm, patterns: Spa
       if (["yes", "true", "1"].includes((node.attributes.same_as ?? "").trim().toLowerCase())) {
         options.push({ name: "input:same-as", value: "yes" });
       }
-      const relationship: SparqlPattern = node.name === "property"
+      patterns.push(node.name === "property"
         ? { kind: "triple", subject, predicate, object: related, ...(options.length ? { options } : {}) }
-        : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) };
-      if ((node.attributes.exclude ?? "").trim().toLowerCase() === "yes") {
-        // Excluded relationships must not bind the related node or apply
-        // nested constraints to a node that is intentionally absent.
-        patterns.push({ kind: "not-exists", patterns: [relationship] });
-        continue;
-      }
-      patterns.push(relationship);
+        : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) });
+      // A facet widget's list view is nested directly under its relationship.
+      // Retain the outer focus so COUNT(DISTINCT outer focus) measures how
+      // many records have each facet value.
+      if (node.children.some((child) => child.name === "view")) state.targetParent = subject;
       compileConstraints(node.children, related, patterns, errors, state);
     } else if (node.name === "class") {
       const classIri = iri(node.attributes.iri ?? "");
       if (!classIri) errors.push("The FCT <class> node has a missing or invalid IRI.");
       else {
         const inference = node.attributes.inference?.trim();
-        const classPattern: SparqlPattern = { kind: "triple", subject, predicate: iriTerm(RDF_TYPE), object: classIri, ...(inference ? { options: [{ name: "input:inference", value: inference }] } : {}) };
-        if ((node.attributes.exclude ?? "").trim().toLowerCase() === "yes") {
-          patterns.push({ kind: "not-exists", patterns: [classPattern] });
-        } else {
-          patterns.push(classPattern);
-        }
+        patterns.push({ kind: "triple", subject, predicate: iriTerm(RDF_TYPE), object: classIri, ...(inference ? { options: [{ name: "input:inference", value: inference }] } : {}) });
       }
       compileConstraints(node.children, subject, patterns, errors, state);
     } else if (node.name === "value") {
@@ -366,7 +356,7 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   const searchText = textNode?.text.trim() ?? "";
   const constraints: SparqlPattern[] = [];
   const errors: string[] = [];
-  const state = { next: 2, target: null as SparqlTerm | null };
+  const state = { next: 2, target: null as SparqlTerm | null, targetParent: null as SparqlTerm | null };
   compileConstraints(root.children, variable("s1"), constraints, errors, state);
   if (errors.length) throw new Error(errors.join(" "));
   const target = state.target ?? variable("s1");
@@ -426,7 +416,11 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       ],
       where: facetWhere,
       groupBy: [termExpr(facet)],
-      orderBy: [{ expression: termExpr(variable("n")), direction: "DESC" }],
+      // Count ordering is opt-in: only the active Group By facet requests it.
+      // ORDER BY runs before LIMIT/OFFSET, so pages are globally count-sorted.
+      ...(viewNode?.attributes.sort === "count"
+        ? { orderBy: [{ expression: termExpr(variable("n")), direction: "DESC" as const }] }
+        : {}),
       limit,
       offset,
     });
@@ -471,12 +465,24 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     }
     query = buildSelectQuery({ directives, distinct: true, projections, where: scopedWhere, orderBy: searchText ? [] : [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" }], limit, offset });
   } else if (view === "list") {
-    // Virtuoso's FCT list view selects the RDF term. Its SQL/XML response
+    // Virtuoso FCT list view selects the RDF term. Its SQL/XML response
     // wrapper resolves the human-readable label; do not call the SQL-only
-    // fct_label procedure from inside SPARQL.
-    query = buildSelectQuery({ directives, distinct: true, projections: [
-      { expression: termExpr(target), as: variable("c1") },
-    ], where: scopedWhere, orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" }], limit, offset });
+    // fct_label procedure from inside SPARQL. For an explicitly count-sorted
+    // facet widget, aggregate outer focus records per value.
+    query = buildSelectQuery({
+      directives,
+      distinct: viewNode?.attributes.sort !== "count",
+      projections: [{ expression: termExpr(target), as: variable("c1") }],
+      where: scopedWhere,
+      ...(viewNode?.attributes.sort === "count"
+        ? {
+            groupBy: [termExpr(target)],
+            orderBy: [{ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(state.targetParent ?? target) }, direction: "DESC" as const }],
+          }
+        : { orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }] }),
+      limit,
+      offset,
+    });
   } else {
     query = buildSelectQuery({ directives, distinct: true, projections: [{ expression: termExpr(target), as: variable("c1") }], where: scopedWhere, orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" }], limit, offset });
   }

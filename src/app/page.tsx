@@ -17,7 +17,7 @@ import {
 import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Bot, CircleSlash, Code2, Expand, List, Network, RefreshCw, Settings, Link, Shrink, Trash2, X } from "lucide-react";
+import { Bot, CircleSlash, Code2, Expand, List, Network, RefreshCw, Settings, Link, Shrink, Trash2, UsersRound, X } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -671,10 +671,14 @@ function PersonalRoleWidget({
   tree,
   roleNode,
   label,
+  isGroupByRole,
+  onGroupValueClick,
 }: {
   tree: FctQueryTree;
   roleNode: FctQueryNode;
   label: string;
+  isGroupByRole: boolean;
+  onGroupValueClick: (value: FctResult) => void;
 }) {
   const { setRoleValue } = useFctQuery();
   const uri = roleNode.attributes.iri ?? "";
@@ -765,15 +769,21 @@ function PersonalRoleWidget({
         </div>
       )}
       <div className="space-y-1">
-        {pageValues.map((value) => {
+        {pageValues.map((value, valueIndex) => {
           const binding = groupValueBinding(value);
           const valueKey = fctTermKey(binding.text, binding.datatype, binding.lang);
           const countQuery = distinctCountQueryFor(tree, "value", value.uri, uri, value);
           const isZeroCount = candidateCounts[countQuery] === 0;
           return (
-            <label key={`${value.uri}:${value.datatype ?? ""}:${value.lang ?? ""}`} className="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50">
-              <input type="checkbox" checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`} />
-              <span className={`min-w-0 flex-1 break-words ${isZeroCount ? "text-destructive" : ""}`}>{value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}</span>
+            <div key={`${value.uri}:${value.datatype ?? ""}:${value.lang ?? ""}`} className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 ${isGroupByRole ? "" : "cursor-pointer"}`}>
+              <input id={`personal-role-value-${roleNode.id}-${valueIndex}`} type="checkbox" checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`} />
+              {isGroupByRole ? (
+                <button type="button" onClick={() => onGroupValueClick(value)} className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`} title={`Scroll to group ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`}>{value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}</button>
+              ) : (
+                <label htmlFor={`personal-role-value-${roleNode.id}-${valueIndex}`} className={`min-w-0 flex-1 break-words cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}>
+                  {value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}
+                </label>
+              )}
               <DistinctCount
                 tree={tree}
                 kind="value"
@@ -786,7 +796,7 @@ function PersonalRoleWidget({
                   )
                 }
               />
-            </label>
+            </div>
           );
         })}
       </div>
@@ -901,6 +911,7 @@ function replaceFacetAutofillCandidates(kind: "property" | "property-in", uris: 
 }
 
 const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const GROUP_BY_FACET_HIGHLIGHT_CLASSES = "border-sky-300 bg-sky-100/80 dark:border-sky-800 dark:bg-sky-950/50";
 
 type ShareableUiState = {
   selectedEndpointId?: string;
@@ -1058,6 +1069,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const [groupBatchOffset, setGroupBatchOffset] = useState(0);
   const [groupHasMoreBatches, setGroupHasMoreBatches] = useState(false);
   const groupCardRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const pendingGroupScrollRef = useRef<string | null>(null);
+  const personalWidgetCardRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const roleWidgetCardRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const categoriesWidgetRef = useRef<HTMLElement | null>(null);
   const FACET_PAGE_SIZE = 10;
   const [propertyFacets, setPropertyFacets] = useState<FacetItem[]>([]);
   const [classFacets, setClassFacets] = useState<FacetItem[]>([]);
@@ -1694,10 +1709,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const groupByOptions: GroupByOption[] = [
     { key: "", uri: "", direction: "forward", label: "none", nodeId: "" },
     // RDF type is permanent dropdown furniture, but it uses the ordinary forward-property grouping path.
-    { key: `forward:${RDF_TYPE_URI}`, uri: RDF_TYPE_URI, direction: "forward", label: toLabel(RDF_TYPE_URI), nodeId: rdfTypePropertyNode?.id ?? "group-by-rdf-type" },
+    ...(rdfTypePropertyNode?.attributes.exclude?.trim().toLowerCase() === "yes" ? [] : [{ key: `forward:${RDF_TYPE_URI}`, uri: RDF_TYPE_URI, direction: "forward" as const, label: "Category", nodeId: rdfTypePropertyNode?.id ?? "group-by-rdf-type" }]),
     ...activeViewPropertyFilters.flatMap((node) => {
       const uri = node.attributes.iri;
-      if (typeof uri !== "string" || !uri || uri === RDF_TYPE_URI) return [];
+      if (typeof uri !== "string" || !uri || uri === RDF_TYPE_URI || node.attributes.exclude?.trim().toLowerCase() === "yes") return [];
       return [{ key: `forward:${uri}`, uri, direction: "forward" as const, label: toLabel(uri), nodeId: node.id }];
     }),
     // Only reverse-role nodes explicitly selected in Focus belong in Group By.
@@ -1705,7 +1720,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     // navigation/scope breadcrumb, not a checked relationship selection.
     ...getActiveViewRoleFilters(queryTree).flatMap((node) => {
       const uri = node.attributes.iri;
-      if (typeof uri !== "string" || !uri) return [];
+      if (typeof uri !== "string" || !uri || node.attributes.exclude?.trim().toLowerCase() === "yes") return [];
       return [{ key: `reverse:${uri}`, uri, direction: "reverse" as const, label: `${toLabel(uri)} of`, nodeId: node.id }];
     }).filter((option, index, all) => all.findIndex((candidate) => candidate.key === option.key) === index),
   ];
@@ -1733,6 +1748,61 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       const bCount = bMembers && !bMembers.loading && !bMembers.error ? (bMembers.count ?? bMembers.results.length) : -1;
       return bCount - aCount || (a.title || a.uri).localeCompare(b.title || b.uri);
     });
+  const groupedPersonalFacetUri = centralTab === "groups" && selectedGroupByOption?.direction === "forward"
+    && selectedGroupByOption.uri !== RDF_TYPE_URI
+    && personalWidgets.some((widget) => widget.uri === selectedGroupByOption.uri && !widget.excluded)
+    ? selectedGroupByOption.uri
+    : null;
+  const isGroupByCategory = centralTab === "groups" && selectedGroupByOption?.direction === "forward" && selectedGroupByOption.uri === RDF_TYPE_URI;
+  const groupedRoleUri = centralTab === "groups" && selectedGroupByOption?.direction === "reverse"
+    ? selectedGroupByOption.uri
+    : null;
+  const groupedFacetActive = Boolean(groupedPersonalFacetUri || groupedRoleUri || isGroupByCategory);
+
+  // Entering Group by mode selects the matching facet pane once. Do not make
+  // the pane depend continuously on groupBy state: users must still be able to
+  // open Configure while grouping is active.
+  useEffect(() => {
+    if (!groupedFacetActive) return;
+    setDefaultLeftTab("personal");
+  }, [groupedFacetActive, isGroupByCategory, groupedPersonalFacetUri]);
+
+  // Scroll the active facet into view after its pane is visible. This is kept
+  // separate from pane selection so switching to Configure is never undone.
+  useEffect(() => {
+    if (!groupedFacetActive || defaultLeftTab !== "personal") return;
+    const target = isGroupByCategory
+      ? categoriesWidgetRef.current
+      : groupedRoleUri
+        ? roleWidgetCardRefs.current.get(groupedRoleUri)
+        : personalWidgetCardRefs.current.get(groupedPersonalFacetUri!);
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [groupedFacetActive, isGroupByCategory, groupedPersonalFacetUri, groupedRoleUri, defaultLeftTab, personalWidgets.map((widget) => widget.uri).join("|")]);
+
+  useEffect(() => {
+    const pendingKey = pendingGroupScrollRef.current;
+    if (!pendingKey || centralTab !== "groups") return;
+    const target = groupCardRefs.current.get(pendingKey);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      pendingGroupScrollRef.current = null;
+    }
+  }, [centralTab, groupUiPage, visibleGroupValues.map(groupValueKey).join("|")]);
+
+  function scrollToGroupForFacetValue(value: FctResult) {
+    if (centralTab !== "groups" || !selectedGroupByOption) return;
+    const matchIndex = groupValues.findIndex((groupValue) => facetValueKey(groupValue) === facetValueKey(value));
+    if (matchIndex < 0) return;
+    const groupValue = groupValues[matchIndex];
+    const key = `${selectedGroupByOption.key}::${groupValueKey(groupValue)}`;
+    const targetPage = Math.floor(matchIndex / resultsPageSize);
+    if (targetPage !== groupUiPage) {
+      pendingGroupScrollRef.current = key;
+      setGroupUiPage(targetPage);
+      return;
+    }
+    groupCardRefs.current.get(key)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
   const sourceSparql = sparqlQuery || "# SPARQL will appear after the endpoint returns a query.";
   const queryWithoutPagingXml = useCallback(
   (viewType?: string) =>
@@ -3168,12 +3238,16 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
             : "grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
         }
       >
-        {personalWidgets.map((widget) => (
+        {personalWidgets.map((widget) => {
+          const isGroupByFacet = groupedPersonalFacetUri === widget.uri;
+          const canGroupByFacet = groupByOptions.some((option) => option.key === `forward:${widget.uri}`);
+          return (
           <article
-  key={widget.uri}
-  className="flex min-w-0 flex-col"
->
-            <header className="group/header flex items-start justify-between gap-2 border-b px-3 py-2">
+            key={widget.uri}
+            ref={(element) => { if (element) personalWidgetCardRefs.current.set(widget.uri, element); else personalWidgetCardRefs.current.delete(widget.uri); }}
+            className={`flex min-w-0 flex-col ${isGroupByFacet ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}
+          >
+            <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByFacet ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <button
@@ -3186,6 +3260,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                       else navigateIntoRelationship(widget.uri, "forward");
                     }}
                   >
+                    {isGroupByFacet && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                     {widget.excluded && <CircleSlash className="mr-1 inline size-3.5 shrink-0" aria-label="Excluded" />}
                     {toLabel(widget.uri)}
                   </button>
@@ -3199,6 +3274,27 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                       countQuery={widget.values[0] ? buildFctCountSparql(createDistinctCountQuery(queryTree, "value", widget.values[0].uri, widget.uri, widget.values[0])) : undefined}
                       countFilename={`facet-${toLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}-first-item-count.xml`}
                     />
+                    {!widget.excluded && (
+                      <button
+                        type="button"
+                        disabled={!canGroupByFacet}
+                        aria-pressed={isGroupByFacet}
+                        onClick={() => {
+                          if (isGroupByFacet) {
+                            setGroupByPropertyUri("");
+                            setCentralTab("results");
+                          } else {
+                            setGroupByPropertyUri(`forward:${widget.uri}`);
+                            setCentralTab("groups");
+                          }
+                        }}
+                        className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:pointer-events-none disabled:opacity-30 ${isGroupByFacet ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
+                        aria-label={isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri)}` : `Group results by ${toLabel(widget.uri)}`}
+                        title={isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri)}` : canGroupByFacet ? `Group results by ${toLabel(widget.uri)}` : "Select this property in the active query before grouping by it"}
+                      >
+                        <UsersRound className="size-4" aria-hidden="true" />
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -3207,8 +3303,9 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                         else removeProperty(activeLeafId, widget.uri);
                         setPersonalWidgets((current) => current.filter((item) => item.uri !== widget.uri));
                       }}
-                      className="shrink-0 px-2 py-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
+                      className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
                       aria-label={`Remove ${widget.excluded ? `Excluded: ${toLabel(widget.uri)}` : toLabel(widget.uri)} widget`}
+                      title={`Remove ${toLabel(widget.uri)} facet`}
                     >
                       <Trash2 className="size-4" aria-hidden="true" />
                     </button>
@@ -3332,7 +3429,13 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                           <button
                             type="button"
                             className="rounded px-2 py-1 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-                            onClick={() =>
+                            onClick={(event) => {
+                              // Keep pagination from shifting the left pane when the
+                              // newly rendered page changes the browser's scroll anchor.
+                              const scrollContainer = event.currentTarget.closest(
+                                ".overflow-y-auto",
+                              ) as HTMLElement | null;
+                              const scrollTop = scrollContainer?.scrollTop ?? 0;
                               setPersonalWidgets((current) =>
                                 current.map((item) =>
                                   item.uri === widget.uri
@@ -3342,8 +3445,13 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                       }
                                     : item,
                                 ),
-                              )
-                            }
+                              );
+                              requestAnimationFrame(() => {
+                                requestAnimationFrame(() => {
+                                  if (scrollContainer) scrollContainer.scrollTop = scrollTop;
+                                });
+                              });
+                            }}
                             disabled={page >= pageCount - 1}
                           >
                             Next
@@ -3351,15 +3459,18 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                         </div>
                       )}
                       <div className="space-y-1">
-                        {pageValues.map((value) => {
+                        {pageValues.map((value, valueIndex) => {
                           const countQuery = distinctCountQueryFor(queryTree, "value", value.uri, widget.uri, value);
                           const isZeroCount = facetCandidateCounts[countQuery] === 0;
+                          const valueInputId = `personal-facet-value-${personalWidgets.indexOf(widget)}-${valueIndex}`;
+                          const valueLabel = value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri;
                           return (
-                          <label
-                            key={value.uri}
-                            className="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50"
+                          <div
+                            key={`${facetValueKey(value)}-${valueIndex}`}
+                            className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 ${isGroupByFacet ? "" : "cursor-pointer"}`}
                           >
                             <input
+                              id={valueInputId}
                               type="checkbox"
                               name={`property-value-${widget.uri}`}
                               value={value.uri}
@@ -3377,9 +3488,18 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                               className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
                               aria-invalid={isZeroCount ? true : undefined}
                             />
-                            <span className={`min-w-0 flex-1 break-words ${isZeroCount ? "text-destructive" : ""}`}>
-                              {value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}
-                            </span>
+                            {isGroupByFacet ? (
+                              <button
+                                type="button"
+                                onClick={() => scrollToGroupForFacetValue(value)}
+                                className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`}
+                                title={`Scroll to group ${valueLabel}`}
+                              >{valueLabel}</button>
+                            ) : (
+                              <label htmlFor={valueInputId} className={`min-w-0 flex-1 break-words cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}>
+                                {valueLabel}
+                              </label>
+                            )}
                             <DistinctCount
                               tree={queryTree}
                               kind="value"
@@ -3392,7 +3512,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                 )
                               }
                             />
-                          </label>
+                          </div>
                           );
                         })}
                       </div>
@@ -3401,7 +3521,8 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                 })()}
             </div>
           </article>
-        ))}
+          );
+        })}
       </div>
     );
   }
@@ -4402,9 +4523,24 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
 
                 {defaultLeftTab === "personal" && (
                   <div className="space-y-3">
-                    <article className="flex min-w-0 flex-col">
-                      <header className="group/header flex items-start justify-between gap-2 border-b px-2 py-2">
-                        <div className="flex min-w-0 items-center gap-1"><h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes")}\n<!-- FCT API option: view=classes -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /></div>
+                    <article ref={categoriesWidgetRef} className={`flex min-w-0 flex-col ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
+                      <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
+                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes")}\n<!-- FCT API option: view=classes -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /><button
+                          type="button"
+                          aria-pressed={isGroupByCategory}
+                          onClick={() => {
+                            if (isGroupByCategory) {
+                              setGroupByPropertyUri("");
+                              setCentralTab("results");
+                            } else {
+                              setGroupByPropertyUri(`forward:${RDF_TYPE_URI}`);
+                              setCentralTab("groups");
+                            }
+                          }}
+                          className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${isGroupByCategory ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
+                          aria-label={isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}
+                          title={isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}
+                        ><UsersRound className="size-4" aria-hidden="true" /></button></div>
                         <span
                           className={`text-xs ${classFacetError ? "text-destructive" : "text-muted-foreground"}`}
                           aria-live="polite"
@@ -4452,8 +4588,8 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                       <button
                                         type="button"
                                         className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${count === 0 ? "text-destructive" : ""}`}
-                                        onClick={() => showClassResults(item.uri, activeLeafId)}
-                                        title={`Show results for class ${toLabel(item.uri)}`}
+                                        onClick={() => isGroupByCategory ? scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri), matches: [], termType: "uri" }) : showClassResults(item.uri, activeLeafId)}
+                                        title={isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}
                                       >
                                         {isFacetExcluded("Classes", item.uri) && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                                         {toLabel(item.uri)}
@@ -4519,10 +4655,14 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                     type="button"
                                     className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
                                     onClick={() => {
-                                      if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true);
-                                      showClassResults(item.uri, activeLeafId);
+                                      if (isGroupByCategory) {
+                                        scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri), matches: [], termType: "uri" });
+                                      } else {
+                                        if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true);
+                                        showClassResults(item.uri, activeLeafId);
+                                      }
                                     }}
-                                    title={`Show results for class ${toLabel(item.uri)}`}
+                                    title={isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}
                                   >
                                     {toLabel(item.uri)}
                                   </button>
@@ -4548,9 +4688,11 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                       const roleLabel = `${toLabel(uri)} of`;
                       const excluded = roleNode.attributes.exclude?.trim().toLowerCase() === "yes";
                       const label = `${roleLabel} `;
+                      const isGroupByRole = groupByPropertyUri === `reverse:${uri}`;
+                      const canGroupByRole = !excluded && groupByOptions.some((option) => option.key === `reverse:${uri}`);
                       return (
-                        <article key={roleNode.id} className="flex min-w-0 flex-col">
-                          <header className="group/header flex items-start justify-between gap-2 border-b px-3 py-2">
+                        <article key={roleNode.id} ref={(element) => { if (element) roleWidgetCardRefs.current.set(uri, element); else roleWidgetCardRefs.current.delete(uri); }} className={`flex min-w-0 flex-col ${isGroupByRole ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
+                          <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByRole ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1">
                                 <button
@@ -4559,39 +4701,54 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                   onClick={() => navigateToPropertyPath(roleNode.id)}
                                   title={`Navigate to role scope ${label}`}
                                 >
+                                  {isGroupByRole && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                                   {excluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                                   {label}
                                 </button>
-                                <QueryInspectorButton
-  query={`${queryWithoutPagingXml("properties-in")}\n<!-- FCT API option: view=properties-in -->`}
-  filename="roles-fct-query.xml"
-  label="View Roles widget query"
-  countQuery={
-    buildFctCountSparql(
-      createDistinctCountQuery(
-        queryTree,
-        "role",
-        uri,
-        undefined,
-        undefined,
-        "text",
-      ),
-    )
-  }
-  countFilename="roles-first-item-count.sparql"
-/>
-                            <button
-                              type="button"
-                              className="shrink-0 px-2 py-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
-                              onClick={() => deleteNode(roleNode.id)}
-                              aria-label={`Remove role filter ${label}`}
-                            >
-                              <Trash2 className="size-4" aria-hidden="true" />
-                            </button></div>
+                                <div className="flex shrink-0 items-center gap-1">
+                                  <QueryInspectorButton
+                                    query={`${queryWithoutPagingXml("properties-in")}\n<!-- FCT API option: view=properties-in -->`}
+                                    filename="roles-fct-query.xml"
+                                    label="View Roles widget query"
+                                    countQuery={buildFctCountSparql(createDistinctCountQuery(queryTree, "role", uri, undefined, undefined, "text"))}
+                                    countFilename="roles-first-item-count.sparql"
+                                  />
+                                  {!excluded && (
+                                    <button
+                                      type="button"
+                                      disabled={!canGroupByRole}
+                                      aria-pressed={isGroupByRole}
+                                      onClick={() => {
+                                        if (isGroupByRole) {
+                                          setGroupByPropertyUri("");
+                                          setCentralTab("results");
+                                        } else {
+                                          setGroupByPropertyUri(`reverse:${uri}`);
+                                          setCentralTab("groups");
+                                        }
+                                      }}
+                                      className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:pointer-events-none disabled:opacity-30 ${isGroupByRole ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
+                                      aria-label={isGroupByRole ? `Stop grouping by ${roleLabel}` : `Group results by ${roleLabel}`}
+                                      title={isGroupByRole ? `Stop grouping by ${roleLabel}` : canGroupByRole ? `Group results by ${roleLabel}` : "Select this role in the active query before grouping by it"}
+                                    >
+                                      <UsersRound className="size-4" aria-hidden="true" />
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
+                                    onClick={() => deleteNode(roleNode.id)}
+                                    aria-label={`Remove role filter ${label}`}
+                                    title={`Remove role filter ${roleLabel}`}
+                                  >
+                                    <Trash2 className="size-4" aria-hidden="true" />
+                                  </button>
+                                </div>
+                              </div>
                               <p className="mt-1 break-all text-xs text-muted-foreground" title={uri}>{uri}</p>
                             </div>
                           </header>
-                          <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} />
+                          <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} onGroupValueClick={scrollToGroupForFacetValue} />
                         </article>
                       );
                     })}
@@ -4900,20 +5057,8 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                       {groupValuesLoading ? <p className="shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground">Loading group values from Virtuoso FCT…</p> : null}
                       {groupValuesError ? <p className="shrink-0 rounded-md border border-destructive/40 p-3 text-sm text-destructive">{groupValuesError}</p> : null}
                       {!groupValuesLoading && !groupValuesError && groupValues.length === 0 ? <p className="shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground">No values found for this relationship in the current scope.</p> : null}
-                      <div className="flex min-h-0 flex-1 overflow-hidden">
-                        <nav aria-label="Groups" className="w-64 min-w-0 shrink-0 overflow-y-auto border-r border-border bg-white p-2 text-slate-900 dark:bg-background dark:text-foreground">
-                          <div className="flex flex-col gap-0.5">
-                            {visibleGroupValues.map((groupValue) => {
-                              const label = groupValue.termType === "uri" ? toLabel(groupValue.uri) : groupValue.title || groupValue.uri;
-                              const key = `${selectedGroupByOption.key}::${groupValueKey(groupValue)}`;
-                              const members = groupMembers[key];
-                              const count = members && !members.loading && !members.error ? (members.count ?? members.results.length) : null;
-                              return <button key={key} type="button" onClick={() => groupCardRefs.current.get(key)?.scrollIntoView({ behavior: "smooth", block: "start" })} className="flex min-w-0 cursor-pointer items-start gap-2 border-b border-border bg-white px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:bg-background" title={label}><span className="min-w-0 flex-1 break-words">{label}</span><span className="shrink-0 tabular-nums text-muted-foreground">{count === null ? (members?.error ? "—" : "…") : count}</span></button>;
-                            })}
-                          </div>
-                        </nav>
-                        <div className="min-w-0 flex-1 overflow-y-auto p-3">
-                          <div className="flex flex-col gap-3">
+                      <div className="min-w-0 flex-1 overflow-y-auto p-3">
+                        <div className="flex flex-col gap-3">
                         {visibleGroupValues.map((groupValue) => {
                           const groupValueLabel = groupValue.termType === "uri" ? toLabel(groupValue.uri) : groupValue.title || groupValue.uri;
                           const memberKey = `${selectedGroupByOption!.key}::${groupValueKey(groupValue)}`;
@@ -4939,7 +5084,6 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                             </div>
                           </article>;
                         })}
-                          </div>
                         </div>
                       </div>
                     </div>

@@ -41,13 +41,6 @@ function findQueryNode(nodes: FctQueryNode[], nodeId: string): FctQueryNode | nu
   return null;
 }
 
-function queryContainsIri(tree: FctQueryTree, name: string, iri: string): boolean {
-  const visit = (nodes: FctQueryNode[]): boolean => nodes.some(
-    (node) => (node.name === name && node.attributes.iri === iri) || visit(node.children),
-  );
-  return visit(tree.children);
-}
-
 function groupValueKey(value: QueryResultValue): string {
   return JSON.stringify([value.uri, value.termType ?? "uri", value.datatype ?? "", value.lang ?? ""]);
 }
@@ -308,6 +301,30 @@ export function createDistinctCountQuery(
   // Preserve the source query's <text> element even when it is empty. The
   // FCT proxy validates the presence of this element for ordinary FCT queries.
 
+  // Candidate counts must model the constraint that clicking the item would
+  // add to the live query. Work only in the active view's immediate sibling
+  // scope: a matching IRI elsewhere in an ancestor/descendant path is not the
+  // same facet constraint.
+  const updateActiveViewScope = (
+    nodes: FctQueryNode[],
+    update: (siblings: FctQueryNode[]) => FctQueryNode[],
+  ): { nodes: FctQueryNode[]; updated: boolean } => {
+    if (nodes.some((node) => node.id === "query-view")) {
+      return { nodes: update(nodes), updated: true };
+    }
+    let updated = false;
+    const next = nodes.map((node) => {
+      if (updated) return node;
+      const result = updateActiveViewScope(node.children, update);
+      if (result.updated) {
+        updated = true;
+        return { ...node, children: result.nodes };
+      }
+      return node;
+    });
+    return { nodes: next, updated };
+  };
+
   if (kind === "property" || kind === "role") {
     const relationshipName = kind === "property" ? "property" : "property-of";
     const relationshipId = `${kind === "property" ? "count-property" : "count-role"}-${encodeURIComponent(uri)}`;
@@ -317,41 +334,52 @@ export function createDistinctCountQuery(
       attributes: { iri: uri },
       children: [],
     };
-
-    // Mirror the click action: add the candidate relationship beside the live
-    // <view> at its current scope, constraining focus resources without changing
-    // which variable the count compiler measures.
-    let inserted = false;
-    const addBesideView = (nodes: FctQueryNode[]): FctQueryNode[] => {
-      const output: FctQueryNode[] = [];
-      for (const node of nodes) {
-        output.push({ ...node, children: addBesideView(node.children) });
-        if (node.id === "query-view" && !inserted) {
-          output.push(relationshipNode);
-          inserted = true;
-        }
+    const scoped = updateActiveViewScope(tree.children, (siblings) => {
+      const existing = siblings.find((node) =>
+        node.name === relationshipName && node.attributes.iri === uri &&
+        (kind !== "property" || node.id.startsWith("property-filter-") || node.id.startsWith("count-property-")) &&
+        (kind !== "role" || node.id.startsWith("role-filter-") || node.id.startsWith("count-role-")),
+      );
+      if (existing) {
+        // An excluded item becomes an inclusion candidate for its count.
+        // Otherwise keep the existing relationship: duplicating it creates a
+        // second SPARQL variable and can distort the count for multi-valued data.
+        return siblings.map((node) => {
+          if (node !== existing) return node;
+          const attributes = { ...node.attributes };
+          delete attributes.exclude;
+          return { ...node, attributes };
+        });
       }
-      return output;
-    };
-    tree = { ...tree, children: addBesideView(tree.children) };
+      const viewIndex = siblings.findIndex((node) => node.id === "query-view");
+      const next = [...siblings];
+      next.splice(viewIndex + 1, 0, relationshipNode);
+      return next;
+    });
+    tree = { ...tree, children: scoped.nodes };
   } else if (kind === "class") {
-    if (!queryContainsIri(tree, "class", uri)) {
-      const classNode: FctQueryNode = {
-        id: `count-class-${encodeURIComponent(uri)}`,
-        name: "class",
-        attributes: { iri: uri },
-        children: [],
-      };
-      const addBesideView = (nodes: FctQueryNode[]): FctQueryNode[] => {
-        const output: FctQueryNode[] = [];
-        for (const node of nodes) {
-          if (node.id === "query-view") output.push(classNode);
-          output.push({ ...node, children: addBesideView(node.children) });
-        }
-        return output;
-      };
-      tree = { ...tree, children: addBesideView(tree.children) };
-    }
+    const classNode: FctQueryNode = {
+      id: `count-class-${encodeURIComponent(uri)}`,
+      name: "class",
+      attributes: { iri: uri },
+      children: [],
+    };
+    const scoped = updateActiveViewScope(tree.children, (siblings) => {
+      const existing = siblings.find((node) => node.name === "class" && node.attributes.iri === uri);
+      if (existing) {
+        return siblings.map((node) => {
+          if (node !== existing) return node;
+          const attributes = { ...node.attributes };
+          delete attributes.exclude;
+          return { ...node, attributes };
+        });
+      }
+      const viewIndex = siblings.findIndex((node) => node.id === "query-view");
+      const next = [...siblings];
+      next.splice(viewIndex + 1, 0, classNode);
+      return next;
+    });
+    tree = { ...tree, children: scoped.nodes };
   } else if (kind === "value" && propertyUri) {
     const binding = candidateValue
       ? groupValueBinding(candidateValue)
@@ -366,33 +394,36 @@ export function createDistinctCountQuery(
       text: binding.text,
       children: [],
     };
-    // The value must constrain the relationship's related variable. The
-    // relationship and <view> are commonly siblings, so looking for a
-    // property node whose *children* contain the view silently misses the
-    // candidate and produces an unfiltered count (often identical to Results).
-    // Insert the value under the matching relationship in the same sibling
-    // scope as the active view. Support both forward <property> and reverse
-    // <property-of> facets.
     let inserted = false;
+    const attachValue = (node: FctQueryNode): FctQueryNode => {
+      const attributes = { ...node.attributes };
+      delete attributes.exclude;
+      const existingValue = node.children.some((child) => child.name === "value" &&
+        child.text === binding.text &&
+        (child.attributes.datatype ?? "") === (binding.datatype ?? "") &&
+        (child.attributes["xml:lang"] ?? child.attributes.lang ?? "") === (binding.lang ?? ""));
+      inserted = true;
+      return {
+        ...node,
+        // The count compiler measures the active focus for reverse roles.
+        ...(node.name === "property-of" ? { id: `count-role-value-${encodeURIComponent(propertyUri)}` } : {}),
+        attributes,
+        children: existingValue ? node.children : [...node.children, valueNode],
+      };
+    };
     const addValueToActiveScope = (nodes: FctQueryNode[]): FctQueryNode[] => {
       const hasActiveView = nodes.some((node) => node.id === "query-view");
       return nodes.map((node) => {
         const isTargetRelationship = hasActiveView && !inserted &&
           (node.name === "property" || node.name === "property-of") &&
           node.attributes.iri === propertyUri;
-        if (isTargetRelationship) {
-          inserted = true;
-          // Reverse-role item counts must count matching resources in the active
-          // view, not the single related value. The count compiler recognizes
-          // this ID prefix and therefore keeps the view variable as its target.
-          return {
-            ...node,
-            ...(node.name === "property-of"
-              ? { id: `count-role-value-${encodeURIComponent(propertyUri)}` }
-              : {}),
-            children: [...node.children, valueNode],
-          };
-        }
+        if (isTargetRelationship) return attachValue(node);
+        // If the facet relationship itself is the active path carrying the
+        // view, its related variable is the view subject; constrain it there.
+        const carriesView = treeNodeContainsId([node], node.id, "query-view");
+        if (!inserted && carriesView &&
+            (node.name === "property" || node.name === "property-of") &&
+            node.attributes.iri === propertyUri) return attachValue(node);
         return { ...node, children: addValueToActiveScope(node.children) };
       });
     };

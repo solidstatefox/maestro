@@ -11,13 +11,14 @@ import { ButtonGroup } from "@/components/ui/button-group";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Bot, CircleSlash, Code2, Expand, List, Network, RefreshCw, Settings, Link, Shrink, Trash2, UsersRound, X } from "lucide-react";
+import { Bot, Check, ChevronDown, CircleSlash, Code2, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, Tag, Tags, Trash2, UsersRound, X } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -76,6 +77,22 @@ const DEFAULT_RESULTS_PAGE_SIZE = 30;
 const RESULTS_PAGE_SIZE_STORAGE_KEY = "maestro-results-page-size";
 const RESULTS_PAGE_SIZE_OPTIONS = [10, 20, 30, 50] as const;
 const RESULTS_BATCH_SIZE_OPTIONS = [30, 100, 250, 500, 1000] as const;
+const RDFS_LABEL_URI = "http://www.w3.org/2000/01/rdf-schema#label";
+
+/** Common RDF vocabulary properties used as human-readable names or labels. */
+const TEXT_SEARCH_NAME_PROPERTIES = [
+  { label: "rdfs:label", description: "RDF Schema label", uri: RDFS_LABEL_URI },
+  { label: "skos:prefLabel", description: "Preferred label", uri: "http://www.w3.org/2004/02/skos/core#prefLabel" },
+  { label: "foaf:name", description: "FOAF name", uri: "http://xmlns.com/foaf/0.1/name" },
+  { label: "schema:name", description: "Schema.org name", uri: "https://schema.org/name" },
+  { label: "dcterms:title", description: "Dublin Core title", uri: "http://purl.org/dc/terms/title" },
+  { label: "dc:title", description: "Dublin Core title (legacy)", uri: "http://purl.org/dc/elements/1.1/title" },
+  { label: "vcard:fn", description: "Formatted name", uri: "http://www.w3.org/2006/vcard/ns#fn" },
+  { label: "foaf:nick", description: "Nickname", uri: "http://xmlns.com/foaf/0.1/nick" },
+  { label: "schema:alternateName", description: "Alternative name", uri: "https://schema.org/alternateName" },
+  { label: "skos:altLabel", description: "Alternative label", uri: "http://www.w3.org/2004/02/skos/core#altLabel" },
+  { label: "skos:hiddenLabel", description: "Hidden label", uri: "http://www.w3.org/2004/02/skos/core#hiddenLabel" },
+] as const;
 
 /** Estimates localStorage key/value payload size; browsers do not expose exact quota usage. */
 function getLocalStorageUsageBytes(): number {
@@ -330,6 +347,7 @@ function QueryInspectorButton({
   countFilename,
   extraQueries = [],
   headerTone = false,
+  toolbarButton = false,
 }: {
   query: string;
   language?: "xml" | "sparql";
@@ -339,6 +357,7 @@ function QueryInspectorButton({
   countFilename?: string;
   extraQueries?: { id: string; label: string; query: string; filename: string; language?: "xml" | "sparql" }[];
   headerTone?: boolean;
+  toolbarButton?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("widget");
@@ -348,17 +367,25 @@ function QueryInspectorButton({
   const displayedCode = showingCount ? countQuery! : selectedExtraQuery?.query ?? query;
   const displayedFilename = showingCount ? (countFilename ?? "first-item-count.sparql").replace(/\.xml$/i, ".sparql") : selectedExtraQuery?.filename ?? filename;
   const displayedLanguage = showingCount || selectedExtraQuery ? selectedExtraQuery?.language ?? "sparql" : language;
+  const inspectorButton = (
+    <button
+      type="button"
+      onClick={() => { setActiveTab("widget"); setOpen(true); }}
+      aria-label={`${label}: ${filename}`}
+      title={toolbarButton ? undefined : label}
+      className={`inline-flex ${toolbarButton ? "size-9" : "size-7 rounded border"} shrink-0 items-center justify-center ${toolbarButton ? "" : "opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/header:opacity-100"} ${headerTone ? "border-sky-700 bg-sky-800 text-sky-50 hover:bg-sky-700 hover:text-sky-50 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100 dark:hover:bg-sky-900" : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+    >
+      <Code2 className="size-4" aria-hidden="true" />
+    </button>
+  );
   return (
     <>
-      <button
-        type="button"
-        onClick={() => { setActiveTab("widget"); setOpen(true); }}
-        aria-label={`${label}: ${filename}`}
-        title={label}
-        className={`inline-flex size-7 shrink-0 items-center justify-center rounded border opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/header:opacity-100 ${headerTone ? "border-sky-700 bg-sky-800 text-sky-50 hover:bg-sky-700 hover:text-sky-50 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100 dark:hover:bg-sky-900" : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground"}`}
-      >
-        <Code2 className="size-4" aria-hidden="true" />
-      </button>
+      {toolbarButton ? (
+        <Tooltip>
+          <TooltipTrigger render={inspectorButton} />
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
+      ) : inspectorButton}
       {open && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
           <section role="dialog" aria-modal="true" aria-label={`${label}: ${filename}`} className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border bg-background p-3 shadow-xl">
@@ -483,8 +510,7 @@ function DistinctCount({
     const refreshTimer = window.setTimeout(() => {
       if (cancelled) return;
       console.info("Maestro DistinctCount request starting", { kind, uri, propertyUri });
-      setCount(null);
-      onCountChange?.(countSparqlQuery, null);
+      // Keep the last completed count visible while this independent count query refreshes.
       setError("");
       void loadCount();
     }, 45);
@@ -965,6 +991,12 @@ type ShareableUiState = {
   graphText?: string;
   rdfSourceUrl?: string;
   rdfTargetGraph?: string;
+  /** Last search term retained while the signal pane is in Clear Terms mode. */
+  savedSearchDraft?: string;
+  /** Selected name/label predicates, retained even while another signal is active. */
+  selectedNamePropertyUris?: string[];
+  /** Backward-compatible single-predicate state from older shared URLs. */
+  selectedNamePropertyUri?: string;
 };
 
 function readShareableUiState(): ShareableUiState | null {
@@ -1026,9 +1058,6 @@ function parseFctQueryXml(xml: string): FctQueryTree | null {
   const children = elementChildren(root).map((child, index) => parseNode(child, String(index), true));
   if (!hasQueryView) {
     children.push({ id: "query-view", name: "view", attributes: { type: "text", limit: "30", offset: "0" }, children: [] });
-  }
-  if (!hasQueryText) {
-    children.unshift({ id: "query-text", name: "text", attributes: { property: "http://www.w3.org/2000/01/rdf-schema#label" }, text: "", children: [] });
   }
   return { name: "query", attributes: rootAttributes, children };
 }
@@ -1112,6 +1141,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const personalWidgetCardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const roleWidgetCardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const categoriesWidgetRef = useRef<HTMLElement | null>(null);
+  const facetListsLoadingObservedRef = useRef(false);
+  const facetListsLoadKeyRef = useRef("");
   const FACET_PAGE_SIZE = 10;
   const [propertyFacets, setPropertyFacets] = useState<FacetItem[]>([]);
   const [classFacets, setClassFacets] = useState<FacetItem[]>([]);
@@ -1185,10 +1216,86 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const searchNode = queryTree.children.find(
     (node) => node.name === "text" && node.id === "query-text",
   );
-  const search = searchNode?.text ?? "";
-  // A missing property means the FCT text search spans every predicate.
-  // The default, narrower mode explicitly targets rdfs:label.
-  const isExpandedSearch = !searchNode?.attributes.property;
+  const [searchDraft, setSearchDraft] = useState(searchNode?.text ?? "");
+  // Preserve the last entered term while Clear Terms temporarily removes it
+  // from the query and blanks the visible input.
+  const [savedSearchDraft, setSavedSearchDraft] = useState(searchNode?.text ?? "");
+  const [selectedNamePropertyUris, setSelectedNamePropertyUris] = useState<string[]>(() => {
+    const configured = (searchNode?.attributes.property ?? RDFS_LABEL_URI).trim();
+    const parsed = configured.split(/[\s,]+/).filter(Boolean);
+    return parsed.length && parsed[0].toLowerCase() !== "none" ? parsed : [RDFS_LABEL_URI];
+  });
+  const search = searchDraft;
+
+  // Follow query edits from elsewhere while keeping the saved term through Clear Terms.
+  useEffect(() => {
+    if (searchNode) {
+      const nextText = searchNode.text ?? "";
+      setSearchDraft(nextText);
+      setSavedSearchDraft(nextText);
+    }
+  }, [searchNode?.id, searchNode?.text]);
+  // Three mutually exclusive query states: a named property, any property, or no <text> constraint.
+  const textSearchMode: "name" | "all" | "clear" = !searchNode
+    ? "clear"
+    : searchNode.attributes.property
+      ? "name"
+      : "all";
+  const selectedNamePropertyLabel = selectedNamePropertyUris
+    .map((uri) => TEXT_SEARCH_NAME_PROPERTIES.find((property) => property.uri === uri)?.label ?? toLabel(uri))
+    .join(", ") || "no properties";
+
+  function setTextSearchMode(mode: "name" | "all" | "clear", propertyUris = selectedNamePropertyUris) {
+    if (mode === "name") setSelectedNamePropertyUris(propertyUris);
+    if (mode === "clear") {
+      // Save the active term before removing it, then blank only the visible field.
+      if (searchNode) {
+        setSavedSearchDraft(searchNode.text ?? searchDraft);
+        replaceQueryTree({ ...queryTree, children: queryTree.children.filter((node) => node.id !== "query-text") });
+      }
+      setSearchDraft("");
+      setSearchPipelineRun((current) => current + 1);
+      return;
+    }
+
+    const restoredText = searchNode?.text ?? savedSearchDraft;
+    setSearchDraft(restoredText);
+    setSavedSearchDraft(restoredText);
+    const textNode: FctQueryNode = searchNode
+      ? {
+          ...searchNode,
+          attributes: mode === "name" ? { ...searchNode.attributes, property: propertyUris.join(" ") } : Object.fromEntries(Object.entries(searchNode.attributes).filter(([key]) => key !== "property")),
+        }
+      : {
+          id: "query-text",
+          name: "text",
+          attributes: mode === "name" ? { property: propertyUris.join(" ") } : {},
+          text: restoredText,
+          children: [],
+        };
+    const children = searchNode
+      ? queryTree.children.map((node) => node.id === "query-text" ? textNode : node)
+      : [textNode, ...queryTree.children];
+    replaceQueryTree({ ...queryTree, children });
+    setSearchPipelineRun((current) => current + 1);
+  }
+
+  function updateSearchText(value: string) {
+    setSearchDraft(value);
+    setSavedSearchDraft(value);
+    if (searchNode) {
+      setSearch(value);
+      return;
+    }
+    // Typing after Clear Terms starts a fresh, restrictive name search.
+    replaceQueryTree({
+      ...queryTree,
+      children: [
+        { id: "query-text", name: "text", attributes: { property: RDFS_LABEL_URI }, text: value, children: [] },
+        ...queryTree.children,
+      ],
+    });
+  }
 
   // Use a structural signature rather than the tree object's identity: the
   // query model can retain the same root object while its children change.
@@ -1644,10 +1751,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
           (node) => node.name === "text" && node.id === "query-text",
         );
         setSearch(restoredTextNode?.text ?? "");
-        // The Expand Search toggle is derived from this node's `property`
-        // attribute, so retain that attribute in the authoritative parsed tree.
-        // In particular, absent `property` means search all properties; a
-        // present property (for example rdfs:label) means a restricted search.
+        // The Name / All fields / Clear Terms control is derived from the
+        // presence of this node and its `property` attribute. Preserve that
+        // structure exactly, including a URL that intentionally has no <text>.
         // Keep the datasite field tied to the graph attribute in q, rather than
         // allowing a separately saved draft field to override the shared query.
         const restoredGraph = restoredTree.attributes.graph ?? null;
@@ -1687,6 +1793,18 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       if (typeof restored.groupBatchOffset === "number" && Number.isFinite(restored.groupBatchOffset)) setGroupBatchOffset(Math.max(0, Math.floor(restored.groupBatchOffset)));
       if (typeof restored.resultsPageSize === "number" && RESULTS_PAGE_SIZE_OPTIONS.includes(restored.resultsPageSize as typeof RESULTS_PAGE_SIZE_OPTIONS[number])) setResultsPageSize(restored.resultsPageSize);
       if (typeof restored.selectedUri === "string") setSelectedUri(restored.selectedUri);
+      // Clear Terms removes <text> from q, so preserve the hidden draft separately
+      // to restore it when the user switches back to Name or All fields.
+      const restoredNameProperties = Array.isArray(restored.selectedNamePropertyUris)
+        ? restored.selectedNamePropertyUris.filter((uri): uri is string => typeof uri === "string" && uri.trim().length > 0)
+        : typeof restored.selectedNamePropertyUri === "string" && restored.selectedNamePropertyUri.trim()
+          ? restored.selectedNamePropertyUri.split(/[\s,]+/).filter(Boolean)
+          : null;
+      if (restoredNameProperties?.length) setSelectedNamePropertyUris(restoredNameProperties);
+      if (typeof restored.savedSearchDraft === "string") {
+        setSavedSearchDraft(restored.savedSearchDraft);
+        if (!restoredQueryFromUrl) setSearchDraft(restored.savedSearchDraft);
+      }
       if (!restoredQueryFromUrl && typeof restored.graphText === "string") {
         restoredGraphTextRef.current = restored.graphText;
         setGraphText(restored.graphText);
@@ -1729,11 +1847,13 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       graphText,
       rdfSourceUrl,
       rdfTargetGraph,
+      savedSearchDraft,
+      selectedNamePropertyUris,
     };
     params.set("state", JSON.stringify(state));
     const nextUrl = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", nextUrl);
-  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph]);
+  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, selectedNamePropertyUris]);
 
   // The graph text box may contain an unapplied draft distinct from the query's graph binding.
   // Restore that draft after the query-graph synchronization effect has run once.
@@ -1806,17 +1926,6 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     setDefaultLeftTab("personal");
   }, [groupedFacetActive, isGroupByCategory, groupedPersonalFacetUri]);
 
-  // Scroll the active facet into view after its pane is visible. This is kept
-  // separate from pane selection so switching to Configure is never undone.
-  useEffect(() => {
-    if (!groupedFacetActive || defaultLeftTab !== "personal") return;
-    const target = isGroupByCategory
-      ? categoriesWidgetRef.current
-      : groupedRoleUri
-        ? roleWidgetCardRefs.current.get(groupedRoleUri)
-        : personalWidgetCardRefs.current.get(groupedPersonalFacetUri!);
-    target?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [groupedFacetActive, isGroupByCategory, groupedPersonalFacetUri, groupedRoleUri, defaultLeftTab, personalWidgets.map((widget) => widget.uri).join("|")]);
 
   useEffect(() => {
     const pendingKey = pendingGroupScrollRef.current;
@@ -2094,6 +2203,57 @@ const describedProperties = Array.from(
 
   const [isLoadingProperties, setIsLoadingProperties] = useState(false);
   const [isLoadingClasses, setIsLoadingClasses] = useState(false);
+
+  // Scroll to the active Group by facet when that widget's own request settles.
+  // Other facet widgets load independently and must not delay this scroll.
+  useEffect(() => {
+    const facetLoadKey = `${queryXml}\u0000${selectedEndpointId}\u0000${search}`;
+    const targetLoading = isGroupByCategory
+      ? isLoadingClasses
+      : groupedRoleUri
+        ? isLoadingRoles
+        : isLoadingProperties;
+
+    if (facetListsLoadKeyRef.current !== facetLoadKey) {
+      facetListsLoadKeyRef.current = facetLoadKey;
+      // A view change may already have set this widget's loading state before
+      // this effect sees the new key. Remember that in-flight request so its
+      // completion still triggers the scroll.
+      facetListsLoadingObservedRef.current = targetLoading;
+      return;
+    }
+
+    // Scroll as soon as the active Group by widget settles; unrelated facet
+    // widgets must not delay it.
+    if (targetLoading) {
+      facetListsLoadingObservedRef.current = true;
+      return;
+    }
+    if (!facetListsLoadingObservedRef.current || !groupedFacetActive || defaultLeftTab !== "personal") return;
+
+    const target = isGroupByCategory
+      ? categoriesWidgetRef.current
+      : groupedRoleUri
+        ? roleWidgetCardRefs.current.get(groupedRoleUri)
+        : personalWidgetCardRefs.current.get(groupedPersonalFacetUri!);
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [
+    groupedFacetActive,
+    isGroupByCategory,
+    groupedPersonalFacetUri,
+    groupedRoleUri,
+    defaultLeftTab,
+    queryXml,
+    selectedEndpointId,
+    search,
+    personalWidgets.map((widget) => widget.uri).join("|"),
+    roleFacets.map((facet) => facet.uri).join("|"),
+    isLoadingClasses,
+    isLoadingProperties,
+    isLoadingRoles,
+    isLoadingGraphs,
+  ]);
+
   const [propertyFacetError, setPropertyFacetError] = useState("");
   const [classFacetError, setClassFacetError] = useState("");
   const [expandedUris, setExpandedUris] = useState<Set<string>>(new Set());
@@ -2454,12 +2614,11 @@ const describedProperties = Array.from(
     };
   }, [centralTab, search, queryXml, selectedGroupByOption?.key, pageGroupValues.map(groupValueKey).join("|"), resultsBatchSize]);
 
+  // Scope-wide side effects are separate from facet fetching. A facet request
+  // must never cancel, wait for, or determine another facet's request lifecycle.
   useEffect(() => {
     const query = search.trim();
-    let cancelled = false;
-
-    const endpointReady = endpointReadyForQuery;
-    if (!query && !endpointReady) {
+    if (!query && !endpointReadyForQuery) {
       setPropertyFacets([]);
       setClassFacets([]);
       setRoleFacets([]);
@@ -2469,114 +2628,151 @@ const describedProperties = Array.from(
       replaceFacetAutofillCandidates("property", []);
       replaceFacetAutofillCandidates("property-in", []);
       setFacetAutofillCandidates({ property: [], "property-in": [] });
-      setPropertyFacetError("");
-      setClassFacetError("");
-      setRoleFacetError("");
-      setIsLoadingProperties(false);
-      setIsLoadingClasses(false);
-      setIsLoadingRoles(false);
       setFocusWidgetsSuppressed(false);
       return;
     }
 
-    // Each facet is an independent request and owns its own loading/error state.
-    // Release personal widgets immediately from the current query tree; they must
-    // not wait for Categories, Properties, or Roles to finish loading.
     setFocusWidgetsSuppressed(false);
-    setIsLoadingProperties(true);
-    setIsLoadingClasses(true);
-    setIsLoadingRoles(true);
-    setPropertyFacetError("");
-    setClassFacetError("");
-    setRoleFacetError("");
-
-    // Every query/endpoint change resets the graph page and invalidates its old rows.
+    // Graph pagination and Autofill are query-scope state, not facet request state.
     setGraphsPage(0);
     setGraphFacets([]);
-
-    // A new source query means the previous scope's Autofill intersection is stale.
-    // Clear it immediately; each facet kind repopulates its own list after its query loads.
     replaceFacetAutofillCandidates("property", []);
     replaceFacetAutofillCandidates("property-in", []);
     setFacetAutofillCandidates({ property: [], "property-in": [] });
+  }, [search, queryXml, selectedEndpointId, endpointReadyForQuery]);
+
+  // Categories owns its own request, debounce, cancellation, data, error and
+  // loading state. It does not wait for Properties or Roles.
+  useEffect(() => {
+    if (!search.trim() && !endpointReadyForQuery) {
+      setClassFacets([]);
+      setClassFacetError("");
+      setIsLoadingClasses(false);
+      return;
+    }
+    let cancelled = false;
     const controller = new AbortController();
-
-    async function loadFacet(view: "properties" | "classes" | "roles") {
-      // Incoming predicates are the inverse-property (Roles) facet.
-      // Virtuoso exposes these with view type="properties-in".
-      const facetXml = view === "roles" ? roleFacetQueryXml : view === "classes" ? classFacetQueryXml : propertyFacetQueryXml;
-      const response = await fetch("/proxy/api/fct", {
-        method: "POST",
-        headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", `FacetLoader:${view}`) },
-        body: facetXml,
-        signal: controller.signal,
-      });
-      const data = await readFctResponse(response);
-      rememberShortforms(data?.shortforms);
-      if (!response.ok)
-        throw new Error(data.error ?? `Failed to load ${view} facets.`);
-      return {
-        items: view === "classes"
-          ? data.classes
-          : view === "roles"
-            ? data.roles
-            : data.properties,
-        sparql: typeof data.sparql === "string" ? data.sparql : "",
-      };
-    }
-
-    async function refreshFacet(view: "properties" | "classes" | "roles") {
-      try {
-        const result = await loadFacet(view);
-        if (cancelled) return;
-        const items = Array.isArray(result.items) ? result.items : [];
-        if (view === "properties") {
-          setPropertyFacets(items);
-          setPropertyFacetSparql(result.sparql);
-        } else if (view === "classes") {
-          setClassFacets(items);
-        } else {
-          setRoleFacets(items);
-          setRoleFacetSparql(result.sparql);
+    setIsLoadingClasses(true);
+    setClassFacetError("");
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await fetch("/proxy/api/fct", {
+            method: "POST",
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:classes") },
+            body: classFacetQueryXml,
+            signal: controller.signal,
+          });
+          const data = await readFctResponse(response);
+          if (!response.ok) throw new Error(data.error ?? "Failed to load classes facets.");
+          if (cancelled) return;
+          rememberShortforms(data?.shortforms);
+          setClassFacets(Array.isArray(data.classes) ? data.classes : []);
+        } catch (error) {
+          if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
+          setClassFacetError(error instanceof Error ? error.message : "Failed to load classes facets.");
+        } finally {
+          if (!cancelled) setIsLoadingClasses(false);
         }
-      } catch (error) {
-        if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
-        const message = error instanceof Error ? error.message : `Failed to load ${view} facets.`;
-        if (view === "properties") {
-          setPropertyFacets([]);
-          setPropertyFacetSparql("");
-          setPropertyFacetError(message);
-        } else if (view === "classes") {
-          setClassFacets([]);
-          setClassFacetError(message);
-        } else {
-          setRoleFacets([]);
-          setRoleFacetSparql("");
-          setRoleFacetError(message);
-        }
-      } finally {
-        if (!cancelled) {
-          if (view === "properties") setIsLoadingProperties(false);
-          else if (view === "classes") setIsLoadingClasses(false);
-          else setIsLoadingRoles(false);
-        }
-      }
-    }
-
-    // Keep a short debounce for intermediate query-tree edits, but once the
-    // settled snapshot is ready, launch all three independent requests together.
-    const timer = setTimeout(() => {
-      void refreshFacet("properties");
-      void refreshFacet("classes");
-      void refreshFacet("roles");
+      })();
     }, 250);
-
     return () => {
       cancelled = true;
-      clearTimeout(timer);
+      window.clearTimeout(timer);
       controller.abort();
+      // A cancelled request skips its finally block; release this widget's
+      // loading indicator during cleanup. A replacement effect sets it true.
+      setIsLoadingClasses(false);
     };
-  }, [search, propertyFacetQueryXml, classFacetQueryXml, roleFacetQueryXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [search, classFacetQueryXml, selectedEndpointId, endpointReadyForQuery]);
+
+  // Properties has a completely separate request lifecycle from Categories and Roles.
+  useEffect(() => {
+    if (!search.trim() && !endpointReadyForQuery) {
+      setPropertyFacets([]);
+      setPropertyFacetSparql("");
+      setPropertyFacetError("");
+      setIsLoadingProperties(false);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    setIsLoadingProperties(true);
+    setPropertyFacetError("");
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await fetch("/proxy/api/fct", {
+            method: "POST",
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:properties") },
+            body: propertyFacetQueryXml,
+            signal: controller.signal,
+          });
+          const data = await readFctResponse(response);
+          if (!response.ok) throw new Error(data.error ?? "Failed to load properties facets.");
+          if (cancelled) return;
+          rememberShortforms(data?.shortforms);
+          setPropertyFacets(Array.isArray(data.properties) ? data.properties : []);
+          setPropertyFacetSparql(typeof data.sparql === "string" ? data.sparql : "");
+        } catch (error) {
+          if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
+          setPropertyFacetError(error instanceof Error ? error.message : "Failed to load properties facets.");
+        } finally {
+          if (!cancelled) setIsLoadingProperties(false);
+        }
+      })();
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controller.abort();
+      setIsLoadingProperties(false);
+    };
+  }, [search, propertyFacetQueryXml, selectedEndpointId, endpointReadyForQuery]);
+
+  // Roles has a completely separate request lifecycle from Categories and Properties.
+  useEffect(() => {
+    if (!search.trim() && !endpointReadyForQuery) {
+      setRoleFacets([]);
+      setRoleFacetSparql("");
+      setRoleFacetError("");
+      setIsLoadingRoles(false);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    setIsLoadingRoles(true);
+    setRoleFacetError("");
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await fetch("/proxy/api/fct", {
+            method: "POST",
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:roles") },
+            body: roleFacetQueryXml,
+            signal: controller.signal,
+          });
+          const data = await readFctResponse(response);
+          if (!response.ok) throw new Error(data.error ?? "Failed to load roles facets.");
+          if (cancelled) return;
+          rememberShortforms(data?.shortforms);
+          setRoleFacets(Array.isArray(data.roles) ? data.roles : []);
+          setRoleFacetSparql(typeof data.sparql === "string" ? data.sparql : "");
+        } catch (error) {
+          if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
+          setRoleFacetError(error instanceof Error ? error.message : "Failed to load roles facets.");
+        } finally {
+          if (!cancelled) setIsLoadingRoles(false);
+        }
+      })();
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controller.abort();
+      setIsLoadingRoles(false);
+    };
+  }, [search, roleFacetQueryXml, selectedEndpointId, endpointReadyForQuery]);
 
   // Fetch only the graph page the user requested; never scan the entire result set.
   useEffect(() => {
@@ -4068,7 +4264,6 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                 </button>
                 {breadcrumbSiblings.length > 0 && (
                   <>
-                    <span aria-hidden="true" className="my-1 w-px shrink-0 self-stretch bg-border" />
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <button
@@ -5237,65 +5432,84 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
               )}
               <div className="group/header shrink-0 border-t bg-muted p-3">
                 <div className="flex items-center gap-2">
-                  <ButtonGroup aria-label="Text search controls" className="flex min-w-0 flex-1 [&>*+*]:!border-l-0">
-                    <input
-                      autoFocus
-                      value={search}
-                      onChange={(event) => setSearch(event.target.value)}
-                      placeholder="Search results..."
-                      aria-label="Search results"
-                      className="min-w-0 flex-1 rounded-none border-0 bg-background px-3 py-2 text-sm outline-none focus-visible:outline-none focus-visible:ring-0"
-                    />
+                  <ButtonGroup
+                    aria-label="Search text and signal controls"
+                    className="min-w-0 flex-1 [&>*+*]:border-l [&>*+*]:border-input [&>span]:border-l-0 [&>input]:min-w-0 [&>input]:flex-1 [&>input]:rounded-none [&>input]:border-0 [&>input]:bg-background [&>input]:px-3 [&>input]:py-2 [&>input]:text-sm"
+                  >
+                    <DropdownMenu>
+                      <Tooltip>
+                        <TooltipTrigger render={<DropdownMenuTrigger asChild><button type="button" aria-label={`Choose name/label property; currently ${selectedNamePropertyLabel}`} className="flex h-10 shrink-0 items-center justify-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"><SearchCode className="size-4" aria-hidden="true" /></button></DropdownMenuTrigger>} />
+                        <TooltipContent>Choose name/label property — currently {selectedNamePropertyLabel}</TooltipContent>
+                      </Tooltip>
+                        <DropdownMenuContent align="start" className="max-h-80 min-w-56 overflow-y-auto">
+                          {TEXT_SEARCH_NAME_PROPERTIES.map((property) => {
+                            const checked = selectedNamePropertyUris.includes(property.uri);
+                            return (
+                              <DropdownMenuCheckboxItem
+                                key={property.uri}
+                                checked={checked}
+                                onSelect={(event) => event.preventDefault()}
+                                onCheckedChange={(nextChecked) => {
+                                  const nextProperties = nextChecked
+                                    ? [...selectedNamePropertyUris, property.uri]
+                                    : selectedNamePropertyUris.filter((uri) => uri !== property.uri);
+                                  // Keep at least one predicate selected so Name mode never silently
+                                  // becomes an unrestricted all-properties search.
+                                  if (nextProperties.length) setTextSearchMode("name", nextProperties);
+                                }}
+                              >
+                                <span className="flex min-w-0 flex-1 flex-col"><span>{property.label}</span><span className="text-xs text-muted-foreground">{property.description}</span></span>
+                              </DropdownMenuCheckboxItem>
+                            );
+                          })}
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                    <input autoFocus value={search} onChange={(event) => updateSearchText(event.target.value)} placeholder="Search results..." aria-label="Search results" className="min-w-0 flex-1 outline-none" />
+                    <Tooltip>
+                      <TooltipTrigger render={<button type="button" onClick={() => setTextSearchMode("name", selectedNamePropertyUris)} aria-pressed={textSearchMode === "name"} aria-label={`Name — search using ${selectedNamePropertyLabel}`} className={`flex h-10 w-10 shrink-0 items-center justify-center transition-colors ${textSearchMode === "name" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}><SignalLow aria-hidden="true" className="size-4" /></button>} />
+                      <TooltipContent>Name — search using {selectedNamePropertyLabel}</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger render={<button type="button" onClick={() => setTextSearchMode("all")} aria-pressed={textSearchMode === "all"} aria-label="All fields — search text across all properties" className={`flex h-10 w-10 shrink-0 items-center justify-center transition-colors ${textSearchMode === "all" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}><SignalMedium aria-hidden="true" className="size-4" /></button>} />
+                      <TooltipContent>All fields — search text across all properties</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger render={<button type="button" onClick={() => setTextSearchMode("clear")} aria-pressed={textSearchMode === "clear"} aria-label="Clear Terms — remove the text constraint from the query" className={`flex h-10 w-10 shrink-0 items-center justify-center transition-colors ${textSearchMode === "clear" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}><SignalHigh aria-hidden="true" className="size-4" /></button>} />
+                      <TooltipContent>Clear Terms — remove the text constraint from the query</TooltipContent>
+                    </Tooltip>
+                  </ButtonGroup>
+                  <ButtonGroup
+                    aria-label="Results, badges, and query inspector"
+                    className="hidden shrink-0 items-center [&>*+*]:border-l [&>*+*]:border-input group-hover/header:inline-flex focus-within:inline-flex"
+                  >
                     <Tooltip>
                       <TooltipTrigger render={
                         <Toggle
-                          pressed={isExpandedSearch}
-                          onPressedChange={(pressed) => setNodeAttribute("query-text", "property", pressed ? null : "http://www.w3.org/2000/01/rdf-schema#label")}
-                          className="inline-flex shrink-0 items-center gap-1.5 rounded-none border-0 px-3 py-2 text-sm data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
-                          aria-label={isExpandedSearch ? "Search rdfs:label Only" : "Search All Properties"}
+                          pressed={centralTab === "query-tree" || centralTab === "view-query"}
+                          onPressedChange={(pressed) => setCentralTab(pressed ? "query-tree" : (groupByPropertyUri ? "groups" : "results"))}
+                          className="size-9 shrink-0 border-0 p-0 text-sm data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
+                          aria-label={centralTab === "query-tree" || centralTab === "view-query" ? "Query" : "Results"}
                         >
-                          {isExpandedSearch ? (
-                            <Shrink aria-hidden="true" className="size-4" />
-                          ) : (
-                            <Expand aria-hidden="true" className="size-4" />
-                          )}
+                          {centralTab === "query-tree" || centralTab === "view-query" ? <Code2 aria-hidden="true" className="size-4" /> : <List aria-hidden="true" className="size-4" />}
                         </Toggle>
                       } />
-                      <TooltipContent>{isExpandedSearch ? "Search only rdfs:label values" : "Search all properties"}</TooltipContent>
+                      <TooltipContent>{centralTab === "query-tree" || centralTab === "view-query" ? "Query" : "Results"}</TooltipContent>
                     </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger render={
+                        <Toggle
+                          pressed={showResultBadges}
+                          onPressedChange={setShowResultBadges}
+                          className="size-9 shrink-0 border-0 p-0 text-sm data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
+                          aria-label={showResultBadges ? "Badges On" : "Badges Off"}
+                        >
+                          {showResultBadges ? <Tags aria-hidden="true" className="size-4" /> : <Tag aria-hidden="true" className="size-4" />}
+                        </Toggle>
+                      } />
+                      <TooltipContent>{showResultBadges ? "Badges On" : "Badges Off"}</TooltipContent>
+                    </Tooltip>
+                    <QueryInspectorButton query={resultsSparql ?? ""} language="sparql" filename="results-query.sparql" countQuery={resultsCountSparql} countFilename="results-count.sparql" toolbarButton />
                   </ButtonGroup>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // Clear the authoritative <text> node, then explicitly run
-                      // the same FCT results pipeline even if it was already empty.
-                      setSearch("");
-                      setSearchPipelineRun((current) => current + 1);
-                    }}
-                    className="shrink-0 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-                    aria-label="Clear text search"
-                    title="Clear text search"
-                  >
-                    Clear
-                  </button>
-                  <Toggle
-                    pressed={centralTab === "query-tree" || centralTab === "view-query"}
-                    onPressedChange={(pressed) => setCentralTab(pressed ? "query-tree" : (groupByPropertyUri ? "groups" : "results"))}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-input px-3 py-2 text-sm data-[state=on]:border-black data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:border-black dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
-                    aria-label={centralTab === "query-tree" || centralTab === "view-query" ? "Query" : "Results"}
-                  >
-                    {centralTab === "query-tree" || centralTab === "view-query" ? <Code2 aria-hidden="true" className="size-4" /> : <List aria-hidden="true" className="size-4" />}
-                    <span>{centralTab === "query-tree" || centralTab === "view-query" ? "Query" : "Results"}</span>
-                  </Toggle>
-                  <Toggle
-                    pressed={showResultBadges}
-                    onPressedChange={setShowResultBadges}
-                    className="shrink-0 rounded-md border border-input px-3 py-2 text-sm data-[state=on]:border-black data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:border-black dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
-                    aria-label={showResultBadges ? "Badges On" : "Badges Off"}
-                  >
-                    <span>{showResultBadges ? "Badges On" : "Badges Off"}</span>
-                  </Toggle>
-                  <QueryInspectorButton query={resultsSparql ?? ""} language="sparql" filename="results-query.sparql" countQuery={resultsCountSparql} countFilename="results-count.sparql" />
                 </div>
                 {searchError && <p className="mt-2 text-sm text-destructive">{searchError}</p>}
               </div>

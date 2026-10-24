@@ -225,13 +225,14 @@ function fullTextPatterns(searchText: string, textProperty?: string): SparqlPatt
     { kind: "full-text", value: variable("txt1"), search },
   ];
   const property = (textProperty ?? "").trim();
-  // Per the FCT XML protocol, an omitted text/@property (or property="none")
-  // searches any property. When property is specified, restrict text matching
-  // to that one predicate.
+  // An omitted text/@property (or property="none") searches any property.
+  // Otherwise accept a whitespace- or comma-separated list of predicate IRIs.
   if (property && property.toLowerCase() !== "none") {
-    const propertyTerm = iri(property);
-    if (!propertyTerm) throw new Error("The FCT <text> property attribute must be an IRI or 'none'.");
-    patterns.push({ kind: "filter", expression: { kind: "in", value: termExpr(variable("txtp1")), options: [propertyTerm] } });
+    const propertyTerms = property.split(/[\s,]+/).filter(Boolean).map(iri);
+    if (!propertyTerms.length || propertyTerms.some((term) => !term)) {
+      throw new Error("The FCT <text> property attribute must contain one or more IRIs, or 'none'.");
+    }
+    patterns.push({ kind: "filter", expression: { kind: "in", value: termExpr(variable("txtp1")), options: propertyTerms as SparqlTerm[] } });
   }
   return patterns;
 }

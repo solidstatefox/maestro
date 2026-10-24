@@ -7,6 +7,7 @@ type CompilerState = {
   text: string;
   textValue: string | null;
   textPredicate: string | null;
+  textProperty: string;
   viewSubject: string | null;
 };
 
@@ -42,6 +43,15 @@ function nextVariable(state: CompilerState): string {
   return `?s${state.nextVariable++}`;
 }
 
+/** Restrict a full-text match to one or more predicates listed in <text property="..."/>. */
+function buildTextPropertyFilter(propertyAttribute: string, predicateVariable: string): string {
+  const property = propertyAttribute.trim();
+  if (!property || property.toLowerCase() === "none") return "";
+  const terms = property.split(/[\s,]+/).filter(Boolean).map(iriTerm);
+  if (!terms.length || terms.some((term) => !term)) return "";
+  return `FILTER (${predicateVariable} IN (${terms.join(", ")}))`;
+}
+
 function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerState): void {
   for (const node of nodes) {
     switch (node.name) {
@@ -63,6 +73,7 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
         state.text = value;
         state.textValue = "?o1";
         state.textPredicate = `${subject.replace(/^\?/, "?")}textp`;
+        state.textProperty = (node.attributes.property ?? "").trim();
         break;
       }
       case "property":
@@ -111,7 +122,7 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
 
 /** Compile the active FCT query tree to a Virtuoso SPARQL result-set query. */
 export function buildFctResultsSparql(tree: FctQueryTree): string | null {
-  const state: CompilerState = { nextVariable: 2, patterns: [], errors: [], text: "", textValue: null, textPredicate: null, viewSubject: null };
+  const state: CompilerState = { nextVariable: 2, patterns: [], errors: [], text: "", textValue: null, textPredicate: null, textProperty: "", viewSubject: null };
   compileNodes(tree.children, "?s1", state);
   if (state.errors.length) return null;
 
@@ -133,9 +144,11 @@ export function buildFctResultsSparql(tree: FctQueryTree): string | null {
     const vector = terms.map((term) => `'${escapeSparqlString(term)}'`).join(", ");
     const contains = `'"${terms.map((term) => escapeSparqlString(term.toLowerCase())).join(" ")}"'`;
     const textPattern = `quad map virtrdf:DefaultQuadMap { graph ?g { ?s1 ?s1textp ?o1 . ?o1 bif:contains ${contains} option (score ?sc) . } }`;
+    const textPropertyFilter = buildTextPropertyFilter(state.textProperty, "?s1textp");
+    if (state.textProperty && state.textProperty.toLowerCase() !== "none" && !textPropertyFilter) return null;
     // The full-text match must be in the Virtuoso quad-map pattern; selected values
     // are equality FILTERs over their related variables, not merely triples.
-    innerSelect = `SELECT ?s1, (?sc * 3e-1) AS ?sc, ?o1, (sql:rnk_scale (<LONG::IRI_RANK> (?s1))) AS ?rank, ?g WHERE { ${textPattern} ${patterns.join(" ")} } ORDER BY DESC (?sc * 3e-1 + sql:rnk_scale (<LONG::IRI_RANK> (?s1))) LIMIT ${limit} OFFSET ${offset}`;
+    innerSelect = `SELECT ?s1, (?sc * 3e-1) AS ?sc, ?o1, (sql:rnk_scale (<LONG::IRI_RANK> (?s1))) AS ?rank, ?g WHERE { ${textPattern} ${textPropertyFilter} ${patterns.join(" ")} } ORDER BY DESC (?sc * 3e-1 + sql:rnk_scale (<LONG::IRI_RANK> (?s1))) LIMIT ${limit} OFFSET ${offset}`;
     outerSelect = `SELECT ?s1 AS ?c1, (bif:search_excerpt (bif:vector (${vector}), ?o1)) AS ?c2, ?sc, ?rank, ?g WHERE {{{ ${innerSelect} }}}`;
   } else {
     if (!patterns.length) patterns.push("?s1 ?p1 ?o2 .");
@@ -154,7 +167,7 @@ export function buildFctResultsSparql(tree: FctQueryTree): string | null {
  * nested under the selected relationship identifies the value variable to
  * return; full-text and every other source-query constraint remain in scope. */
 export function buildFctGroupValuesSparql(tree: FctQueryTree): string | null {
-  const state: CompilerState = { nextVariable: 2, patterns: [], errors: [], text: "", textValue: null, textPredicate: null, viewSubject: null };
+  const state: CompilerState = { nextVariable: 2, patterns: [], errors: [], text: "", textValue: null, textPredicate: null, textProperty: "", viewSubject: null };
   compileNodes(tree.children, "?s1", state);
   if (state.errors.length || !state.viewSubject) return null;
 
@@ -184,7 +197,9 @@ export function buildFctGroupValuesSparql(tree: FctQueryTree): string | null {
     if (!terms.length) return null;
     const contains = `'"${terms.map((term) => escapeSparqlString(term.toLowerCase())).join(" ")}"'`;
     const textPattern = `quad map virtrdf:DefaultQuadMap { graph ?g { ?s1 ?s1textp ?o1 . ?o1 bif:contains ${contains} option (score ?sc) . } }`;
-    body = `${textPattern} ${body}`;
+    const textPropertyFilter = buildTextPropertyFilter(state.textProperty, "?s1textp");
+    if (state.textProperty && state.textProperty.toLowerCase() !== "none" && !textPropertyFilter) return null;
+    body = `${textPattern} ${textPropertyFilter} ${body}`;
   } else {
     const graph = tree.attributes.graph?.trim();
     const graphTerm = graph ? iriTerm(graph) : null;

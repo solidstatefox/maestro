@@ -1244,6 +1244,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const selectedNamePropertyLabel = selectedNamePropertyUris
     .map((uri) => TEXT_SEARCH_NAME_PROPERTIES.find((property) => property.uri === uri)?.label ?? toLabel(uri))
     .join(", ") || "no properties";
+  const [signalPickerExpanded, setSignalPickerExpanded] = useState(false);
+  const signalOptions = [
+    { mode: "name" as const, Icon: SignalLow, label: `Name — search using ${selectedNamePropertyLabel}` },
+    { mode: "all" as const, Icon: SignalMedium, label: "All fields — search text across all properties" },
+    { mode: "clear" as const, Icon: SignalHigh, label: "Clear Terms — remove the text constraint from the query" },
+  ];
 
   function setTextSearchMode(mode: "name" | "all" | "clear", propertyUris = selectedNamePropertyUris) {
     if (mode === "name") setSelectedNamePropertyUris(propertyUris);
@@ -5455,19 +5461,46 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                           })}
                         </DropdownMenuContent>
                     </DropdownMenu>
-                    <input autoFocus value={search} onChange={(event) => updateSearchText(event.target.value)} placeholder="Search results..." aria-label="Search results" className="min-w-0 flex-1 outline-none" />
-                    <Tooltip>
-                      <TooltipTrigger render={<button type="button" onClick={() => setTextSearchMode("name", selectedNamePropertyUris)} aria-pressed={textSearchMode === "name"} aria-label={`Name — search using ${selectedNamePropertyLabel}`} className={`flex h-10 w-10 shrink-0 items-center justify-center transition-colors ${textSearchMode === "name" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}><SignalLow aria-hidden="true" className="size-4" /></button>} />
-                      <TooltipContent>Name — search using {selectedNamePropertyLabel}</TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger render={<button type="button" onClick={() => setTextSearchMode("all")} aria-pressed={textSearchMode === "all"} aria-label="All fields — search text across all properties" className={`flex h-10 w-10 shrink-0 items-center justify-center transition-colors ${textSearchMode === "all" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}><SignalMedium aria-hidden="true" className="size-4" /></button>} />
-                      <TooltipContent>All fields — search text across all properties</TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger render={<button type="button" onClick={() => setTextSearchMode("clear")} aria-pressed={textSearchMode === "clear"} aria-label="Clear Terms — remove the text constraint from the query" className={`flex h-10 w-10 shrink-0 items-center justify-center transition-colors ${textSearchMode === "clear" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}><SignalHigh aria-hidden="true" className="size-4" /></button>} />
-                      <TooltipContent>Clear Terms — remove the text constraint from the query</TooltipContent>
-                    </Tooltip>
+                    <input autoFocus value={search} onChange={(event) => updateSearchText(event.target.value)} placeholder="Enter keywords" aria-label="Search results" className="min-w-0 flex-1 outline-none" />
+                    <div
+                      aria-label="Search mode"
+                      className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none ${signalPickerExpanded ? "w-[7.5rem]" : "w-10"}`}
+                      onMouseEnter={() => setSignalPickerExpanded(true)}
+                      onMouseLeave={() => setSignalPickerExpanded(false)}
+                      onFocusCapture={() => setSignalPickerExpanded(true)}
+                      onBlurCapture={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                          setSignalPickerExpanded(false);
+                        }
+                      }}
+                    >
+                      <div className="inline-flex w-[7.5rem] shrink-0 overflow-hidden">
+                        {(signalPickerExpanded
+                          ? signalOptions
+                          : [...signalOptions].sort((left, right) =>
+                              left.mode === textSearchMode ? -1 : right.mode === textSearchMode ? 1 : 0,
+                            )
+                        ).map(({ mode, Icon, label }) => (
+                          <Tooltip key={mode}>
+                            <TooltipTrigger render={
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setTextSearchMode(mode);
+                                  setSignalPickerExpanded(false);
+                                }}
+                                aria-pressed={textSearchMode === mode}
+                                aria-label={label}
+                                aria-hidden={!signalPickerExpanded && textSearchMode !== mode}
+                                tabIndex={!signalPickerExpanded && textSearchMode !== mode ? -1 : 0}
+                                className={`flex h-10 w-10 shrink-0 items-center justify-center transition-colors ${textSearchMode === mode ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
+                              ><Icon aria-hidden="true" className="size-4" /></button>
+                            } />
+                            <TooltipContent>{label}</TooltipContent>
+                          </Tooltip>
+                        ))}
+                      </div>
+                    </div>
                   </ButtonGroup>
                   <ButtonGroup
                     aria-label="Results, badges, and query inspector"

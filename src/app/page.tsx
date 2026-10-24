@@ -1942,11 +1942,14 @@ useEffect(() => {
   // The separate scalar count is used for the overall pager, not as a substitute
   // for the actual result bindings returned by the current page query.
   const [resultsPageComplete, setResultsPageComplete] = useState(false);
-  const effectiveResultsTotalCount = resultsPageComplete
-    ? results.length
-    : resultsTotalCount === null
-      ? null
-      : Math.max(resultsTotalCount, results.length);
+  // The FCT Results request is paged, so a short batch only says that this
+  // page is the end of the stream; it must not override a larger scalar count
+  // for the whole query (e.g. 930 matches but 14 rows in the current FCT view).
+  // Use the completed result stream only as a fallback when scalar counting is
+  // unavailable, and never let a stale/partial batch lower a valid total.
+  const effectiveResultsTotalCount = resultsTotalCount === null
+    ? (resultsPageComplete ? results.length : null)
+    : Math.max(resultsTotalCount, results.length);
   const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string }[]>([]);
   const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
   const RECORD_DESCRIPTION_PAGE_SIZE = 20;
@@ -2391,9 +2394,11 @@ const describedProperties = Array.from(
             setGroupMembers((current) => ({ ...current, [key]: { results: Array.from(uniqueResults.values()), count: uniqueResults.size, loading: false, error: "" } }));
           }
         } catch (error) {
-          if (error instanceof Error && error.name === "AbortError") return;
+          // Cleanup already releases this request's loading marker. An aborted
+          // older request must not delete the marker for a newer request that
+          // has since started for the same group key.
+          if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
           groupMemberRequestStates.current.delete(key);
-          if (cancelled) return;
           setGroupMembers((current) => ({ ...current, [key]: { results: [], loading: false, error: error instanceof Error ? error.message : "Failed to load group items." } }));
         }
       })();

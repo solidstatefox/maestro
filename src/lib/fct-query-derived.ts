@@ -23,6 +23,7 @@ type GroupByOption = {
 };
 export type DistinctCountKind = "property" | "class" | "role" | "value";
 const COUNT_QUERY_LIMIT = 1000;
+const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 function cloneQueryNode(node: FctQueryNode): FctQueryNode {
   return {
@@ -280,7 +281,39 @@ export function createGroupMemberQuery(
       return { ...node, children: bind(node.children) };
     });
   }
-  return { ...tree, children: bind(tree.children) };
+  tree = { ...tree, children: bind(tree.children) };
+
+  // Group headings for rdf:type are classes, but their members must be the
+  // resources typed with that class. If the <view> stays nested in the
+  // rdf:type <property>, FCT focuses on the class itself and can return the
+  // misleading one-item group "Article" containing "Article". Keep the
+  // rdf:type/value constraint and move the view beside that binding, preserving
+  // any enclosing property path while returning the typed resources.
+  if (option.direction === "forward" && option.uri === RDF_TYPE_URI) {
+    const view = findQueryView(tree.children);
+    if (view) {
+      const removeView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) => {
+        if (node.id === view.id) return [];
+        return [{ ...node, children: removeView(node.children) }];
+      });
+      const moveViewToBindingScope = (nodes: FctQueryNode[]): FctQueryNode[] => {
+        // The active focus may be nested beneath a property path. Hoist the
+        // view only to the sibling scope containing the rdf:type binding, not
+        // unconditionally to the query root, which would discard that path.
+        if (nodes.some((node) => node.id === bindingNodeId)) {
+          if (nodes.some((node) => node.id === view.id)) return nodes;
+          return [...removeView(nodes), view];
+        }
+        return nodes.map((node) => ({
+          ...node,
+          children: moveViewToBindingScope(node.children),
+        }));
+      };
+      tree = { ...tree, children: moveViewToBindingScope(tree.children) };
+    }
+  }
+
+  return tree;
 }
 
 /** Build an isolated query-tree scope for one visible facet/value count. */

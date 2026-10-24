@@ -140,6 +140,20 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
         const textPredicate = nextVariable(state);
         state.patterns.push(`${subject} ${textPredicate} ${textValue} .`);
         state.patterns.push(`FILTER (bif:contains(${textValue}, "${escapeSparqlString(expression)}"))`);
+
+        // Keep the count query's full-text scope identical to the Results
+        // query. FCT's <text property="..."> restricts matches to that
+        // predicate; "none" (or an omitted property) intentionally searches
+        // every predicate.
+        const textProperty = (node.attributes.property ?? "").trim();
+        if (textProperty && textProperty.toLowerCase() !== "none") {
+          const property = iriTerm(textProperty);
+          if (!property) {
+            state.errors.push("The FCT <text> property attribute must be an IRI or 'none'.");
+            break;
+          }
+          state.patterns.push(`FILTER (${textPredicate} IN (${property}))`);
+        }
         break;
       }
       default:

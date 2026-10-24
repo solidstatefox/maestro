@@ -298,7 +298,7 @@ type RelationshipDirection = "forward" | "reverse";
 type ScopeRelationship = { uri: string; direction: RelationshipDirection };
 type GroupByOption = ScopeRelationship & { key: string; label: string; nodeId: string; memberBindingNodeId?: string; ancestorRole?: boolean };
 
-type GroupMembersState = { results: FctResult[]; count?: number; loading: boolean; error: string };
+type GroupMembersState = { results: FctResult[]; count?: number; loading: boolean; error: string; offset?: number; hasMore?: boolean };
 
 
 /** Hover-only query inspector for any widget backed by an FCT or SPARQL request. */
@@ -1736,6 +1736,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const [groupValuesError, setGroupValuesError] = useState("");
   const [groupMembers, setGroupMembers] = useState<Record<string, GroupMembersState>>({});
   const groupMemberRequestStates = useRef(new Map<string, "loading" | "loaded">());
+  // Load-more requests must not repopulate a different query or group-by view.
+  const groupMemberRequestIdentityRef = useRef("");
   // Counts are derived from the member rows loaded for each visible group.
   // Keep the index and cards in the same descending-count order.
   const pageGroupValues = groupValues.slice(groupUiPage * resultsPageSize, (groupUiPage + 1) * resultsPageSize);
@@ -1824,6 +1826,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const queryCountXml = serializeFctQuery(
     setQueryViewAttributes(queryTree, { type: "text", limit: "1000", offset: "0" }),
   );
+  groupMemberRequestIdentityRef.current = `${selectedEndpointId}\u0000${queryCountXml}\u0000${selectedGroupByOption?.key ?? ""}`;
 
   const [results, setResults] = useState<FctResult[]>([]);
   const resultsBatchRequestPending = useRef(false);
@@ -2125,7 +2128,9 @@ const describedProperties = Array.from(
         if (cancelled || requestQueryIdentity !== activeQueryIdentityRef.current) return;
 
         setSparqlQuery(data.sparql || "");
-        setResultsPageMatchCount(nextResults.length);
+        // Paging offsets belong to the raw query rows, not the deduplicated
+        // resource list. Text search can return multiple excerpts per resource.
+        setResultsPageMatchCount(rawResults.length);
         setResultsPageComplete(rawResults.length < resultsBatchSize);
         setResults((current) => {
           if (resultsOffset === 0) return nextResults;
@@ -2391,7 +2396,15 @@ const describedProperties = Array.from(
               uniqueResults.set(item.uri, previous ? { ...previous, ...item, matches: [...previous.matches, ...item.matches] } : { ...item, matches: [...item.matches] });
             }
             groupMemberRequestStates.current.set(key, "loaded");
-            setGroupMembers((current) => ({ ...current, [key]: { results: Array.from(uniqueResults.values()), count: uniqueResults.size, loading: false, error: "" } }));
+            setGroupMembers((current) => ({ ...current, [key]: {
+              results: Array.from(uniqueResults.values()),
+              count: uniqueResults.size,
+              loading: false,
+              error: "",
+              // Keep the raw-row offset: a resource can have multiple excerpts.
+              offset: rawResults.length,
+              hasMore: rawResults.length >= resultsBatchSize,
+            } }));
           }
         } catch (error) {
           // Cleanup already releases this request's loading marker. An aborted
@@ -5081,11 +5094,69 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                 <button type="button" onClick={() => setSelectedUri(groupValue.uri)} className="block max-w-full cursor-pointer break-words text-left text-sm font-semibold hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Load this group value in the Record viewer">{groupValueLabel}</button>
                                 <p className="mt-0.5 break-all text-xs text-muted-foreground">{groupValue.uri}</p>
                               </div>
-                              <span className="shrink-0 text-xs text-muted-foreground">{members.loading ? "…" : `${members.count ?? members.results.length} ${(members.count ?? members.results.length) === 1 ? "item" : "items"}`}</span>
+                              <span className="shrink-0 text-xs text-muted-foreground">{members.loading ? "…" : members.hasMore ? `${members.count ?? members.results.length} loaded` : `${members.count ?? members.results.length} ${(members.count ?? members.results.length) === 1 ? "item" : "items"}`}</span>
                               <QueryInspectorButton query={serializeFctQuery(createGroupMemberQuery(queryTree, selectedGroupByOption!, groupValue))} filename={`group-${groupValueLabel.replace(/[^a-z0-9_-]+/gi, "-")}.xml`} />
                             </header>
                             <div className="flex flex-col gap-1 p-2">
                               {members.error ? <p className="px-2 py-2 text-xs text-destructive">{members.error}</p> : members.loading ? <p className="px-2 py-2 text-xs text-muted-foreground">Loading matching Results items…</p> : members.results.length > 0 ? members.results.map((item) => <button key={item.uri} type="button" onClick={() => setSelectedUri(item.uri)} className={`flex min-w-0 flex-col rounded-md px-2 py-2 text-left hover:bg-accent/50 ${selectedUri === item.uri ? "bg-accent/40" : ""}`}><span className="break-words text-sm font-medium cursor-pointer">{item.termType === "uri" ? toLabel(item.uri) : item.title || item.uri}</span><span className="mt-0.5 break-all text-xs text-muted-foreground">{item.uri}</span></button>) : <p className="px-2 py-2 text-xs text-muted-foreground">No Results items match this value.</p>}
+                              {members.hasMore && !members.loading ? <button
+                                type="button"
+                                className="mx-2 my-1 rounded-md border border-input px-2 py-1.5 text-xs hover:bg-accent"
+                                onClick={() => {
+                                  const option = selectedGroupByOption;
+                                  if (!option || groupMemberRequestStates.current.get(memberKey) === "loading") return;
+                                  const requestIdentity = groupMemberRequestIdentityRef.current;
+                                  const offset = members.offset ?? members.results.length;
+                                  groupMemberRequestStates.current.set(memberKey, "loading");
+                                  setGroupMembers((current) => ({ ...current, [memberKey]: { ...(current[memberKey] ?? members), loading: true, error: "" } }));
+                                  void (async () => {
+                                    const controller = new AbortController();
+                                    try {
+                                      const memberTree = createGroupMemberQuery(queryTree, option, groupValue);
+                                      const memberXml = serializeFctQuery(setQueryViewAttributes(memberTree, {
+                                        type: "text", limit: String(resultsBatchSize), offset: String(offset),
+                                      }));
+                                      const response = await fetch("/proxy/api/fct", {
+                                        method: "POST",
+                                        cache: "no-store",
+                                        headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("group-members-fct", "GroupsMembersMore") },
+                                        body: memberXml,
+                                        signal: controller.signal,
+                                      });
+                                      const data = await readFctResponse(response);
+                                      if (groupMemberRequestIdentityRef.current !== requestIdentity) return;
+                                      rememberShortforms(data?.shortforms);
+                                      const rawResults: FctResult[] = Array.isArray(data.results) ? data.results : [];
+                                      setGroupMembers((current) => {
+                                        const previous = current[memberKey]?.results ?? members.results;
+                                        const merged = new Map(previous.map((item) => [item.uri, item]));
+                                        for (const item of rawResults) {
+                                          const prior = merged.get(item.uri);
+                                          merged.set(item.uri, prior ? { ...prior, ...item, matches: [...prior.matches, ...item.matches] } : { ...item, matches: [...item.matches] });
+                                        }
+                                        const results = Array.from(merged.values());
+                                        return { ...current, [memberKey]: {
+                                          results,
+                                          count: results.length,
+                                          loading: false,
+                                          error: "",
+                                          offset: offset + rawResults.length,
+                                          hasMore: rawResults.length >= resultsBatchSize,
+                                        } };
+                                      });
+                                      groupMemberRequestStates.current.set(memberKey, "loaded");
+                                    } catch (error) {
+                                      if (groupMemberRequestIdentityRef.current !== requestIdentity) return;
+                                      groupMemberRequestStates.current.delete(memberKey);
+                                      setGroupMembers((current) => ({ ...current, [memberKey]: {
+                                        ...(current[memberKey] ?? members),
+                                        loading: false,
+                                        error: error instanceof Error ? error.message : "Failed to load more group items.",
+                                      } }));
+                                    }
+                                  })();
+                                }}
+                              >{members.error ? "Retry loading items" : "Load more items"}</button> : null}
                             </div>
                           </article>;
                         })}

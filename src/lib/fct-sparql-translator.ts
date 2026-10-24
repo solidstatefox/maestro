@@ -42,6 +42,7 @@ type SparqlPattern =
   | { kind: "triple"; subject: SparqlTerm; predicate: SparqlTerm; object: SparqlTerm; options?: SparqlDirective[] }
   | { kind: "full-text"; value: SparqlTerm; search: SparqlTerm }
   | { kind: "filter"; expression: SparqlExpression }
+  | { kind: "not-exists"; patterns: SparqlPattern[] }
   | { kind: "group"; patterns: SparqlPattern[] }
   | { kind: "graph"; graph: SparqlTerm; patterns: SparqlPattern[] }
   | { kind: "quad-map"; map: SparqlTerm; graph: SparqlTerm; patterns: SparqlPattern[] };
@@ -136,6 +137,7 @@ function serializePattern(pattern: SparqlPattern, depth = 0): string {
     }
     case "full-text": return `${indent}${serializeTerm(pattern.value)} bif:contains ${serializeTerm(pattern.search)} .`;
     case "filter": return `${indent}FILTER ${serializeExpression(pattern.expression)}`;
+    case "not-exists": return `${indent}FILTER NOT EXISTS {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "group": return `${indent}{\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "graph": return `${indent}GRAPH ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "quad-map": return `${indent}quad map ${serializeTerm(pattern.map)} { graph ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 2)).join("\n")}\n${indent}  } }`;
@@ -256,16 +258,28 @@ function compileConstraints(nodes: XmlNode[], subject: SparqlTerm, patterns: Spa
       if (["yes", "true", "1"].includes((node.attributes.same_as ?? "").trim().toLowerCase())) {
         options.push({ name: "input:same-as", value: "yes" });
       }
-      patterns.push(node.name === "property"
+      const relationship: SparqlPattern = node.name === "property"
         ? { kind: "triple", subject, predicate, object: related, ...(options.length ? { options } : {}) }
-        : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) });
+        : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) };
+      if ((node.attributes.exclude ?? "").trim().toLowerCase() === "yes") {
+        // Excluded relationships must not bind the related node or apply
+        // nested constraints to a node that is intentionally absent.
+        patterns.push({ kind: "not-exists", patterns: [relationship] });
+        continue;
+      }
+      patterns.push(relationship);
       compileConstraints(node.children, related, patterns, errors, state);
     } else if (node.name === "class") {
       const classIri = iri(node.attributes.iri ?? "");
       if (!classIri) errors.push("The FCT <class> node has a missing or invalid IRI.");
       else {
         const inference = node.attributes.inference?.trim();
-        patterns.push({ kind: "triple", subject, predicate: iriTerm(RDF_TYPE), object: classIri, ...(inference ? { options: [{ name: "input:inference", value: inference }] } : {}) });
+        const classPattern: SparqlPattern = { kind: "triple", subject, predicate: iriTerm(RDF_TYPE), object: classIri, ...(inference ? { options: [{ name: "input:inference", value: inference }] } : {}) };
+        if ((node.attributes.exclude ?? "").trim().toLowerCase() === "yes") {
+          patterns.push({ kind: "not-exists", patterns: [classPattern] });
+        } else {
+          patterns.push(classPattern);
+        }
       }
       compileConstraints(node.children, subject, patterns, errors, state);
     } else if (node.name === "value") {

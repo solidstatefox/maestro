@@ -6,7 +6,7 @@ A web-based dashboard for exploring RDF data through Virtuoso's Faceted Browser 
 
 - [Node.js](https://nodejs.org/) (LTS recommended)
 - npm
-- One or more accessible Virtuoso FCT endpoints
+- One or more accessible SPARQL endpoints
 
 ## Getting Started
 

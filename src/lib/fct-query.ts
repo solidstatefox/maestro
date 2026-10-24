@@ -118,7 +118,7 @@ function fctValueKey(value: FctValueInput): string {
   ]);
 }
 
-function createValueNode(id: string, value: FctValueInput, defaultDatatype?: string): FctQueryNode {
+function addValue(id: string, value: FctValueInput, defaultDatatype?: string): FctQueryNode {
   const normalized = normalizeFctValue(value);
   return {
     id,
@@ -289,10 +289,27 @@ function createQueryStore(initialTree?: FctQueryTree) {
   /** Replace the authoritative query with a validated snapshot, e.g. one restored from a share URL. */
   function replaceTree(tree: FctQueryTree) {
     if (!isValidQueryTree(tree)) throw new TypeError("Invalid FCT query tree");
+    const clonedTree = cloneQueryTree(tree);
+    const rootUriValues = clonedTree.children.filter(
+      (node) => node.name === "value" && node.attributes.datatype === "uri",
+    );
     state = {
-      tree: cloneQueryTree(tree),
+      tree: clonedTree,
       revision: state.revision + 1,
     };
+
+    // Old shared URLs may contain duplicate or empty fixed-subject values.
+    // Reconcile them through the same setValue API used by live edits.
+    if (rootUriValues.length) {
+      const selected = rootUriValues.find((node) => node.id === "query-uri-value" && node.text?.trim())
+        ?? rootUriValues.find((node) => node.text?.trim());
+      setValue(
+        null,
+        selected?.text?.trim() ? [{ text: selected.text, datatype: "uri" }] : [],
+        { replaceExisting: true, idPrefix: "query-uri-value" },
+      );
+      return;
+    }
     notify();
   }
 
@@ -311,7 +328,8 @@ function createQueryStore(initialTree?: FctQueryTree) {
   function setNodeAttribute(nodeId: string, name: string, value: string | null) {
     if (!name.trim()) return;
     updateTree((tree) => {
-      if (!findNodeInTree(tree, nodeId)) return tree;
+      const target = findNodeInTree(tree, nodeId);
+      if (!target || target.name === "value") return tree;
       return {
         ...tree,
         children: updateNodeRecursively(tree.children, nodeId, (node) => {
@@ -325,18 +343,21 @@ function createQueryStore(initialTree?: FctQueryTree) {
   }
 
   function setNodeText(nodeId: string, text: string | undefined) {
-    updateTree((tree) => findNodeInTree(tree, nodeId)
-      ? { ...tree, children: updateNodeRecursively(tree.children, nodeId, (node) => ({ ...node, text })) }
-      : tree);
+    updateTree((tree) => {
+      const target = findNodeInTree(tree, nodeId);
+      if (!target || target.name === "value") return tree;
+      return { ...tree, children: updateNodeRecursively(tree.children, nodeId, (node) => ({ ...node, text })) };
+    });
   }
 
   function insertNode(parentId: string | null, node: FctQueryNode, index?: number) {
+    // Value nodes must be created through setValue so existence and scope are
+    // resolved by one API instead of by each caller.
+    if (node.name === "value") return;
     updateTree((tree) => {
       if (parentId && !findNodeInTree(tree, parentId)) return tree;
       const insert = (children: FctQueryNode[]) => {
-        const next = node.name === "value"
-          ? children.filter((child) => child.name !== "value")
-          : [...children];
+        const next = [...children];
         const at = index === undefined ? next.length : Math.max(0, Math.min(next.length, Math.floor(index)));
         const clone = (item: FctQueryNode): FctQueryNode => ({
           ...item,
@@ -350,9 +371,84 @@ function createQueryStore(initialTree?: FctQueryTree) {
     });
   }
 
+  /**
+   * Set RDF value bindings in one exact scope. This is the only API operation
+   * that creates value nodes; callers choose whether to replace the scope's
+   * current bindings or merge distinct bindings into them.
+   */
+  function setValue(
+    parentId: string | null,
+    valuesInput: FctValueInput[],
+    options: { replaceExisting?: boolean; idPrefix?: string } = {},
+  ) {
+    const idPrefix = options.idPrefix ?? "value";
+    // A query-root value is the fixed subject, so the root scope can contain
+    // at most one binding. For batch calls, the final value is the requested
+    // state; property/property-of scopes may legitimately contain many values.
+    const inputValues = parentId === null ? valuesInput.slice(-1) : valuesInput;
+    const replaceExisting = parentId === null || options.replaceExisting === true;
+    const uniqueValues = new Map<string, FctValueInput>();
+    for (const value of inputValues) {
+      const normalized = normalizeFctValue(value);
+      if (!normalized.text.trim()) continue;
+      uniqueValues.set(fctValueKey(value), value);
+    }
+
+    updateTree((tree) => {
+      const parent = parentId === null ? null : findNodeInTree(tree, parentId);
+      if (parentId !== null && !parent) return tree;
+      const currentChildren = parent ? parent.children : tree.children;
+      const existingValues = currentChildren.filter((node) => node.name === "value");
+      const retainedValues = replaceExisting
+        ? []
+        : existingValues.filter((node) => {
+            const key = fctValueKey({
+              text: node.text ?? "",
+              datatype: node.attributes.datatype,
+              lang: node.attributes["xml:lang"],
+              op: node.attributes.op,
+              attributes: Object.fromEntries(Object.entries(node.attributes).filter(([name]) =>
+                !["datatype", "xml:lang", "op"].includes(name))),
+            });
+            return !uniqueValues.has(key);
+          });
+      const nextValues = [
+        ...retainedValues,
+        ...[...uniqueValues.entries()]
+          .filter(([key]) => replaceExisting || !existingValues.some((node) =>
+            fctValueKey({
+              text: node.text ?? "",
+              datatype: node.attributes.datatype,
+              lang: node.attributes["xml:lang"],
+              op: node.attributes.op,
+              attributes: Object.fromEntries(Object.entries(node.attributes).filter(([name]) =>
+                !["datatype", "xml:lang", "op"].includes(name))),
+            }) === key,
+          ))
+          .map(([key, value]) => addValue(
+            (idPrefix === "query-uri-value" ? idPrefix : `${idPrefix}-${encodeURIComponent(key)}`),
+            value,
+            typeof value === "string" ? "uri" : undefined,
+          )),
+      ];
+      const children = [
+        ...currentChildren.filter((node) => node.name !== "value"),
+        ...nextValues,
+      ];
+      if (parent) {
+        return {
+          ...tree,
+          children: replaceNode(tree.children, parent.id, { ...parent, children }),
+        };
+      }
+      return { ...tree, children };
+    });
+  }
+
   function replaceQueryNode(nodeId: string, replacement: FctQueryNode) {
     updateTree((tree) => {
-      if (!findNodeInTree(tree, nodeId)) return tree;
+      const target = findNodeInTree(tree, nodeId);
+      if (!target || target.name === "value" || replacement.name === "value") return tree;
       const clone = (node: FctQueryNode): FctQueryNode => ({
         ...node,
         id: node.id,
@@ -363,10 +459,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
       function replace(nodes: FctQueryNode[]): FctQueryNode[] {
         const target = nodes.find((node) => node.id === nodeId);
         if (target) {
-          const siblings = stableReplacement.name === "value"
-            ? nodes.filter((node) => node.name !== "value" || node.id === nodeId)
-            : nodes;
-          return siblings.map((node) => node.id === nodeId ? stableReplacement : node);
+          return nodes.map((node) => node.id === nodeId ? stableReplacement : node);
         }
         return nodes.map((node) => ({ ...node, children: replace(node.children) }));
       }
@@ -624,27 +717,11 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
   function setPropertyValues(parentId: string | null, uri: string, valuesInput: FctValueInput[]) {
     const normalizedUri = uri.trim();
     if (!normalizedUri) return;
-    const uniqueValues = new Map<string, FctValueInput>();
-    for (const value of valuesInput) {
-      const normalized = normalizeFctValue(value);
-      if (!normalized.text.trim()) continue;
-      uniqueValues.set(fctValueKey(value), value);
-    }
-    updateTree((tree) => {
-      const target = findScopedProperty(tree, parentId, normalizedUri);
-      if (!target) return tree;
-      const valueNodes = [...uniqueValues.values()].map((value) => createValueNode(
-        `property-value-${encodeURIComponent(normalizedUri)}-${encodeURIComponent(fctValueKey(value))}`,
-        value,
-        typeof value === "string" ? "uri" : undefined,
-      ));
-      return {
-        ...tree,
-        children: replaceNode(tree.children, target.id, {
-          ...target,
-          children: [...target.children.filter((node) => node.name !== "value"), ...valueNodes],
-        }),
-      };
+    const property = findScopedProperty(state.tree, parentId, normalizedUri);
+    if (!property) return;
+    setValue(property.id, valuesInput, {
+      replaceExisting: true,
+      idPrefix: `property-value-${encodeURIComponent(normalizedUri)}`,
     });
   }
 
@@ -652,45 +729,27 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     const normalizedUri = uri.trim();
     const normalizedValue = normalizeFctValue(value);
     if (!normalizedUri || !normalizedValue.text.trim()) return;
+    const property = findScopedProperty(state.tree, parentId, normalizedUri);
+    if (!property) return;
 
-    // Read and write against the same current tree. This avoids a stale read
-    // between deriving the existing bindings and applying the checkbox toggle.
-    updateTree((tree) => {
-      const property = findScopedProperty(tree, parentId, normalizedUri);
-      if (!property) return tree;
-
-      const values: FctValueInput[] = property.children
-        .filter((node) => node.name === "value" && Boolean(node.text))
-        .map((node) => ({
-          text: node.text ?? "",
-          datatype: node.attributes.datatype ?? (node.attributes["xml:lang"] ? undefined : "string"),
-          lang: node.attributes["xml:lang"],
-          op: node.attributes.op,
-          attributes: Object.fromEntries(Object.entries(node.attributes).filter(([name]) =>
-            !["datatype", "xml:lang", "op"].includes(name))),
-        }));
-      const currentKey = fctValueKey(value);
-      const existing = values.some((item) => fctValueKey(item) === currentKey);
-      const nextValues = checked
-        ? existing ? values : [...values, value]
-        : values.filter((item) => fctValueKey(item) !== currentKey);
-      const uniqueValues = new Map<string, FctValueInput>();
-      for (const item of nextValues) {
-        const normalized = normalizeFctValue(item);
-        if (normalized.text.trim()) uniqueValues.set(fctValueKey(item), item);
-      }
-      const valueNodes = [...uniqueValues.values()].map((item) => createValueNode(
-        `property-value-${encodeURIComponent(normalizedUri)}-${encodeURIComponent(fctValueKey(item))}`,
-        item,
-        typeof item === "string" ? "uri" : undefined,
-      ));
-      return {
-        ...tree,
-        children: replaceNode(tree.children, property.id, {
-          ...property,
-          children: [...property.children.filter((node) => node.name !== "value"), ...valueNodes],
-        }),
-      };
+    const values: FctValueInput[] = property.children
+      .filter((node) => node.name === "value" && Boolean(node.text))
+      .map((node) => ({
+        text: node.text ?? "",
+        datatype: node.attributes.datatype ?? (node.attributes["xml:lang"] ? undefined : "string"),
+        lang: node.attributes["xml:lang"],
+        op: node.attributes.op,
+        attributes: Object.fromEntries(Object.entries(node.attributes).filter(([name]) =>
+          !["datatype", "xml:lang", "op"].includes(name))),
+      }));
+    const currentKey = fctValueKey(value);
+    const existing = values.some((item) => fctValueKey(item) === currentKey);
+    const nextValues = checked
+      ? existing ? values : [...values, value]
+      : values.filter((item) => fctValueKey(item) !== currentKey);
+    setValue(property.id, nextValues, {
+      replaceExisting: true,
+      idPrefix: `property-value-${encodeURIComponent(normalizedUri)}`,
     });
   }
 
@@ -1031,59 +1090,56 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     const normalizedUri = uri.trim();
     const normalizedValue = normalizeFctValue(value);
     if (!normalizedUri || !normalizedValue.text.trim()) return;
-    updateTree((tree) => {
-      function findViewParent(nodes: FctQueryNode[]): { parentId: string | null; children: FctQueryNode[] } | null {
-        for (const node of nodes) {
-          if (node.children.some((child) => child.id === "query-view")) return { parentId: node.id, children: node.children };
-          const nested = findViewParent(node.children);
-          if (nested) return nested;
-        }
-        if (nodes.some((node) => node.id === "query-view")) return { parentId: null, children: nodes };
-        return null;
+
+    function findViewParent(nodes: FctQueryNode[]): { parentId: string | null; children: FctQueryNode[] } | null {
+      for (const node of nodes) {
+        if (node.children.some((child) => child.id === "query-view")) return { parentId: node.id, children: node.children };
+        const nested = findViewParent(node.children);
+        if (nested) return nested;
       }
-      const scope = findViewParent(tree.children);
-      if (!scope) return tree;
-      const target = scope.children.find((node) => node.name === "property-of" && node.id.startsWith("role-filter-") && node.attributes.iri === normalizedUri);
-      let targetId = target?.id;
-      if (!targetId) {
-        function findAncestorRole(nodes: FctQueryNode[]): FctQueryNode | undefined {
-          for (const node of nodes) {
-            const containsView = (candidate: FctQueryNode): boolean => candidate.id === "query-view" || candidate.children.some(containsView);
-            if (node.name === "property-of" && node.attributes.iri === normalizedUri && containsView(node)) return node;
-            const nested = findAncestorRole(node.children);
-            if (nested) return nested;
-          }
-          return undefined;
-        }
-        targetId = findAncestorRole(tree.children)?.id;
+      if (nodes.some((node) => node.id === "query-view")) return { parentId: null, children: nodes };
+      return null;
+    }
+    const tree = state.tree;
+    const scope = findViewParent(tree.children);
+    if (!scope) return;
+    const target = scope.children.find((node) =>
+      node.name === "property-of" && node.id.startsWith("role-filter-") &&
+      node.attributes.iri === normalizedUri,
+    );
+    const findAncestorRole = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
+      for (const node of nodes) {
+        const containsView = (candidate: FctQueryNode): boolean =>
+          candidate.id === "query-view" || candidate.children.some(containsView);
+        if (node.name === "property-of" && node.attributes.iri === normalizedUri && containsView(node)) return node;
+        const nested = findAncestorRole(node.children);
+        if (nested) return nested;
       }
-      if (!targetId) return tree;
-      function updateTarget(nodes: FctQueryNode[]): FctQueryNode[] {
-        return nodes.map((node) => {
-          if (node.id !== targetId) return { ...node, children: updateTarget(node.children) };
-          const existingValues = node.children.filter((child) => child.name === "value");
-          const keyForNode = (child: FctQueryNode) => fctValueKey({
-            text: child.text ?? "",
-            datatype: child.attributes.datatype,
-            lang: child.attributes["xml:lang"],
-            op: child.attributes.op,
-            attributes: Object.fromEntries(Object.entries(child.attributes).filter(([name]) =>
-              !["datatype", "xml:lang", "op"].includes(name))),
-          });
-          const wantedKey = fctValueKey(value);
-          const nextValues = checked
-            ? existingValues.some((child) => keyForNode(child) === wantedKey)
-              ? existingValues
-              : [...existingValues, createValueNode(
-                  `role-value-${encodeURIComponent(normalizedUri)}-${encodeURIComponent(wantedKey)}`,
-                  value,
-                  typeof value === "string" ? "uri" : undefined,
-                )]
-            : existingValues.filter((child) => keyForNode(child) !== wantedKey);
-          return { ...node, children: [...node.children.filter((child) => child.name !== "value"), ...nextValues] };
-        });
-      }
-      return { ...tree, children: updateTarget(tree.children) };
+      return undefined;
+    };
+    const targetId = target?.id ?? findAncestorRole(tree.children)?.id;
+    if (!targetId) return;
+    const targetNode = findNodeInTree(tree, targetId);
+    if (!targetNode) return;
+
+    const values: FctValueInput[] = targetNode.children
+      .filter((node) => node.name === "value" && Boolean(node.text))
+      .map((node) => ({
+        text: node.text ?? "",
+        datatype: node.attributes.datatype,
+        lang: node.attributes["xml:lang"],
+        op: node.attributes.op,
+        attributes: Object.fromEntries(Object.entries(node.attributes).filter(([name]) =>
+          !["datatype", "xml:lang", "op"].includes(name))),
+      }));
+    const wantedKey = fctValueKey(value);
+    const existing = values.some((item) => fctValueKey(item) === wantedKey);
+    const nextValues = checked
+      ? existing ? values : [...values, value]
+      : values.filter((item) => fctValueKey(item) !== wantedKey);
+    setValue(targetId, nextValues, {
+      replaceExisting: true,
+      idPrefix: `role-value-${encodeURIComponent(normalizedUri)}`,
     });
   }
 
@@ -1188,6 +1244,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     setNodeAttribute,
     setNodeText,
     insertNode,
+    setValue,
     replaceQueryNode,
     removeQueryNode,
     getPropertiesAtNode,
@@ -1257,6 +1314,9 @@ export const fctQueryTreeApi = {
   },
   setNodeText(tree: FctQueryTree | undefined, nodeId: string, text: string | undefined): FctQueryTree {
     return applyTreeOperation(tree, (store) => store.setNodeText(nodeId, text));
+  },
+  setValue(tree: FctQueryTree | undefined, parentId: string | null, values: FctValueInput[], options?: { replaceExisting?: boolean; idPrefix?: string }): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setValue(parentId, values, options));
   },
   insertNode(tree: FctQueryTree | undefined, parentId: string | null, node: FctQueryNode, index?: number): FctQueryTree {
     return applyTreeOperation(tree, (store) => store.insertNode(parentId, node, index));
@@ -1344,6 +1404,7 @@ export function useFctQuery() {
     setNodeAttribute: fctQueryStore.setNodeAttribute,
     setNodeText: fctQueryStore.setNodeText,
     insertNode: fctQueryStore.insertNode,
+    setValue: fctQueryStore.setValue,
     replaceNode: fctQueryStore.replaceQueryNode,
     removeNode: fctQueryStore.removeQueryNode,
     getPropertiesAtNode: fctQueryStore.getPropertiesAtNode,

@@ -18,7 +18,7 @@ import {
 import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Bot, Check, ChevronDown, CircleSlash, Code2, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, Tag, Tags, Trash2, UsersRound, X } from "lucide-react";
+import { Bot, Check, ChevronDown, CircleSlash, Code2, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash2, UsersRound, X } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -30,7 +30,7 @@ import xmlFormat from "xml-formatter";
 import hljs from "highlight.js/lib/core";
 import xmlLanguage from "highlight.js/lib/languages/xml";
 import sqlLanguage from "highlight.js/lib/languages/sql";
-import { useFctQuery, serializeFctQuery, createPropertyWidgetQuery, createGroupMemberQuery, createGroupValuesQuery, createDistinctCountQuery, setQueryViewAttributes } from "@/lib/fct-query-api";
+import { useFctQuery, fctQueryTreeApi, serializeFctQuery, createPropertyWidgetQuery, createGroupMemberQuery, createGroupValuesQuery, createDistinctCountQuery, setQueryViewAttributes } from "@/lib/fct-query-api";
 import type { FctQueryNode, FctQueryTree, DistinctCountKind } from "@/lib/fct-query-api";
 
 hljs.registerLanguage("xml", xmlLanguage);
@@ -1006,8 +1006,10 @@ type ShareableUiState = {
   graphText?: string;
   rdfSourceUrl?: string;
   rdfTargetGraph?: string;
-  /** Last search term retained while the signal pane is in Clear Terms mode. */
+  /** Last text-search term retained while another signal is active. */
   savedSearchDraft?: string;
+  /** Last fixed-subject URI retained independently from the text-search term. */
+  savedUriDraft?: string;
   /** Selected name/label predicates, retained even while another signal is active. */
   selectedNamePropertyUris?: string[];
   /** Backward-compatible single-predicate state from older shared URLs. */
@@ -1232,10 +1234,20 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const searchNode = queryTree.children.find(
     (node) => node.name === "text" && node.id === "query-text",
   );
-  const [searchDraft, setSearchDraft] = useState(searchNode?.text ?? "");
-  // Preserve the last entered term while Clear Terms temporarily removes it
-  // from the query and blanks the visible input.
+  // Treat any root-level URI value as the fixed-subject constraint, including
+  // legacy/duplicate nodes that do not have Maestro's canonical node ID.
+  const rootUriValues = queryTree.children.filter(
+    (node) => node.name === "value" && node.attributes.datatype === "uri",
+  );
+  const uriNode = rootUriValues.find((node) => node.id === "query-uri-value")
+    ?? rootUriValues.find((node) => Boolean(node.text?.trim()))
+    ?? rootUriValues[0];
+  const activeSearchNode = uriNode ?? searchNode;
+  const [searchDraft, setSearchDraft] = useState(activeSearchNode?.text ?? "");
+  // Keep text search and fixed-subject URI drafts independently so switching
+  // signals never overwrites the term belonging to the other mode.
   const [savedSearchDraft, setSavedSearchDraft] = useState(searchNode?.text ?? "");
+  const [savedUriDraft, setSavedUriDraft] = useState(uriNode?.text ?? "");
   const [selectedNamePropertyUris, setSelectedNamePropertyUris] = useState<string[]>(() => {
     const configured = (searchNode?.attributes.property ?? RDFS_LABEL_URI).trim();
     const parsed = configured.split(/[\s,]+/).filter(Boolean);
@@ -1243,39 +1255,81 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   });
   const search = searchDraft;
 
-  // Follow query edits from elsewhere while keeping the saved term through Clear Terms.
+  // Follow query edits from elsewhere while retaining independent text and URI drafts.
   useEffect(() => {
-    if (searchNode) {
-      const nextText = searchNode.text ?? "";
-      setSearchDraft(nextText);
-      setSavedSearchDraft(nextText);
-    }
-  }, [searchNode?.id, searchNode?.text]);
-  // Three mutually exclusive query states: a named property, any property, or no <text> constraint.
-  const textSearchMode: "name" | "all" | "clear" = !searchNode
-    ? "clear"
-    : searchNode.attributes.property
-      ? "name"
-      : "all";
+    if (!activeSearchNode) return;
+    const nextText = activeSearchNode.text ?? "";
+    setSearchDraft(nextText);
+    if (activeSearchNode.name === "value" && activeSearchNode.attributes.datatype === "uri") setSavedUriDraft(nextText);
+    else if (activeSearchNode.id === "query-text") setSavedSearchDraft(nextText);
+  }, [activeSearchNode?.id, activeSearchNode?.text]);
+  // The URI signal fixes the query subject; other signals search text values or clear the term.
+  const textSearchMode: "uri" | "name" | "all" | "clear" = uriNode
+    ? "uri"
+    : !searchNode
+      ? "clear"
+      : searchNode.attributes.property
+        ? "name"
+        : "all";
   const selectedNamePropertyLabel = selectedNamePropertyUris
     .map((uri) => TEXT_SEARCH_NAME_PROPERTIES.find((property) => property.uri === uri)?.label ?? toLabel(uri))
     .join(", ") || "no properties";
   const [signalPickerExpanded, setSignalPickerExpanded] = useState(false);
   const signalOptions = [
+    { mode: "uri" as const, Icon: SignalZero, label: "URI — use the entered URI as the fixed subject" },
     { mode: "name" as const, Icon: SignalLow, label: `Name — search using ${selectedNamePropertyLabel}` },
     { mode: "all" as const, Icon: SignalMedium, label: "All fields — search text across all properties" },
     { mode: "clear" as const, Icon: SignalHigh, label: "Clear Terms — remove the text constraint from the query" },
   ];
 
-  function setTextSearchMode(mode: "name" | "all" | "clear", propertyUris = selectedNamePropertyUris) {
+  function setMainViewType(node: FctQueryNode, type: string): FctQueryNode {
+    return {
+      ...node,
+      attributes: node.id === "query-view"
+        ? { ...node.attributes, type, offset: "0" }
+        : node.attributes,
+      children: node.children.map((child) => setMainViewType(child, type)),
+    };
+  }
+
+
+  function setTextSearchMode(mode: "uri" | "name" | "all" | "clear", propertyUris = selectedNamePropertyUris) {
     if (mode === "name") setSelectedNamePropertyUris(propertyUris);
     if (mode === "clear") {
-      // Save the active term before removing it, then blank only the visible field.
-      if (searchNode) {
-        setSavedSearchDraft(searchNode.text ?? searchDraft);
-        replaceQueryTree({ ...queryTree, children: queryTree.children.filter((node) => node.id !== "query-text") });
-      }
+      // Both drafts are retained independently; clear only the active query constraint.
+      if (uriNode) setSavedUriDraft(uriNode.text ?? searchDraft);
+      else if (searchNode) setSavedSearchDraft(searchNode.text ?? searchDraft);
+      const withoutSearch = {
+        ...queryTree,
+        children: queryTree.children
+          .filter((node) => node.id !== "query-text")
+          .map((node) => setMainViewType(node, "text")),
+      };
+      replaceQueryTree(fctQueryTreeApi.setValue(withoutSearch, null, [], {
+        replaceExisting: true,
+        idPrefix: "query-uri-value",
+      }));
       setSearchDraft("");
+      setSearchPipelineRun((current) => current + 1);
+      return;
+    }
+
+    if (mode === "uri") {
+      const restoredUri = uriNode?.text ?? savedUriDraft;
+      setSearchDraft(restoredUri);
+      setSavedUriDraft(restoredUri);
+      const nonSearchTree = {
+        ...queryTree,
+        children: queryTree.children
+          .filter((node) => node.name !== "text")
+          .map((node) => setMainViewType(node, "properties")),
+      };
+      replaceQueryTree(fctQueryTreeApi.setValue(
+        nonSearchTree,
+        null,
+        restoredUri.trim() ? [{ text: restoredUri, datatype: "uri" }] : [],
+        { replaceExisting: true, idPrefix: "query-uri-value" },
+      ));
       setSearchPipelineRun((current) => current + 1);
       return;
     }
@@ -1283,10 +1337,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     const restoredText = searchNode?.text ?? savedSearchDraft;
     setSearchDraft(restoredText);
     setSavedSearchDraft(restoredText);
+
     const textNode: FctQueryNode = searchNode
       ? {
           ...searchNode,
           attributes: mode === "name" ? { ...searchNode.attributes, property: propertyUris.join(" ") } : Object.fromEntries(Object.entries(searchNode.attributes).filter(([key]) => key !== "property")),
+          text: restoredText,
         }
       : {
           id: "query-text",
@@ -1295,21 +1351,43 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
           text: restoredText,
           children: [],
         };
-    const children = searchNode
-      ? queryTree.children.map((node) => node.id === "query-text" ? textNode : node)
-      : [textNode, ...queryTree.children];
-    replaceQueryTree({ ...queryTree, children });
+    const withoutSearch = {
+      ...queryTree,
+      children: queryTree.children
+        .filter((node) => node.id !== "query-text")
+        .map((node) => setMainViewType(node, "text")),
+    };
+    const withoutUri = fctQueryTreeApi.setValue(withoutSearch, null, [], {
+      replaceExisting: true,
+      idPrefix: "query-uri-value",
+    });
+    replaceQueryTree({ ...withoutUri, children: [textNode, ...withoutUri.children] });
     setSearchPipelineRun((current) => current + 1);
   }
 
   function updateSearchText(value: string) {
     setSearchDraft(value);
-    setSavedSearchDraft(value);
+    if (textSearchMode === "uri") {
+      setSavedUriDraft(value);
+      const nonSearchTree = {
+        ...queryTree,
+        children: queryTree.children.filter((node) => node.name !== "text"),
+      };
+      replaceQueryTree(fctQueryTreeApi.setValue(
+        nonSearchTree,
+        null,
+        value.trim() ? [{ text: value, datatype: "uri" }] : [],
+        { replaceExisting: true, idPrefix: "query-uri-value" },
+      ));
+      return;
+    }
     if (searchNode) {
+      setSavedSearchDraft(value);
       setSearch(value);
       return;
     }
     // Typing after Clear Terms starts a fresh, restrictive name search.
+    setSavedSearchDraft(value);
     replaceQueryTree({
       ...queryTree,
       children: [
@@ -1825,7 +1903,11 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       if (restoredNameProperties?.length) setSelectedNamePropertyUris(restoredNameProperties);
       if (typeof restored.savedSearchDraft === "string") {
         setSavedSearchDraft(restored.savedSearchDraft);
-        if (!restoredQueryFromUrl) setSearchDraft(restored.savedSearchDraft);
+        if (!restoredQueryFromUrl && !restored.savedUriDraft) setSearchDraft(restored.savedSearchDraft);
+      }
+      if (typeof restored.savedUriDraft === "string") {
+        setSavedUriDraft(restored.savedUriDraft);
+        if (!restoredQueryFromUrl) setSearchDraft(restored.savedUriDraft);
       }
       if (!restoredQueryFromUrl && typeof restored.graphText === "string") {
         restoredGraphTextRef.current = restored.graphText;
@@ -1870,12 +1952,13 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       rdfSourceUrl,
       rdfTargetGraph,
       savedSearchDraft,
+      savedUriDraft,
       selectedNamePropertyUris,
     };
     params.set("state", JSON.stringify(state));
     const nextUrl = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", nextUrl);
-  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, selectedNamePropertyUris]);
+  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris]);
 
   // The graph text box may contain an unapplied draft distinct from the query's graph binding.
   // Restore that draft after the query-graph synchronization effect has run once.
@@ -5488,10 +5571,10 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                           })}
                         </DropdownMenuContent>
                     </DropdownMenu>
-                    <input autoFocus value={search} onChange={(event) => updateSearchText(event.target.value)} placeholder="Enter keywords" aria-label="Search results" className="min-w-0 flex-1 outline-none" />
+                    <input autoFocus value={search} onChange={(event) => updateSearchText(event.target.value)} placeholder={textSearchMode === "uri" ? "Enter URI" : "Enter keywords"} aria-label="Search results" className="min-w-0 flex-1 outline-none" />
                     <div
                       aria-label="Search mode"
-                      className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none ${signalPickerExpanded ? "w-[7.5rem]" : "w-10"}`}
+                      className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none ${signalPickerExpanded ? "w-[10rem]" : "w-10"}`}
                       onMouseEnter={() => setSignalPickerExpanded(true)}
                       onMouseLeave={() => setSignalPickerExpanded(false)}
                       onFocusCapture={() => setSignalPickerExpanded(true)}
@@ -5501,7 +5584,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                         }
                       }}
                     >
-                      <div className="inline-flex w-[7.5rem] shrink-0 overflow-hidden">
+                      <div className="inline-flex w-[10rem] shrink-0 overflow-hidden">
                         {(signalPickerExpanded
                           ? signalOptions
                           : [...signalOptions].sort((left, right) =>

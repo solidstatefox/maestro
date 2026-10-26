@@ -3,42 +3,12 @@ import { NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
 import { compileFctXmlToSparql, type SparqlJsonResults, type SparqlBindingTerm } from "@/lib/fct-sparql-translator";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
+import { DATASERVERS_GRAPH, getConfiguredFctEndpoints } from "@/lib/personal-sparql";
 
 type SparqlEndpoint = { id: string; label: string; url: string; group: string };
 
-function slugify(value: string) {
-  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function getConfiguredEndpoints(): SparqlEndpoint[] {
-  const configured = (process.env.FCT_ENDPOINTS ?? "")
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const separator = entry.indexOf("=");
-      if (separator <= 0) return null;
-      const left = entry.slice(0, separator).trim();
-      const url = entry.slice(separator + 1).trim();
-      if (!left || !/^https?:\/\//i.test(url)) return null;
-      const groupSeparator = left.indexOf("::");
-      const group = groupSeparator >= 0 ? left.slice(0, groupSeparator).trim() : "Endpoints";
-      const label = (groupSeparator >= 0 ? left.slice(groupSeparator + 2) : left).trim();
-      if (!label) return null;
-      return { id: groupSeparator >= 0 ? slugify(`${group}-${label}`) : slugify(label), group: group || "Endpoints", label, url };
-    })
-    .filter((endpoint): endpoint is SparqlEndpoint => Boolean(endpoint));
-
-  const legacyUrl = (process.env.FCT_ENDPOINT ?? "").trim();
-  if (legacyUrl && !configured.some((endpoint) => endpoint.url === legacyUrl)) {
-    configured.unshift({ id: slugify("Current VOS"), group: "Endpoints", label: "Current VOS", url: legacyUrl });
-  }
-  const seen = new Set<string>();
-  return configured.filter((endpoint) => {
-    if (seen.has(endpoint.id)) return false;
-    seen.add(endpoint.id);
-    return true;
-  });
+async function getConfiguredEndpoints(): Promise<SparqlEndpoint[]> {
+  return getConfiguredFctEndpoints();
 }
 
 function getSelectedEndpointId(request: Request, endpoints: SparqlEndpoint[]) {
@@ -286,7 +256,11 @@ function parseDescribeRdfXml(source: string): Record<string, SparqlBindingTerm>[
 
 export async function GET(request: Request) {
   logProxyCaller(request, "fct.GET");
-  const endpoints = getConfiguredEndpoints();
+  let endpoints: SparqlEndpoint[];
+  try { endpoints = await getConfiguredEndpoints(); }
+  catch (error) {
+    return NextResponse.json({ error: `Could not load Datasites from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}` }, { status: 503 });
+  }
   const url = new URL(request.url);
   const cookie = request.headers.get("cookie") ?? "";
   const cookieMatch = cookie.match(/(?:^|;\s*)fct_endpoint=([^;]+)/);
@@ -342,7 +316,11 @@ export async function POST(request: Request) {
     const body: Record<string, unknown> | null = contentType.includes("xml")
       ? { queryXml: requestBodyText }
       : (() => { try { return JSON.parse(requestBodyText) as Record<string, unknown>; } catch { return null; } })();
-    const endpoints = getConfiguredEndpoints();
+    let endpoints: SparqlEndpoint[];
+    try { endpoints = await getConfiguredEndpoints(); }
+    catch (error) {
+      return fctError(`Could not load Datasites from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}`, 503);
+    }
 
     if (typeof body?.selectEndpointId === "string") {
       const selected = endpoints.find((endpoint) => endpoint.id === body.selectEndpointId);
@@ -354,7 +332,7 @@ export async function POST(request: Request) {
 
     const endpointId = getSelectedEndpointId(request, endpoints);
     const endpoint = endpoints.find((item) => item.id === endpointId);
-    if (!endpoint) return fctError("No SPARQL endpoints are configured. Set FCT_ENDPOINTS to the exact SPARQL endpoint URLs.", 500);
+    if (!endpoint) return fctError(`No Datasites are configured in the personal SPARQL store graph ${DATASERVERS_GRAPH}.`, 500);
 
     let queryXml = typeof body?.queryXml === "string" ? body.queryXml.trim() : "";
     if (!queryXml && typeof body?.text === "string") {

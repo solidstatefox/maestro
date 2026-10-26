@@ -1,3 +1,4 @@
+import { getOntologyGraph } from "@/lib/personal-sparql";
 import { discoverAndIngestOntology } from "./ingest";
 import { NextResponse } from "next/server";
 
@@ -129,7 +130,7 @@ function sparqlTerm(value: unknown): string | undefined {
 async function queryPersonalStore(uris: string[]): Promise<ClassMetadata[]> {
   const endpoint = personalSparqlEndpoint();
   const values = uris.map((uri) => `<${uri.replace(/[<>\\"{}|^`\s]/g, "")}>`).join(" ");
-  const graph = (process.env.MAESTRO_ONTOLOGY_GRAPH || "urn:maestro:ontology-cache").trim().replace(/[<>\\"{}|^`\s]/g, "");
+  const graph = getOntologyGraph().replace(/[<>\\"{}|^`\s]/g, "");
   const graphIri = `<${graph}>`;
   const either = (triple: string) => `{ ${triple} } UNION { GRAPH ${graphIri} { ${triple} } }`;
   const query = `PREFIX rdfs: <${RDFS_NS}>\nPREFIX owl: <${OWL_NS}>\nSELECT DISTINCT ?class ?parent ?ontology ?ontologyLabel WHERE { VALUES ?class { ${values} } OPTIONAL { ${either("?class rdfs:subClassOf ?parent . FILTER(isIRI(?parent))")} } OPTIONAL { ${either("?class rdfs:isDefinedBy ?ontology . FILTER(isIRI(?ontology))")} } OPTIONAL { ${either("?ontology a owl:Ontology . OPTIONAL { ?ontology rdfs:label ?ontologyLabel }")} } }`;
@@ -164,7 +165,7 @@ async function queryNearestListedParents(uris: string[]): Promise<Map<string, st
   if (uris.length < 2) return parents;
   const endpoint = personalSparqlEndpoint();
   const values = uris.map((uri) => `<${uri.replace(/[<>\\"{}|^`\s]/g, "")}>`).join(" ");
-  const graph = (process.env.MAESTRO_ONTOLOGY_GRAPH || "urn:maestro:ontology-cache").trim().replace(/[<>\\"{}|^`\s]/g, "");
+  const graph = getOntologyGraph().replace(/[<>\\"{}|^`\s]/g, "");
   const graphIri = `<${graph}>`;
   const path = (start: string, end: string) => `{{ ${start} rdfs:subClassOf+ ${end} } UNION { GRAPH ${graphIri} { ${start} rdfs:subClassOf+ ${end} } }}`;
   const query = `PREFIX rdfs: <${RDFS_NS}>\nSELECT DISTINCT ?class ?candidateParent WHERE { VALUES ?class { ${values} } VALUES ?candidateParent { ${values} } FILTER(?class != ?candidateParent) ${path("?class", "?candidateParent")} FILTER NOT EXISTS { VALUES ?middle { ${values} } FILTER(?middle != ?class && ?middle != ?candidateParent) ${path("?class", "?middle")} ${path("?middle", "?candidateParent")} } }`;
@@ -190,7 +191,7 @@ async function queryNearestListedParents(uris: string[]): Promise<Map<string, st
 }
 
 export async function GET() {
-  return NextResponse.json({ endpoint: personalSparqlEndpoint(), graph: (process.env.MAESTRO_ONTOLOGY_GRAPH || "urn:maestro:ontology-cache").trim() });
+  return NextResponse.json({ endpoint: personalSparqlEndpoint(), graph: getOntologyGraph() });
 }
 
 export async function POST(request: Request) {
@@ -214,7 +215,7 @@ export async function POST(request: Request) {
         return fallback ? { ...fallback, ...item, parent: item.parent ?? fallback.parent, ontologyLabel: item.ontologyLabel ?? fallback.ontologyLabel, ontology: item.ontology !== namespaceFallback(item.uri) ? item.ontology : fallback.ontology } : item;
       });
     }
-    return NextResponse.json({ items: output, graph: (process.env.MAESTRO_ONTOLOGY_GRAPH || "urn:maestro:ontology-cache").trim() });
+    return NextResponse.json({ items: output, graph: getOntologyGraph() });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Ontology discovery failed." }, { status: 502 });
   }

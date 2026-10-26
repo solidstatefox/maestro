@@ -1,0 +1,265 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix schema: <https://schema.org/> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+# Stable readable resource identifiers:
+#   group:  gttp://ggg.maestro.ecosys/ids/dataservers/<readable-group-id>
+#   server: gttp://ggg.maestro.ecosys/ids/dataservers/<readable-group-id>#<readable-server-id>
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/registry> a schema:DataCatalog ;
+    rdfs:label "Maestro Datasites registry" .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/endpoints> a skos:Collection ;
+    rdfs:label "Endpoints" ;
+    schema:position "0"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured> a skos:Collection ;
+    rdfs:label "Featured" ;
+    schema:position "1"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> a skos:Collection ;
+    rdfs:label "Most reliable (endpoint registry)" ;
+    schema:position "2"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> a skos:Collection ;
+    rdfs:label "Government & parliaments" ;
+    schema:position "3"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities> a skos:Collection ;
+    rdfs:label "Libraries & humanities" ;
+    schema:position "4"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it> a skos:Collection ;
+    rdfs:label "Life sciences & health IT" ;
+    schema:position "5"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/endpoints#split-ds> a schema:EntryPoint ;
+    rdfs:label "Split DS" ;
+    schema:url <http://localhost:2001/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/endpoints> ;
+    schema:position "0"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#dbpedia> a schema:EntryPoint ;
+    rdfs:label "DBpedia" ;
+    schema:url <https://dbpedia.org/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/featured> ;
+    schema:position "1"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#uriburner-ub> a schema:EntryPoint ;
+    rdfs:label "URIBurner (UB)" ;
+    schema:url <https://linkeddata.uriburner.com/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/featured> ;
+    schema:position "2"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#wikidata> a schema:EntryPoint ;
+    rdfs:label "Wikidata" ;
+    schema:url <https://query.wikidata.org/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/featured> ;
+    schema:position "3"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#wikidata-openlink-instance> a schema:EntryPoint ;
+    rdfs:label "Wikidata - OpenLink instance" ;
+    schema:url <https://wikidata.demo.openlinksw.com/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/featured> ;
+    schema:position "4"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#openlink-demo-server> a schema:EntryPoint ;
+    rdfs:label "OpenLink demo server" ;
+    schema:url <https://demo.openlinksw.com/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/featured> ;
+    schema:position "5"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#openlink-vector-demo-dbpedia-search-by-meaning> a schema:EntryPoint ;
+    rdfs:label "OpenLink vector demo (DBpedia, search by meaning)" ;
+    schema:url <https://vec.demo.openlinksw.com/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/featured> ;
+    schema:position "6"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#uniprot> a schema:EntryPoint ;
+    rdfs:label "UniProt" ;
+    schema:url <https://sparql.uniprot.org/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/featured> ;
+    schema:position "7"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#eu-publications-office> a schema:EntryPoint ;
+    rdfs:label "EU Publications Office" ;
+    schema:url <https://publications.europa.eu/webapi/rdf/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/featured> ;
+    schema:position "8"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#eu-data-portal-cordis> a schema:EntryPoint ;
+    rdfs:label "EU data portal (Cordis)" ;
+    schema:url <https://data.europa.eu/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "9"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#uk-parliament> a schema:EntryPoint ;
+    rdfs:label "UK Parliament" ;
+    schema:url <https://api.parliament.uk/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "10"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#cellosaurus> a schema:EntryPoint ;
+    rdfs:label "Cellosaurus" ;
+    schema:url <https://sparql.cellosaurus.org/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "11"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#czech-government> a schema:EntryPoint ;
+    rdfs:label "Czech Government" ;
+    schema:url <https://data.gov.cz/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "12"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#idref-sudoc-authorities> a schema:EntryPoint ;
+    rdfs:label "IdRef (Sudoc authorities)" ;
+    schema:url <https://data.idref.fr/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "13"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#nakala> a schema:EntryPoint ;
+    rdfs:label "Nakala" ;
+    schema:url <https://www.nakala.fr/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "14"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#agrovoc> a schema:EntryPoint ;
+    rdfs:label "AGROVOC" ;
+    schema:url <https://agrovoc.fao.org/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "15"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#science-plus-abes> a schema:EntryPoint ;
+    rdfs:label "science plus (ABES)" ;
+    schema:url <https://scienceplus.abes.fr/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "16"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#aragon-open-data> a schema:EntryPoint ;
+    rdfs:label "Aragon Open Data" ;
+    schema:url <https://opendata.aragon.es/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "17"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#kb-national-library-of-the-netherlands> a schema:EntryPoint ;
+    rdfs:label "KB - National Library of the Netherlands" ;
+    schema:url <https://data.bibliotheken.nl/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "18"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#nerc-vocabulary-service> a schema:EntryPoint ;
+    rdfs:label "NERC Vocabulary Service" ;
+    schema:url <https://vocab.nerc.ac.uk/sparql/> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "19"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#muziekschatten> a schema:EntryPoint ;
+    rdfs:label "Muziekschatten" ;
+    schema:url <https://data.muziekschatten.nl/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+    schema:position "20"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#italian-chamber-of-deputies> a schema:EntryPoint ;
+    rdfs:label "Italian Chamber of Deputies" ;
+    schema:url <https://dati.camera.it/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "21"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#dati-gov-it-italian-open-data> a schema:EntryPoint ;
+    rdfs:label "dati.gov.it (Italian open data)" ;
+    schema:url <https://lod.dati.gov.it/sparql/> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "22"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#datos-gob-es-spanish-open-data> a schema:EntryPoint ;
+    rdfs:label "datos.gob.es (Spanish open data)" ;
+    schema:url <https://datos.gob.es/virtuoso/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "23"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#era-rinf-eu-register-of-railway-infrastructure> a schema:EntryPoint ;
+    rdfs:label "ERA RINF - EU Register of Railway Infrastructure" ;
+    schema:url <https://graph.data.era.europa.eu/repositories/rinf-plus> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "24"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#era-vocabulary-and-requirements> a schema:EntryPoint ;
+    rdfs:label "ERA vocabulary & requirements" ;
+    schema:url <https://graph.data.era.europa.eu/repositories/ERA-Onto> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "25"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#era-ocr-organisation-code-register> a schema:EntryPoint ;
+    rdfs:label "ERA OCR - Organisation Code Register" ;
+    schema:url <https://graph.data.era.europa.eu/repositories/OCR-KG> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "26"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#era-lex-eu-railway-legislation> a schema:EntryPoint ;
+    rdfs:label "ERA-Lex - EU railway legislation" ;
+    schema:url <https://graph.data.era.europa.eu/repositories/era-lex> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "27"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#fedlex-swiss-federal-law> a schema:EntryPoint ;
+    rdfs:label "Fedlex - Swiss federal law" ;
+    schema:url <https://fedlex.data.admin.ch/sparqlendpoint> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "28"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#legilux-luxembourg-legislation> a schema:EntryPoint ;
+    rdfs:label "Legilux - Luxembourg legislation" ;
+    schema:url <https://data.legilux.public.lu/sparqlendpoint> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "29"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#bcn-library-of-the-national-congress-of-chile> a schema:EntryPoint ;
+    rdfs:label "BCN - Library of the National Congress of Chile" ;
+    schema:url <https://datos.bcn.cl/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "30"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#siop-brazilian-federal-budget> a schema:EntryPoint ;
+    rdfs:label "SIOP - Brazilian federal budget" ;
+    schema:url <https://www1.siop.planejamento.gov.br/sparql/> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> ;
+    schema:position "31"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities#libris-national-library-of-sweden> a schema:EntryPoint ;
+    rdfs:label "LIBRIS - National Library of Sweden" ;
+    schema:url <https://libris.kb.se/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities> ;
+    schema:position "32"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities#data-for-humanities-abes> a schema:EntryPoint ;
+    rdfs:label "Data for Humanities (ABES)" ;
+    schema:url <https://dataforhumanities.abes.fr/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities> ;
+    schema:position "33"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it#wikipathways> a schema:EntryPoint ;
+    rdfs:label "WikiPathways" ;
+    schema:url <https://sparql.wikipathways.org/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it> ;
+    schema:position "34"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it#oma-orthology-browser> a schema:EntryPoint ;
+    rdfs:label "OMA orthology browser" ;
+    schema:url <https://sparql.omabrowser.org/sparql/> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it> ;
+    schema:position "35"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it#orthodb> a schema:EntryPoint ;
+    rdfs:label "OrthoDB" ;
+    schema:url <https://sparql.orthodb.org/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it> ;
+    schema:position "36"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it#3lgm2-ihe-integration-profiles> a schema:EntryPoint ;
+    rdfs:label "3LGM² - IHE integration profiles" ;
+    schema:url <https://www.3lgm2.de/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it> ;
+    schema:position "37"^^xsd:integer .

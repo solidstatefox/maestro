@@ -1,7 +1,8 @@
+import { getOntologyGraph } from "@/lib/personal-sparql";
 /** Bounded Linked Data discovery and RDF ingestion for the Categories hierarchy. */
 const RDFS = "http://www.w3.org/2000/01/rdf-schema#";
 const OWL = "http://www.w3.org/2002/07/owl#";
-const GRAPH = (process.env.MAESTRO_ONTOLOGY_GRAPH || "urn:maestro:ontology-cache").trim();
+const GRAPH = getOntologyGraph();
 const MAX_DOCS = 250;
 const loadedRdfSources = new Set<string>();
 
@@ -70,7 +71,7 @@ function refsFrom(text: string, contentType: string, subject: string): string[] 
 export async function discoverAndIngestOntology(uris: string[]): Promise<void> {
   const endpoint = new URL((process.env.PERSONAL_SPARQL_ENDPOINT || process.env.RDF_LOADER_ENDPOINT || "http://localhost:8890/sparql").trim());
   if (!/^https?:$/.test(endpoint.protocol)) throw new Error("Personal SPARQL endpoint must use HTTP or HTTPS.");
-  if (!/^(?:https?:\/\/|urn:)[^\s<>"{}|\\^`]+$/i.test(GRAPH)) throw new Error("MAESTRO_ONTOLOGY_GRAPH must be an absolute HTTP(S) or URN IRI.");
+  if (!/^[a-z][a-z0-9+.-]*:[^\s<>"{}|\\^`]+$/i.test(GRAPH)) throw new Error("The configured ontology graph must be an absolute IRI.");
   const seen = new Set<string>();
   let queue = uris.map((url) => ({ url, depth: 0 }));
   let loaded = 0;

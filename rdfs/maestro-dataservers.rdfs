@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:dcterms="http://purl.org/dc/terms/"
+  xmlns:schema="https://schema.org/"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#">
+  <!-- Maestro's Datasites registry reuses established RDF vocabulary terms:
+       schema:EntryPoint, schema:url, schema:position, dcterms:isPartOf,
+       skos:Collection, rdf:type, and rdfs:label. No app-specific predicates
+       are required for endpoint names, URLs, grouping, or ordering. -->
+  <rdf:Description rdf:about="https://schema.org/EntryPoint">
+    <rdfs:comment>A SPARQL endpoint listed in Maestro's Datasites registry is represented as a schema:EntryPoint.</rdfs:comment>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://www.w3.org/2004/02/skos/core#Collection">
+    <rdfs:comment>A SKOS collection groups related Datasites in the Maestro menu.</rdfs:comment>
+  </rdf:Description>
+</rdf:RDF>

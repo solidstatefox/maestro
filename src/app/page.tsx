@@ -19,7 +19,7 @@ import {
 import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, Equal, RotateCcw } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, Equal, RotateCcw, Bookmark } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -1147,6 +1147,11 @@ export default function Home() {
   const [selectedUri, setSelectedUri] = useState("");
   const [urlStateInitialized, setUrlStateInitialized] = useState(false);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
+  const [bookmarkSaveMessage, setBookmarkSaveMessage] = useState("");
+  const [bookmarkSaveError, setBookmarkSaveError] = useState(false);
+  const [queryFavorites, setQueryFavorites] = useState<{ uri: string; title: string; created: string; queryXml: string }[]>([]);
+  const [favoritesMessage, setFavoritesMessage] = useState("");
+  const [favoritesLoading, setFavoritesLoading] = useState(false);
   const [fctEndpoints, setFctEndpoints] = useState<EndpointOption[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState("");
   const [endpointStatuses, setEndpointStatuses] = useState<
@@ -4793,6 +4798,36 @@ useEffect(() => {
               type="button"
               variant="outline"
               size="icon"
+              aria-label="Save query favorite"
+              onClick={async () => {
+                const title = window.prompt("Name this query favorite", "Saved query");
+                if (title === null) return;
+                setBookmarkSaveMessage("Saving query favorite…");
+                setBookmarkSaveError(false);
+                try {
+                  const response = await fetch("/proxy/api/query-favorites", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ title: title.trim() || "Saved query", queryXml: serializeFctQuery(queryTree), shareLink: window.location.href }),
+                  });
+                  const payload = await response.json() as { error?: string };
+                  if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+                  setBookmarkSaveMessage("Query favorite saved to your personal store.");
+                } catch (error) {
+                  setBookmarkSaveError(true);
+                  setBookmarkSaveMessage(error instanceof Error ? error.message : "Could not save query favorite.");
+                }
+              }}
+            ><Bookmark aria-hidden="true" /></Button>
+          } />
+          <TooltipContent>Save query favorite</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger render={
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
               aria-label="Copy share link"
               onClick={async () => {
                 try {
@@ -4822,6 +4857,31 @@ useEffect(() => {
               <p className="mt-1 break-all text-xs text-muted-foreground">Using personal: <span className="font-medium text-foreground">{personalSparqlEndpoint || "Not configured"}</span></p>
             </SheetHeader>
             <div className="flex flex-col gap-4 px-4 pb-4">
+              {bookmarkSaveMessage && <p role="status" className={`text-xs ${bookmarkSaveError ? "text-destructive" : "text-muted-foreground"}`}>{bookmarkSaveMessage}</p>}
+              <div className="flex flex-col gap-2 rounded-md border p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <Label>Query favorites</Label>
+                    <p className="mt-1 text-xs text-muted-foreground">Read saved FCT query XML from your personal SPARQL store.</p>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" disabled={favoritesLoading} onClick={async () => {
+                    setFavoritesLoading(true);
+                    setFavoritesMessage("");
+                    try {
+                      const response = await fetch("/proxy/api/query-favorites", { cache: "no-store" });
+                      const payload = await response.json() as { favorites?: typeof queryFavorites; error?: string };
+                      if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+                      const favorites = payload.favorites ?? [];
+                      setQueryFavorites(favorites);
+                      setFavoritesMessage(favorites.length ? `${favorites.length} saved quer${favorites.length === 1 ? "y" : "ies"} loaded.` : "No saved query favorites found.");
+                    } catch (error) {
+                      setFavoritesMessage(error instanceof Error ? error.message : "Could not load query favorites.");
+                    } finally { setFavoritesLoading(false); }
+                  }}>{favoritesLoading ? "Loading…" : "Show Favorites"}</Button>
+                </div>
+                {favoritesMessage && <p role="status" className="text-xs text-muted-foreground">{favoritesMessage}</p>}
+                {queryFavorites.length > 0 && <ul className="max-h-40 overflow-y-auto text-xs text-muted-foreground">{queryFavorites.map((favorite) => <li key={favorite.uri} className="border-t py-1.5"><span className="font-medium text-foreground">{favorite.title}</span>{favorite.created ? <span className="ml-2">{new Date(favorite.created).toLocaleString()}</span> : null}</li>)}</ul>}
+              </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <Label htmlFor="maestro-tutorial-mode">Tutorial mode</Label>

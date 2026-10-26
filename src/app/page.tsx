@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { rememberShortforms, toLabel } from "@/lib/uri-labels";
+import { rememberNamespaceMetadata, rememberShortforms, toLabel } from "@/lib/uri-labels";
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -1149,6 +1149,14 @@ export default function Home() {
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [bookmarkSaveMessage, setBookmarkSaveMessage] = useState("");
   const [bookmarkSaveError, setBookmarkSaveError] = useState(false);
+  const [bookmarkDialogOpen, setBookmarkDialogOpen] = useState(false);
+  const [bookmarkTitle, setBookmarkTitle] = useState("Saved query");
+  const [bookmarkDescription, setBookmarkDescription] = useState("");
+  const [bookmarkTags, setBookmarkTags] = useState("");
+  const [bookmarkTagVocabulary, setBookmarkTagVocabulary] = useState<"skos" | "dcterms" | "scot">("skos");
+  const [bookmarkSaving, setBookmarkSaving] = useState(false);
+  const [isQueryBookmarked, setIsQueryBookmarked] = useState(false);
+  const [bookmarkCheckRevision, setBookmarkCheckRevision] = useState(0);
   const [queryFavorites, setQueryFavorites] = useState<{ uri: string; title: string; created: string; queryXml: string }[]>([]);
   const [favoritesMessage, setFavoritesMessage] = useState("");
   const [favoritesLoading, setFavoritesLoading] = useState(false);
@@ -2014,6 +2022,42 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   }, []);
 
   const queryXml = serializeFctQuery(queryTree);
+
+  // Load vocabulary namespace labels from the app's LOD metadata route. Known
+  // prefixes are seeded synchronously, so the UI never falls back to nsN for
+  // established public vocabularies while metadata is loading.
+  useEffect(() => {
+    let active = true;
+    fetch("/proxy/api/ontology/namespaces", { cache: "force-cache" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload: { namespaces?: unknown } | null) => {
+        if (active && payload?.namespaces) rememberNamespaceMetadata(payload.namespaces);
+      })
+      .catch(() => { /* Built-in namespace prefixes remain available offline. */ });
+    return () => { active = false; };
+  }, []);
+
+  // Ask the personal store whether this exact serialized query already has a bookmark.
+  useEffect(() => {
+    if (!urlStateInitialized) return;
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch("/proxy/api/query-favorites", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "check", queryXml }),
+          cache: "no-store",
+        });
+        const payload = await response.json() as { bookmarked?: boolean };
+        if (active && response.ok) setIsQueryBookmarked(payload.bookmarked === true);
+      } catch {
+        if (active) setIsQueryBookmarked(false);
+      }
+    }, 350);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [queryXml, urlStateInitialized, bookmarkCheckRevision]);
+
   // The main Results request must use the active view's server-side limit and offset.
   const queryResultsXml = queryXml;
   const prettyQueryXml = xmlFormat(queryXml, { indentation: "  " });
@@ -4700,17 +4744,17 @@ useEffect(() => {
                 value={graphText}
                 onChange={(event) => setGraphText(event.target.value)}
                 onKeyDown={(event) => { if (event.key === "Enter") applyGraphText(); }}
-                placeholder="Enter keywords or site URI"
+                placeholder="Enter keywords or datasite URI"
                 aria-label="Site URI"
                 className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
               />
               <button
                 type="button"
                 onClick={clearGraph}
-                aria-label="Clear"
-                title="Clear graph field and query graph"
+                aria-label="Remove datasite"
+                title="Remove datasite"
                 className="inline-flex shrink-0 items-center justify-center px-2.5 hover:bg-accent hover:text-accent-foreground"
-              ><Trash aria-hidden="true" className="size-4" /></button>
+              ><X aria-hidden="true" className="size-4" /></button>
               <button
                 type="button"
                 onClick={applyGraphText}
@@ -4798,30 +4842,83 @@ useEffect(() => {
               type="button"
               variant="outline"
               size="icon"
-              aria-label="Save query favorite"
-              onClick={async () => {
-                const title = window.prompt("Name this query favorite", "Saved query");
-                if (title === null) return;
+              aria-label={isQueryBookmarked ? "Query is bookmarked; save another favorite" : "Save query favorite"}
+              onClick={() => {
+                setBookmarkTitle("Saved query");
+                setBookmarkDescription("");
+                setBookmarkTags("");
+                setBookmarkTagVocabulary("skos");
+                setBookmarkDialogOpen(true);
+              }}
+            ><Bookmark aria-hidden="true" className={isQueryBookmarked ? "fill-current text-amber-500" : ""} /></Button>
+          } />
+          <TooltipContent>{isQueryBookmarked ? "This query is bookmarked" : "Save query favorite"}</TooltipContent>
+        </Tooltip>
+        {bookmarkDialogOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !bookmarkSaving) setBookmarkDialogOpen(false); }}>
+            <section role="dialog" aria-modal="true" aria-labelledby="maestro-bookmark-dialog-title" className="w-full max-w-lg rounded-lg border bg-background p-5 shadow-xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <h2 id="maestro-bookmark-dialog-title" className="text-lg font-semibold">Save query bookmark</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">Save a title, description, and optional tags with this query.</p>
+                </div>
+                <Button type="button" variant="ghost" size="icon" aria-label="Close bookmark dialog" disabled={bookmarkSaving} onClick={() => setBookmarkDialogOpen(false)}><X className="size-4" /></Button>
+              </div>
+              <form className="flex flex-col gap-4" onSubmit={async (event) => {
+                event.preventDefault();
+                setBookmarkSaving(true);
                 setBookmarkSaveMessage("Saving query favorite…");
                 setBookmarkSaveError(false);
                 try {
+                  const tags = bookmarkTags.split(/[,;\n]/u).map((tag) => tag.trim()).filter(Boolean);
                   const response = await fetch("/proxy/api/query-favorites", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ title: title.trim() || "Saved query", queryXml: serializeFctQuery(queryTree), shareLink: window.location.href }),
+                    body: JSON.stringify({ title: bookmarkTitle.trim() || "Saved query", description: bookmarkDescription.trim(), tags, tagVocabulary: bookmarkTagVocabulary, queryXml: serializeFctQuery(queryTree), shareLink: window.location.href }),
                   });
-                  const payload = await response.json() as { error?: string };
+                  const payload = await response.json() as { error?: string; namespaces?: unknown };
                   if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+                  if (payload.namespaces) rememberNamespaceMetadata(payload.namespaces);
+                  setIsQueryBookmarked(true);
+                  setBookmarkCheckRevision((revision) => revision + 1);
                   setBookmarkSaveMessage("Query favorite saved to your personal store.");
+                  setBookmarkDialogOpen(false);
                 } catch (error) {
                   setBookmarkSaveError(true);
                   setBookmarkSaveMessage(error instanceof Error ? error.message : "Could not save query favorite.");
+                } finally {
+                  setBookmarkSaving(false);
                 }
-              }}
-            ><Bookmark aria-hidden="true" /></Button>
-          } />
-          <TooltipContent>Save query favorite</TooltipContent>
-        </Tooltip>
+              }}>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="maestro-bookmark-title">Title</Label>
+                  <input id="maestro-bookmark-title" autoFocus value={bookmarkTitle} onChange={(event) => setBookmarkTitle(event.target.value)} maxLength={300} required className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="maestro-bookmark-description">Description</Label>
+                  <textarea id="maestro-bookmark-description" value={bookmarkDescription} onChange={(event) => setBookmarkDescription(event.target.value)} maxLength={5000} rows={3} placeholder="Describe what this query finds or why you saved it" className="min-h-20 rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="maestro-bookmark-tags">Tags</Label>
+                  <input id="maestro-bookmark-tags" value={bookmarkTags} onChange={(event) => setBookmarkTags(event.target.value)} maxLength={2000} placeholder="linked data, publications, people" className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                  <p className="text-xs text-muted-foreground">Separate tags with commas, semicolons, or new lines.</p>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="maestro-bookmark-tag-vocabulary">Tag vocabulary</Label>
+                  <select id="maestro-bookmark-tag-vocabulary" value={bookmarkTagVocabulary} onChange={(event) => setBookmarkTagVocabulary(event.target.value as "skos" | "dcterms" | "scot")} className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    <option value="skos">SKOS concept — skos:Concept / skos:prefLabel</option>
+                    <option value="dcterms">Dublin Core subject — dcterms:subject literal</option>
+                    <option value="scot">SCOT tag — scot:Tag / scot:has_tag</option>
+                  </select>
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button type="button" variant="outline" disabled={bookmarkSaving} onClick={() => setBookmarkDialogOpen(false)}>Cancel</Button>
+                  <Button type="submit" disabled={bookmarkSaving}>{bookmarkSaving ? "Saving…" : "Save bookmark"}</Button>
+                </div>
+              </form>
+            </section>
+          </div>
+        )}
         <Tooltip>
           <TooltipTrigger render={
             <Button
@@ -6619,7 +6716,7 @@ useEffect(() => {
                           className="inline-flex size-9 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                           aria-label="Reset query"
                         >
-                          <RotateCcw aria-hidden="true" className="size-4" />
+                          <X aria-hidden="true" className="size-4" />
                         </button>
                       } />
                       <TooltipContent>Reset query</TooltipContent>

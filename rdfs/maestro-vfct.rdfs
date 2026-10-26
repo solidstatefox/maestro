@@ -2,7 +2,12 @@
 <rdf:RDF
   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
   xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:bookmark="http://www.w3.org/2002/01/bookmark#"
   xmlns:dcterms="http://purl.org/dc/terms/"
+  xmlns:sioc="http://rdfs.org/sioc/ns#"
+  xmlns:schema="https://schema.org/"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:scot="http://rdfs.org/scot/ns#"
   xmlns:vfct="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#">
   <rdfs:Class rdf:about="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#query">
     <rdfs:label>FCT query element</rdfs:label>
@@ -14,14 +19,31 @@
   <rdfs:Class rdf:about="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#class"><rdfs:label>FCT class element</rdfs:label></rdfs:Class>
   <rdfs:Class rdf:about="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#value"><rdfs:label>FCT value element</rdfs:label></rdfs:Class>
   <rdfs:Class rdf:about="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#view"><rdfs:label>FCT view element</rdfs:label></rdfs:Class>
-  <rdfs:Class rdf:about="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#QueryBookmark">
-    <rdfs:label>Saved FCT query bookmark</rdfs:label>
-    <rdfs:comment>A Maestro bookmark for a saved FCT query. Its title is stored with rdfs:label, creation time with dcterms:created, the query link with dcterms:references, and the serialized XML as rdf:value with datatype rdf:XMLLiteral.</rdfs:comment>
-  </rdfs:Class>
-  <rdfs:Class rdf:about="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#XMLAttribute"><rdfs:label>XML attribute</rdfs:label><rdfs:comment>A resource representing one attribute in a saved FCT query XML tree.</rdfs:comment></rdfs:Class>
-  <rdf:Property rdf:about="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#attribute"><rdfs:label>XML attribute node</rdfs:label><rdfs:comment>Links an XML element resource to an attribute resource so names and values remain paired. Attribute labels and values use rdfs:label and rdf:value.</rdfs:comment><rdfs:range rdf:resource="http://www.w3.org/2000/01/rdf-schema#Resource"/></rdf:Property>
+  <rdf:Description rdf:about="https://schema.org/identifier">
+    <rdfs:label>identifier</rdfs:label>
+    <rdfs:comment>Maestro stores the SHA-256 hash of serialized FCT query XML as schema:identifier on an Annotea Bookmark, allowing the UI to detect whether the current query is already bookmarked.</rdfs:comment>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://www.w3.org/2002/01/bookmark#Bookmark">
+    <rdfs:label>Bookmark</rdfs:label>
+    <rdfs:comment>Maestro query favorites use the Annotea Bookmark Schema. Titles use dcterms:title and rdfs:label, descriptions use dcterms:description, and bookmark:recalls links to the saved query resource. Each bookmark also has bookmark:hasTopic.</rdfs:comment>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://www.w3.org/2004/02/skos/core#Concept">
+    <rdfs:label>SKOS concept</rdfs:label>
+    <rdfs:comment>When the user selects SKOS tagging, each tag is represented as a skos:Concept labelled with skos:prefLabel and linked from the bookmark with dcterms:subject.</rdfs:comment>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://rdfs.org/scot/ns#Tag">
+    <rdfs:label>SCOT tag</rdfs:label>
+    <rdfs:comment>When the user selects SCOT tagging, each tag is represented as a scot:Tag and linked from the SIOC item bookmark using scot:has_tag.</rdfs:comment>
+  </rdf:Description>
+  <rdf:Property rdf:about="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#attribute">
+    <rdfs:label>XML attribute node</rdfs:label>
+    <rdfs:comment>Links an XML element resource to an attribute resource so names and values remain paired. Attribute labels and values use rdfs:label and rdf:value.</rdfs:comment>
+    <rdfs:range rdf:resource="http://www.w3.org/2000/01/rdf-schema#Resource"/>
+  </rdf:Property>
   <rdf:Property rdf:about="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#child">
-    <rdfs:label>child</rdfs:label><rdfs:comment>Connects an XML element resource to each of its immediate child elements.</rdfs:comment>
-    <rdfs:domain rdf:resource="http://www.w3.org/2000/01/rdf-schema#Resource"/><rdfs:range rdf:resource="http://www.w3.org/2000/01/rdf-schema#Resource"/>
+    <rdfs:label>child</rdfs:label>
+    <rdfs:comment>Connects an XML element resource to each of its immediate child elements.</rdfs:comment>
+    <rdfs:domain rdf:resource="http://www.w3.org/2000/01/rdf-schema#Resource"/>
+    <rdfs:range rdf:resource="http://www.w3.org/2000/01/rdf-schema#Resource"/>
   </rdf:Property>
 </rdf:RDF>

@@ -68,6 +68,27 @@ export async function queryPersonalSparql(query: string, timeoutMs = 20000): Pro
   }
 }
 
+/** Execute a SPARQL ASK against the personal endpoint and return its boolean result. */
+export async function askPersonalSparql(query: string, timeoutMs = 20000): Promise<boolean> {
+  const endpoint = personalSparqlUrl();
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: personalSparqlHeaders("application/x-www-form-urlencoded; charset=UTF-8"),
+    body: new URLSearchParams({ query }).toString(),
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`Personal SPARQL ASK returned HTTP ${response.status}: ${body.slice(0, 1000)}`);
+  try {
+    const parsed = JSON.parse(body) as { boolean?: unknown };
+    if (typeof parsed.boolean !== "boolean") throw new Error("missing boolean result");
+    return parsed.boolean;
+  } catch (error) {
+    throw new Error(`Personal SPARQL endpoint returned an invalid ASK result: ${error instanceof Error ? error.message : "invalid JSON"}`);
+  }
+}
+
 /** Execute a SPARQL Update against the personal endpoint. */
 export async function updatePersonalSparql(update: string, timeoutMs = 30000): Promise<string> {
   const endpoint = personalSparqlUrl();

@@ -43,6 +43,7 @@ type SparqlPattern =
   | { kind: "full-text"; value: SparqlTerm; search: SparqlTerm }
   | { kind: "filter"; expression: SparqlExpression }
   | { kind: "group"; patterns: SparqlPattern[] }
+  | { kind: "optional"; patterns: SparqlPattern[] }
   | { kind: "graph"; graph: SparqlTerm; patterns: SparqlPattern[] }
   | { kind: "quad-map"; map: SparqlTerm; graph: SparqlTerm; patterns: SparqlPattern[] };
 
@@ -137,6 +138,7 @@ function serializePattern(pattern: SparqlPattern, depth = 0): string {
     case "full-text": return `${indent}${serializeTerm(pattern.value)} bif:contains ${serializeTerm(pattern.search)} .`;
     case "filter": return `${indent}FILTER ${serializeExpression(pattern.expression)}`;
     case "group": return `${indent}{\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
+    case "optional": return `${indent}OPTIONAL {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "graph": return `${indent}GRAPH ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "quad-map": return `${indent}quad map ${serializeTerm(pattern.map)} { graph ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 2)).join("\n")}\n${indent}  } }`;
   }
@@ -388,7 +390,43 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       graphWhere = [{ kind: "graph", graph: variable("g"), patterns: constraints.length ? constraints : [{ kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") }] }];
     }
     if (graphTerm) graphWhere.push({ kind: "filter", expression: binary("=", termExpr(variable("g")), termExpr(graphTerm)) });
-    query = buildSelectQuery({ directives, distinct: true, projections: [{ expression: termExpr(variable("g")), as: variable("c1") }], where: graphWhere, orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(variable("g"))] }, direction: "ASC" }], limit, offset });
+    const graphSort = ["count-asc", "count-desc", "label-asc", "label-desc"].includes(viewNode?.attributes.sort ?? "")
+      ? viewNode?.attributes.sort ?? "count-desc"
+      : viewNode?.attributes.sort === "label" ? "label-asc" : "count-desc";
+    const graphLabel = variable("graphLabel");
+    const graphLabelKey: SparqlExpression = {
+      kind: "function", name: "LCASE", args: [{
+        kind: "function", name: "COALESCE", args: [
+          { kind: "function", name: "STR", args: [termExpr(graphLabel)] },
+          { kind: "function", name: "REPLACE", args: [
+            { kind: "function", name: "STR", args: [termExpr(variable("g"))] },
+            termExpr(literalTerm("^.*[/#]")), termExpr(literalTerm("")),
+          ] },
+        ],
+      }],
+    };
+    const graphCount = countProjection(variable("s1"));
+    query = buildSelectQuery({
+      directives,
+      projections: [
+        { expression: termExpr(variable("g")), as: variable("c1") },
+        { expression: graphLabelKey, as: variable("label") },
+        graphCount,
+      ],
+      where: [
+        ...graphWhere,
+        { kind: "optional", patterns: [{ kind: "triple", subject: variable("g"), predicate: iriTerm("http://www.w3.org/2000/01/rdf-schema#label"), object: graphLabel }] },
+      ],
+      groupBy: [termExpr(variable("g")), graphLabelKey],
+      orderBy: graphSort.startsWith("count-")
+        ? [
+            { expression: termExpr(variable("n")), direction: graphSort === "count-asc" ? "ASC" : "DESC" },
+            { expression: graphLabelKey, direction: "ASC" },
+          ]
+        : [{ expression: graphLabelKey, direction: graphSort === "label-desc" ? "DESC" : "ASC" }],
+      limit,
+      offset,
+    });
   } else if (countOnly) {
     let counted: SparqlTerm;
     let countWhere = scopedWhere;

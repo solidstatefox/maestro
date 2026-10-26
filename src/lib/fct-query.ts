@@ -4,12 +4,25 @@ import { useSyncExternalStore } from "react";
 
 export type FctNodeName = string;
 
+export type FctUiResultSummary = {
+  /** Display label of the first record returned by the active view. */
+  label: string;
+  /** Result-set count (ct) for that same view. */
+  count: number | null;
+};
+
 export type FctQueryNode = {
   id: string;
   name: FctNodeName;
   attributes: Record<string, string>;
   text?: string;
   children: FctQueryNode[];
+  /**
+   * Ephemeral presentation metadata only. It is attached as a non-enumerable
+   * property by the UI and must never become part of query serialization,
+   * snapshots, clones, or query notifications.
+   */
+  uiResultSummary?: FctUiResultSummary;
 };
 
 /** A value binding as represented by the FCT <value> element.
@@ -31,6 +44,8 @@ export type FctQueryTree = {
   name: "query";
   attributes: Record<string, string>;
   children: FctQueryNode[];
+  /** Ephemeral, non-enumerable UI metadata; never part of the FCT query. */
+  uiResultSummary?: FctUiResultSummary;
 };
 
 export type FctQueryState = {
@@ -234,13 +249,19 @@ export function attachViewToPropertyInQueryTree(
 }
 
 function cloneQueryTree(tree: FctQueryTree): FctQueryTree {
-  const cloneNode = (node: FctQueryNode): FctQueryNode => ({
-    ...node,
-    attributes: { ...node.attributes },
-    children: node.name === "view" ? [] : node.children.map(cloneNode),
-  });
+  const cloneNode = (node: FctQueryNode): FctQueryNode => {
+    const queryNode = { ...node };
+    delete queryNode.uiResultSummary;
+    return {
+      ...queryNode,
+      attributes: { ...node.attributes },
+      children: node.name === "view" ? [] : node.children.map(cloneNode),
+    };
+  };
+  const queryTree = { ...tree };
+  delete queryTree.uiResultSummary;
   return {
-    ...tree,
+    ...queryTree,
     attributes: { ...tree.attributes },
     children: tree.children.map(cloneNode),
   };
@@ -260,11 +281,15 @@ function createQueryStore(initialTree?: FctQueryTree) {
     : createInitialState();
   const listeners = new Set<Listener>();
   function cloneNodes(nodes: FctQueryNode[]): FctQueryNode[] {
-    return nodes.map((node) => ({
-      ...node,
-      attributes: { ...node.attributes },
-      children: node.name === "view" ? [] : cloneNodes(node.children),
-    }));
+    return nodes.map((node) => {
+      const queryNode = { ...node };
+      delete queryNode.uiResultSummary;
+      return {
+        ...queryNode,
+        attributes: { ...node.attributes },
+        children: node.name === "view" ? [] : cloneNodes(node.children),
+      };
+    });
   }
 
 

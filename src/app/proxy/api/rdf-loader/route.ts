@@ -36,10 +36,10 @@ export async function POST(request: Request) {
     const sourceUrl = validateIri(body?.sourceUrl, "RDF source URL");
     const targetGraph = validateIri(body?.targetGraph, "Target graph IRI");
 
-    const endpoint = process.env.RDF_LOADER_ENDPOINT || "http://localhost:8890/sparql";
+    const endpoint = process.env.PERSONAL_SPARQL_ENDPOINT || process.env.RDF_LOADER_ENDPOINT || "http://localhost:8890/sparql";
     const endpointUrl = new URL(endpoint);
     if (endpointUrl.protocol !== "http:" && endpointUrl.protocol !== "https:") {
-      return NextResponse.json({ error: "RDF_LOADER_ENDPOINT must use HTTP or HTTPS." }, { status: 500 });
+      return NextResponse.json({ error: "PERSONAL_SPARQL_ENDPOINT (or RDF_LOADER_ENDPOINT) must use HTTP or HTTPS." }, { status: 500 });
     }
 
     const headers: Record<string, string> = {

@@ -25,13 +25,33 @@ npm ci
 
 ### 3. Configure SPARQL Endpoints
 
-The application uses the `SPARQL_ENDPOINTS` environment variable to define the SPARQL endpoints available in the dashboard.
+The application uses `SPARQL_ENDPOINTS` to define the SPARQL endpoints available in the dashboard. Maestro also supports a separate personal SPARQL endpoint for RDF loading and ontology metadata used by the Categories facet.
 
-Create a `.env.local` file in the project root and add your endpoints:
+Create a `.env.local` file in the project root and configure the endpoints and, if needed, the optional credentials:
 
 ```env
 SPARQL_ENDPOINTS=Local Virtuoso=http://localhost:8890/sparql;Featured::DBpedia=https://dbpedia.org/sparql;Featured::Wikidata=https://query.wikidata.org/sparql
+
+# Personal SPARQL endpoint used to load RDF and query ontology metadata for Categories.
+# For a local Virtuoso installation, this is commonly http://localhost:8890/sparql.
+PERSONAL_SPARQL_ENDPOINT=http://localhost:8890/sparql
+
+# Optional Basic Auth credentials for RDF loading and personal SPARQL requests.
+# Leave unset if the endpoint does not require Basic Authentication.
+# RDF_LOADER_USERNAME=
+# RDF_LOADER_PASSWORD=
+
+# Datasite where Maestro ingests discovered class/ontology RDF for Categories.
+MAESTRO_ONTOLOGY_GRAPH=gttp://ggg.maestro.eco/ontology-cache
 ```
+
+#### Personal endpoint and ontology settings
+
+- `PERSONAL_SPARQL_ENDPOINT` is separate from `SPARQL_ENDPOINTS`. It identifies the personal SPARQL endpoint Maestro uses to load RDF and query ontology metadata for the Categories facet. For a local Virtuoso server, the usual value is `http://localhost:8890/sparql`.
+- `RDF_LOADER_USERNAME` and `RDF_LOADER_PASSWORD` are optional Basic Authentication credentials used for RDF loading and requests to the personal SPARQL endpoint. Set both only when your endpoint requires Basic Authentication.
+- `MAESTRO_ONTOLOGY_GRAPH` identifies the graph (datasite) where Maestro stores discovered class and ontology RDF used by Categories. The example uses `gttp://ggg.maestro.eco/ontology-cache`; change it if you want to use a different graph URI.
+
+The personal endpoint is configured independently of the selectable endpoints in `SPARQL_ENDPOINTS`. If you change `.env.local`, restart the development server for the new configuration to take effect.
 
 #### Endpoint format
 

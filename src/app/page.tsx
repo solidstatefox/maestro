@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { rememberShortforms, toLabel } from "@/lib/uri-labels";
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
-import { buildFctResultsSparql } from "@/lib/fct-results-sparql";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { ReactNode, Dispatch, SetStateAction } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,7 +19,7 @@ import {
 import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Bot, Check, ChevronDown, CircleSlash, Code2, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash2, UsersRound, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, Equal, RotateCcw } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -31,7 +32,7 @@ import hljs from "highlight.js/lib/core";
 import xmlLanguage from "highlight.js/lib/languages/xml";
 import sqlLanguage from "highlight.js/lib/languages/sql";
 import { useFctQuery, fctQueryTreeApi, serializeFctQuery, createPropertyWidgetQuery, createGroupMemberQuery, createGroupValuesQuery, createDistinctCountQuery, setQueryViewAttributes } from "@/lib/fct-query-api";
-import type { FctQueryNode, FctQueryTree, DistinctCountKind } from "@/lib/fct-query-api";
+import type { FctQueryNode, FctQueryTree, FctUiResultSummary, DistinctCountKind } from "@/lib/fct-query-api";
 
 hljs.registerLanguage("xml", xmlLanguage);
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
@@ -123,6 +124,9 @@ type FacetItem = {
 
 type FacetName = string;
 
+type OntologyClassMetadata = { uri: string; ontology: string; parent?: string; ontologyLabel?: string };
+type CategoryTreeNode = { item: FacetItem; children: CategoryTreeNode[] };
+
 type EnrichedTerm = {
   value: string;
   type?: string;
@@ -187,7 +191,7 @@ type ParsedFctResponse = {
   properties: { uri: string; label: string; count: number }[];
   classes: { uri: string; label: string; count: number }[];
   roles: { uri: string; label: string; count: number }[];
-  graphs: string[];
+  graphs: { uri: string; label: string; count: number }[];
   describe: { subject: FctResponseColumn; predicate: FctResponseColumn; object: FctResponseColumn }[];
   count?: number;
   shortforms: { uri: string; shortform?: string; label?: string }[];
@@ -265,7 +269,11 @@ function parseFctResponse(xmlText: string): ParsedFctResponse {
     properties: resultType === "properties" ? facetItems : [],
     classes: resultType === "classes" ? facetItems : [],
     roles: resultType === "properties-in" ? facetItems : [],
-    graphs: resultType === "graphs" ? rowColumns.flatMap((columns) => columns[0] ? [columns[0].value] : []) : [],
+    graphs: resultType === "graphs" ? rowColumns.flatMap((columns) => columns[0] ? [{
+      uri: columns[0].value,
+      label: columns[1]?.value || columns[0].label || columns[0].shortform || toLabel(columns[0].value),
+      count: Number(columns[2]?.value ?? 0),
+    }] : []) : [],
     describe: resultType === "describe" ? describe : [],
     count: resultType === "count" ? Number(rowColumns[0]?.[0]?.value ?? 0) : undefined,
     shortforms: Array.from(uris, ([uri, metadata]) => ({ uri, ...metadata })),
@@ -903,6 +911,46 @@ type FacetAutofillCandidates = {
 const FACET_ADD_COUNTS_STORAGE_KEY = "maestro:facet-add-counts:v1";
 const FACET_AUTOFILL_STORAGE_KEY = "maestro:facet-autofill:v1";
 const AUTO_CONFIGURED_FACETS_STORAGE_KEY = "maestro:auto-configured-facets:v1";
+/** Auto-configure registry: the live query's exclude boolean for each facet URI. */
+const FACET_EXCLUDE_STORAGE_KEY = "maestro:facet-exclude:v1";
+
+type FacetExcludeRegistry = {
+  property: Record<string, boolean>;
+  "property-in": Record<string, boolean>;
+};
+
+function readFacetExcludeRegistry(): FacetExcludeRegistry {
+  const empty: FacetExcludeRegistry = { property: {}, "property-in": {} };
+  try {
+    const raw = window.localStorage.getItem(FACET_EXCLUDE_STORAGE_KEY);
+    if (!raw) return empty;
+    const parsed = JSON.parse(raw) as Partial<FacetExcludeRegistry>;
+    const clean = (value: unknown): Record<string, boolean> =>
+      value && typeof value === "object"
+        ? Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([, flag]) => typeof flag === "boolean")) as Record<string, boolean>
+        : {};
+    return { property: clean(parsed.property), "property-in": clean(parsed["property-in"]) };
+  } catch {
+    return empty;
+  }
+}
+
+/** Record the exclude boolean read from the live query's node for this facet. */
+function recordFacetExclude(kind: "property" | "property-in", uri: string, excluded: boolean) {
+  try {
+    const registry = readFacetExcludeRegistry();
+    if (registry[kind][uri] === excluded) return;
+    registry[kind][uri] = excluded;
+    window.localStorage.setItem(FACET_EXCLUDE_STORAGE_KEY, JSON.stringify(registry));
+  } catch (error) {
+    // Browsing and filtering must continue when localStorage is unavailable.
+    console.error("[Maestro Auto-configure] Could not persist facet exclude flag.", error);
+  }
+}
+
+function isFacetExcludeRecorded(kind: "property" | "property-in", uri: string): boolean {
+  return readFacetExcludeRegistry()[kind][uri] === true;
+}
 
 type AutoConfiguredFacetKey = string;
 
@@ -1115,8 +1163,12 @@ export default function Home() {
   const [propertiesPage, setPropertiesPage] = useState(0);
   const [classesPage, setClassesPage] = useState(0);
   const [graphsPage, setGraphsPage] = useState(0);
+  const [graphSort, setGraphSort] = useState<"count-desc" | "count-asc" | "label-asc" | "label-desc">("count-desc");
+  const [graphSortPickerExpanded, setGraphSortPickerExpanded] = useState(false);
   const [graphListSparql, setGraphListSparql] = useState("");
   const [graphText, setGraphText] = useState("");
+  const [graphNavigationHistory, setGraphNavigationHistory] = useState<string[]>([""]);
+  const [graphNavigationIndex, setGraphNavigationIndex] = useState(0);
   const restoredGraphTextRef = useRef<string | null>(null);
   const [findEndpointsEnabled, setFindEndpointsEnabled] = useState(false);
   const [centralTab, setCentralTab] = useState<"results" | "groups" | "query-tree" | "view-query">("results");
@@ -1142,6 +1194,55 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
 
   const [personalWidgets, setPersonalWidgets] = useState<PersonalWidget[]>([]);
+  // Tutorial previews are presentation-only and never mutate or persist the query.
+  const [tutorialMode, setTutorialMode] = useState(false);
+  const [facetHoverPreview, setFacetHoverPreview] = useState<{
+    kind: "facet" | "record";
+    uri: string;
+    label: string;
+    direction: "forward" | "reverse";
+    source: "personal" | "configure" | "record";
+    successorNodeId?: string | null;
+  } | null>(null);
+  // One owner controls every transient tutorial highlight. Clearing this state
+  // removes the results overlay, Query Tree tint, breadcrumb tint, and widget tint.
+  const clearTutorialPreview = () => setFacetHoverPreview(null);
+  const beginFacetHoverPreview = (uri: string, direction: "forward" | "reverse", label: string, source: "personal" | "configure") => {
+    if (!tutorialMode) return;
+    const matchingRelationship = findRelationshipPreviewNode(uri, direction);
+    setFacetHoverPreview({
+      kind: "facet", uri, direction, label, source,
+      // Preview the selected relationship as the immediate successor crumb,
+      // without changing the authoritative query or saved breadcrumb trail.
+      successorNodeId: matchingRelationship && !getPropertyPath().some((crumb) => crumb.id === matchingRelationship.id)
+        ? matchingRelationship.id
+        : null,
+    });
+  };
+  const beginRecordHoverPreview = (uri: string, label: string) => {
+    if (!tutorialMode || !uri.trim()) return;
+    setFacetHoverPreview({ kind: "record", uri, label, direction: "forward", source: "record" });
+  };
+  const applyRecordAsRootValue = (uri: string) => {
+    if (!uri.trim()) return;
+    const nonTextTree = {
+      ...queryTree,
+      children: queryTree.children
+        .filter((node) => node.name !== "text")
+        .map((node) => setMainViewType(node, "properties")),
+    };
+    replaceQueryTree(fctQueryTreeApi.setValue(nonTextTree, null, [{ text: uri, datatype: "uri" }], {
+      replaceExisting: true,
+      idPrefix: "query-uri-value",
+    }));
+    selectedSignalModeRef.current = "uri";
+    setSelectedSignalMode("uri");
+    setSavedUriDraft(uri);
+    searchDraftRef.current = uri;
+    setSearchDraft(uri);
+    clearTutorialPreview();
+    setSearchPipelineRun((current) => current + 1);
+  };
   const [breadcrumbTrail, setBreadcrumbTrail] = useState<
   { id: string; uri: string; name: string }[]
 >([]);
@@ -1175,7 +1276,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // localStorage mutations do not trigger React renders. This revision makes
   // additions to the live query observable to the Auto-configure candidate effects.
   const [facetUsageRevision, setFacetUsageRevision] = useState(0);
-  const previousFacetQueryNodesRef = useRef<Map<string, { kind: "property" | "property-in"; uri: string }> | null>(null);
+  const previousFacetQueryNodesRef = useRef<Map<string, { kind: "property" | "property-in"; uri: string; excluded: boolean }> | null>(null);
   const [autoConfiguredFacetKeys, setAutoConfiguredFacetKeys] = useState<Set<AutoConfiguredFacetKey>>(
     () => new Set(typeof window === "undefined" ? [] : readAutoConfiguredFacetKeys()),
   );
@@ -1254,23 +1355,42 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     return parsed.length && parsed[0].toLowerCase() !== "none" ? parsed : [RDFS_LABEL_URI];
   });
   const search = searchDraft;
+  const searchDraftRef = useRef(searchDraft);
 
   // Follow query edits from elsewhere while retaining independent text and URI drafts.
   useEffect(() => {
     if (!activeSearchNode) return;
     const nextText = activeSearchNode.text ?? "";
+    searchDraftRef.current = nextText;
     setSearchDraft(nextText);
     if (activeSearchNode.name === "value" && activeSearchNode.attributes.datatype === "uri") setSavedUriDraft(nextText);
     else if (activeSearchNode.id === "query-text") setSavedSearchDraft(nextText);
   }, [activeSearchNode?.id, activeSearchNode?.text]);
   // The URI signal fixes the query subject; other signals search text values or clear the term.
-  const textSearchMode: "uri" | "name" | "all" | "clear" = uriNode
+  const querySignalMode: "uri" | "name" | "all" | "clear" = uriNode
     ? "uri"
     : !searchNode
       ? "clear"
       : searchNode.attributes.property
         ? "name"
         : "all";
+  // Keep the selected signal separate from query constraints. URI mode is valid
+  // with an empty draft, in which case the query API correctly stores no <value>.
+  const [selectedSignalMode, setSelectedSignalMode] = useState<"uri" | "name" | "all" | "clear">(querySignalMode);
+  const selectedSignalModeRef = useRef<"uri" | "name" | "all" | "clear">(querySignalMode);
+  // Follow live query changes when a URI or text constraint exists. If neither
+  // exists, preserve the selected mode so an empty URI draft stays in URI mode.
+  useEffect(() => {
+    if (uriNode) {
+      selectedSignalModeRef.current = "uri";
+      setSelectedSignalMode("uri");
+    } else if (searchNode) {
+      const mode = searchNode.attributes.property ? "name" : "all";
+      selectedSignalModeRef.current = mode;
+      setSelectedSignalMode(mode);
+    }
+  }, [uriNode?.id, uriNode?.text, searchNode?.id, searchNode?.attributes.property]);
+  const textSearchMode = selectedSignalMode;
   const selectedNamePropertyLabel = selectedNamePropertyUris
     .map((uri) => TEXT_SEARCH_NAME_PROPERTIES.find((property) => property.uri === uri)?.label ?? toLabel(uri))
     .join(", ") || "no properties";
@@ -1281,6 +1401,16 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     { mode: "all" as const, Icon: SignalMedium, label: "All fields — search text across all properties" },
     { mode: "clear" as const, Icon: SignalHigh, label: "Clear Terms — remove the text constraint from the query" },
   ];
+  const ActiveSignalIcon = signalOptions.find(({ mode }) => mode === textSearchMode)?.Icon ?? SignalHigh;
+  const [rootSearchExpanded, setRootSearchExpanded] = useState(false);
+  const [namePropertyMenuOpen, setNamePropertyMenuOpen] = useState(false);
+  const [categoriesTreeMode, setCategoriesTreeMode] = useState(false);
+  const [ontologyClassMetadata, setOntologyClassMetadata] = useState<Record<string, OntologyClassMetadata>>({});
+  const [personalSparqlEndpoint, setPersonalSparqlEndpoint] = useState("");
+  const [breadcrumbPreviewSummaries, setBreadcrumbPreviewSummaries] = useState<Record<string, FctUiResultSummary>>({});
+  const [breadcrumbPreviewPendingIds, setBreadcrumbPreviewPendingIds] = useState<Set<string>>(() => new Set());
+  // Reuse result-set metadata for the exact scoped query before issuing a breadcrumb-only request.
+  const metadataRegistryRef = useRef<Map<string, FctUiResultSummary>>(new Map());
 
   function setMainViewType(node: FctQueryNode, type: string): FctQueryNode {
     return {
@@ -1294,6 +1424,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
 
   function setTextSearchMode(mode: "uri" | "name" | "all" | "clear", propertyUris = selectedNamePropertyUris) {
+    selectedSignalModeRef.current = mode;
+    setSelectedSignalMode(mode);
     if (mode === "name") setSelectedNamePropertyUris(propertyUris);
     if (mode === "clear") {
       // Both drafts are retained independently; clear only the active query constraint.
@@ -1309,6 +1441,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         replaceExisting: true,
         idPrefix: "query-uri-value",
       }));
+      searchDraftRef.current = "";
       setSearchDraft("");
       setSearchPipelineRun((current) => current + 1);
       return;
@@ -1316,6 +1449,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
     if (mode === "uri") {
       const restoredUri = uriNode?.text ?? savedUriDraft;
+      searchDraftRef.current = restoredUri;
       setSearchDraft(restoredUri);
       setSavedUriDraft(restoredUri);
       const nonSearchTree = {
@@ -1335,6 +1469,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     }
 
     const restoredText = searchNode?.text ?? savedSearchDraft;
+    const uriToResolve = mode === "name" && textSearchMode === "uri" && !restoredText.trim()
+      ? (uriNode?.text ?? savedUriDraft).trim()
+      : "";
+    searchDraftRef.current = restoredText;
     setSearchDraft(restoredText);
     setSavedSearchDraft(restoredText);
 
@@ -1363,9 +1501,44 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     });
     replaceQueryTree({ ...withoutUri, children: [textNode, ...withoutUri.children] });
     setSearchPipelineRun((current) => current + 1);
+
+    // When leaving URI mode for an empty Name search, resolve the URI's label.
+    // Only fill the field if the user has not started typing while the request runs.
+    if (uriToResolve) {
+      void (async () => {
+        const controller = new AbortController();
+        try {
+          const response = await fetch("/proxy/api/fct", {
+            method: "POST",
+            cache: "no-store",
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("uri-label-lookup", "UriLabelLookup") },
+            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="describe" limit="30" offset="0"/></query>`,
+            signal: controller.signal,
+          });
+          const data = await readFctResponse(response);
+          const label = (data.describe ?? []).find((triple) =>
+            triple.subject?.value === uriToResolve &&
+            triple.predicate?.value === RDFS_LABEL_URI &&
+            triple.object?.termType !== "bnode" &&
+            Boolean(triple.object?.value?.trim()),
+          )?.object?.value?.trim() ?? "";
+          if (label && selectedSignalModeRef.current === "name" && !searchDraftRef.current.trim()) {
+            searchDraftRef.current = label;
+            setSearchDraft(label);
+            setSavedSearchDraft(label);
+            setSearch(label);
+          }
+        } catch (error) {
+          if (!(error instanceof DOMException && error.name === "AbortError")) {
+            console.warn("URI label lookup failed:", error);
+          }
+        }
+      })();
+    }
   }
 
   function updateSearchText(value: string) {
+    searchDraftRef.current = value;
     setSearchDraft(value);
     if (textSearchMode === "uri") {
       setSavedUriDraft(value);
@@ -1418,13 +1591,14 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // handlers. This catches additions from checkboxes, label navigation, and
   // any other code path that inserts a <property> or <property-of> node.
   useEffect(() => {
-    const currentNodes = new Map<string, { kind: "property" | "property-in"; uri: string }>();
+    const currentNodes = new Map<string, { kind: "property" | "property-in"; uri: string; excluded: boolean }>();
     const collectRelationshipNodes = (nodes: FctQueryNode[]) => {
       for (const node of nodes) {
         if ((node.name === "property" || node.name === "property-of") && node.attributes.iri) {
           currentNodes.set(node.id, {
             kind: node.name === "property" ? "property" : "property-in",
             uri: node.attributes.iri,
+            excluded: node.attributes.exclude?.trim().toLowerCase() === "yes",
           });
         }
         collectRelationshipNodes(node.children);
@@ -1454,6 +1628,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     let recordedAddition = false;
     for (const [id, current] of currentNodes) {
       const previous = previousNodes.get(id);
+      // Whenever the live query adds or changes a facet node, store its exclude boolean.
+      if (!previous || previous.kind !== current.kind || previous.uri !== current.uri || previous.excluded !== current.excluded) {
+        recordFacetExclude(current.kind, current.uri, current.excluded);
+      }
       if (previous?.kind === current.kind && previous.uri === current.uri) continue;
       recordFacetAddition(current.kind, current.uri);
       recordedAddition = true;
@@ -2081,6 +2259,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
   const [results, setResults] = useState<FctResult[]>([]);
   const resultsBatchRequestPending = useRef(false);
+  const resultsLoadedQueryIdentityRef = useRef("");
   const activeQueryIdentityRef = useRef("");
   const previousResultsQueryIdentityRef = useRef("");
   const endpointReadyForQuery = Boolean(
@@ -2109,6 +2288,7 @@ useEffect(() => {
 
   setResultsUiPage(0);
   setResults([]);
+  resultsLoadedQueryIdentityRef.current = "";
   resultsBatchRequestPending.current = false;
   setResultsPageMatchCount(0);
   setResultsPageComplete(false);
@@ -2135,6 +2315,7 @@ useEffect(() => {
   function clearWidgetsForViewChange() {
     setResultsUiPage(0);
     setResults([]);
+    resultsLoadedQueryIdentityRef.current = "";
     resultsBatchRequestPending.current = false;
     setResultsPageMatchCount(0);
     setResultsPageComplete(false);
@@ -2204,20 +2385,30 @@ useEffect(() => {
   const effectiveResultsTotalCount = resultsTotalCount === null
     ? (resultsPageComplete ? results.length : null)
     : Math.max(resultsTotalCount, results.length);
-  const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string }[]>([]);
+  const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string; direction: "property" | "property-of" }[]>([]);
   const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
   const RECORD_DESCRIPTION_PAGE_SIZE = 20;
   
-  // First pass: collect every value under its property URI.
+  // Group the DESCRIBE triples by predicate and direction: outgoing properties
+// and incoming roles (property-of) share the same paging sequence.
 const describedProperties = Array.from(
   describedRecord.reduce((grouped, item) => {
-    const values = grouped.get(item.property) ?? [];
-    values.push(item.value);
-    grouped.set(item.property, values);
+    const key = `${item.direction}\u0000${item.property}`;
+    const values = grouped.get(key) ?? { property: item.property, direction: item.direction, values: [] as string[] };
+    values.values.push(item.value);
+    grouped.set(key, values);
     return grouped;
-  }, new Map<string, string[]>()),
-  ([property, values]) => ({ property, values }),
+  }, new Map<string, { property: string; direction: "property" | "property-of"; values: string[] }>()),
+  ([, item]) => item,
 );
+const describedPropertyPage = describedProperties.slice(
+  recordDescriptionPage * RECORD_DESCRIPTION_PAGE_SIZE,
+  (recordDescriptionPage + 1) * RECORD_DESCRIPTION_PAGE_SIZE,
+);
+const describedPropertyRows = describedPropertyPage.filter((item) => item.direction === "property");
+const describedRoleRows = describedPropertyPage.filter((item) => item.direction === "property-of");
+const describedPropertyCount = describedProperties.filter((item) => item.direction === "property").length;
+const describedRoleCount = describedProperties.filter((item) => item.direction === "property-of").length;
   
   const [isDescribing, setIsDescribing] = useState(false);
   const [isCountingResults, setIsCountingResults] = useState(false);
@@ -2228,7 +2419,6 @@ const describedProperties = Array.from(
   const [timeoutSeconds, setTimeoutSeconds] = useState(0);
 
   const resultsCountSparql = buildFctCountSparql(queryTree);
-  const resultsSparql = buildFctResultsSparql(queryTree);
   const resultsRequestXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
     type: "text", limit: String(resultsBatchSize), offset: String(resultsOffset),
   }));
@@ -2429,6 +2619,7 @@ const describedProperties = Array.from(
         // the widgets after the coordinated transition has cleared them.
         if (cancelled || requestQueryIdentity !== activeQueryIdentityRef.current) return;
 
+        resultsLoadedQueryIdentityRef.current = requestQueryIdentity;
         setSparqlQuery(data.sparql || "");
         setResultsPageMatchCount(nextResults.length);
         setResultsPageComplete(rawResults.length < resultsBatchSize);
@@ -2447,6 +2638,7 @@ const describedProperties = Array.from(
         if (cancelled) return;
 
         setResults([]);
+        resultsLoadedQueryIdentityRef.current = "";
         setResultsPageMatchCount(0);
         setSelectedUri("");
         setSearchError(
@@ -2897,7 +3089,7 @@ const describedProperties = Array.from(
         const limit = FACET_PAGE_SIZE;
         const offset = graphsPage * limit;
         const graphQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
-          type: "graphs", limit: String(limit), offset: String(offset),
+          type: "graphs", sort: graphSort, limit: String(limit), offset: String(offset),
         }));
         const response = await fetch("/proxy/api/fct", {
           method: "POST", cache: "no-store",
@@ -2915,17 +3107,21 @@ const describedProperties = Array.from(
         //const graphs = Array.isArray(data.graphs) ? [...new Set(data.graphs.filter((value: unknown): value is string => typeof value === "string"))] : [];
        // setGraphFacets(graphs.map((uri: string) => ({ uri, label: uri, count: 0 })));
 
-const graphs: string[] = Array.isArray(data.graphs)
+const graphs: FacetItem[] = Array.isArray(data.graphs)
   ? Array.from(
-      new Set<string>(
-        (data.graphs as unknown[]).filter(
-          (value): value is string => typeof value === "string"
-        )
-      )
+      new Map<string, FacetItem>(
+        (data.graphs as FacetItem[])
+          .filter((item) => item && typeof item.uri === "string")
+          .map((item) => [item.uri, {
+            uri: item.uri,
+            label: item.label || toLabel(item.uri),
+            count: Number.isFinite(item.count) ? item.count : 0,
+          }]),
+      ).values(),
     )
   : [];
 
-setGraphFacets(graphs.map((uri) => ({ uri, label: toLabel(uri), count: 0 })));
+setGraphFacets(graphs);
 
         setGraphHasMore(typeof data.rowCount === "number" ? data.rowCount >= limit : graphs.length >= limit);
       } catch (error) {
@@ -2940,7 +3136,7 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: toLabel(uri), count: 0 })));
     }
     void loadGraphPage();
     return () => { cancelled = true; controller.abort(); };
-  }, [graphsPage, queryWithoutPagingXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [graphsPage, graphSort, queryWithoutPagingXml, selectedEndpointId, endpointReadyForQuery]);
 
 
   // Defensively merge duplicate resource rows by URI. The API normally groups
@@ -2974,6 +3170,9 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: toLabel(uri), count: 0 })));
   // Match excerpts/counts are meaningful only for the root-level live <view>.
   // A nested view represents a focused path, not a root text-search result set.
   const isRootView = queryTree.children.some((node) => node.id === "query-view");
+  // The live query is the source of truth: without a <text> node there is no
+  // text match to explain, whatever the search field happens to contain.
+  const liveQueryHasText = queryTree.children.some((node) => node.name === "text");
   const visibleResultsPage = allLoadedResults.slice(resultsUiPage * resultsPageSize, (resultsUiPage + 1) * resultsPageSize);
   useEffect(() => {
     // Group members can be selected even when they are not on the ordinary
@@ -3015,8 +3214,14 @@ setGraphFacets(graphs.map((uri) => ({ uri, label: toLabel(uri), count: 0 })));
         if (!cancelled) rememberShortforms(data?.shortforms);
         const rows = data.describe.flatMap((triple) => {
           const property = triple.predicate.value;
+          const subject = triple.subject?.value;
           const object = triple.object.termType === "bnode" ? `_:${triple.object.value}` : triple.object.value;
-          return property && object ? [{ property, value: object }] : [];
+          const direction: "property" | "property-of" | null = subject === selectedUri
+            ? "property"
+            : triple.object.value === selectedUri
+              ? "property-of"
+              : null;
+          return property && object && direction ? [{ property, value: object, direction }] : [];
         });
         if (!cancelled) setDescribedRecord(rows);
       } catch (error) {
@@ -3051,7 +3256,169 @@ const displayedBreadcrumbPath =
     ? breadcrumbTrail
     : activePropertyPath;
 
-const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked state from the authoritative query tree, including path
+const activeBreadcrumbIndex = activePropertyPath.length - 1;
+const tutorialBreadcrumbPath = tutorialMode && facetHoverPreview?.kind === "facet" && facetHoverPreview.successorNodeId
+  ? [
+      ...displayedBreadcrumbPath.slice(0, activeBreadcrumbIndex + 1),
+      {
+        id: facetHoverPreview.successorNodeId,
+        uri: facetHoverPreview.uri,
+        name: facetHoverPreview.direction === "forward" ? "property" : "property-of",
+      },
+    ]
+  : displayedBreadcrumbPath;
+const tutorialBreadcrumbTargetId = tutorialMode && facetHoverPreview?.kind === "facet"
+  ? facetHoverPreview.successorNodeId ?? null
+  : null;
+const breadcrumbPreviewPathKey = `query-root|${displayedBreadcrumbPath.map((crumb) => crumb.id).join("|")}`;
+const makeBreadcrumbScopedTree = (targetId: string): FctQueryTree | null => {
+  // Metadata queries are clones of the live query. Only the active <view> is
+  // moved to the target scope and normalized to one result at offset zero.
+  const cloned = JSON.parse(JSON.stringify(queryTree)) as FctQueryTree;
+  const existingView = findQueryNode(queryTree.children, "query-view");
+  const removeViews = (nodes: FctQueryNode[]) => {
+    for (const node of nodes) {
+      node.children = node.children.filter((child) => child.name !== "view");
+      removeViews(node.children);
+    }
+  };
+  cloned.children = cloned.children.filter((node) => node.name !== "view");
+  removeViews(cloned.children);
+  const viewNode: FctQueryNode = {
+    id: "query-view",
+    name: "view",
+    attributes: { ...(existingView?.attributes ?? {}), type: "text", limit: "1", offset: "0" },
+    children: [],
+  };
+  const attach = (nodes: FctQueryNode[]): boolean => {
+    for (const node of nodes) {
+      if (node.id === targetId) {
+        node.children.push(viewNode);
+        return true;
+      }
+      if (attach(node.children)) return true;
+    }
+    return false;
+  };
+  if (targetId === "query-root") {
+    cloned.children.push(viewNode);
+    return cloned;
+  }
+  return attach(cloned.children) ? cloned : null;
+};
+const metadataRegistryKey = (tree: FctQueryTree) => `${selectedEndpointId}\u0000${serializeFctQuery(tree)}`;
+
+// When the center-pane result set finishes loading, register its first item and
+// total count under the same one-result scoped query used by breadcrumb metadata.
+useEffect(() => {
+  const expectedLoadedIdentity = `${selectedEndpointId}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
+  if (!endpointReadyForQuery || isSearching || isCountingResults) return;
+  if (resultsLoadedQueryIdentityRef.current !== expectedLoadedIdentity) return;
+  // If the center pane did not obtain a usable total, leave the registry empty
+  // so the breadcrumb fallback can fetch its own count rather than caching null.
+  if (effectiveResultsTotalCount === null) return;
+  const activeScopeId = activeLeafId ?? "query-root";
+  const scopedTree = makeBreadcrumbScopedTree(activeScopeId);
+  if (!scopedTree) return;
+  const first = results[0];
+  const summary: FctUiResultSummary = {
+    label: first ? (first.label?.trim() || first.title?.trim() || toLabel(first.uri)) : "—",
+    count: effectiveResultsTotalCount,
+  };
+  metadataRegistryRef.current.set(metadataRegistryKey(scopedTree), summary);
+  // Bound the in-memory registry so navigating across many queries cannot grow it indefinitely.
+  if (metadataRegistryRef.current.size > 300) {
+    const oldestKey = metadataRegistryRef.current.keys().next().value;
+    if (oldestKey) metadataRegistryRef.current.delete(oldestKey);
+  }
+}, [activeLeafId, effectiveResultsTotalCount, endpointReadyForQuery, isCountingResults, isSearching, queryCountXml, queryTree, results, selectedEndpointId]);
+
+useEffect(() => {
+  if (!endpointReadyForQuery) {
+    setBreadcrumbPreviewSummaries({});
+    setBreadcrumbPreviewPendingIds(new Set());
+    return;
+  }
+  const controller = new AbortController();
+  let cancelled = false;
+  const targetCrumbs = [{ id: "query-root", uri: "" }, ...displayedBreadcrumbPath.map((crumb) => ({ id: crumb.id, uri: crumb.uri }))];
+  const activeScopeId = activeLeafId ?? "query-root";
+  const initialPendingIds = new Set(targetCrumbs.flatMap((crumb) => {
+    const scopedTree = makeBreadcrumbScopedTree(crumb.id);
+    return scopedTree && !metadataRegistryRef.current.has(metadataRegistryKey(scopedTree)) ? [crumb.id] : [];
+  }));
+  if (isSearching || isCountingResults) initialPendingIds.add(activeScopeId);
+  setBreadcrumbPreviewPendingIds(initialPendingIds);
+  const request = async (xml: string, component: string) => {
+    const response = await fetch("/proxy/api/fct", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("breadcrumb-preview", component) },
+      body: xml,
+      signal: controller.signal,
+    });
+    return await readFctResponse(response);
+  };
+  const timer = window.setTimeout(() => {
+    void Promise.all(targetCrumbs.map(async (crumb) => {
+      const scopedTree = makeBreadcrumbScopedTree(crumb.id);
+      if (!scopedTree) return null;
+      const registryKey = metadataRegistryKey(scopedTree);
+      const cached = metadataRegistryRef.current.get(registryKey);
+      if (cached) return [crumb.id, cached] as const;
+      // Let the center-pane loader supply metadata for its own scope rather than
+      // racing it with a redundant breadcrumb request.
+      if (crumb.id === activeScopeId && (isSearching || isCountingResults)) return null;
+      try {
+        const countSparql = buildFctCountSparql(scopedTree);
+        const [textData, countResponse] = await Promise.all([
+          request(serializeFctQuery(scopedTree), `BreadcrumbPreview:${crumb.id}:text`),
+          countSparql ? fetch("/proxy/api/sparql", {
+            method: "POST",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-preview-count", `BreadcrumbPreview:${crumb.id}:count`) },
+            body: JSON.stringify({ facetValueCount: { sparql: countSparql } }),
+            signal: controller.signal,
+          }) : Promise.resolve(null),
+        ]);
+        let count: number | null = null;
+        if (countResponse?.ok) {
+          const countPayload = await countResponse.json() as { count?: unknown };
+          const parsedCount = Number(countPayload.count);
+          if (Number.isSafeInteger(parsedCount) && parsedCount >= 0) count = parsedCount;
+        }
+        const first = textData.results[0];
+        const summary: FctUiResultSummary = {
+          label: first ? (first.label?.trim() || first.title?.trim() || toLabel(first.uri)) : "—",
+          count,
+        };
+        metadataRegistryRef.current.set(registryKey, summary);
+        return [crumb.id, summary] as const;
+      } catch (error) {
+        if (!controller.signal.aborted) console.info("Maestro breadcrumb preview lookup failed", { crumb: crumb.uri, error });
+        return null;
+      }
+    })).then((items) => {
+      if (cancelled || controller.signal.aborted) return;
+      const nextSummaries: Record<string, FctUiResultSummary> = {};
+      for (const item of items) if (item) nextSummaries[item[0]] = item[1];
+      setBreadcrumbPreviewSummaries(nextSummaries);
+      // The active scope can be supplied by the center-pane result/count pipeline.
+      setBreadcrumbPreviewPendingIds(new Set(
+        (isSearching || isCountingResults) && initialPendingIds.has(activeScopeId) && !nextSummaries[activeScopeId]
+          ? [activeScopeId]
+          : [],
+      ));
+    });
+  }, 120);
+  return () => {
+    cancelled = true;
+    window.clearTimeout(timer);
+    controller.abort();
+  };
+}, [activeLeafId, breadcrumbPreviewPathKey, effectiveResultsTotalCount, isCountingResults, isSearching, queryRevision, queryTree, results, selectedEndpointId, endpointReadyForQuery]);
+
+// Derive checked state from the authoritative query tree, including path
   // properties left at the root when a breadcrumb moves the view elsewhere.
   const activePropertyFilters = getActiveViewPropertyFilters(queryTree);
   const activeRoleFilters = getActiveViewRoleFilters(queryTree);
@@ -3087,6 +3454,79 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
   // dedicated pane above the paged list, so selected items do not appear twice.
   const selectedClassDisplayFacets = visibleClassDisplayFacets.filter((item) => selectedClasses.has(item.uri));
   const unselectedClassDisplayFacets = visibleClassDisplayFacets.filter((item) => !selectedClasses.has(item.uri));
+  const categoryMetadataUrisKey = classDisplayFacets.map((item) => item.uri).sort().join("\n");
+  useEffect(() => {
+    if (!categoryMetadataUrisKey) return;
+    const controller = new AbortController();
+    const uris = categoryMetadataUrisKey.split("\n").filter(Boolean);
+    const batches: string[][] = [];
+    for (let offset = 0; offset < uris.length; offset += 100) batches.push(uris.slice(offset, offset + 100));
+    void (async () => {
+      const discovered: OntologyClassMetadata[] = [];
+      for (const batch of batches) {
+        if (controller.signal.aborted) return;
+        const response = await fetch("/proxy/api/ontology", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uris: batch }),
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Ontology discovery/ingestion returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
+        const payload = await response.json() as { items?: OntologyClassMetadata[] };
+        discovered.push(...(payload.items ?? []));
+      }
+      if (controller.signal.aborted) return;
+      setOntologyClassMetadata((current) => {
+        const next = { ...current };
+        for (const item of discovered) if (item?.uri && item.ontology) next[item.uri] = item;
+        return next;
+      });
+    })().catch((error: unknown) => {
+      if (!controller.signal.aborted) console.info("Maestro category ontology discovery or ingestion was incomplete; inspect the /proxy/api/ontology response and personal SPARQL store.", error);
+    });
+    return () => controller.abort();
+  }, [categoryMetadataUrisKey]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch("/proxy/api/ontology", { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Personal SPARQL endpoint lookup returned HTTP ${response.status}.`);
+        return await response.json() as { endpoint?: string };
+      })
+      .then((payload) => { if (!controller.signal.aborted) setPersonalSparqlEndpoint(payload.endpoint ?? ""); })
+      .catch((error: unknown) => { if (!controller.signal.aborted) console.info("Could not read the personal SPARQL endpoint configuration.", error); });
+    return () => controller.abort();
+  }, []);
+
+  const pagedUnselectedClasses = unselectedClassDisplayFacets.slice(classesPage * FACET_PAGE_SIZE, (classesPage + 1) * FACET_PAGE_SIZE);
+  const categoryTreeItems = categoriesTreeMode ? unselectedClassDisplayFacets : pagedUnselectedClasses;
+  const categoryTreeRoots: CategoryTreeNode[] = (() => {
+    const byUri = new Map(categoryTreeItems.map((item) => [item.uri, { item, children: [] as CategoryTreeNode[] }]));
+    const roots: CategoryTreeNode[] = [];
+    for (const node of byUri.values()) {
+      const parentUri = ontologyClassMetadata[node.item.uri]?.parent;
+      const parent = parentUri ? byUri.get(parentUri) : undefined;
+      // Malformed ontologies can contain subclass cycles. Do not attach a node if following
+      // the candidate parent's ancestry would loop back to that node; keep it as a root instead.
+      let ancestor = parent;
+      const seen = new Set<string>([node.item.uri]);
+      let wouldCycle = false;
+      while (ancestor) {
+        if (seen.has(ancestor.item.uri)) { wouldCycle = true; break; }
+        seen.add(ancestor.item.uri);
+        const nextParentUri = ontologyClassMetadata[ancestor.item.uri]?.parent;
+        ancestor = nextParentUri ? byUri.get(nextParentUri) : undefined;
+      }
+      if (parent && !wouldCycle) parent.children.push(node);
+      else roots.push(node);
+    }
+    const sortTree = (nodes: CategoryTreeNode[]) => {
+      nodes.sort((a, b) => toLabel(a.item.uri).localeCompare(toLabel(b.item.uri)));
+      nodes.forEach((node) => sortTree(node.children));
+    };
+    sortTree(roots);
+    return roots;
+  })();
   useEffect(() => {
     setClassesPage((current) =>
       Math.min(current, Math.max(0, Math.ceil(unselectedClassDisplayFacets.length / FACET_PAGE_SIZE) - 1)),
@@ -3160,6 +3600,28 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
     return visit(queryTree.children);
   }
 
+  /**
+   * Finds a node to highlight for a tutorial preview. Unlike path navigation,
+   * this may return an ordinary relationship filter when no path node exists.
+   */
+  function findRelationshipPreviewNode(
+    uri: string,
+    direction: RelationshipDirection,
+  ): FctQueryNode | null {
+    const pathNode = findRelationshipPathNode(uri, direction);
+    if (pathNode) return pathNode;
+    const tag = direction === "forward" ? "property" : "property-of";
+    function visit(nodes: FctQueryNode[]): FctQueryNode | null {
+      for (const node of nodes) {
+        if (node.name === tag && node.attributes.iri === uri) return node;
+        const nested = visit(node.children);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    return visit(queryTree.children);
+  }
+
   function findPropertyPathNode(uri: string): FctQueryNode | null {
     return findRelationshipPathNode(uri, "forward");
   }
@@ -3183,6 +3645,27 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
       window.localStorage.setItem(AUTO_CONFIGURED_FACETS_STORAGE_KEY, JSON.stringify(Array.from(next)));
     } catch {
       // The UI marker is still useful for this session if storage is unavailable.
+    }
+  }
+
+  // Add every pending Auto-configure candidate. A facet whose registry exclude
+  // boolean is true is written to the live query with exclude="yes".
+  function runAutoConfigure() {
+    const activePath = getPropertyPath();
+    const scopeParentId = activePath[activePath.length - 1]?.id ?? null;
+    for (const uri of facetAutofillCandidates.property) {
+      if (selectedProperties.has(uri)) continue;
+      const excluded = isFacetExcludeRecorded("property", uri);
+      handlePropertyCheckboxChange(uri, true, false);
+      setAutoConfiguredFacet("property", uri, true);
+      if (excluded) setNodeAttribute(`property-filter-${encodeURIComponent(uri)}`, "exclude", "yes");
+    }
+    for (const uri of facetAutofillCandidates["property-in"]) {
+      if (selectedRoles.has(uri)) continue;
+      const excluded = isFacetExcludeRecorded("property-in", uri);
+      handleRoleCheckboxChange(uri, true, false);
+      setAutoConfiguredFacet("property-in", uri, true);
+      if (excluded) setNodeAttribute(`role-filter-${scopeParentId ? `${encodeURIComponent(scopeParentId)}-` : "root-"}${encodeURIComponent(uri)}`, "exclude", "yes");
     }
   }
 
@@ -3298,17 +3781,43 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
 
   function bindGraph(uri: string) {
     setGraphText(uri);
+    recordGraphNavigation(uri);
     setQueryAttribute("graph", uri);
+    clearTutorialPreview();
+  }
+
+  function navigateGraphHistory(nextIndex: number) {
+    const graph = graphNavigationHistory[nextIndex];
+    if (graph === undefined) return;
+    setGraphNavigationIndex(nextIndex);
+    setGraphText(graph);
+    setQueryAttribute("graph", graph || null);
+    clearTutorialPreview();
+  }
+
+  function recordGraphNavigation(graph: string) {
+    const prefix = graphNavigationHistory.slice(0, graphNavigationIndex + 1);
+    if (prefix[prefix.length - 1] === graph) {
+      setGraphNavigationHistory(prefix);
+      return;
+    }
+    const next = [...prefix, graph];
+    setGraphNavigationHistory(next);
+    setGraphNavigationIndex(next.length - 1);
   }
 
   function applyGraphText() {
     const graph = graphText.trim();
+    recordGraphNavigation(graph);
     setQueryAttribute("graph", graph || null);
+    clearTutorialPreview();
   }
 
   function clearGraph() {
     setGraphText("");
+    recordGraphNavigation("");
     setQueryAttribute("graph", null);
+    clearTutorialPreview();
   }
 
   function handleRoleCheckboxChange(uri: string, checked: boolean, trackUsage = true) {
@@ -3475,12 +3984,39 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
     });
   }
 
+  /** Bound <value> children of a relationship node, in query order. */
+  function boundValueNodes(node: FctQueryNode | undefined): FctQueryNode[] {
+    return (node?.children ?? []).filter((child) => child.name === "value" && Boolean(child.text));
+  }
+
+  function boundValueLabel(value: FctQueryNode): string {
+    const text = value.text ?? "";
+    const lang = value.attributes["xml:lang"];
+    const base = value.attributes.datatype === "uri" ? toLabel(text) : text;
+    return lang ? `${base} @${lang}` : base;
+  }
+
+  /**
+   * A relationship's bound values sit on the stack just above it: the first
+   * pop removes the most recent binding, and only when none remain does the
+   * next pop remove the relationship itself.
+   */
+  function popBreadcrumbOrBinding(crumb: { id: string; uri: string; name: string }) {
+    const values = boundValueNodes(findQueryNode(queryTree.children, crumb.id));
+    if (values.length > 0) {
+      deleteNode(values[values.length - 1].id);
+      return;
+    }
+    popBreadcrumbNode(crumb);
+  }
+
   function queryNodeLabel(node: FctQueryNode): string {
     const iri = node.attributes.iri;
+    if (node.id === "query-everything") return "Everything";
     if (node.id === "query-text")
-      return `Search text${node.text ? `: ${node.text}` : " (empty)"}`;
+      return node.text || "Everything";
     if (node.id === "query-view") {
-      return `Results view · limit ${node.attributes.limit ?? "30"} · offset ${node.attributes.offset ?? "0"}`;
+      return `Focus · limit ${node.attributes.limit ?? "30"} · offset ${node.attributes.offset ?? "0"}`;
     }
     if (node.name === "value")
       return node.text ? `Value: ${node.text}` : "Value";
@@ -3509,66 +4045,176 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
   }
 
 
+  const [collapsedQueryNodeIds, setCollapsedQueryNodeIds] = useState<Set<string>>(() => new Set());
+  const rootClassNodes = queryTree.children.filter((node) => node.name === "class");
+  // Prefer the Text node, otherwise attach root classes to a root Value node.
+  const rootClassCarrierId = queryTree.children.find((node) => node.id === "query-text")?.id
+    ?? queryTree.children.find((node) => node.name === "value")?.id
+    ?? "query-everything";
+  const classLabelsForQueryNode = (node: FctQueryNode): string[] => {
+    const nested = node.children.filter((child) => child.name === "class").map((child) => child.attributes.iri).filter((iri): iri is string => Boolean(iri));
+    const rootStack = node.id === rootClassCarrierId
+      ? rootClassNodes.map((classNode) => classNode.attributes.iri).filter((iri): iri is string => Boolean(iri))
+      : [];
+    return Array.from(new Set([...nested, ...rootStack])).map(toLabel);
+  };
+
+  const rootPreviewNodeId = queryTree.children.find((node) => node.name === "value" && node.attributes.datatype === "uri")?.id
+    ?? queryTree.children.find((node) => node.id === "query-text")?.id
+    ?? "query-everything";
   const renderQueryNode = (
     node: FctQueryNode,
     depth = 0,
   ): ReactNode => {
-    const protectedNode =
-      node.id === "query-text" || node.id === "query-view";
+    // A nested <view> is the focus marker for its parent, not a separate tree row.
+    if (node.id === "query-view") return null;
+    const protectedNode = node.id === "query-text" || node.id === "query-view" || node.id === "query-everything";
+    const rootHasFocusView = queryTree.children.some((child) => child.id === "query-view");
+    const isRoot = depth === 0;
+    // A <view> belongs to its immediate parent. Color that parent's icon green
+    // wherever it occurs in the tree; at the root, the standalone view focuses
+    // the root search/value node instead.
+    const hasAttachedFocusView = node.children.some((child) => child.id === "query-view");
+    const isRootFocusCarrier = isRoot && rootHasFocusView && (node.id === "query-text" || node.id === "query-everything" || node.name === "value");
+    const isFocusCarrier = hasAttachedFocusView || isRootFocusCarrier;
+    const isRootUriValue = isRoot && node.name === "value" && node.attributes.datatype === "uri";
+    const SearchModeIcon = signalOptions.find((option) => option.mode === textSearchMode)?.Icon ?? SignalHigh;
+    const NodeIcon = node.id === "query-text"
+      ? SearchModeIcon
+      : node.id === "query-everything"
+        ? SearchModeIcon
+        : node.id === "query-view"
+        ? null
+        : node.name === "property"
+          ? BetweenHorizontalStart
+          : node.name === "property-of"
+            ? BetweenHorizontalEnd
+            : node.name === "class"
+              ? Shapes
+              : node.name === "value"
+                ? isRootUriValue ? GlobeCode : Tag
+                : null;
+    const nodeIconColor = isFocusCarrier
+      ? "text-emerald-600 dark:text-emerald-400"
+      : node.id === "query-text" || node.id === "query-everything"
+        ? "text-black dark:text-white"
+        : node.name === "property" || node.name === "property-of"
+          ? "text-red-600 dark:text-red-400"
+          : node.name === "class"
+            ? "text-blue-600 dark:text-blue-400"
+            : "text-muted-foreground";
+    // <value> children of a property, property-of, or class are shown inline on
+    // their parent's row (= value) instead of as separate rows.
+    const inlinesValues = node.name === "property" || node.name === "property-of" || node.name === "class";
+    const inlineValues = inlinesValues ? boundValueNodes(node) : [];
+    const topInlineValue = inlineValues[inlineValues.length - 1];
+    const inlineClassNodes = node.children.filter((child) => child.name === "class");
+    const rootClassesOnThisNode = node.id === rootClassCarrierId ? rootClassNodes : [];
+    const topInlineClass = [...inlineClassNodes, ...rootClassesOnThisNode][inlineClassNodes.length + rootClassesOnThisNode.length - 1];
+    const visibleChildren = node.children.filter((child) =>
+      child.id !== "query-view" && child.name !== "class" && !(inlinesValues && child.name === "value" && Boolean(child.text)));
+    const hasVisibleChildren = visibleChildren.length > 0;
+    const isCollapsed = collapsedQueryNodeIds.has(node.id);
+    const toggleCollapsed = () => setCollapsedQueryNodeIds((current) => {
+      const next = new Set(current);
+      if (next.has(node.id)) next.delete(node.id);
+      else next.add(node.id);
+      return next;
+    });
     return (
       <li key={node.id} className="min-w-0">
         <div
-          className="flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5 hover:bg-accent/60"
+          className={`flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5 hover:bg-accent/60 ${
+            facetHoverPreview && ((facetHoverPreview.kind === "record" && node.id === rootPreviewNodeId) || (facetHoverPreview.kind === "facet" && node.id === facetHoverPreview.successorNodeId))
+              ? "bg-purple-50/70 text-purple-800 ring-1 ring-inset ring-purple-500/80 dark:bg-purple-950/30 dark:text-purple-200"
+              : ""
+          }`}
           style={{ marginLeft: depth * 14 }}
         >
-          <span
-            className="mt-0.5 select-none text-muted-foreground"
-            aria-hidden="true"
-          >
-            {node.children.length ? "▾" : "·"}
+          <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
+            {hasVisibleChildren ? (
+              <button
+                type="button"
+                onClick={toggleCollapsed}
+                aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${queryNodeLabel(node)}`}
+                title={`${isCollapsed ? "Expand" : "Collapse"} node`}
+                className="rounded-sm text-muted-foreground hover:text-foreground"
+              >
+                {isCollapsed ? <ChevronRight className="size-4" aria-hidden="true" /> : <ChevronDown className="size-4" aria-hidden="true" />}
+              </button>
+            ) : null}
           </span>
-          {node.name === "property" || node.name === "property-of" ? (
-            <button
-              type="button"
-              className="min-w-0 flex-1 break-words text-left text-sm underline-offset-2 hover:underline cursor-pointer"
-              title={`Navigate to ${node.name === "property-of" ? "reverse-role" : "property"} scope: ${node.attributes.iri ?? queryNodeLabel(node)}`}
-              onClick={() => navigateToPropertyPath(node.id)}
-            >
-              {queryNodeLabel(node)}{node.name === "property-of" ? " of" : ""}
-            </button>
+          {NodeIcon && (node.name === "property" || node.name === "property-of" ? (
+            <Tooltip>
+              <TooltipTrigger render={<span className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center" aria-label={node.name === "property-of" ? "Role" : "Property"}><NodeIcon className={`size-4 ${nodeIconColor}`} aria-hidden="true" /></span>} />
+              <TooltipContent>{node.name === "property-of" ? "Role" : "Property"}</TooltipContent>
+            </Tooltip>
           ) : (
-            <span
-              className="min-w-0 flex-1 break-words text-sm"
-              title={node.attributes.iri ?? node.name}
-            >
-              {queryNodeLabel(node)}
-            </span>
-          )}
+            <NodeIcon className={`mt-0.5 size-4 shrink-0 ${nodeIconColor}`} aria-hidden="true" />
+          ))}
+          <span className="min-w-0 flex-1 break-words text-sm">
+            {node.name === "property" || node.name === "property-of" ? (
+              <button
+                type="button"
+                className="min-w-0 break-words text-left underline-offset-2 hover:underline cursor-pointer"
+                title={`Navigate to ${node.name === "property-of" ? "reverse-role" : "property"} scope: ${node.attributes.iri ?? queryNodeLabel(node)}`}
+                onClick={() => navigateToPropertyPath(node.id)}
+              >
+                {queryNodeLabel(node)}{node.name === "property-of" ? " of" : ""}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
+              </button>
+            ) : (
+              <span
+                className="min-w-0 break-words"
+                title={node.attributes.iri ?? node.name}
+              >
+                {node.id === "query-view" ? "Results view" : facetHoverPreview?.kind === "record" && node.id === rootPreviewNodeId ? facetHoverPreview.label : queryNodeLabel(node)}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
+              </span>
+            )}
+            {inlineValues.map((value) => (
+              <span key={value.id} className="ml-1.5 inline-flex max-w-full items-baseline gap-1 align-baseline">
+                <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
+                <span
+                  className="min-w-0 break-words"
+                  title={`${value.text ?? ""}${value.attributes.datatype ? ` (${value.attributes.datatype})` : ""}`}
+                >
+                  {boundValueLabel(value)}
+                </span>
+              </span>
+            ))}
+          </span>
           <button
             type="button"
             aria-label={
               protectedNode
                 ? `${queryNodeLabel(node)} is required`
-                : `Remove ${queryNodeLabel(node)} and its children`
+                : topInlineValue
+                  ? `Remove value ${boundValueLabel(topInlineValue)} from ${queryNodeLabel(node)}`
+                  : topInlineClass
+                    ? `Remove class ${toLabel(topInlineClass.attributes.iri ?? "class")} from ${queryNodeLabel(node)}`
+                    : `Remove ${queryNodeLabel(node)} and its children`
             }
             title={
               protectedNode
                 ? "Required query node"
-                : "Remove this node and all descendants"
+                : topInlineValue
+                  ? "Remove the bound value; click again to remove the node"
+                  : topInlineClass
+                    ? "Remove the last class constraint; click again to remove the node"
+                    : "Remove this node and all descendants"
             }
             disabled={protectedNode}
-            onClick={() => deleteNode(node.id)}
+            onClick={() => deleteNode(topInlineValue ? topInlineValue.id : topInlineClass ? topInlineClass.id : node.id)}
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded border text-base leading-none text-muted-foreground hover:border-destructive hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-25"
           >
             −
           </button>
         </div>
-        {node.children.length > 0 && (
+        {hasVisibleChildren && !isCollapsed && (
           <ul
             className="border-l border-border/70"
             style={{ marginLeft: depth * 14 + 18 }}
           >
-            {node.children.map((child) => renderQueryNode(child, depth + 1))}
+            {visibleChildren.map((child) => <Fragment key={child.id}>{renderQueryNode(child, depth + 1)}</Fragment>)}
           </ul>
         )}
       </li>
@@ -3593,16 +4239,22 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
           <article
             key={widget.uri}
             ref={(element) => { if (element) personalWidgetCardRefs.current.set(widget.uri, element); else personalWidgetCardRefs.current.delete(widget.uri); }}
-            className={`flex min-w-0 flex-col ${isGroupByFacet ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}
+            className={`flex min-w-0 flex-col ${isGroupByFacet ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "rounded-md" : ""}`}
+            style={facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward"
+              ? { boxShadow: "inset 0 0 0 1px rgb(168 85 247 / 0.85)", borderRadius: "0.375rem", ...(isGroupByFacet ? { borderColor: "rgb(168 85 247 / 0.9)" } : {}) }
+              : undefined}
           >
-            <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByFacet ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
+            <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByFacet ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""} ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "border-purple-500/80" : ""}`}>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <button
                     type="button"
-                    className="break-words text-left text-sm font-semibold text-inherit underline-offset-2 hover:underline cursor-pointer"
+                    className={`break-words text-left text-sm font-semibold underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : "text-inherit"}`}
                     title={`Navigate to ${widget.excluded ? `Excluded: ${toLabel(widget.uri)}` : toLabel(widget.uri)} scope`}
+                    onMouseEnter={() => beginFacetHoverPreview(widget.uri, "forward", toLabel(widget.uri), "personal")}
+                    onMouseLeave={clearTutorialPreview}
                     onClick={() => {
+                      clearTutorialPreview();
                       const existingPath = findPropertyPathNode(widget.uri);
                       if (existingPath) navigateToPropertyPath(existingPath.id);
                       else navigateIntoRelationship(widget.uri, "forward");
@@ -3866,6 +4518,152 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
     );
   }
 
+  /**
+   * Attach non-enumerable UI-only result metadata to the live query node that
+   * owns the active <view>. This never changes XML, query identity, or revision.
+   */
+  function defineUiResultSummary(
+    target: { uiResultSummary?: FctUiResultSummary },
+    summary: FctUiResultSummary | undefined,
+  ) {
+    Object.defineProperty(target, "uiResultSummary", {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: summary,
+    });
+  }
+
+  function clearUiResultSummaries(nodes: FctQueryNode[]) {
+    for (const node of nodes) {
+      defineUiResultSummary(node, undefined);
+      clearUiResultSummaries(node.children);
+    }
+  }
+
+  clearUiResultSummaries(queryTree.children);
+  defineUiResultSummary(queryTree, undefined);
+  const firstResultForSummary = results[0];
+  const resultSummary: FctUiResultSummary | undefined =
+    firstResultForSummary || effectiveResultsTotalCount !== null
+      ? {
+          label: firstResultForSummary
+            ? (firstResultForSummary.label?.trim() || firstResultForSummary.title?.trim() || toLabel(firstResultForSummary.uri))
+            : "—",
+          count: effectiveResultsTotalCount,
+        }
+      : undefined;
+  if (resultSummary) {
+    if (queryTree.children.some((node) => node.name === "view")) {
+      defineUiResultSummary(queryTree, resultSummary);
+    } else {
+      const attachToViewCarrier = (nodes: FctQueryNode[]): boolean => {
+        for (const node of nodes) {
+          if (node.children.some((child) => child.name === "view")) {
+            defineUiResultSummary(node, resultSummary);
+            return true;
+          }
+          if (attachToViewCarrier(node.children)) return true;
+        }
+        return false;
+      };
+      attachToViewCarrier(queryTree.children);
+    }
+  }
+
+  const searchInputGroup = (
+                  <ButtonGroup
+                    aria-label="Search text and signal controls"
+                    className="min-w-0 flex-1 rounded-none border-0 [&>*+*]:border-l [&>*+*]:border-input [&>span]:border-l-0 [&>input]:min-w-0 [&>input]:flex-1 [&>input]:rounded-none [&>input]:border-0 [&>input]:bg-background [&>input]:px-3 [&>input]:py-2 [&>input]:text-sm"
+                  >
+                    {textSearchMode === "uri" ? (
+                      <span
+                        role="img"
+                        aria-label="URI"
+                        title="URI"
+                        className="flex h-10 shrink-0 items-center justify-center px-2 text-muted-foreground"
+                      >
+                        <GlobeCode className="size-4" aria-hidden="true" />
+                      </span>
+                    ) : (
+                      <DropdownMenu
+                        open={namePropertyMenuOpen}
+                        onOpenChange={(open) => {
+                          setNamePropertyMenuOpen(open);
+                          if (!open) setRootSearchExpanded(false);
+                        }}
+                      >
+                        <Tooltip>
+                          <TooltipTrigger render={<DropdownMenuTrigger asChild><button type="button" onMouseEnter={() => { setRootSearchExpanded(true); setNamePropertyMenuOpen(true); }} aria-label={`Choose name/label property; currently ${selectedNamePropertyLabel}`} className="flex h-10 shrink-0 items-center justify-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"><SearchCode className="size-4" aria-hidden="true" /></button></DropdownMenuTrigger>} />
+                          <TooltipContent>Choose name/label property — currently {selectedNamePropertyLabel}</TooltipContent>
+                        </Tooltip>
+                        <DropdownMenuContent align="start" onMouseLeave={() => setNamePropertyMenuOpen(false)} className="max-h-80 min-w-56 overflow-y-auto">
+                          {TEXT_SEARCH_NAME_PROPERTIES.map((property) => {
+                            const checked = selectedNamePropertyUris.includes(property.uri);
+                            return (
+                              <DropdownMenuCheckboxItem
+                                key={property.uri}
+                                checked={checked}
+                                onSelect={(event) => event.preventDefault()}
+                                onCheckedChange={(nextChecked) => {
+                                  const nextProperties = nextChecked
+                                    ? [...selectedNamePropertyUris, property.uri]
+                                    : selectedNamePropertyUris.filter((uri) => uri !== property.uri);
+                                  // Keep at least one predicate selected so Name mode never silently
+                                  // becomes an unrestricted all-properties search.
+                                  if (nextProperties.length) setTextSearchMode("name", nextProperties);
+                                }}
+                              >
+                                <span className="flex min-w-0 flex-1 flex-col"><span>{property.label}</span><span className="text-xs text-muted-foreground">{property.description}</span></span>
+                              </DropdownMenuCheckboxItem>
+                            );
+                          })}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                    <input autoFocus value={search} onChange={(event) => updateSearchText(event.target.value)} placeholder={textSearchMode === "uri" ? "Enter URI" : "Enter keywords"} aria-label="Search results" className="min-w-0 flex-1 outline-none" />
+                    <div
+                      aria-label="Search mode"
+                      className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none ${signalPickerExpanded ? "w-[10rem]" : "w-10"}`}
+                      onMouseEnter={() => setSignalPickerExpanded(true)}
+                      onMouseLeave={() => setSignalPickerExpanded(false)}
+                      onFocusCapture={() => setSignalPickerExpanded(true)}
+                      onBlurCapture={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                          setSignalPickerExpanded(false);
+                        }
+                      }}
+                    >
+                      <div className="inline-flex w-[10rem] shrink-0 overflow-hidden">
+                        {(signalPickerExpanded
+                          ? signalOptions
+                          : [...signalOptions].sort((left, right) =>
+                              left.mode === textSearchMode ? -1 : right.mode === textSearchMode ? 1 : 0,
+                            )
+                        ).map(({ mode, Icon, label }) => (
+                          <Tooltip key={mode}>
+                            <TooltipTrigger render={
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setTextSearchMode(mode);
+                                  setSignalPickerExpanded(false);
+                                }}
+                                aria-pressed={textSearchMode === mode}
+                                aria-label={label}
+                                aria-hidden={!signalPickerExpanded && textSearchMode !== mode}
+                                tabIndex={!signalPickerExpanded && textSearchMode !== mode ? -1 : 0}
+                                className={`flex h-10 w-10 shrink-0 items-center justify-center transition-colors ${textSearchMode === mode ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
+                              ><Icon aria-hidden="true" className="size-4" /></button>
+                            } />
+                            <TooltipContent>{label}</TooltipContent>
+                          </Tooltip>
+                        ))}
+                      </div>
+                    </div>
+                  </ButtonGroup>
+  );
+
   return (
     <main className="flex h-dvh min-h-[500px] flex-col bg-background text-foreground">
       {isCheckingEndpoints && (
@@ -3883,51 +4681,49 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
       ))}
 
       <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b px-4 py-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          <label htmlFor="maestro-graph-input" className="shrink-0 text-sm font-medium">Datasite:</label>
-          <div className="flex min-w-0 max-w-3xl flex-1 items-stretch overflow-hidden rounded-md border border-input bg-background">
-            <input
-              id="maestro-graph-input"
-              value={graphText}
-              onChange={(event) => setGraphText(event.target.value)}
-              onKeyDown={(event) => { if (event.key === "Enter") applyGraphText(); }}
-              placeholder="Enter keywords or site URI"
-              aria-label="Site URI"
-              className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
-            />
-            <Tooltip>
-              <TooltipTrigger render={
-                <Toggle
-                  type="button"
-                  pressed={findEndpointsEnabled}
-                  onPressedChange={setFindEndpointsEnabled}
-                  aria-label={findEndpointsEnabled ? "Find Data Servers On" : "Find Data Servers Off"}
-                  className="shrink-0 rounded-none border-0 px-3 data-[state=on]:bg-green-100 data-[state=on]:text-green-800 data-[state=on]:hover:bg-green-200 dark:data-[state=on]:bg-green-950 dark:data-[state=on]:text-green-300 dark:data-[state=on]:hover:bg-green-900"
-                ><Network aria-hidden="true" /></Toggle>
-              } />
-              <TooltipContent>{findEndpointsEnabled ? "Find Data Servers On" : "Find Data Servers Off"}</TooltipContent>
-            </Tooltip>
-          </div>
-          <button
-              type="button"
-              onClick={clearGraph}
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-              title="Clear graph field and query graph"
-            >Clear</button>
-          <button
-              type="button"
-              onClick={applyGraphText}
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-            >Go</button>
-              <div className="ml-8 flex min-w-0 flex-wrap items-center gap-2">
-                <Label htmlFor="fct-endpoint" className="shrink-0 text-sm font-medium">Data server:</Label>
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <ButtonGroup aria-label="Data server selection and refresh" className="max-w-full [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-2">
+          <ButtonGroup aria-label="Datasite navigation" className="shrink-0 border-0 shadow-none">
+            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => navigateGraphHistory(graphNavigationIndex - 1)} disabled={graphNavigationIndex <= 0} aria-label="Previous datasite" title="Previous datasite" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent disabled:opacity-40"><ArrowLeft className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Previous datasite</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => navigateGraphHistory(graphNavigationIndex + 1)} disabled={graphNavigationIndex >= graphNavigationHistory.length - 1} aria-label="Next datasite" title="Next datasite" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent disabled:opacity-40"><ArrowRight className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Next datasite</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => { clearTutorialPreview(); refreshQuery(); }} aria-label="Refresh datasite" title="Refresh datasite" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent"><RefreshCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Refresh datasite</TooltipContent></Tooltip>
+          </ButtonGroup>
+          {/* One address: [datasite]@[data server], with no gap around the at-sign. */}
+          <div className="flex min-w-0 flex-1 items-center">
+            <div className="flex min-w-0 max-w-3xl flex-1 items-stretch overflow-hidden rounded-md border border-input bg-background">
+              <input
+                id="maestro-graph-input"
+                value={graphText}
+                onChange={(event) => setGraphText(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") applyGraphText(); }}
+                placeholder="Enter keywords or site URI"
+                aria-label="Site URI"
+                className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
+              />
+              <button
+                type="button"
+                onClick={clearGraph}
+                aria-label="Clear"
+                title="Clear graph field and query graph"
+                className="inline-flex shrink-0 items-center justify-center px-2.5 hover:bg-accent hover:text-accent-foreground"
+              ><Trash aria-hidden="true" className="size-4" /></button>
+              <button
+                type="button"
+                onClick={applyGraphText}
+                aria-label="Go"
+                title="Go"
+                className="inline-flex shrink-0 items-center justify-center px-2.5 hover:bg-accent hover:text-accent-foreground"
+              ><CirclePlay aria-hidden="true" className="size-4" /></button>
+            </div>
+            <Label htmlFor="fct-endpoint" aria-label="Data server" className="shrink-0 px-2 text-muted-foreground">
+              <AtSign aria-hidden="true" className="size-4" />
+            </Label>
+            <div className="flex min-w-0 items-center gap-2">
+              <ButtonGroup aria-label="Data server selection, discovery, and refresh" className="max-w-full [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
                     <select
                       id="fct-endpoint"
                       value={selectedEndpointId}
                       onChange={(event) => void chooseFctEndpoint(event.currentTarget.value)}
-                      className="w-80 max-w-full"
+                      className="w-80 min-w-0 max-w-full"
                       title="Choose which FCT endpoint receives queries"
                     >
                       {fctEndpoints.length === 0 && (
@@ -3951,23 +4747,45 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                         </optgroup>
                       ))}
                     </select>
-                    <button
+                <Tooltip>
+                  <TooltipTrigger render={
+                    <Toggle
                       type="button"
-                      onClick={() => void checkFctEndpoints()}
-                      disabled={isCheckingEndpoints || fctEndpoints.length === 0}
-                      aria-label={isCheckingEndpoints ? "Checking servers" : "Check servers"}
-                      className="inline-flex shrink-0 items-center justify-center px-2.5 py-2 text-sm hover:bg-accent disabled:opacity-50"
-                      title={isCheckingEndpoints ? "Checking servers…" : "Check each server with a small FCT query"}
-                    ><RefreshCw aria-hidden="true" className={`size-4 ${isCheckingEndpoints ? "animate-spin" : ""}`} /></button>
-                  </ButtonGroup>
+                      pressed={findEndpointsEnabled}
+                      onPressedChange={setFindEndpointsEnabled}
+                      aria-label={findEndpointsEnabled ? "Find Data Servers On" : "Find Data Servers Off"}
+                      className="shrink-0 rounded-none px-2.5 data-[state=on]:bg-green-100 data-[state=on]:text-green-800 data-[state=on]:hover:bg-green-200 dark:data-[state=on]:bg-green-950 dark:data-[state=on]:text-green-300 dark:data-[state=on]:hover:bg-green-900"
+                    ><Network aria-hidden="true" /></Toggle>
+                  } />
+                  <TooltipContent>{findEndpointsEnabled ? "Find Data Servers On" : "Find Data Servers Off"}</TooltipContent>
+                </Tooltip>
+                <button
+                  type="button"
+                  onClick={() => void checkFctEndpoints()}
+                  disabled={isCheckingEndpoints || fctEndpoints.length === 0}
+                  aria-label={isCheckingEndpoints ? "Checking servers" : "Check servers"}
+                  className="inline-flex shrink-0 items-center justify-center px-2.5 py-2 text-sm hover:bg-accent disabled:opacity-50"
+                  title={isCheckingEndpoints ? "Checking servers…" : "Check each server with a small FCT query"}
+                ><RefreshCw aria-hidden="true" className={`size-4 ${isCheckingEndpoints ? "animate-spin" : ""}`} /></button>
+              </ButtonGroup>
                   {isCheckingEndpoints && (
                     <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground" role="status" aria-live="polite">
                       <span className="sr-only">{fctEndpoints.length === 0 ? "Loading FCT servers" : "Updating FCT servers"}</span>
                       {fctEndpoints.length === 0 ? "Loading FCT servers…" : `Updating… ${endpointChecksCompleted}/${endpointChecksTotal}`}
                     </span>
                   )}
-                </div>
-              </div>
+            </div>
+          </div>
+          <div className="shrink-0">
+        <Tabs value="browse" className="shrink-0" aria-label="Maestro ribbon">
+          <TabsList aria-label="Maestro ribbon tabs">
+            <TabsTrigger value="browse">Browse</TabsTrigger>
+            <TabsTrigger value="view" disabled title="Coming soon">View</TabsTrigger>
+            <TabsTrigger value="analyze" disabled title="Coming soon">Analyze</TabsTrigger>
+            <TabsTrigger value="publish" disabled title="Coming soon">Publish</TabsTrigger>
+          </TabsList>
+        </Tabs>
+          </div>
         </div>
         <Tooltip>
           <TooltipTrigger render={
@@ -4001,8 +4819,16 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
             <SheetHeader>
               <SheetTitle>Maestro controls</SheetTitle>
               <SheetDescription>Query behavior, appearance, and data server settings.</SheetDescription>
+              <p className="mt-1 break-all text-xs text-muted-foreground">Using personal: <span className="font-medium text-foreground">{personalSparqlEndpoint || "Not configured"}</span></p>
             </SheetHeader>
             <div className="flex flex-col gap-4 px-4 pb-4">
+              <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                <div className="min-w-0">
+                  <Label htmlFor="maestro-tutorial-mode">Tutorial mode</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">Preview facets and records on hover without changing the query.</p>
+                </div>
+                <Switch id="maestro-tutorial-mode" checked={tutorialMode} onCheckedChange={(enabled) => { setTutorialMode(enabled); if (!enabled) clearTutorialPreview(); }} aria-label="Tutorial mode" />
+              </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <Label>Appearance</Label>
                 <ThemeToggle />
@@ -4048,7 +4874,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <Label>Auto-configure</Label>
-                  <p className="mt-1 text-xs text-muted-foreground">Clear learned facet usage and saved candidates.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Clear learned facet usage, recorded exclude flags, and saved candidates.</p>
                 </div>
                 <button
                   type="button"
@@ -4057,6 +4883,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                       window.localStorage.removeItem(FACET_ADD_COUNTS_STORAGE_KEY);
                       window.localStorage.removeItem(FACET_AUTOFILL_STORAGE_KEY);
                       window.localStorage.removeItem(AUTO_CONFIGURED_FACETS_STORAGE_KEY);
+                      window.localStorage.removeItem(FACET_EXCLUDE_STORAGE_KEY);
                       setAutoConfiguredFacetKeys(new Set());
                       setFacetAutofillCandidates({ property: [], "property-in": [] });
                       setFacetUsageRevision((revision) => revision + 1);
@@ -4289,30 +5116,81 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
       )}
 
       <div className="shrink-0">
-        <div role="tablist" aria-label="Query pane" className="flex shrink-0 gap-1 border-b px-2 pt-2">
-          <button type="button" role="tab" aria-selected="true" className="-mb-px border-b-2 border-primary px-3 py-2 text-sm font-medium text-foreground">Query</button>
-          <button type="button" role="tab" aria-selected="false" disabled aria-disabled="true" title="Coming soon" className="-mb-px cursor-not-allowed px-3 py-2 text-sm font-medium text-muted-foreground opacity-50">View</button>
-          <button type="button" role="tab" aria-selected="false" disabled aria-disabled="true" title="Coming soon" className="-mb-px cursor-not-allowed px-3 py-2 text-sm font-medium text-muted-foreground opacity-50">Build</button>
-          <button type="button" role="tab" aria-selected="false" disabled aria-disabled="true" title="Coming soon" className="-mb-px cursor-not-allowed px-3 py-2 text-sm font-medium text-muted-foreground opacity-50">Publish</button>
-        </div>
-        <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-center gap-2 bg-background px-4 py-2">
-        <span className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => { setDefaultLeftTab("personal"); navigateToPropertyPath("query-root"); }}
-          className={`relative cursor-pointer rounded-md border px-2.5 pb-1.5 pt-4 text-sm ${getPropertyPath().length === 0 ? "border-primary bg-accent font-medium" : "bg-background hover:bg-accent"}`}
-          title={`Return to the top-level query view${classBreadcrumbLabels(null).length ? ` · Classes: ${classBreadcrumbLabels(null).join(", ")}` : ""}`}
+        <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-start gap-2 bg-background px-4 pt-2 pb-7">
+        <span
+          className="relative flex min-w-0 items-center gap-1"
+          onMouseLeave={() => { if (!namePropertyMenuOpen) setRootSearchExpanded(false); }}
         >
-          {classBreadcrumbLabels(null).length > 0 && (
-            <span className="absolute left-1 top-0 max-w-[calc(100%-8px)] truncate text-left text-[9px] font-normal leading-3 text-muted-foreground" aria-label={`Classes: ${classBreadcrumbLabels(null).join(", ")}`}>
-              {classBreadcrumbLabels(null).join(", ")}
+          <ButtonGroup aria-label="Root query controls" className={`min-w-0 max-w-full ${rootSearchExpanded ? "border border-input" : "border border-border"} ${facetHoverPreview?.kind === "record" ? "rounded-md !border-purple-500/80 text-purple-800 dark:text-purple-200" : ""}`}>
+            {rootSearchExpanded ? (
+              <div className="min-w-0 max-w-[min(42rem,70vw)] flex-1">
+                {searchInputGroup}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { clearTutorialPreview(); setDefaultLeftTab("personal"); navigateToPropertyPath("query-root"); }}
+                className={`relative cursor-pointer rounded-none border-0 px-2.5 pb-1.5 pt-4 text-sm ${facetHoverPreview?.kind === "record" ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200" : getPropertyPath().length === 0 ? "bg-accent font-medium" : "bg-background hover:bg-accent"}`}
+                title={`Return to the top-level query view${classBreadcrumbLabels(null).length ? ` · Classes: ${classBreadcrumbLabels(null).join(", ")}` : ""}`}
+              >
+                {classBreadcrumbLabels(null).length > 0 && (
+                  <span className="absolute left-1 top-0 max-w-[calc(100%-8px)] truncate text-left text-[9px] font-normal leading-3 text-muted-foreground" aria-label={`Classes: ${classBreadcrumbLabels(null).join(", ")}`}>
+                    {classBreadcrumbLabels(null).join(", ")}
+                  </span>
+                )}
+                {facetHoverPreview?.kind === "record"
+                  ? facetHoverPreview.label
+                  : !search.trim()
+                    ? "Everything"
+                    : textSearchMode === "uri"
+                      ? search
+                      : `"${search}"`}
+              </button>
+            )}
+            {!rootSearchExpanded && queryTree.children.some((node) => node.name === "class") && (
+              <button
+                type="button"
+                onClick={() => {
+                  const rootClasses = queryTree.children.filter((node) => node.name === "class");
+                  const lastRootClass = rootClasses[rootClasses.length - 1];
+                  if (lastRootClass) deleteNode(lastRootClass.id);
+                }}
+                className="flex h-auto min-h-10 w-7 shrink-0 items-center justify-center border-l border-input text-muted-foreground hover:bg-accent hover:text-destructive"
+                aria-label="Remove the last root class constraint"
+                title="Remove the last root class constraint"
+              >−</button>
+            )}
+            {!rootSearchExpanded && <button
+              type="button"
+              onMouseEnter={() => setRootSearchExpanded(true)}
+              onFocus={() => setRootSearchExpanded(true)}
+              onClick={() => setRootSearchExpanded(true)}
+              className="flex h-auto min-h-10 w-7 shrink-0 items-center justify-center rounded border border-input py-0 text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label={`Search signal: ${signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}`}
+              title={signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}
+            >
+              <ActiveSignalIcon className="size-4" aria-hidden="true" />
+            </button>}
+          </ButtonGroup>
+          {!rootSearchExpanded && (breadcrumbPreviewSummaries["query-root"] || breadcrumbPreviewPendingIds.has("query-root")) && (
+            /* 15px centers this compact metadata badge beneath the next slash. */
+            <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
+              {breadcrumbPreviewSummaries["query-root"] ? (
+                <Badge variant="outline" className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3">
+                  <span className="max-w-32 truncate">{breadcrumbPreviewSummaries["query-root"].label || "—"}</span>
+                  <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
+                  <span>{breadcrumbPreviewSummaries["query-root"].count ?? "…"}</span>
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" aria-label="Loading root result metadata">
+                  <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
+                  Loading…
+                </Badge>
+              )}
             </span>
           )}
-          {search ? `"${search}"` : "query"}
-        </button>
-
         </span>
-        {displayedBreadcrumbPath.map((crumb, index) => {
+        {tutorialBreadcrumbPath.map((crumb, index) => {
   const isInactiveSuffix = index > activeBreadcrumbIndex;
           const breadcrumbClasses = classBreadcrumbLabels(crumb.id);
           const breadcrumbNode = findQueryNode(queryTree.children, crumb.id);
@@ -4320,21 +5198,55 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
           const breadcrumbExcluded = breadcrumbNode?.attributes.exclude?.trim().toLowerCase() === "yes";
           const breadcrumbLabel = breadcrumbExcluded ? `Excluded: ${breadcrumbBaseLabel}` : breadcrumbBaseLabel;
           const breadcrumbSiblings = getBreadcrumbSiblings(crumb.id);
+          const breadcrumbBoundValues = boundValueNodes(breadcrumbNode);
+          const topBoundValue = breadcrumbBoundValues[breadcrumbBoundValues.length - 1];
           return (
-            <span key={crumb.id} className="flex items-center gap-1">
-              <span aria-hidden="true" className="text-muted-foreground">
-                /
+            <span key={crumb.id} className="relative flex max-w-full items-center gap-1">
+              <span className="flex size-3.5 shrink-0 items-center justify-center">
+                <Slash aria-hidden="true" className="size-3.5 text-muted-foreground" />
               </span>
-              <ButtonGroup aria-label={`Controls for ${breadcrumbLabel}`} className="[&>*+*]:!border-l-0">
+              {(() => {
+                // Each relationship crumb displays its own scoped preview. The root has a
+                // separate query-root preview above the root breadcrumb button.
+                const isTutorialSuccessor = tutorialBreadcrumbTargetId === crumb.id;
+                const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
+                const isPending = breadcrumbPreviewPendingIds.has(crumb.id);
+                if (isTutorialSuccessor) return (
+                  <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
+                    <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap border-purple-400/70 text-[10px] font-normal leading-3 text-purple-700 dark:text-purple-300">Preview · …</Badge>
+                  </span>
+                );
+                return summary || isPending ? (
+                  /* Match the next slash center: 8px nav gap + 7px half of the 14px icon. */
+                  <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
+                    {summary ? (
+                      <Badge variant="outline" className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" title={`${summary.label} · ${summary.count ?? "…"}`}>
+                        <span className="max-w-32 truncate">{summary.label || "—"}</span>
+                        <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
+                        <span>{summary.count ?? "…"}</span>
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" aria-label={`Loading metadata for ${breadcrumbBaseLabel}`}>
+                        <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
+                        Loading…
+                      </Badge>
+                    )}
+                  </span>
+                ) : null;
+              })()}
+              {/* w-max lets the crumb stretch to its full "prop = value" statement; max-w-full only wraps it when it exceeds the whole bar. */}
+              <ButtonGroup aria-label={`Controls for ${breadcrumbLabel}`} className={`w-max max-w-full [&>*+*]:!border-l-0 ${tutorialBreadcrumbTargetId === crumb.id ? "rounded-md !border-purple-500/80" : ""}`}>
                 <button
                   type="button"
-                  onClick={() => { setDefaultLeftTab("personal"); navigateToPropertyPath(crumb.id); }}
-                  className={`relative cursor-pointer rounded-none border-0 px-2.5 pb-1.5 pt-4 text-sm hover:bg-accent ${
-  index === activeBreadcrumbIndex
-    ? "bg-accent font-medium text-foreground"
-    : isInactiveSuffix
-      ? "bg-background text-muted-foreground"
-      : "bg-background text-foreground"
+                  onClick={() => { clearTutorialPreview(); setDefaultLeftTab("personal"); navigateToPropertyPath(crumb.id); }}
+                  className={`relative min-w-0 cursor-pointer break-words rounded-none border-0 px-2.5 pb-1.5 pt-4 text-left text-sm hover:bg-accent ${
+  tutorialBreadcrumbTargetId === crumb.id
+    ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200"
+    : index === activeBreadcrumbIndex
+      ? "bg-accent font-medium text-foreground"
+      : isInactiveSuffix
+        ? "bg-background text-muted-foreground"
+        : "bg-background text-foreground"
 }`}
                   title={`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}
                   aria-current={
@@ -4348,13 +5260,23 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                   )}
                   {breadcrumbExcluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                   {breadcrumbBaseLabel}
+                  {breadcrumbBoundValues.map((value) => (
+                    <span key={value.id} className="ml-1.5 inline-flex items-baseline gap-1">
+                      <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
+                      <span title={value.text ?? ""}>{boundValueLabel(value)}</span>
+                    </span>
+                  ))}
                 </button>
                 <button
                   type="button"
-                  onClick={() => popBreadcrumbNode(crumb)}
+                  onClick={() => { clearTutorialPreview(); popBreadcrumbOrBinding(crumb); }}
                   className="flex h-auto min-h-full w-7 shrink-0 self-stretch items-center justify-center rounded-none border-0 py-0 text-base leading-none text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  aria-label={`Pop ${breadcrumbLabel} from the breadcrumb stack`}
-                  title="Pop this relationship and its descendants; preserve a sibling when available"
+                  aria-label={topBoundValue
+                    ? `Remove value ${boundValueLabel(topBoundValue)} bound to ${breadcrumbLabel}`
+                    : `Pop ${breadcrumbLabel} from the breadcrumb stack`}
+                  title={topBoundValue
+                    ? "Remove the bound value; click again to pop this relationship"
+                    : "Pop this relationship and its descendants; preserve a sibling when available"}
                 >
                   −
                 </button>
@@ -4366,21 +5288,27 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                           type="button"
                           aria-label={`Choose a sibling for ${compactIri(crumb.uri)}`}
                           title="Choose a sibling relationship"
-                          className={`flex h-auto min-h-10 w-8 shrink-0 self-stretch items-center justify-center rounded-none border-0 bg-background p-0 ${
-  isInactiveSuffix ? "text-muted-foreground" : "text-foreground"
-} outline-none hover:bg-accent focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=open]:bg-accent`}
+                          className={`flex h-auto min-h-10 w-8 shrink-0 self-stretch items-center justify-center rounded-none border-0 p-0 ${tutorialBreadcrumbTargetId === crumb.id ? "bg-transparent text-purple-800 dark:text-purple-200" : `bg-background ${isInactiveSuffix ? "text-muted-foreground" : "text-foreground"}`} outline-none hover:bg-accent focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=open]:bg-accent`}
                         >
                           <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m4 6 4 4 4-4" /></svg>
                         </button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="min-w-40">
+                      {/* The shared menu is sized to its trigger by default; w-max lets it show every full "prop = value" item. */}
+                      <DropdownMenuContent align="end" className="w-max min-w-40 max-w-[calc(100vw-2rem)]">
                         {breadcrumbSiblings.map((sibling) => (
                           <DropdownMenuItem
                             key={sibling.id}
-                            onSelect={() => moveViewToSibling(crumb.id, sibling.id)}
+                            onSelect={() => { clearTutorialPreview(); moveViewToSibling(crumb.id, sibling.id); }}
+                            className="whitespace-normal break-words"
                           >
                             {sibling.attributes.exclude?.trim().toLowerCase() === "yes" && <CircleSlash className="mr-2 inline size-3.5" aria-label="Excluded" />}
                             {breadcrumbSiblingLabel(sibling)}
+                            {boundValueNodes(sibling).map((value) => (
+                              <span key={value.id} className="ml-1.5 inline-flex items-baseline gap-1">
+                                <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
+                                <span title={value.text ?? ""}>{boundValueLabel(value)}</span>
+                              </span>
+                            ))}
                           </DropdownMenuItem>
                         ))}
                       </DropdownMenuContent>
@@ -4463,40 +5391,14 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                       <ButtonGroup aria-label="Auto-configure facets">
                         <button
                           type="button"
-                          onClick={() => {
-                            for (const uri of facetAutofillCandidates.property) {
-                              if (!selectedProperties.has(uri)) {
-                                handlePropertyCheckboxChange(uri, true, false);
-                                setAutoConfiguredFacet("property", uri, true);
-                              }
-                            }
-                            for (const uri of facetAutofillCandidates["property-in"]) {
-                              if (!selectedRoles.has(uri)) {
-                                handleRoleCheckboxChange(uri, true, false);
-                                setAutoConfiguredFacet("property-in", uri, true);
-                              }
-                            }
-                          }}
+                          onClick={runAutoConfigure}
                           className="px-2 text-xs font-medium hover:bg-accent"
                           title="Add high-frequency Properties and Roles that apply to the current query scope"
                         >Auto-configure</button>
                         <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
                         <button
                           type="button"
-                          onClick={() => {
-                            for (const uri of facetAutofillCandidates.property) {
-                              if (!selectedProperties.has(uri)) {
-                                handlePropertyCheckboxChange(uri, true, false);
-                                setAutoConfiguredFacet("property", uri, true);
-                              }
-                            }
-                            for (const uri of facetAutofillCandidates["property-in"]) {
-                              if (!selectedRoles.has(uri)) {
-                                handleRoleCheckboxChange(uri, true, false);
-                                setAutoConfiguredFacet("property-in", uri, true);
-                              }
-                            }
-                          }}
+                          onClick={runAutoConfigure}
                           className="px-3 py-1.5 text-sm hover:bg-accent"
                           aria-label={`Auto-configure ${autoConfigureFacetCount} facets`}
                           title={`${autoConfigureFacetCount} facets will be added`}
@@ -4658,7 +5560,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                   {selectedItems.map((item) => (
                                     <div
                                       key={item.key}
-                                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm"
+                                      className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-sm ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && ((group === "Properties" && facetHoverPreview.direction === "forward") || (group === "Roles" && facetHoverPreview.direction === "reverse")) ? "!border-purple-500" : "border-transparent"}`}
                                     >
                                       <input
                                         type="checkbox"
@@ -4672,6 +5574,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                           }
                                         }}
                                         onChange={(event) => {
+                                          clearTutorialPreview();
                                           if (group === "Properties") {
                                             handlePropertyCheckboxChange(item.key, event.currentTarget.checked);
                                           } else {
@@ -4686,8 +5589,10 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                       {group === "Properties" ? (
                                         <button
                                           type="button"
-                                          className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${item.count === 0 ? "text-destructive" : ""}`}
-                                          onClick={() => navigateIntoRelationship(item.key, "forward")}
+                                          className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : item.count === 0 ? "text-destructive" : ""}`}
+                                          onMouseEnter={() => beginFacetHoverPreview(item.key, "forward", item.label, "configure")}
+                                          onMouseLeave={clearTutorialPreview}
+                                          onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "forward"); }}
                                           title={`Drill down through ${item.label}`}
                                         >
                                           {item.label}
@@ -4698,8 +5603,10 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                       ) : (
                                         <button
                                           type="button"
-                                          className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${item.count === 0 ? "text-destructive" : ""}`}
-                                          onClick={() => navigateIntoRelationship(item.key, "reverse")}
+                                          className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : item.count === 0 ? "text-destructive" : ""}`}
+                                          onMouseEnter={() => beginFacetHoverPreview(item.key, "reverse", item.label, "configure")}
+                                          onMouseLeave={clearTutorialPreview}
+                                          onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "reverse"); }}
                                           title={`Filter by role ${item.label}`}
                                         >
                                           {item.label}
@@ -4770,7 +5677,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                               return (
                               <div
                                 key={item.key}
-                                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50"
+                                className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-sm hover:bg-accent/50 ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && ((group === "Properties" && facetHoverPreview.direction === "forward") || (group === "Roles" && facetHoverPreview.direction === "reverse")) ? "!border-purple-500" : "border-transparent"}`}
                               >
                                 {group === "Graphs" ? (
                                   <input
@@ -4822,8 +5729,10 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                 {group === "Properties" ? (
                                   <button
                                     type="button"
-                                    className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
-                                    onClick={() => navigateIntoRelationship(item.key, "forward")}
+                                    className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : isZeroCount ? "text-destructive" : ""}`}
+                                    onMouseEnter={() => beginFacetHoverPreview(item.key, "forward", item.label, "configure")}
+                                    onMouseLeave={clearTutorialPreview}
+                                    onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "forward"); }}
                                     title={`Drill down through ${item.label}`}
                                   >
                                     {item.label}
@@ -4831,8 +5740,10 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                 ) : group === "Roles" ? (
                                   <button
                                     type="button"
-                                    className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
-                                    onClick={() => navigateIntoRelationship(item.key, "reverse")}
+                                    className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : isZeroCount ? "text-destructive" : ""}`}
+                                    onMouseEnter={() => beginFacetHoverPreview(item.key, "reverse", item.label, "configure")}
+                                    onMouseLeave={clearTutorialPreview}
+                                    onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "reverse"); }}
                                     title={`Filter by role ${item.label}`}
                                   >
                                     {item.label}
@@ -4903,6 +5814,13 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                     <article ref={categoriesWidgetRef} className={`flex min-w-0 flex-col ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
                       <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
                         <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes")}\n<!-- FCT API option: view=classes -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /><button
+                          type="button"
+                          aria-pressed={categoriesTreeMode}
+                          onClick={() => setCategoriesTreeMode((current) => !current)}
+                          className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${categoriesTreeMode ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`}
+                          aria-label={categoriesTreeMode ? "Show categories as a flat list" : "Group categories by ontology"}
+                          title={categoriesTreeMode ? "Show flat category list" : "Group categories by ontology"}
+                        >{categoriesTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />}</button><button
                           type="button"
                           aria-pressed={isGroupByCategory}
                           onClick={() => {
@@ -4987,7 +5905,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                               </div>
                             </div>
                           )}
-                          {unselectedClassDisplayFacets.length > FACET_PAGE_SIZE && (
+                          {!categoriesTreeMode && unselectedClassDisplayFacets.length > FACET_PAGE_SIZE && (
                             <div className="mt-2 mb-2 flex items-center justify-between gap-2 text-xs">
                               <button
                                 type="button"
@@ -5010,12 +5928,28 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                               </button>
                             </div>
                           )}
-                          <div className="space-y-1">
-                            {unselectedClassDisplayFacets
-                              // Selected classes are shown above; this list pages only
-                              // through the remaining available categories.
-                              .slice(classesPage * FACET_PAGE_SIZE, (classesPage + 1) * FACET_PAGE_SIZE)
-                              .map((item) => {
+                          <div className="space-y-2">
+                            {categoriesTreeMode ? (
+                              <div className="space-y-1">
+                                  {(() => {
+                                    const renderTreeNode = (node: CategoryTreeNode, depth: number): ReactNode => {
+                                      const item = node.item;
+                                      const countQuery = distinctCountQueryFor(queryTree, "class", item.uri);
+                                      const isZeroCount = classCandidateCounts[countQuery] === 0;
+                                      return <div key={item.uri} className="min-w-0">
+                                        <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50" style={{ paddingLeft: `${8 + depth * 14}px` }}>
+                                          {node.children.length > 0 ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" /> : <span className="size-3.5 shrink-0" aria-hidden="true" />}
+                                          <input type="checkbox" checked={selectedClasses.has(item.uri)} onChange={(event) => toggleClass(item.uri, event.target.checked)} aria-label={`Filter by class ${toLabel(item.uri)}`} className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} />
+                                          <button type="button" className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`} onClick={() => { if (isGroupByCategory) scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri), matches: [], termType: "uri" }); else { if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true); showClassResults(item.uri, activeLeafId); } }} title={isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}>{toLabel(item.uri)}</button>
+                                          <DistinctCount tree={queryTree} kind="class" uri={item.uri} onCountChange={(query, count) => setClassCandidateCounts((current) => current[query] === count ? current : { ...current, [query]: count })} />
+                                        </div>
+                                        {node.children.length > 0 && <div className="ml-2 border-l border-border/60">{node.children.map((child) => renderTreeNode(child, depth + 1))}</div>}
+                                      </div>;
+                                    };
+                                    return categoryTreeRoots.map((node) => renderTreeNode(node, 0));
+                                  })()}
+                              </div>
+                            ) : pagedUnselectedClasses.map((item) => {
                                 const countQuery = distinctCountQueryFor(queryTree, "class", item.uri);
                                 const isZeroCount = classCandidateCounts[countQuery] === 0;
                                 return (
@@ -5068,13 +6002,15 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                       const isGroupByRole = groupByPropertyUri === `reverse:${uri}`;
                       const canGroupByRole = !excluded && groupByOptions.some((option) => option.key === `reverse:${uri}`);
                       return (
-                        <article key={roleNode.id} ref={(element) => { if (element) roleWidgetCardRefs.current.set(uri, element); else roleWidgetCardRefs.current.delete(uri); }} className={`flex min-w-0 flex-col ${isGroupByRole ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
+                        <article key={roleNode.id} ref={(element) => { if (element) roleWidgetCardRefs.current.set(uri, element); else roleWidgetCardRefs.current.delete(uri); }} className={`flex min-w-0 flex-col ${isGroupByRole ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`} style={facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === uri && facetHoverPreview.direction === "reverse" ? { borderColor: "rgb(168 85 247)" } : undefined}>
                           <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByRole ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1">
                                 <button
                                   type="button"
-                                  className="cursor-pointer text-left text-sm font-semibold underline-offset-2 hover:underline"
+                                  className={`cursor-pointer text-left text-sm font-semibold underline-offset-2 hover:underline ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === uri && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : ""}`}
+                                  onMouseEnter={() => beginFacetHoverPreview(uri, "reverse", label.trim(), "personal")}
+                                  onMouseLeave={clearTutorialPreview}
                                   onClick={() => navigateToPropertyPath(roleNode.id)}
                                   title={`Navigate to role scope ${label}`}
                                 >
@@ -5082,6 +6018,9 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                                   {excluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                                   {label}
                                 </button>
+                                {autoConfiguredFacetKeys.has(`property-in::${uri}`) && (
+                                  <Bot className="size-3.5 text-muted-foreground" aria-label="Auto-configured" />
+                                )}
                                 <div className="flex shrink-0 items-center gap-1">
                                   <QueryInspectorButton
                                     query={`${queryWithoutPagingXml("properties-in")}\n<!-- FCT API option: view=properties-in -->`}
@@ -5142,8 +6081,10 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                     })}
                     {!focusWidgetsSuppressed && renderPersonalWidgetCards("column")}
                     <article className="flex min-w-0 flex-col">
-                      <header className="group/header flex items-center justify-between gap-2 px-2 py-2">
-                        <div className="flex min-w-0 items-center gap-1"><h2 className="text-sm font-semibold">Datasites</h2><QueryInspectorButton query={`${queryWithoutPagingXml()}\n<!-- FCT API option: graphOnly=true -->`} filename="datasites-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
+                      <header className="group/header flex items-center gap-2 px-2 py-2">
+                        <div className="flex min-w-0 flex-1 items-center gap-1">
+                          <h2 className="text-sm font-semibold">Datasites</h2>
+                          <QueryInspectorButton query={`${queryWithoutPagingXml()}\n<!-- FCT API option: graphOnly=true -->`} filename="datasites-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
                           {queryTree.attributes.graph && (
                             <button
                               type="button"
@@ -5153,10 +6094,50 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                               title="Clear datasite selection and Datasite field"
                             ><X className="size-4" aria-hidden="true" /></button>
                           )}
+                          <div
+                            aria-label="Sort datasites"
+                            className={`invisible ml-1 shrink-0 overflow-hidden opacity-0 transition-[width,opacity] duration-200 group-hover/header:visible group-hover/header:opacity-100 focus-within:visible focus-within:opacity-100 ${graphSortPickerExpanded ? "w-28" : "w-7"}`}
+                            onMouseEnter={() => setGraphSortPickerExpanded(true)}
+                            onMouseLeave={() => setGraphSortPickerExpanded(false)}
+                            onFocusCapture={() => setGraphSortPickerExpanded(true)}
+                            onBlurCapture={(event) => {
+                              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setGraphSortPickerExpanded(false);
+                            }}
+                          >
+                            <ButtonGroup className="inline-flex w-28 shrink-0 items-center [&>*+*]:border-l [&>*+*]:border-input">
+                              {[...([
+                                { value: "count-asc", label: "Count: lowest first", Icon: ArrowDown01 },
+                                { value: "count-desc", label: "Count: highest first", Icon: ArrowDown10 },
+                                { value: "label-asc", label: "Label: A to Z", Icon: ArrowDownAZ },
+                                { value: "label-desc", label: "Label: Z to A", Icon: ArrowDownZA },
+                              ] as const)].sort((left, right) => left.value === graphSort ? -1 : right.value === graphSort ? 1 : 0).map(({ value, label, Icon }) => (
+                                <Tooltip key={value}>
+                                  <TooltipTrigger render={
+                                    <Toggle
+                                      pressed={graphSort === value}
+                                      onPressedChange={(pressed) => {
+                                        if (!pressed) return;
+                                        setGraphsPage(0);
+                                        setGraphSort(value);
+                                        setGraphSortPickerExpanded(false);
+                                      }}
+                                      aria-hidden={!graphSortPickerExpanded && graphSort !== value}
+                                      tabIndex={!graphSortPickerExpanded && graphSort !== value ? -1 : 0}
+                                      className={`size-7 shrink-0 border-0 p-0 transition-colors ${graphSort === value ? "bg-black text-white dark:bg-black dark:text-white" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
+                                      aria-label={label}
+                                    >
+                                      <Icon aria-hidden="true" className="size-4" />
+                                    </Toggle>
+                                  } />
+                                  <TooltipContent>{label}</TooltipContent>
+                                </Tooltip>
+                              ))}
+                            </ButtonGroup>
+                          </div>
+                          <span className="ml-auto shrink-0 text-xs text-muted-foreground" aria-live="polite">
+                            {isLoadingGraphs ? "Updating…" : graphFacets.length}
+                          </span>
                         </div>
-                        <span className="text-xs text-muted-foreground" aria-live="polite">
-                          {isLoadingGraphs ? "Updating…" : graphFacets.length}
-                        </span>
                       </header>
                       {graphFacets.length === 0 ? (
                         <p className="px-2 text-xs text-muted-foreground">
@@ -5172,17 +6153,14 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                             </div>
                           )}
                           <div className="space-y-1">
-                            {[...graphFacets]
-                              .sort((a, b) => {
-                                const selectedGraph = queryTree.attributes.graph;
-                                if (a.uri === selectedGraph) return -1;
-                                if (b.uri === selectedGraph) return 1;
-                                return 0;
-                              })
-                              .map((item) => (
-                              <label key={item.uri} className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 cursor-pointer">
-                                <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri} onChange={() => bindGraph(item.uri)} aria-label={`Bind datasite ${toLabel(item.uri)}`} className="size-4 shrink-0 accent-current" />
-                                <span className="min-w-0 flex-1 break-words">{toLabel(item.uri)}</span>
+                            {graphFacets.map((item) => (
+                              <label key={item.uri} className="flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 cursor-pointer">
+                                <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri} onChange={() => bindGraph(item.uri)} aria-label={`Bind datasite ${item.label}`} className="mt-0.5 size-4 shrink-0 accent-current" />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block break-words">{item.label}</span>
+                                  <span className="block break-all text-xs text-muted-foreground" title={item.uri}>{item.uri}</span>
+                                </span>
+                                <span className="shrink-0 text-xs text-muted-foreground" title={`${item.count} matching resources`}>{item.count}</span>
                               </label>
                             ))}
                           </div>
@@ -5268,6 +6246,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                       } else {
                         setResultsUiPage(0);
                         setResults([]);
+                        resultsLoadedQueryIdentityRef.current = "";
                         setResultsPage(nextSize, 0);
                       }
                     }}
@@ -5326,8 +6305,8 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                 >
 
 
-              <div className="min-h-0 flex-1 overflow-y-auto p-2">
-                {visibleResultsPage.map((item, index) => {
+              <div className="relative min-h-0 flex-1 overflow-y-auto p-2">
+                {!facetHoverPreview && visibleResultsPage.map((item, index) => {
                   const isExpanded = expandedUris.has(item.uri);
 
                   return (
@@ -5373,7 +6352,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                           )}
                         </button>
 
-                        {isRootView && search.trim().length > 0 && (
+                        {isRootView && liveQueryHasText && search.trim().length > 0 && (
                           <button
                             type="button"
                             onClick={() =>
@@ -5397,7 +6376,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                         )}
                       </div>
 
-                      {isRootView && isExpanded && search.trim().length > 0 && (
+                      {isRootView && liveQueryHasText && isExpanded && search.trim().length > 0 && (
                         <div className="border-t px-3 py-2">
                           {item.matches.map((match, index) => (
                             <div
@@ -5433,6 +6412,12 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                           ? "Searching..."
                           : "No matching results."}
                   </p>
+                )}
+                {facetHoverPreview && tutorialMode && (
+                  <div className="absolute inset-0 z-20 flex flex-col gap-3 bg-background/95 p-6" aria-live="polite" aria-label={facetHoverPreview.kind === "record" ? `Preview record ${facetHoverPreview.label}` : `Preview ${facetHoverPreview.label} ${facetHoverPreview.direction === "reverse" ? "role" : "property"} list`}>
+                    <p className="text-base">{facetHoverPreview.kind === "record" ? <>Only the <span className="font-semibold text-purple-700 dark:text-purple-300">{facetHoverPreview.label}</span> item will load here</> : <>The <span className="font-semibold text-purple-700 dark:text-purple-300">{facetHoverPreview.label}</span> list will load here</>}</p>
+                    <p className="flex items-center gap-2 text-sm text-muted-foreground"><CornerDownLeft className="size-4 shrink-0" aria-hidden="true" />{facetHoverPreview.kind === "record" ? "The filters for this record will appear on the left" : "The filters for this list will appear on the left"}</p>
+                  </div>
                 )}
               </div>
                 </div>
@@ -5490,31 +6475,15 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                     <p className="text-xs text-muted-foreground">
                       Live query structure. Changes in Filters, Focus, navigation, and bindings appear here immediately.
                     </p>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          resetQuery();
-                          setSearch("");
-                          setGroupByPropertyUri("");
-                          setCentralTab("query-tree");
-                          setSearchPipelineRun((current) => current + 1);
-                        }}
-                        className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
-                      >
-                        Reset
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCentralTab("view-query")}
-                        className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
-                      >
-                        View source
-                      </button>
-                    </div>
                   </div>
                   <ul className="space-y-1">
-                    {queryTree.children.map((node) => renderQueryNode(node))}
+                    {!search.trim() && !searchNode && !uriNode?.text?.trim() && renderQueryNode({
+                      id: "query-everything",
+                      name: "everything",
+                      attributes: {},
+                      children: [],
+                    })}
+                    {queryTree.children.filter((node) => node.name !== "class").map((node) => <Fragment key={node.id}>{renderQueryNode(node)}</Fragment>)}
                   </ul>
                 </div>
               )}
@@ -5539,82 +6508,16 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
               )}
               <div className="group/header shrink-0 border-t bg-muted p-3">
                 <div className="flex items-center gap-2">
-                  <ButtonGroup
-                    aria-label="Search text and signal controls"
-                    className="min-w-0 flex-1 [&>*+*]:border-l [&>*+*]:border-input [&>span]:border-l-0 [&>input]:min-w-0 [&>input]:flex-1 [&>input]:rounded-none [&>input]:border-0 [&>input]:bg-background [&>input]:px-3 [&>input]:py-2 [&>input]:text-sm"
-                  >
-                    <DropdownMenu>
-                      <Tooltip>
-                        <TooltipTrigger render={<DropdownMenuTrigger asChild><button type="button" aria-label={`Choose name/label property; currently ${selectedNamePropertyLabel}`} className="flex h-10 shrink-0 items-center justify-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"><SearchCode className="size-4" aria-hidden="true" /></button></DropdownMenuTrigger>} />
-                        <TooltipContent>Choose name/label property — currently {selectedNamePropertyLabel}</TooltipContent>
-                      </Tooltip>
-                        <DropdownMenuContent align="start" className="max-h-80 min-w-56 overflow-y-auto">
-                          {TEXT_SEARCH_NAME_PROPERTIES.map((property) => {
-                            const checked = selectedNamePropertyUris.includes(property.uri);
-                            return (
-                              <DropdownMenuCheckboxItem
-                                key={property.uri}
-                                checked={checked}
-                                onSelect={(event) => event.preventDefault()}
-                                onCheckedChange={(nextChecked) => {
-                                  const nextProperties = nextChecked
-                                    ? [...selectedNamePropertyUris, property.uri]
-                                    : selectedNamePropertyUris.filter((uri) => uri !== property.uri);
-                                  // Keep at least one predicate selected so Name mode never silently
-                                  // becomes an unrestricted all-properties search.
-                                  if (nextProperties.length) setTextSearchMode("name", nextProperties);
-                                }}
-                              >
-                                <span className="flex min-w-0 flex-1 flex-col"><span>{property.label}</span><span className="text-xs text-muted-foreground">{property.description}</span></span>
-                              </DropdownMenuCheckboxItem>
-                            );
-                          })}
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-                    <input autoFocus value={search} onChange={(event) => updateSearchText(event.target.value)} placeholder={textSearchMode === "uri" ? "Enter URI" : "Enter keywords"} aria-label="Search results" className="min-w-0 flex-1 outline-none" />
-                    <div
-                      aria-label="Search mode"
-                      className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none ${signalPickerExpanded ? "w-[10rem]" : "w-10"}`}
-                      onMouseEnter={() => setSignalPickerExpanded(true)}
-                      onMouseLeave={() => setSignalPickerExpanded(false)}
-                      onFocusCapture={() => setSignalPickerExpanded(true)}
-                      onBlurCapture={(event) => {
-                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                          setSignalPickerExpanded(false);
-                        }
-                      }}
-                    >
-                      <div className="inline-flex w-[10rem] shrink-0 overflow-hidden">
-                        {(signalPickerExpanded
-                          ? signalOptions
-                          : [...signalOptions].sort((left, right) =>
-                              left.mode === textSearchMode ? -1 : right.mode === textSearchMode ? 1 : 0,
-                            )
-                        ).map(({ mode, Icon, label }) => (
-                          <Tooltip key={mode}>
-                            <TooltipTrigger render={
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setTextSearchMode(mode);
-                                  setSignalPickerExpanded(false);
-                                }}
-                                aria-pressed={textSearchMode === mode}
-                                aria-label={label}
-                                aria-hidden={!signalPickerExpanded && textSearchMode !== mode}
-                                tabIndex={!signalPickerExpanded && textSearchMode !== mode ? -1 : 0}
-                                className={`flex h-10 w-10 shrink-0 items-center justify-center transition-colors ${textSearchMode === mode ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
-                              ><Icon aria-hidden="true" className="size-4" /></button>
-                            } />
-                            <TooltipContent>{label}</TooltipContent>
-                          </Tooltip>
-                        ))}
-                      </div>
-                    </div>
-                  </ButtonGroup>
+                  <div className="min-w-0 flex-1">
+                    <input
+                      aria-label="Ask the assistant"
+                      placeholder="Ask the assistant…"
+                      className="h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </div>
                   <ButtonGroup
                     aria-label="Results, badges, and query inspector"
-                    className="hidden shrink-0 items-center [&>*+*]:border-l [&>*+*]:border-input group-hover/header:inline-flex focus-within:inline-flex"
+                    className="hidden shrink-0 items-center [&>*+*]:border-l [&>*+*]:border-input group-hover/header:inline-flex"
                   >
                     <Tooltip>
                       <TooltipTrigger render={
@@ -5642,7 +6545,38 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
                       } />
                       <TooltipContent>{showResultBadges ? "Badges On" : "Badges Off"}</TooltipContent>
                     </Tooltip>
-                    <QueryInspectorButton query={resultsSparql ?? ""} language="sparql" filename="results-query.sparql" countQuery={resultsCountSparql} countFilename="results-count.sparql" toolbarButton />
+                    <Tooltip>
+                      <TooltipTrigger render={
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resetQuery();
+                            setSearch("");
+                            setGroupByPropertyUri("");
+                            if (centralTab === "groups") setCentralTab("results");
+                            setSearchPipelineRun((current) => current + 1);
+                          }}
+                          className="inline-flex size-9 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                          aria-label="Reset query"
+                        >
+                          <RotateCcw aria-hidden="true" className="size-4" />
+                        </button>
+                      } />
+                      <TooltipContent>Reset query</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger render={
+                        <Toggle
+                          pressed={centralTab === "view-query"}
+                          onPressedChange={(pressed) => setCentralTab(pressed ? "view-query" : "query-tree")}
+                          className="size-9 shrink-0 border-0 p-0 text-sm data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
+                          aria-label="View source"
+                        >
+                          <Code2 aria-hidden="true" className="size-4" />
+                        </Toggle>
+                      } />
+                      <TooltipContent>View source</TooltipContent>
+                    </Tooltip>
                   </ButtonGroup>
                 </div>
                 {searchError && <p className="mt-2 text-sm text-destructive">{searchError}</p>}
@@ -5654,7 +6588,16 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
             <section className="flex h-full min-h-0 min-w-0 flex-col">
               <div className="border-b p-4">
                 <h2 className="text-base font-semibold">
-                  {selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : "Record")}
+                  {selectedUri ? (
+                    <button
+                      type="button"
+                      className={`cursor-pointer text-left underline-offset-2 hover:underline ${facetHoverPreview?.kind === "record" && facetHoverPreview.uri === selectedUri ? "text-purple-700 dark:text-purple-300" : ""}`}
+                      onClick={() => { clearTutorialPreview(); applyRecordAsRootValue(selectedUri); }}
+                      onMouseEnter={() => beginRecordHoverPreview(selectedUri, selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri)))}
+                      onMouseLeave={clearTutorialPreview}
+                      title={`Set ${selectedUri} as the root record value`}
+                    >{selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri))}</button>
+                  ) : "Record"}
                 </h2>
                 <p className="mt-1 break-all text-xs text-muted-foreground">
                   {selectedUri}
@@ -5663,7 +6606,7 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
               <div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
                 {describedRecord.length > 0 ? (
                   <span className="text-xs text-muted-foreground">
-                    {describedProperties.length} properties · {describedRecord.length} values
+                    {describedPropertyCount} properties · {describedRoleCount} roles · {describedRecord.length} values
                   </span>
                 ) : <span />}
                 {describedProperties.length > RECORD_DESCRIPTION_PAGE_SIZE && (
@@ -5698,53 +6641,49 @@ const activeBreadcrumbIndex = activePropertyPath.length - 1;  // Derive checked 
 )}
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-4">
-                <table className="w-full border-collapse text-left text-sm">
-                  <thead>
-                    <tr className="border-b text-muted-foreground">
-                      <th className="px-3 py-2 font-medium">Property</th>
-                      <th className="px-3 py-2 font-medium">Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-  {describedProperties
-    .slice(
-      recordDescriptionPage * RECORD_DESCRIPTION_PAGE_SIZE,
-      (recordDescriptionPage + 1) * RECORD_DESCRIPTION_PAGE_SIZE,
-    )
-    .flatMap((item) =>
-      item.values.map((value, index) => (
-        <tr
-          key={`${item.property}-${index}`}
-          className="border-b"
-        >
-          {index === 0 && (
-            <td
-              rowSpan={item.values.length}
-              className="whitespace-nowrap px-3 py-3 align-top font-medium"
-            >
-              {toLabel(item.property)}
-            </td>
-          )}
-          <td className="break-all px-3 py-3 align-top">
-            {value}
-          </td>
-        </tr>
-      )),
-    )}
-
-  {describedRecord.length === 0 && (
-    <tr>
-      <td colSpan={2} className="px-3 py-4 text-sm text-muted-foreground">
-        {isDescribing
-          ? "Loading record…"
-          : selectedUri
-            ? "No description data returned."
-            : "Select a result to describe it."}
-      </td>
-    </tr>
-  )}
-</tbody>
-                </table>
+                {describedPropertyRows.length > 0 && <section>
+                  <h3 className="mb-2 text-sm font-semibold">Properties</h3>
+                  <table className="w-full border-collapse text-left text-sm">
+                    <thead>
+                      <tr className="border-b text-muted-foreground">
+                        <th className="w-[1%] whitespace-nowrap px-3 py-2 font-medium">Name</th>
+                        <th className="px-3 py-2 font-medium">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {describedPropertyRows.flatMap((item) => item.values.map((value, index) => (
+                        <tr key={`${item.property}-${index}`} className="border-b">
+                          {index === 0 && <td rowSpan={item.values.length} className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium">{toLabel(item.property)}</td>}
+                          <td className="break-all px-3 py-3 align-top">{value}</td>
+                        </tr>
+                      )))}
+                    </tbody>
+                  </table>
+                </section>}
+                {describedRoleRows.length > 0 && <section className="mt-6">
+                  <h3 className="mb-2 text-sm font-semibold">Roles</h3>
+                  <table className="w-full border-collapse text-left text-sm">
+                    <thead>
+                      <tr className="border-b text-muted-foreground">
+                        <th className="w-[1%] whitespace-nowrap px-3 py-2 font-medium">Name</th>
+                        <th className="px-3 py-2 font-medium">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {describedRoleRows.flatMap((item) => item.values.map((value, index) => (
+                        <tr key={`${item.property}-of-${index}`} className="border-b">
+                          {index === 0 && <td rowSpan={item.values.length} className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium">{toLabel(item.property)} of</td>}
+                          <td className="break-all px-3 py-3 align-top">{value}</td>
+                        </tr>
+                      )))}
+                    </tbody>
+                  </table>
+                </section>}
+                {describedRecord.length === 0 && (
+                  <p className="mt-4 text-sm text-muted-foreground">
+                    {isDescribing ? "Loading record…" : selectedUri ? "No description data returned." : "Select a result to describe it."}
+                  </p>
+                )}
               </div>
             </section>
             </ResizablePanel>

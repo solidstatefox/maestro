@@ -12,6 +12,7 @@ export {
 export type {
   FctQueryNode,
   FctQueryTree,
+  FctUiResultSummary,
   FctQueryState,
   FctNodeName,
   FctValue,

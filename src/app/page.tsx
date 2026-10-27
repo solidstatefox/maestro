@@ -17,9 +17,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Toggle } from "@/components/ui/toggle";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, Equal, RotateCcw, Bookmark } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, Bookmark, History } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -298,7 +301,11 @@ function fctTermKey(text: string, datatype?: string, lang?: string): string {
 
 function facetValueKey(value: FctResult): string {
   const binding = groupValueBinding(value);
-  return fctTermKey(binding.text, binding.datatype, binding.lang);
+  // Literal results without an explicit datatype are FCT strings, not URIs.
+  // Keep this key aligned with queryValueKey so a one-item literal facet
+  // remains visibly checked after its checkbox is clicked.
+  const datatype = binding.datatype ?? (binding.lang ? undefined : value.termType === "uri" ? "uri" : "string");
+  return fctTermKey(binding.text, datatype, binding.lang);
 }
 
 function groupValueBinding(value: FctResult): {
@@ -381,7 +388,6 @@ function QueryInspectorButton({
       type="button"
       onClick={() => { setActiveTab("widget"); setOpen(true); }}
       aria-label={`${label}: ${filename}`}
-      title={toolbarButton ? undefined : label}
       className={`inline-flex ${toolbarButton ? "size-9" : "size-7 rounded border"} shrink-0 items-center justify-center ${toolbarButton ? "" : "opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/header:opacity-100"} ${headerTone ? "border-sky-700 bg-sky-800 text-sky-50 hover:bg-sky-700 hover:text-sky-50 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100 dark:hover:bg-sky-900" : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground"}`}
     >
       <Code2 className="size-4" aria-hidden="true" />
@@ -394,10 +400,14 @@ function QueryInspectorButton({
           <TooltipTrigger render={inspectorButton} />
           <TooltipContent>{label}</TooltipContent>
         </Tooltip>
-      ) : inspectorButton}
-      {open && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
-          <section role="dialog" aria-modal="true" aria-label={`${label}: ${filename}`} className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border bg-background p-3 shadow-xl">
+      ) : (
+        <Tooltip>
+          <TooltipTrigger render={inspectorButton} />
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
+      )}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent aria-label={`${label}: ${filename}`} className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden p-3">
             <header className="mb-3 flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <h2 className="text-sm font-semibold">Query inspector</h2>
@@ -414,9 +424,8 @@ function QueryInspectorButton({
             )}
             <p className="mb-2 text-xs text-muted-foreground">{displayedFilename} · {displayedLanguage.toUpperCase()}</p>
             <CodeBlock className="min-h-0 flex-1" code={displayedCode} language={displayedLanguage} filename={displayedFilename} />
-          </section>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -470,6 +479,7 @@ function DistinctCount({
 
     async function loadCount() {
       let stage = "building scalar count SPARQL from the query tree";
+      let responseDiagnostics: unknown;
       try {
         if (!countSparqlQuery) {
           throw new Error("The current FCT query tree contains a condition that cannot be compiled safely to SPARQL.");
@@ -482,6 +492,7 @@ function DistinctCount({
           signal: controller.signal,
         });
         const sparqlData = await sparqlResponse.json();
+        responseDiagnostics = sparqlData;
         if (!sparqlResponse.ok) {
           throw new Error(sparqlData.error ?? "Failed to execute the item count against SPARQL.");
         }
@@ -501,7 +512,17 @@ function DistinctCount({
         )
           return;
         const message = requestError instanceof Error ? requestError.message : "Could not load distinct count.";
-        console.warn("Maestro facet item count failed", { kind, uri, propertyUri, stage, error: message });
+        console.warn("Maestro facet item count failed", {
+          kind,
+          uri,
+          propertyUri,
+          stage,
+          error: message,
+          component: `DistinctCount:${kind}:${propertyUri ?? ""}:${uri}`,
+          sparql: countSparqlQuery,
+          proxyResponse: responseDiagnostics,
+          cause: requestError instanceof Error ? requestError.cause : undefined,
+        });
         setError(`${stage}: ${message}`);
       }
     }
@@ -534,54 +555,41 @@ function DistinctCount({
   }, [countSparqlQuery]);
 
   return (
-    <span
+    <Tooltip><TooltipTrigger render={<span
       className={`shrink-0 text-xs ${error || count === 0 ? "text-destructive" : "text-muted-foreground"}`}
       aria-live="polite"
       aria-invalid={count === 0 ? true : undefined}
-      title={
-        error
-          ? `Could not load distinct count: ${error}`
-          : kind === "property"
-            ? "Distinct property values"
-            : kind === "role"
-              ? "Distinct role values"
-              : "Distinct results"
-      }
     >
       {error
         ? "!"
         : count === null
           ? "…"
           : count.toLocaleString()}
-    </span>
+    </span>} /><TooltipContent>{error
+          ? `Could not load distinct count: ${error}`
+          : kind === "property"
+            ? "Distinct property values"
+            : kind === "role"
+              ? "Distinct role values"
+              : "Distinct results"}</TooltipContent></Tooltip>
   );
 }
 
-/** Return selected property nodes from the sibling scope containing the active view.
- * The query tree's structure establishes scope; an internal ID prefix must not
- * decide whether a serialized <property> sibling appears in the Selected list.
+/** Return property filters that are actual siblings of the active <view>.
+ * Scope is represented by the query tree itself: recurse through each node's
+ * children until the array containing the active view is found, then inspect
+ * only that array. Ancestors on the navigation path are not scope members.
  */
 function getActiveViewPropertyFilters(tree: FctQueryTree): FctQueryNode[] {
-  function findScope(
-    nodes: FctQueryNode[],
-  ): { siblings: FctQueryNode[]; carrier?: FctQueryNode } | null {
-    if (nodes.some((node) => node.id === "query-view")) return { siblings: nodes };
+  function findViewSiblings(nodes: FctQueryNode[]): FctQueryNode[] | null {
+    if (nodes.some((node) => node.id === "query-view")) return nodes;
     for (const node of nodes) {
-      // A property that directly contains the active view is itself the
-      // current path/facet binding; looking only at the view's children loses it.
-      if (node.children.some((child) => child.id === "query-view")) {
-        return { siblings: node.children, carrier: node };
-      }
-      const nested = findScope(node.children);
+      const nested = findViewSiblings(node.children);
       if (nested) return nested;
     }
     return null;
   }
-  const scope = findScope(tree.children);
-  const candidates = scope
-    ? [...(scope.carrier ? [scope.carrier] : []), ...scope.siblings]
-    : [];
-  return candidates.filter((node) =>
+  return (findViewSiblings(tree.children) ?? []).filter((node) =>
     node.name === "property" && typeof node.attributes.iri === "string" && node.attributes.iri.length > 0,
   );
 }
@@ -676,11 +684,14 @@ function PersonalWidgetQueryListener({
         );
         const selectedTerms = (activeFilter?.children ?? [])
           .filter((child) => child.name === "value")
-          .map((child) => fctTermKey(
-            child.text ?? "",
-            child.attributes.datatype,
-            child.attributes["xml:lang"],
-          ));
+          .map((child) => {
+            const lang = child.attributes["xml:lang"];
+            // FCT literal constraints default to datatype="string". If the
+            // key defaults this missing datatype to "uri", a one-value
+            // literal facet filters its only checkbox out after selection.
+            const datatype = child.attributes.datatype ?? (lang ? undefined : "string");
+            return fctTermKey(child.text ?? "", datatype, lang);
+          });
         const values = selectedTerms.length
           ? fetchedValues.filter((value) => selectedTerms.includes(facetValueKey(value)))
           : fetchedValues;
@@ -843,7 +854,7 @@ function PersonalRoleWidget({
   return (
     <div className="min-h-0 flex-1 overflow-auto p-2">
       {loading && <p className="px-2 py-1 text-xs text-muted-foreground" aria-live="polite">Updating…</p>}
-      {error && <p className="px-2 py-1 text-xs text-destructive" title={error}>Update failed: {error}</p>}
+      {error && <Tooltip><TooltipTrigger render={<p className="px-2 py-1 text-xs text-destructive">Update failed: {error}</p>} /><TooltipContent>{error}</TooltipContent></Tooltip>}
       {!loading && !error && visibleValues.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">No matching values for this role.</p>}
       {visibleValues.length > 10 && (
         <div className="mb-2 flex items-center justify-between gap-2 px-1 text-xs">
@@ -862,7 +873,7 @@ function PersonalRoleWidget({
             <div key={`${value.uri}:${value.datatype ?? ""}:${value.lang ?? ""}`} className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 ${isGroupByRole ? "" : "cursor-pointer"}`}>
               <input id={`personal-role-value-${roleNode.id}-${valueIndex}`} type="checkbox" checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`} />
               {isGroupByRole ? (
-                <button type="button" onClick={() => onGroupValueClick(value)} className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`} title={`Scroll to group ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`}>{value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}</button>
+                <Tooltip><TooltipTrigger render={<button type="button" onClick={() => onGroupValueClick(value)} className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`}>{value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}</button>} /><TooltipContent>{`Scroll to group ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`}</TooltipContent></Tooltip>
               ) : (
                 <label htmlFor={`personal-role-value-${roleNode.id}-${valueIndex}`} className={`min-w-0 flex-1 break-words cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}>
                   {value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}
@@ -1075,9 +1086,9 @@ type ShareableUiState = {
   selectedNamePropertyUri?: string;
 };
 
-function readShareableUiState(): ShareableUiState | null {
-  if (typeof window === "undefined") return null;
-  const encodedState = new URLSearchParams(window.location.search).get("state");
+function readShareableUiState(search?: string): ShareableUiState | null {
+  if (typeof window === "undefined" && search === undefined) return null;
+  const encodedState = new URLSearchParams(search ?? window.location.search).get("state");
   if (!encodedState) return null;
   try {
     const parsed: unknown = JSON.parse(encodedState);
@@ -1140,6 +1151,9 @@ function parseFctQueryXml(xml: string): FctQueryTree | null {
 
 export default function Home() {
   const [controlsSheetOpen, setControlsSheetOpen] = useState(false);
+  const [clearCacheDialogOpen, setClearCacheDialogOpen] = useState(false);
+  const [deleteHistoryDialogOpen, setDeleteHistoryDialogOpen] = useState(false);
+  const [isDeletingHistory, setIsDeletingHistory] = useState(false);
   const [localStorageUsageBytes, setLocalStorageUsageBytes] = useState<number | null>(null);
 
   useEffect(() => {
@@ -1158,19 +1172,27 @@ export default function Home() {
   const [selectedUri, setSelectedUri] = useState("");
   const [urlStateInitialized, setUrlStateInitialized] = useState(false);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
-  const [bookmarkSaveMessage, setBookmarkSaveMessage] = useState("");
-  const [bookmarkSaveError, setBookmarkSaveError] = useState(false);
   const [bookmarkDialogOpen, setBookmarkDialogOpen] = useState(false);
-  const [bookmarkTitle, setBookmarkTitle] = useState("Saved query");
+  const [bookmarkTitle, setBookmarkTitle] = useState("");
   const [bookmarkDescription, setBookmarkDescription] = useState("");
   const [bookmarkTags, setBookmarkTags] = useState("");
   const [bookmarkTagVocabulary, setBookmarkTagVocabulary] = useState<"skos" | "dcterms" | "scot">("skos");
   const [bookmarkSaving, setBookmarkSaving] = useState(false);
   const [isQueryBookmarked, setIsQueryBookmarked] = useState(false);
+  const [matchingBookmarkId, setMatchingBookmarkId] = useState("");
   const [bookmarkCheckRevision, setBookmarkCheckRevision] = useState(0);
-  const [queryFavorites, setQueryFavorites] = useState<{ uri: string; title: string; created: string; queryXml: string; shareUrl?: string }[]>([]);
-  const [favoritesMessage, setFavoritesMessage] = useState("");
-  const [favoritesLoading, setFavoritesLoading] = useState(false);
+  const [historyBookmarkId, setHistoryBookmarkId] = useState("");
+  const [historyHasOlder, setHistoryHasOlder] = useState(false);
+  const [historyHasNewer, setHistoryHasNewer] = useState(false);
+  const [historyNavigationPending, setHistoryNavigationPending] = useState<"backward" | "forward" | null>(null);
+  const [isDeletingCurrentHistory, setIsDeletingCurrentHistory] = useState(false);
+  const bookmarkTitleInputRef = useRef<HTMLInputElement>(null);
+  const historyVisitQueryRef = useRef("");
+  const historyVisitIdRef = useRef("");
+  const historyWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // While the pointer is over the search input, coalesce rapid query edits into
+  // While the root breadcrumb search is expanded, coalesce changes into one in-memory snapshot.
+  const pendingHistoryVisitRef = useRef<{ queryXml: string; stateUrl: string } | null>(null);
   const [fctEndpoints, setFctEndpoints] = useState<EndpointOption[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState("");
   const [endpointStatuses, setEndpointStatuses] = useState<
@@ -1198,7 +1220,56 @@ export default function Home() {
   const [centralTab, setCentralTab] = useState<"results" | "groups" | "query-tree" | "view-query">("results");
   // The Query Tree is its own pane under the results, not a replacement tab.
   const [queryTreeOpen, setQueryTreeOpen] = useState(false);
+  const [queryTreeHeightPercent, setQueryTreeHeightPercent] = useState(40);
+  const [queryTreeHeightLoaded, setQueryTreeHeightLoaded] = useState(false);
+  const queryTreeHeightDbRef = useRef<IDBDatabase | null>(null);
+  const centralPaneRef = useRef<HTMLElement | null>(null);
   const [showResultBadges, setShowResultBadges] = useState(false);
+
+  // Keep the draggable Query Tree pane height in IndexedDB, not localStorage.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.indexedDB) {
+      setQueryTreeHeightLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    const request = window.indexedDB.open("maestro-ui-preferences", 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains("preferences")) db.createObjectStore("preferences");
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      if (cancelled) { db.close(); return; }
+      queryTreeHeightDbRef.current = db;
+      const read = db.transaction("preferences", "readonly").objectStore("preferences").get("query-tree-height-percent");
+      read.onsuccess = () => {
+        const value = Number(read.result);
+        if (!cancelled && Number.isFinite(value) && value >= 15 && value <= 75) setQueryTreeHeightPercent(value);
+        if (!cancelled) setQueryTreeHeightLoaded(true);
+      };
+      read.onerror = () => { if (!cancelled) setQueryTreeHeightLoaded(true); };
+    };
+    request.onerror = () => { if (!cancelled) setQueryTreeHeightLoaded(true); };
+    return () => {
+      cancelled = true;
+      queryTreeHeightDbRef.current?.close();
+      queryTreeHeightDbRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!queryTreeHeightLoaded || !queryTreeHeightDbRef.current) return;
+    const timer = window.setTimeout(() => {
+      try {
+        const transaction = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite");
+        transaction?.objectStore("preferences").put(queryTreeHeightPercent, "query-tree-height-percent");
+      } catch (error) {
+        console.warn("Maestro could not persist Query Tree height in IndexedDB", error);
+      }
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [queryTreeHeightPercent, queryTreeHeightLoaded]);
   const [querySourceFormat, setQuerySourceFormat] = useState<"xml" | "sparql">("xml");
   const [sparqlQuery, setSparqlQuery] = useState("");
   const [isRdfLoaderOpen, setIsRdfLoaderOpen] = useState(false);
@@ -1207,8 +1278,6 @@ export default function Home() {
     "http://example.org/graph/imported",
   );
   const [isRdfLoading, setIsRdfLoading] = useState(false);
-  const [rdfLoadMessage, setRdfLoadMessage] = useState("");
-  const [rdfLoadError, setRdfLoadError] = useState(false);
   /*
   const [activeTab, setActiveTab] = useState<
     "default" | "personal" | "community"
@@ -1275,6 +1344,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
   const [focusWidgetsSuppressed, setFocusWidgetsSuppressed] = useState(false);
   const [groupByPropertyUri, setGroupByPropertyUri] = useState("");
+  // Preserve a Personal facet's group-by selection while the Code Block pane
+  // temporarily replaces the results/groups pane.
+  const groupByBeforeCodeViewRef = useRef("");
   const [resultsUiPage, setResultsUiPage] = useState(0);
   const [groupUiPage, setGroupUiPage] = useState(0);
   const [groupBatchSize, setGroupBatchSize] = useState<number>(100);
@@ -1306,7 +1378,6 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const [autoConfiguredFacetKeys, setAutoConfiguredFacetKeys] = useState<Set<AutoConfiguredFacetKey>>(
     () => new Set(typeof window === "undefined" ? [] : readAutoConfiguredFacetKeys()),
   );
-  const [autoResetMessage, setAutoResetMessage] = useState("");
   const [rolesPage, setRolesPage] = useState(0);
 
   // Facet results can shrink after a query or endpoint change. Never leave a
@@ -1429,6 +1500,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   ];
   const ActiveSignalIcon = signalOptions.find(({ mode }) => mode === textSearchMode)?.Icon ?? SignalHigh;
   const [rootSearchExpanded, setRootSearchExpanded] = useState(false);
+  const rootSearchExpandedRef = useRef(rootSearchExpanded);
+  // Keep queued History work aware of the breadcrumb's current visibility,
+  // including work enqueued just before the search field opened.
+  rootSearchExpandedRef.current = rootSearchExpanded;
   const [namePropertyMenuOpen, setNamePropertyMenuOpen] = useState(false);
   const [categoriesTreeMode, setCategoriesTreeMode] = useState(false);
   const [ontologyClassMetadata, setOntologyClassMetadata] = useState<Record<string, OntologyClassMetadata>>({});
@@ -1932,9 +2007,14 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   async function chooseFctEndpoint(endpointId: string) {
     if (!endpointId) return;
 
-    // A grey status means this server has not been checked yet. Check it lazily
-    // when the user chooses it, including when it is already the selected server.
-    if (!endpointStatuses[endpointId]) {
+    // Trust a green endpoint until an actual interaction fails. Selecting it
+    // should not add a redundant health request; unknown or unhealthy endpoints
+    // are checked lazily when selected.
+    const knownStatus = endpointStatuses[endpointId];
+    const isGreen = knownStatus?.state === "ok" && knownStatus.status !== null && knownStatus.status < 400;
+    if (isGreen) {
+      // Keep reporting the existing green state; do not issue a health request.
+    } else {
       const endpoint = fctEndpoints.find((item) => item.id === endpointId);
       if (endpoint) {
         setEndpointMenuError("");
@@ -2078,6 +2158,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   useEffect(() => {
     if (!urlStateInitialized) return;
     let active = true;
+    setIsQueryBookmarked(false);
+    setMatchingBookmarkId("");
     const timer = window.setTimeout(async () => {
       try {
         const response = await fetch("/proxy/api/query-favorites", {
@@ -2086,24 +2168,106 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
           body: JSON.stringify({ action: "check", queryXml }),
           cache: "no-store",
         });
-        const payload = await response.json() as { bookmarked?: boolean };
-        if (active && response.ok) setIsQueryBookmarked(payload.bookmarked === true);
+        const payload = await response.json() as { bookmarked?: boolean; historyId?: string | null };
+        if (active && response.ok) {
+          setIsQueryBookmarked(payload.bookmarked === true);
+          setMatchingBookmarkId(payload.bookmarked && payload.historyId ? payload.historyId : "");
+        }
       } catch {
-        if (active) setIsQueryBookmarked(false);
+        if (active) {
+          setIsQueryBookmarked(false);
+          setMatchingBookmarkId("");
+        }
       }
     }, 350);
     return () => { active = false; window.clearTimeout(timer); };
   }, [queryXml, urlStateInitialized, bookmarkCheckRevision]);
 
+  // Keep History navigation enabled state synchronized with the actual store.
+  // With no loaded History item, the comparison cursor is the current time.
+  useEffect(() => {
+    if (!urlStateInitialized || rootSearchExpanded) return;
+    let active = true;
+    // Preserve the currently displayed button states while the root search
+    // field is open. They are refreshed only after the coalesced History write
+    // has been persisted when the field closes.
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        // Query changes enqueue a History visit. Wait for that write, then ask
+        // relative to the newly-current item rather than the previous cursor.
+        await historyWriteQueueRef.current;
+        if (!active) return;
+        const currentId = historyVisitQueryRef.current === queryXml
+          ? historyVisitIdRef.current
+          : historyBookmarkId;
+        // Attribute each availability query to the specific navigation button
+        // whose enabled state it controls. Separate requests make the component
+        // identity unambiguous in DevTools and server-side request logs.
+        const [backResponse, forwardResponse] = await Promise.all([
+          fetch("/proxy/api/query-favorites", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-maestro-debug-component": "HistoryBackButton",
+            },
+            body: JSON.stringify({ action: "availability", direction: "backward", historyId: currentId }),
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+          fetch("/proxy/api/query-favorites", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-maestro-debug-component": "HistoryForwardButton",
+            },
+            body: JSON.stringify({ action: "availability", direction: "forward", historyId: currentId }),
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        ]);
+        const [backPayload, forwardPayload] = await Promise.all([
+          backResponse.json() as Promise<{ older?: boolean }>,
+          forwardResponse.json() as Promise<{ newer?: boolean }>,
+        ]);
+        if (active) {
+          setHistoryHasOlder(backResponse.ok && backPayload.older === true);
+          setHistoryHasNewer(forwardResponse.ok && forwardPayload.newer === true);
+        }
+      } catch {
+        if (active) {
+          setHistoryHasOlder(false);
+          setHistoryHasNewer(false);
+        }
+      }
+    }, 100);
+    return () => { active = false; controller.abort(); window.clearTimeout(timer); };
+  }, [urlStateInitialized, historyBookmarkId, queryXml, bookmarkCheckRevision, rootSearchExpanded]);
+
+  useEffect(() => {
+    if (!bookmarkDialogOpen) return;
+    const timer = window.setTimeout(() => {
+      bookmarkTitleInputRef.current?.focus();
+      bookmarkTitleInputRef.current?.select();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [bookmarkDialogOpen]);
+
   // The main Results request must use the active view's server-side limit and offset.
   const queryResultsXml = queryXml;
   const prettyQueryXml = xmlFormat(queryXml, { indentation: "  " });
 
-  // Restore the share URL once. Subsequent SPA state changes only rewrite the URL;
-  // they never re-run this initializer or navigate the application.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const serializedQuery = params.get("q");
+  /**
+   * Apply a saved FCT query and its shareable UI state without navigating. The
+   * initial URL restore and RDF History navigation both use this same path so
+   * query listeners and every UI component are refreshed consistently.
+   */
+  function restoreQueryAndUiState(
+    serializedQuery: string | null,
+    restored: ShareableUiState | null,
+    restoredHistoryId?: string | null,
+  ): boolean {
+    if (restoredHistoryId) setHistoryBookmarkId(restoredHistoryId);
     let restoredQueryFromUrl = false;
     if (serializedQuery) {
       const restoredTree = parseFctQueryXml(serializedQuery);
@@ -2126,7 +2290,6 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         restoredQueryFromUrl = true;
       }
     }
-    const restored = readShareableUiState();
     if (restored) {
       if (typeof restored.selectedEndpointId === "string") setSelectedEndpointId(restored.selectedEndpointId);
       if (typeof restored.selectedFacet === "string" && restored.selectedFacet.length < 100) setSelectedFacet(restored.selectedFacet);
@@ -2178,6 +2341,14 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       if (typeof restored.rdfSourceUrl === "string") setRdfSourceUrl(restored.rdfSourceUrl);
       if (typeof restored.rdfTargetGraph === "string") setRdfTargetGraph(restored.rdfTargetGraph);
     }
+    return restoredQueryFromUrl;
+  }
+
+  // Restore the initial share URL once. Subsequent state changes only rewrite
+  // the address bar; they never navigate or rerun this initializer.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    restoreQueryAndUiState(params.get("q"), readShareableUiState(), params.get("history"));
     setUrlStateInitialized(true);
   // This is intentionally a one-time initializer for the initial URL only.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2222,6 +2393,105 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     window.history.replaceState(window.history.state, "", nextUrl);
   }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris]);
 
+  /** Persist one History visit for a query snapshot, preserving queue ordering. */
+  async function writeHistoryVisit(queryXmlSnapshot: string, stateUrlSnapshot: string) {
+    const response = await fetch("/proxy/api/query-favorites", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "visit", queryXml: queryXmlSnapshot, stateUrl: stateUrlSnapshot }), cache: "no-store",
+    });
+    const payload = await response.json() as { historyId?: string; error?: string };
+    if (!response.ok || !payload.historyId) throw new Error(payload.error ?? `HTTP ${response.status}`);
+    historyVisitIdRef.current = payload.historyId;
+    setHistoryBookmarkId(payload.historyId);
+    // Persist the URL captured for this exact query visit, not the current URL.
+    const visitUrl = new URL(stateUrlSnapshot, window.location.origin);
+    visitUrl.searchParams.set("history", payload.historyId);
+    const currentParams = new URLSearchParams(window.location.search);
+    if (currentParams.get("q") === queryXmlSnapshot) {
+      currentParams.set("history", payload.historyId);
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}?${currentParams.toString()}${window.location.hash}`);
+    }
+    await fetch("/proxy/api/query-favorites", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "updateState", historyId: payload.historyId, stateUrl: visitUrl.toString() }), cache: "no-store",
+    });
+  }
+
+  // Each distinct FCT query gets its own History record. While the root breadcrumb
+  // search is visible, coalesce all query/UI changes and persist only the latest
+  // snapshot after the search closes. UI-only changes otherwise update the visit.
+  useEffect(() => {
+    if (!urlStateInitialized) return;
+    const stateUrl = window.location.href;
+    const previousQueryXml = historyVisitQueryRef.current;
+    const isInitialLoadedHistoryItem = Boolean(historyBookmarkId && !previousQueryXml);
+    const isNewQuery = !isInitialLoadedHistoryItem && previousQueryXml !== queryXml;
+    historyVisitQueryRef.current = queryXml;
+    if (isInitialLoadedHistoryItem) historyVisitIdRef.current = historyBookmarkId;
+
+    const synchronize = async () => {
+      try {
+        if (isNewQuery) {
+          await writeHistoryVisit(queryXml, stateUrl);
+          return;
+        }
+
+        // On initial restoration, keep the selected History item as the cursor.
+        // On UI-only state changes, update its URL without creating a new visit.
+        const currentId = historyBookmarkId;
+        // Never overwrite an older visit's URL with the URL for a newer query
+        // while that newer query's History item is still being written.
+        if (currentId && historyVisitIdRef.current === currentId && historyVisitQueryRef.current === queryXml) {
+          await fetch("/proxy/api/query-favorites", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "updateState", historyId: currentId, stateUrl }), cache: "no-store",
+          });
+        }
+      } catch (error) {
+        console.warn("Maestro History synchronization failed", error);
+      }
+    };
+
+    if (rootSearchExpanded) {
+      // No History writes while the root search field is visible. Only create a
+      // pending snapshot once a query changes, then replace it with the latest
+      // query/state whenever more changes occur.
+      if (isNewQuery || pendingHistoryVisitRef.current) {
+        pendingHistoryVisitRef.current = { queryXml, stateUrl };
+      }
+      return;
+    }
+    const pending = pendingHistoryVisitRef.current;
+    if (pending) {
+      pendingHistoryVisitRef.current = null;
+      // Persist the final coalesced snapshot, not a separately reconstructed
+      // value. Intermediate snapshots are discarded when the ref is cleared.
+      const persistLatest = async () => {
+        if (rootSearchExpandedRef.current) {
+          pendingHistoryVisitRef.current = { queryXml: pending.queryXml, stateUrl: pending.stateUrl };
+          return;
+        }
+        try {
+          await writeHistoryVisit(pending.queryXml, pending.stateUrl);
+        } catch (error) {
+          console.warn("Maestro History synchronization failed", error);
+        }
+      };
+      historyWriteQueueRef.current = historyWriteQueueRef.current.then(persistLatest, persistLatest);
+      return;
+    }
+    const synchronizeWhenCollapsed = async () => {
+      if (rootSearchExpandedRef.current) {
+        pendingHistoryVisitRef.current = { queryXml, stateUrl };
+        return;
+      }
+      await synchronize();
+    };
+    historyWriteQueueRef.current = historyWriteQueueRef.current.then(synchronizeWhenCollapsed, synchronizeWhenCollapsed);
+    // Do not cancel queued writes in effect cleanup; pending History is flushed
+    // when the root breadcrumb search field closes.
+  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded]);
+
   // The graph text box may contain an unapplied draft distinct from the query's graph binding.
   // Restore that draft after the query-graph synchronization effect has run once.
   useEffect(() => {
@@ -2253,10 +2523,19 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const selectedGroupByOption = groupByOptions.find((option) => option.key !== "" && option.key === groupByPropertyUri) ?? null;
   useEffect(() => {
     if (groupByPropertyUri && !groupByOptions.some((option) => option.key === groupByPropertyUri)) {
+      // Opening Code Block does not mutate the FCT query. Ignore transient
+      // facet-option gaps during that pane switch; restore the grouping when
+      // returning to Results instead of treating the pane switch as deselection.
+      if (groupByBeforeCodeViewRef.current === groupByPropertyUri) return;
       setGroupByPropertyUri("");
       setCentralTab((current) => current === "groups" ? "results" : current);
     }
-  }, [groupByPropertyUri, groupByOptions.map((option) => option.key).join("|")]);
+  }, [groupByPropertyUri, groupByOptions.map((option) => option.key).join("|"), centralTab]);
+  useEffect(() => {
+    if (groupByBeforeCodeViewRef.current && centralTab !== "view-query" && groupByOptions.some((option) => option.key === groupByBeforeCodeViewRef.current)) {
+      groupByBeforeCodeViewRef.current = "";
+    }
+  }, [centralTab, groupByOptions.map((option) => option.key).join("|")]);
   const [groupValues, setGroupValues] = useState<FctResult[]>([]);
   const [groupValuesLoading, setGroupValuesLoading] = useState(false);
   const [groupValuesError, setGroupValuesError] = useState("");
@@ -2274,13 +2553,13 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       const bCount = bMembers && !bMembers.loading && !bMembers.error ? (bMembers.count ?? bMembers.results.length) : -1;
       return bCount - aCount || (a.title || a.uri).localeCompare(b.title || b.uri);
     });
-  const groupedPersonalFacetUri = centralTab === "groups" && selectedGroupByOption?.direction === "forward"
+  const groupedPersonalFacetUri = selectedGroupByOption?.direction === "forward"
     && selectedGroupByOption.uri !== RDF_TYPE_URI
     && personalWidgets.some((widget) => widget.uri === selectedGroupByOption.uri && !widget.excluded)
     ? selectedGroupByOption.uri
     : null;
-  const isGroupByCategory = centralTab === "groups" && selectedGroupByOption?.direction === "forward" && selectedGroupByOption.uri === RDF_TYPE_URI;
-  const groupedRoleUri = centralTab === "groups" && selectedGroupByOption?.direction === "reverse"
+  const isGroupByCategory = selectedGroupByOption?.direction === "forward" && selectedGroupByOption.uri === RDF_TYPE_URI;
+  const groupedRoleUri = selectedGroupByOption?.direction === "reverse"
     ? selectedGroupByOption.uri
     : null;
   const groupedFacetActive = Boolean(groupedPersonalFacetUri || groupedRoleUri || isGroupByCategory);
@@ -3969,6 +4248,197 @@ useEffect(() => {
     clearTutorialPreview();
   }
 
+  async function navigateQueryHistory(direction: "backward" | "forward") {
+    if (historyNavigationPending !== null) return;
+    setHistoryNavigationPending(direction);
+    try {
+      const response = await fetch("/proxy/api/query-favorites", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-maestro-debug-component": direction === "backward" ? "HistoryBackButton" : "HistoryForwardButton",
+        },
+        body: JSON.stringify({ action: "navigate", direction, historyId: historyBookmarkId }), cache: "no-store",
+      });
+      const payload = await response.json() as { found?: boolean; stateUrl?: string; queryXml?: string; historyId?: string; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+      if (!payload.found) {
+        toast.add({ title: `No ${direction === "backward" ? "earlier" : "later"} query in History`, type: "info" });
+        return;
+      }
+      if (!payload.queryXml || !payload.historyId) {
+        throw new Error("The selected History item does not contain a saved query.");
+      }
+
+      // stateUrl is RDF-stored metadata, not a navigation target. Read its
+      // serialized UI state, but apply the query XML returned by the RDF result
+      // set as the authoritative query. The shared restore function updates the
+      // query store and all related UI state without reloading the page.
+      const savedUrl = payload.stateUrl ? new URL(payload.stateUrl, window.location.href) : null;
+      const restoredUiState = savedUrl ? readShareableUiState(savedUrl.search) : null;
+      const restoredTree = parseFctQueryXml(payload.queryXml);
+      if (!restoredTree) throw new Error("The selected History item contains invalid FCT query XML.");
+
+      historyVisitQueryRef.current = serializeFctQuery(restoredTree);
+      historyVisitIdRef.current = payload.historyId;
+      restoreQueryAndUiState(payload.queryXml, restoredUiState, payload.historyId);
+
+      // Keep the current browser URL synchronized without navigating. The URL
+      // remains a reflection of app state; it is not the source used to restore it.
+      const params = new URLSearchParams(window.location.search);
+      params.set("q", payload.queryXml);
+      params.set("history", payload.historyId);
+      if (savedUrl?.searchParams.has("state")) params.set("state", savedUrl.searchParams.get("state")!);
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not navigate query History.";
+      toast.add({ title: "Could not navigate query History", description: message, type: "error" });
+    } finally {
+      setHistoryNavigationPending(null);
+    }
+  }
+
+  async function loadHistoryQuery() {
+    setControlsSheetOpen(false);
+    try {
+      // Use the server-resolved SITE_HISTORY graph rather than duplicating its
+      // default in client code, so .env.local remains authoritative.
+      const response = await fetch("/proxy/api/query-favorites/config", { cache: "no-store" });
+      const payload = await response.json() as { historyGraph?: string; personalEndpointUrl?: string; error?: string };
+      if (!response.ok || !payload.historyGraph || !payload.personalEndpointUrl) {
+        throw new Error(payload.error ?? `HTTP ${response.status}`);
+      }
+
+      // History is a personal-store view: select the endpoint configured by
+      // PERSONAL_SPARQL_ENDPOINT in .env.local before restoring the query.
+      // The personal endpoint is expected to also exist in the Datasites graph.
+      const normalizeEndpointUrl = (value: string) => {
+        const url = new URL(value);
+        url.hash = "";
+        url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
+        return url.toString().replace(/\/$/u, "");
+      };
+      const personalEndpoint = fctEndpoints.find((endpoint) => {
+        try {
+          return normalizeEndpointUrl(endpoint.url) === normalizeEndpointUrl(payload.personalEndpointUrl!);
+        } catch {
+          return false;
+        }
+      });
+      if (!personalEndpoint) {
+        throw new Error(`The personal SPARQL endpoint (${payload.personalEndpointUrl}) is not present in the Datasites graph.`);
+      }
+      const selectResponse = await fetch("/proxy/api/fct", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history", "SelectPersonalServer") },
+        body: JSON.stringify({ selectEndpointId: personalEndpoint.id }),
+        cache: "no-store",
+      });
+      const selectPayload = await selectResponse.json() as { selectedId?: string; error?: string };
+      if (!selectResponse.ok || selectPayload.selectedId !== personalEndpoint.id) {
+        throw new Error(selectPayload.error ?? `Could not select the personal data server (HTTP ${selectResponse.status}).`);
+      }
+      setSelectedEndpointId(personalEndpoint.id);
+
+      // Build the History query as a complete FCT query, then pass it through
+      // the same restore path used by URL state. That path updates the live
+      // query store through its API, notifying the query tree, breadcrumbs,
+      // facets, results, and URL-state listeners together.
+      const historyTree: FctQueryTree = {
+        ...queryTree,
+        attributes: { ...queryTree.attributes, graph: payload.historyGraph },
+        children: [
+          { id: "history-bookmark-class", name: "class", attributes: { iri: "http://www.w3.org/2002/01/bookmark#Bookmark" }, children: [] },
+          { id: "query-view", name: "view", attributes: { type: "text", limit: "30", offset: "0" }, children: [] },
+        ],
+      };
+      const historyQueryXml = serializeFctQuery(historyTree);
+      if (!restoreQueryAndUiState(historyQueryXml, null)) {
+        throw new Error("Could not restore the generated History query.");
+      }
+
+      setSearchDraft("");
+      setSavedSearchDraft("");
+      setGroupByPropertyUri("");
+      setCentralTab("results");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not load query History.";
+      toast.add({ title: "Could not load query History", description: message, type: "error" });
+    }
+  }
+
+  async function deleteCurrentQueryHistory() {
+    if (isDeletingCurrentHistory || !historyBookmarkId) return;
+    setIsDeletingCurrentHistory(true);
+    try {
+      await historyWriteQueueRef.current;
+      const response = await fetch("/proxy/api/query-favorites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history", "DeleteCurrentHistory") },
+        body: JSON.stringify({ action: "deleteCurrentHistory", historyId: historyBookmarkId }),
+        cache: "no-store",
+      });
+      const payload = await response.json() as { deleted?: boolean; nextHistoryId?: string; queryXml?: string; stateUrl?: string; error?: string };
+      if (!response.ok || !payload.deleted) throw new Error(payload.error ?? `HTTP ${response.status}`);
+      historyVisitQueryRef.current = "";
+      historyVisitIdRef.current = "";
+      pendingHistoryVisitRef.current = null;
+      if (payload.nextHistoryId && payload.queryXml) {
+        const savedUrl = payload.stateUrl ? new URL(payload.stateUrl, window.location.href) : null;
+        const restoredTree = parseFctQueryXml(payload.queryXml);
+        if (!restoredTree) throw new Error("The next earlier History item contains invalid FCT query XML.");
+        historyVisitQueryRef.current = serializeFctQuery(restoredTree);
+        historyVisitIdRef.current = payload.nextHistoryId;
+        restoreQueryAndUiState(payload.queryXml, savedUrl ? readShareableUiState(savedUrl.search) : null, payload.nextHistoryId);
+        const params = new URLSearchParams(window.location.search);
+        params.set("q", payload.queryXml);
+        params.set("history", payload.nextHistoryId);
+        if (savedUrl?.searchParams.has("state")) params.set("state", savedUrl.searchParams.get("state")!);
+        else params.delete("state");
+        window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
+      } else {
+        setHistoryBookmarkId("");
+      }
+      setBookmarkCheckRevision((revision) => revision + 1);
+      toast.add({ title: "History item deleted", description: payload.nextHistoryId ? "Restored the next earlier History item." : "The current History item was deleted; no earlier item remains.", type: "success" });
+    } catch (error) {
+      toast.add({ title: "Could not delete History item", description: error instanceof Error ? error.message : "The History item could not be deleted.", type: "error" });
+    } finally {
+      setIsDeletingCurrentHistory(false);
+    }
+  }
+
+  async function deleteQueryHistory() {
+    if (isDeletingHistory) return;
+    setIsDeletingHistory(true);
+    try {
+      const response = await fetch("/proxy/api/query-favorites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history", "DeleteHistory") },
+        body: JSON.stringify({ action: "deleteHistory" }),
+        cache: "no-store",
+      });
+      const payload = await response.json() as { deleted?: boolean; error?: string };
+      if (!response.ok || !payload.deleted) throw new Error(payload.error ?? `HTTP ${response.status}`);
+      historyVisitQueryRef.current = "";
+      historyVisitIdRef.current = "";
+      pendingHistoryVisitRef.current = null;
+      setHistoryBookmarkId("");
+      const params = new URLSearchParams(window.location.search);
+      params.delete("history");
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
+      setHistoryHasOlder(false);
+      setHistoryHasNewer(false);
+      setHistoryNavigationPending(null);
+      setDeleteHistoryDialogOpen(false);
+      toast.add({ title: "History deleted", description: "Query History visits were removed from your RDF store. Saved bookmarks were preserved.", type: "success" });
+    } catch (error) {
+      toast.add({ title: "Could not delete History", description: error instanceof Error ? error.message : "The History records could not be deleted.", type: "error" });
+    } finally {
+      setIsDeletingHistory(false);
+    }
+  }
+
   function navigateGraphHistory(nextIndex: number) {
     const graph = graphNavigationHistory[nextIndex];
     if (graph === undefined) return;
@@ -4326,15 +4796,14 @@ useEffect(() => {
         >
           <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
             {hasVisibleChildren ? (
-              <button
+              <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={toggleCollapsed}
                 aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${queryNodeLabel(node)}`}
-                title={`${isCollapsed ? "Expand" : "Collapse"} node`}
                 className="rounded-sm text-muted-foreground hover:text-foreground"
               >
                 {isCollapsed ? <ChevronRight className="size-4" aria-hidden="true" /> : <ChevronDown className="size-4" aria-hidden="true" />}
-              </button>
+              </button>} /><TooltipContent>{`${isCollapsed ? "Expand" : "Collapse"} node`}</TooltipContent></Tooltip>
             ) : null}
           </span>
           {NodeIcon && (node.name === "property" || node.name === "property-of" ? (
@@ -4347,36 +4816,33 @@ useEffect(() => {
           ))}
           <span className="min-w-0 flex-1 break-words text-sm">
             {node.name === "property" || node.name === "property-of" ? (
-              <button
+              <Tooltip><TooltipTrigger render={<button
                 type="button"
                 className="min-w-0 break-words text-left underline-offset-2 hover:underline cursor-pointer"
-                title={`Navigate to ${node.name === "property-of" ? "reverse-role" : "property"} scope: ${node.attributes.iri ?? queryNodeLabel(node)}`}
                 onClick={() => navigateToPropertyPath(node.id)}
               >
                 {queryNodeLabel(node)}{node.name === "property-of" ? " of" : ""}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
-              </button>
+              </button>} /><TooltipContent>{`Navigate to ${node.name === "property-of" ? "reverse-role" : "property"} scope: ${node.attributes.iri ?? queryNodeLabel(node)}`}</TooltipContent></Tooltip>
             ) : (
-              <span
+              <Tooltip><TooltipTrigger render={<span
                 className="min-w-0 break-words"
-                title={node.attributes.iri ?? node.name}
               >
                 {node.id === "query-view" ? "Results view" : facetHoverPreview?.kind === "record" && node.id === rootPreviewNodeId ? facetHoverPreview.label : queryNodeLabel(node)}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
-              </span>
+              </span>} /><TooltipContent>{node.attributes.iri ?? node.name}</TooltipContent></Tooltip>
             )}
             {inlineValues.map((value) => (
               <span key={value.id} className="ml-1.5 inline-flex max-w-full items-baseline gap-1 align-baseline">
                 <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
-                <span
+                <Tooltip><TooltipTrigger render={<span
                   className="min-w-0 break-words"
-                  title={`${value.text ?? ""}${value.attributes.datatype ? ` (${value.attributes.datatype})` : ""}`}
                 >
                   {boundValueLabel(value)}
-                </span>
+                </span>} /><TooltipContent>{`${value.text ?? ""}${value.attributes.datatype ? ` (${value.attributes.datatype})` : ""}`}</TooltipContent></Tooltip>
               </span>
             ))}
           </span>
           {showMinus && (
-          <button
+          <Tooltip><TooltipTrigger render={<button
             type="button"
             aria-label={
               lockedNode
@@ -4391,19 +4857,6 @@ useEffect(() => {
                       ? `Remove class ${toLabel(topInlineClass.attributes.iri ?? "class")} from ${queryNodeLabel(node)}`
                       : `Remove ${queryNodeLabel(node)} and its children`
             }
-            title={
-              lockedNode
-                ? "Required query node"
-                : isRootCarrierRow
-                  ? rootTextOrValue
-                    ? `${node.name === "value" ? "Remove the root value" : "Clear the search text"}${rootClassesOnThisNode.length > 0 ? "; click again to remove the last class" : ""}`
-                    : "Remove the last root class constraint"
-                  : topInlineValue
-                    ? "Remove the bound value; click again to remove the node"
-                    : topInlineClass
-                      ? "Remove the last class constraint; click again to remove the node"
-                      : "Remove this node and all descendants"
-            }
             disabled={lockedNode}
             onClick={() => {
               if (isRootCarrierRow) {
@@ -4416,7 +4869,17 @@ useEffect(() => {
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded border text-base leading-none text-muted-foreground hover:border-destructive hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-25"
           >
             −
-          </button>
+          </button>} /><TooltipContent>{lockedNode
+                ? "Required query node"
+                : isRootCarrierRow
+                  ? rootTextOrValue
+                    ? `${node.name === "value" ? "Remove the root value" : "Clear the search text"}${rootClassesOnThisNode.length > 0 ? "; click again to remove the last class" : ""}`
+                    : "Remove the last root class constraint"
+                  : topInlineValue
+                    ? "Remove the bound value; click again to remove the node"
+                    : topInlineClass
+                      ? "Remove the last class constraint; click again to remove the node"
+                      : "Remove this node and all descendants"}</TooltipContent></Tooltip>
           )}
         </div>
         {hasVisibleChildren && !isCollapsed && (
@@ -4457,10 +4920,9 @@ useEffect(() => {
             <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByFacet ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""} ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "border-purple-500/80" : ""}`}>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <button
+                  <Tooltip><TooltipTrigger render={<button
                     type="button"
                     className={`break-words text-left text-sm font-semibold underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : "text-inherit"}`}
-                    title={`Navigate to ${widget.excluded ? `Excluded: ${toLabel(widget.uri)}` : toLabel(widget.uri)} scope`}
                     onMouseEnter={() => beginFacetHoverPreview(widget.uri, "forward", toLabel(widget.uri), "personal")}
                     onMouseLeave={clearTutorialPreview}
                     onClick={() => {
@@ -4473,7 +4935,7 @@ useEffect(() => {
                     {isGroupByFacet && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                     {widget.excluded && <CircleSlash className="mr-1 inline size-3.5 shrink-0" aria-label="Excluded" />}
                     {toLabel(widget.uri)}
-                  </button>
+                  </button>} /><TooltipContent>{`Navigate to ${widget.excluded ? `Excluded: ${toLabel(widget.uri)}` : toLabel(widget.uri)} scope`}</TooltipContent></Tooltip>
                   {autoConfiguredFacetKeys.has(`property::${widget.uri}`) && (
                     <Bot className="size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                   )}
@@ -4485,7 +4947,7 @@ useEffect(() => {
                       countFilename={`facet-${toLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}-first-item-count.xml`}
                     />
                     {!widget.excluded && (
-                      <button
+                      <Tooltip><TooltipTrigger render={<button
                         type="button"
                         disabled={!canGroupByFacet}
                         aria-pressed={isGroupByFacet}
@@ -4500,12 +4962,11 @@ useEffect(() => {
                         }}
                         className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:pointer-events-none disabled:opacity-30 ${isGroupByFacet ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
                         aria-label={isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri)}` : `Group results by ${toLabel(widget.uri)}`}
-                        title={isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri)}` : canGroupByFacet ? `Group results by ${toLabel(widget.uri)}` : "Select this property in the active query before grouping by it"}
                       >
                         <UsersRound className="size-4" aria-hidden="true" />
-                      </button>
+                      </button>} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri)}` : canGroupByFacet ? `Group results by ${toLabel(widget.uri)}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip>
                     )}
-                    <button
+                    <Tooltip><TooltipTrigger render={<button
                       type="button"
                       onClick={() => {
                         const pathNode = findPropertyPathNode(widget.uri);
@@ -4515,26 +4976,23 @@ useEffect(() => {
                       }}
                       className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
                       aria-label={`Remove ${widget.excluded ? `Excluded: ${toLabel(widget.uri)}` : toLabel(widget.uri)} widget`}
-                      title={`Remove ${toLabel(widget.uri)} facet`}
                     >
                       <Trash2 className="size-4" aria-hidden="true" />
-                    </button>
+                    </button>} /><TooltipContent>{`Remove ${toLabel(widget.uri)} facet`}</TooltipContent></Tooltip>
                   </div>
                 </div>
-                <p
+                <Tooltip><TooltipTrigger render={<p
                   className="mt-1 break-all text-xs text-muted-foreground"
-                  title={widget.uri}
                 >
                   {widget.uri}
-                </p>
+                </p>} /><TooltipContent>{widget.uri}</TooltipContent></Tooltip>
               </div>
-              <span
+              <Tooltip><TooltipTrigger render={<span
                 className={`shrink-0 text-xs ${widget.error ? "text-destructive" : "text-muted-foreground"}`}
                 aria-live="polite"
-                title={widget.error || undefined}
               >
                 {widget.loading ? "Updating…" : widget.error ? "Update failed" : widget.values.length}
-              </span>
+              </span>} /><TooltipContent>{widget.error || undefined}</TooltipContent></Tooltip>
             </header>
             <div className="min-h-0 flex-1 overflow-auto p-2">
               {!widget.loading &&
@@ -4690,12 +5148,11 @@ useEffect(() => {
                               aria-invalid={isZeroCount ? true : undefined}
                             />
                             {isGroupByFacet ? (
-                              <button
+                              <Tooltip><TooltipTrigger render={<button
                                 type="button"
                                 onClick={() => scrollToGroupForFacetValue(value)}
                                 className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`}
-                                title={`Scroll to group ${valueLabel}`}
-                              >{valueLabel}</button>
+                              >{valueLabel}</button>} /><TooltipContent>{`Scroll to group ${valueLabel}`}</TooltipContent></Tooltip>
                             ) : (
                               <label htmlFor={valueInputId} className={`min-w-0 flex-1 break-words cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}>
                                 {valueLabel}
@@ -4787,14 +5244,13 @@ useEffect(() => {
                     className="min-w-0 flex-1 rounded-none border-0 [&>*+*]:border-l [&>*+*]:border-input [&>span]:border-l-0 [&>input]:min-w-0 [&>input]:flex-1 [&>input]:rounded-none [&>input]:border-0 [&>input]:bg-background [&>input]:px-3 [&>input]:py-2 [&>input]:text-sm"
                   >
                     {textSearchMode === "uri" ? (
-                      <span
+                      <Tooltip><TooltipTrigger render={<span
                         role="img"
                         aria-label="URI"
-                        title="URI"
                         className="flex h-10 shrink-0 items-center justify-center px-2 text-muted-foreground"
                       >
                         <GlobeCode className="size-4" aria-hidden="true" />
-                      </span>
+                      </span>} /><TooltipContent>{"URI"}</TooltipContent></Tooltip>
                     ) : (
                       <DropdownMenu
                         open={namePropertyMenuOpen}
@@ -4807,7 +5263,7 @@ useEffect(() => {
                           <TooltipTrigger render={<DropdownMenuTrigger asChild><button type="button" onMouseEnter={() => { setRootSearchExpanded(true); setNamePropertyMenuOpen(true); }} aria-label={`Choose name/label property; currently ${selectedNamePropertyLabel}`} className="flex h-10 shrink-0 items-center justify-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"><SearchCode className="size-4" aria-hidden="true" /></button></DropdownMenuTrigger>} />
                           <TooltipContent>Choose name/label property — currently {selectedNamePropertyLabel}</TooltipContent>
                         </Tooltip>
-                        <DropdownMenuContent align="start" onMouseLeave={() => setNamePropertyMenuOpen(false)} className="max-h-80 min-w-56 overflow-y-auto">
+                        <DropdownMenuContent align="start" className="max-h-80 min-w-56 overflow-y-auto">
                           {TEXT_SEARCH_NAME_PROPERTIES.map((property) => {
                             const checked = selectedNamePropertyUris.includes(property.uri);
                             return (
@@ -4831,7 +5287,14 @@ useEffect(() => {
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}
-                    <input autoFocus value={search} onChange={(event) => updateSearchText(event.target.value)} placeholder={textSearchMode === "uri" ? "Enter URI" : "Enter keywords"} aria-label="Search results" className="min-w-0 flex-1 outline-none" />
+                    <input
+                      autoFocus
+                      value={search}
+                      onChange={(event) => updateSearchText(event.target.value)}
+                      placeholder={textSearchMode === "uri" ? "Enter URI" : "Enter keywords"}
+                      aria-label="Search results"
+                      className="min-w-0 flex-1 outline-none"
+                    />
                     <div
                       aria-label="Search mode"
                       className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none ${signalPickerExpanded ? "w-[10rem]" : "w-10"}`}
@@ -4876,6 +5339,43 @@ useEffect(() => {
 
   return (
     <main className="flex h-dvh min-h-[500px] flex-col bg-background text-foreground">
+      <Toaster />
+      <AlertDialog open={clearCacheDialogOpen} onOpenChange={setClearCacheDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear Maestro cache?</AlertDialogTitle>
+            <AlertDialogDescription>Clear all localStorage data saved by this site? This resets saved settings and reloads Maestro.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => {
+              try {
+                window.localStorage.clear();
+                window.location.reload();
+              } catch {
+                toast.add({ title: "Could not clear localStorage", description: "Check your browser's site storage permissions.", type: "error" });
+                setClearCacheDialogOpen(false);
+              }
+            }}>Clear Cache</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={deleteHistoryDialogOpen} onOpenChange={(open) => { if (!isDeletingHistory) setDeleteHistoryDialogOpen(open); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete query History?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Permanently delete all Maestro query History visits from your personal RDF store? This cannot be undone. Saved query bookmarks will be preserved.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingHistory}>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" disabled={isDeletingHistory} onClick={(event) => { event.preventDefault(); void deleteQueryHistory(); }}>
+              {isDeletingHistory ? "Deleting…" : "Delete All"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {isCheckingEndpoints && (
         <div className="fixed inset-x-0 top-0 z-[100] h-1.5 bg-muted" role="status" aria-label="Checking FCT endpoints">
           <Progress className="h-full rounded-none bg-muted" value={endpointChecksTotal > 0 ? (endpointChecksCompleted / endpointChecksTotal) * 100 : 0} indeterminate={endpointChecksTotal === 0 || endpointChecksCompleted === 0} aria-label="FCT endpoint check progress" />
@@ -4893,9 +5393,14 @@ useEffect(() => {
       <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-2">
           <ButtonGroup aria-label="Datasite navigation" className="shrink-0 border-0 shadow-none">
-            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => navigateGraphHistory(graphNavigationIndex - 1)} disabled={graphNavigationIndex <= 0} aria-label="Previous datasite" title="Previous datasite" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent disabled:opacity-40"><ArrowLeft className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Previous datasite</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => navigateGraphHistory(graphNavigationIndex + 1)} disabled={graphNavigationIndex >= graphNavigationHistory.length - 1} aria-label="Next datasite" title="Next datasite" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent disabled:opacity-40"><ArrowRight className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Next datasite</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => { clearTutorialPreview(); refreshQuery(); }} aria-label="Refresh datasite" title="Refresh datasite" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent"><RefreshCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Refresh datasite</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent>{historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => {
+              clearTutorialPreview();
+              const params = new URLSearchParams(window.location.search);
+              const restored = restoreQueryAndUiState(params.get("q"), readShareableUiState(), params.get("history"));
+              if (!restored) toast.add({ title: "URL query not restored", description: "The current URL does not contain a valid FCT query. UI settings from the URL were still applied.", type: "warning" });
+            }} aria-label="Restore query and UI from URL" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent"><RefreshCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Restore query and UI state from URL (no browser refresh)</TooltipContent></Tooltip>
           </ButtonGroup>
           {/* One address: [datasite]@[data server], with no gap around the at-sign. */}
           <div className="flex min-w-0 flex-1 items-center">
@@ -4909,32 +5414,29 @@ useEffect(() => {
                 aria-label="Site URI"
                 className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
               />
-              <button
+              <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={clearGraph}
                 aria-label="Remove datasite"
-                title="Remove datasite"
                 className="inline-flex shrink-0 items-center justify-center px-2.5 hover:bg-accent hover:text-accent-foreground"
-              ><X aria-hidden="true" className="size-4" /></button>
-              <button
+              ><X aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Remove datasite"}</TooltipContent></Tooltip>
+              <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={applyGraphText}
                 aria-label="Go"
-                title="Go"
                 className="inline-flex shrink-0 items-center justify-center px-2.5 hover:bg-accent hover:text-accent-foreground"
-              ><CirclePlay aria-hidden="true" className="size-4" /></button>
+              ><CirclePlay aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Go"}</TooltipContent></Tooltip>
             </div>
             <Label htmlFor="fct-endpoint" aria-label="Data server" className="shrink-0 px-2 text-muted-foreground">
               <AtSign aria-hidden="true" className="size-4" />
             </Label>
             <div className="flex min-w-0 items-center gap-2">
               <ButtonGroup aria-label="Data server selection, discovery, and refresh" className="max-w-full [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
-                    <select
+                    <Tooltip><TooltipTrigger render={<select
                       id="fct-endpoint"
                       value={selectedEndpointId}
                       onChange={(event) => void chooseFctEndpoint(event.currentTarget.value)}
                       className="w-80 min-w-0 max-w-full"
-                      title="Choose which FCT endpoint receives queries"
                     >
                       {fctEndpoints.length === 0 && (
                         <option value="">
@@ -4957,7 +5459,7 @@ useEffect(() => {
                           })}
                         </optgroup>
                       ))}
-                    </select>
+                    </select>} /><TooltipContent>{"Choose which FCT endpoint receives queries"}</TooltipContent></Tooltip>
                 <Tooltip>
                   <TooltipTrigger render={
                     <Toggle
@@ -4970,14 +5472,13 @@ useEffect(() => {
                   } />
                   <TooltipContent>{findEndpointsEnabled ? "Find Data Servers On" : "Find Data Servers Off"}</TooltipContent>
                 </Tooltip>
-                <button
+                <Tooltip><TooltipTrigger render={<button
                   type="button"
                   onClick={() => void checkFctEndpoints()}
                   disabled={isCheckingEndpoints || fctEndpoints.length === 0}
                   aria-label={isCheckingEndpoints ? "Checking servers" : "Check servers"}
                   className="inline-flex shrink-0 items-center justify-center px-2.5 py-2 text-sm hover:bg-accent disabled:opacity-50"
-                  title={isCheckingEndpoints ? "Checking servers…" : "Check each server with a small FCT query"}
-                ><RefreshCw aria-hidden="true" className={`size-4 ${isCheckingEndpoints ? "animate-spin" : ""}`} /></button>
+                ><RefreshCw aria-hidden="true" className={`size-4 ${isCheckingEndpoints ? "animate-spin" : ""}`} /></button>} /><TooltipContent>{isCheckingEndpoints ? "Checking servers…" : "Check each server with a small FCT query"}</TooltipContent></Tooltip>
               </ButtonGroup>
                   {isCheckingEndpoints && (
                     <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground" role="status" aria-live="polite">
@@ -4991,9 +5492,9 @@ useEffect(() => {
         <Tabs value="browse" className="shrink-0" aria-label="Maestro ribbon">
           <TabsList aria-label="Maestro ribbon tabs">
             <TabsTrigger value="browse">Browse</TabsTrigger>
-            <TabsTrigger value="view" disabled title="Coming soon">View</TabsTrigger>
-            <TabsTrigger value="analyze" disabled title="Coming soon">Analyze</TabsTrigger>
-            <TabsTrigger value="publish" disabled title="Coming soon">Publish</TabsTrigger>
+            <Tooltip><TooltipTrigger render={<TabsTrigger value="view" disabled>View</TabsTrigger>} /><TooltipContent>{"Coming soon"}</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<TabsTrigger value="analyze" disabled>Analyze</TabsTrigger>} /><TooltipContent>{"Coming soon"}</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<TabsTrigger value="publish" disabled>Publish</TabsTrigger>} /><TooltipContent>{"Coming soon"}</TooltipContent></Tooltip>
           </TabsList>
         </Tabs>
           </div>
@@ -5004,57 +5505,116 @@ useEffect(() => {
               type="button"
               variant="outline"
               size="icon"
-              aria-label={isQueryBookmarked ? "Query is bookmarked; save another favorite" : "Save query favorite"}
-              onClick={() => {
-                setBookmarkTitle("Saved query");
+              aria-label={isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}
+              onClick={async () => {
+                if (isQueryBookmarked) {
+                  try {
+                    const response = await fetch("/proxy/api/query-favorites", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-bookmark", "RemoveBookmarkHash") },
+                      body: JSON.stringify({ action: "unbookmark", queryXml }),
+                      cache: "no-store",
+                    });
+                    const payload = await response.json() as { removed?: boolean; error?: string };
+                    if (!response.ok || !payload.removed) throw new Error(payload.error ?? `HTTP ${response.status}`);
+                    setIsQueryBookmarked(false);
+                    setMatchingBookmarkId("");
+                    setBookmarkCheckRevision((revision) => revision + 1);
+                    toast.add({ title: "Bookmark removed", description: "The query hash was removed from the bookmark in your personal RDF store.", type: "success" });
+                  } catch (error) {
+                    toast.add({ title: "Could not remove bookmark", description: error instanceof Error ? error.message : "The bookmark hash could not be removed.", type: "error" });
+                  }
+                  return;
+                }
+                // Wait until the queued visit write has finished before opening
+                // metadata for the current query. Otherwise a fast click after
+                // editing can race the visit and leave the dialog at "Saved query".
+                await historyWriteQueueRef.current;
+                let currentHistoryId = historyVisitQueryRef.current === queryXml ? historyVisitIdRef.current : "";
+                if (!currentHistoryId && historyBookmarkId && historyVisitQueryRef.current === queryXml) currentHistoryId = historyBookmarkId;
+                const metadataId = matchingBookmarkId || currentHistoryId;
+                setBookmarkTitle(metadataId ? metadataId.slice(metadataId.lastIndexOf("#") + 1) : "");
                 setBookmarkDescription("");
                 setBookmarkTags("");
                 setBookmarkTagVocabulary("skos");
+                if (metadataId) {
+                  try {
+                    const response = await fetch("/proxy/api/query-favorites", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "read", historyId: metadataId }), cache: "no-store" });
+                    const payload = await response.json() as { found?: boolean; title?: string; description?: string; tags?: string[]; tagVocabulary?: "skos" | "dcterms" | "scot"; error?: string };
+                    if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+                    if (payload.found) {
+                      setBookmarkTitle(payload.title || metadataId.slice(metadataId.lastIndexOf("#") + 1));
+                      setBookmarkDescription(payload.description ?? "");
+                      setBookmarkTags((payload.tags ?? []).join(", "));
+                      setBookmarkTagVocabulary(payload.tagVocabulary ?? "skos");
+                    }
+                  } catch (error) {
+                    toast.add({ title: "Could not load bookmark metadata", description: error instanceof Error ? error.message : "The generated name is available to edit.", type: "error" });
+                  }
+                }
                 setBookmarkDialogOpen(true);
               }}
             ><Bookmark aria-hidden="true" className={isQueryBookmarked ? "fill-current text-amber-500" : ""} /></Button>
           } />
-          <TooltipContent>{isQueryBookmarked ? "This query is bookmarked" : "Save query favorite"}</TooltipContent>
+          <TooltipContent>{isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}</TooltipContent>
         </Tooltip>
-        {bookmarkDialogOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !bookmarkSaving) setBookmarkDialogOpen(false); }}>
-            <section role="dialog" aria-modal="true" aria-labelledby="maestro-bookmark-dialog-title" className="w-full max-w-lg rounded-lg border bg-background p-5 shadow-xl">
+        <Dialog open={bookmarkDialogOpen} onOpenChange={(open) => { if (!bookmarkSaving) setBookmarkDialogOpen(open); }}>
+            <DialogContent className="max-w-lg p-5" showCloseButton={false}>
               <div className="mb-4 flex items-start justify-between gap-4">
-                <div>
-                  <h2 id="maestro-bookmark-dialog-title" className="text-lg font-semibold">Save query bookmark</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">Save a title, description, and optional tags with this query.</p>
-                </div>
+                <DialogHeader>
+                  <DialogTitle id="maestro-bookmark-dialog-title">Edit History bookmark</DialogTitle>
+                  <DialogDescription>Edit the title, description, and optional tags for this History item.</DialogDescription>
+                </DialogHeader>
                 <Button type="button" variant="ghost" size="icon" aria-label="Close bookmark dialog" disabled={bookmarkSaving} onClick={() => setBookmarkDialogOpen(false)}><X className="size-4" /></Button>
               </div>
               <form className="flex flex-col gap-4" onSubmit={async (event) => {
                 event.preventDefault();
                 setBookmarkSaving(true);
-                setBookmarkSaveMessage("Saving query favorite…");
-                setBookmarkSaveError(false);
                 try {
+                  // Serialize against pending query visits so a save never races
+                  // the RDF insert for the current query's History item.
+                  await historyWriteQueueRef.current;
+                  let currentHistoryId = historyVisitQueryRef.current === queryXml ? historyVisitIdRef.current : "";
+                  if (!currentHistoryId && historyBookmarkId && historyVisitQueryRef.current === queryXml) currentHistoryId = historyBookmarkId;
+                  const targetHistoryId = matchingBookmarkId || currentHistoryId;
+                  if (!targetHistoryId) throw new Error("The current query's History item could not be resolved. Please wait for History to synchronize and retry.");
                   const tags = bookmarkTags.split(/[,;\n]/u).map((tag) => tag.trim()).filter(Boolean);
                   const response = await fetch("/proxy/api/query-favorites", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ title: bookmarkTitle.trim() || "Saved query", description: bookmarkDescription.trim(), tags, tagVocabulary: bookmarkTagVocabulary, queryXml: serializeFctQuery(queryTree), shareLink: window.location.href }),
+                    body: JSON.stringify({ action: "update", historyId: targetHistoryId, title: bookmarkTitle.trim() || targetHistoryId.slice(targetHistoryId.lastIndexOf("#") + 1), description: bookmarkDescription.trim(), tags, tagVocabulary: bookmarkTagVocabulary, queryXml: serializeFctQuery(queryTree), stateUrl: window.location.href }),
                   });
-                  const payload = await response.json() as { error?: string; namespaces?: unknown };
+                  const payload = await response.json() as { error?: string; namespaces?: unknown; historyId?: string; shareUrl?: string };
                   if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
                   if (payload.namespaces) rememberNamespaceMetadata(payload.namespaces);
                   setIsQueryBookmarked(true);
+                  setMatchingBookmarkId(payload.historyId || matchingBookmarkId || historyBookmarkId);
                   setBookmarkCheckRevision((revision) => revision + 1);
-                  setBookmarkSaveMessage("Query favorite saved to your personal store.");
+                  const shareUrl = payload.shareUrl;
+                  const savedAt = new Date().toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+                  const savedName = bookmarkTitle.trim() || targetHistoryId.slice(targetHistoryId.lastIndexOf("#") + 1);
+                  toast.add({
+                    title: "Bookmark saved",
+                    description: (
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <div><span className="font-medium">Name:</span> {savedName}</div>
+                        <div><span className="font-medium">Date:</span> {savedAt}</div>
+                        {shareUrl && <div className="min-w-0"><span className="font-medium">Link:</span> <a href={shareUrl} target="_blank" rel="noreferrer" className="break-all text-primary underline underline-offset-2">Open bookmark</a></div>}
+                      </div>
+                    ),
+                    type: "success",
+                  });
                   setBookmarkDialogOpen(false);
                 } catch (error) {
-                  setBookmarkSaveError(true);
-                  setBookmarkSaveMessage(error instanceof Error ? error.message : "Could not save query favorite.");
+                  const message = error instanceof Error ? error.message : "Could not save query bookmark.";
+                  toast.add({ title: "Could not save bookmark", description: message, type: "error" });
                 } finally {
                   setBookmarkSaving(false);
                 }
               }}>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="maestro-bookmark-title">Title</Label>
-                  <input id="maestro-bookmark-title" autoFocus value={bookmarkTitle} onChange={(event) => setBookmarkTitle(event.target.value)} maxLength={300} required className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                  <input id="maestro-bookmark-title" ref={bookmarkTitleInputRef} value={bookmarkTitle} onChange={(event) => setBookmarkTitle(event.target.value)} maxLength={300} required className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="maestro-bookmark-description">Description</Label>
@@ -5075,12 +5635,11 @@ useEffect(() => {
                 </div>
                 <div className="flex justify-end gap-2 pt-1">
                   <Button type="button" variant="outline" disabled={bookmarkSaving} onClick={() => setBookmarkDialogOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={bookmarkSaving}>{bookmarkSaving ? "Saving…" : "Save bookmark"}</Button>
+                  <Button type="submit" disabled={bookmarkSaving}>{bookmarkSaving ? "Updating…" : "Update bookmark"}</Button>
                 </div>
               </form>
-            </section>
-          </div>
-        )}
+            </DialogContent>
+        </Dialog>
         <Tooltip>
           <TooltipTrigger render={
             <Button
@@ -5116,31 +5675,19 @@ useEffect(() => {
               <p className="mt-1 break-all text-xs text-muted-foreground">Using personal: <span className="font-medium text-foreground">{personalSparqlEndpoint || "Not configured"}</span></p>
             </SheetHeader>
             <div className="flex flex-col gap-4 px-4 pb-4">
-              {bookmarkSaveMessage && <p role="status" className={`text-xs ${bookmarkSaveError ? "text-destructive" : "text-muted-foreground"}`}>{bookmarkSaveMessage}</p>}
-              <div className="flex flex-col gap-2 rounded-md border p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <Label>Query favorites</Label>
-                    <p className="mt-1 text-xs text-muted-foreground">Read saved FCT query XML from your personal SPARQL store.</p>
-                  </div>
-                  <Button type="button" variant="outline" size="sm" disabled={favoritesLoading} onClick={async () => {
-                    setFavoritesLoading(true);
-                    setFavoritesMessage("");
-                    try {
-                      const response = await fetch("/proxy/api/query-favorites", { cache: "no-store" });
-                      const payload = await response.json() as { favorites?: typeof queryFavorites; error?: string };
-                      if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
-                      const favorites = payload.favorites ?? [];
-                      setQueryFavorites(favorites);
-                      setFavoritesMessage(favorites.length ? `${favorites.length} saved quer${favorites.length === 1 ? "y" : "ies"} loaded.` : "No saved query favorites found.");
-                    } catch (error) {
-                      setFavoritesMessage(error instanceof Error ? error.message : "Could not load query favorites.");
-                    } finally { setFavoritesLoading(false); }
-                  }}>{favoritesLoading ? "Loading…" : "Show Favorites"}</Button>
+
+              <div className="flex flex-col gap-3 rounded-md border p-3">
+                <Label>History</Label>
+                <div className="flex items-center gap-2">
+                  <Tooltip>
+                    <TooltipTrigger render={<Button type="button" variant="outline" onClick={loadHistoryQuery}>Show</Button>} />
+                    <TooltipContent className="z-[100]">History — show all Bookmark records</TooltipContent>
+                  </Tooltip>
+                  <Button type="button" variant="outline" disabled={!historyBookmarkId || isDeletingCurrentHistory || isDeletingHistory} onClick={() => void deleteCurrentQueryHistory()}>{isDeletingCurrentHistory ? "Deleting…" : "Delete"}</Button>
+                  <Button type="button" variant="destructive" disabled={isDeletingCurrentHistory || isDeletingHistory} onClick={() => setDeleteHistoryDialogOpen(true)}>Delete All</Button>
                 </div>
-                {favoritesMessage && <p role="status" className="text-xs text-muted-foreground">{favoritesMessage}</p>}
-                {queryFavorites.length > 0 && <ul className="max-h-40 overflow-y-auto text-xs text-muted-foreground">{queryFavorites.map((favorite) => <li key={favorite.uri} className="border-t py-1.5"><span className="font-medium text-foreground">{favorite.title}</span>{favorite.created ? <span className="ml-2">{new Date(favorite.created).toLocaleString()}</span> : null}{favorite.shareUrl && /^https?:\/\//i.test(favorite.shareUrl) ? <a href={favorite.shareUrl} target="_blank" rel="noopener noreferrer" title={favorite.shareUrl} className="ml-2 text-foreground underline underline-offset-2 hover:text-primary">Share URL</a> : null}</li>)}</ul>}
               </div>
+
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <Label htmlFor="maestro-tutorial-mode">Tutorial mode</Label>
@@ -5178,15 +5725,7 @@ useEffect(() => {
                     type="button"
                     variant="destructive"
                     className="shrink-0"
-                    onClick={() => {
-                      if (!window.confirm("Clear all localStorage data for Maestro? This resets saved settings and reloads the app.")) return;
-                      try {
-                        window.localStorage.clear();
-                        window.location.reload();
-                      } catch {
-                        window.alert("Could not clear localStorage. Check your browser's site storage permissions.");
-                      }
-                    }}
+                    onClick={() => setClearCacheDialogOpen(true)}
                   >Clear Cache</Button>
                 </div>
               </div>
@@ -5195,7 +5734,7 @@ useEffect(() => {
                   <Label>Auto-configure</Label>
                   <p className="mt-1 text-xs text-muted-foreground">Clear learned facet usage, recorded exclude flags, and saved candidates.</p>
                 </div>
-                <button
+                <Tooltip><TooltipTrigger render={<button
                   type="button"
                   onClick={() => {
                     try {
@@ -5206,14 +5745,13 @@ useEffect(() => {
                       setAutoConfiguredFacetKeys(new Set());
                       setFacetAutofillCandidates({ property: [], "property-in": [] });
                       setFacetUsageRevision((revision) => revision + 1);
-                      setAutoResetMessage("Auto-configure was reset.");
+                      toast.add({ title: "Auto-configure reset", description: "Learned facet usage and saved candidates were cleared.", type: "success" });
                     } catch {
-                      setAutoResetMessage("Auto-configure could not be reset because browser storage is unavailable.");
+                      toast.add({ title: "Auto-configure could not be reset", description: "Browser storage is unavailable.", type: "error" });
                     }
                   }}
                   className="shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
-                  title="Reset Auto-configure learning history and saved candidates"
-                >Reset Auto</button>
+                >Reset Auto</button>} /><TooltipContent>{"Reset Auto-configure learning history and saved candidates"}</TooltipContent></Tooltip>
               </div>
               <div className="flex flex-col gap-3 rounded-md border p-3">
                 <div className="flex items-center justify-between gap-3">
@@ -5247,9 +5785,7 @@ useEffect(() => {
                 type="button"
                 onClick={() => {
                   setIsRdfLoaderOpen(true);
-                  setRdfLoadMessage("");
-                  setRdfLoadError(false);
-                  setControlsSheetOpen(false);
+                    setControlsSheetOpen(false);
                 }}
                 className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent"
               >RDF Loader</button>
@@ -5258,42 +5794,8 @@ useEffect(() => {
         </Sheet>
       </header>
 
-      {autoResetMessage && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="auto-reset-dialog-title"
-            className="w-full max-w-md rounded-xl border bg-background p-6 text-foreground shadow-xl"
-          >
-            <h2 id="auto-reset-dialog-title" className="text-base font-semibold">
-              Auto-configure
-            </h2>
-            <p className="mt-3 text-sm text-muted-foreground" role="status" aria-live="polite">
-              {autoResetMessage}
-            </p>
-            <div className="mt-6 flex justify-end">
-              <button
-                type="button"
-                autoFocus
-                onClick={() => setAutoResetMessage("")}
-                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              >
-                Close
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {isRdfLoaderOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="rdf-loader-title"
-        >
-          <section className="w-full max-w-xl rounded-xl border bg-background p-5 shadow-xl">
+      <Dialog open={isRdfLoaderOpen} onOpenChange={(open) => { if (!isRdfLoading) setIsRdfLoaderOpen(open); }}>
+        <DialogContent aria-labelledby="rdf-loader-title" className="w-full max-w-xl p-5">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
                 <h2 id="rdf-loader-title" className="text-lg font-semibold">
@@ -5317,8 +5819,6 @@ useEffect(() => {
               onSubmit={async (event) => {
                 event.preventDefault();
                 setIsRdfLoading(true);
-                setRdfLoadMessage("");
-                setRdfLoadError(false);
                 try {
                   const response = await fetch("/proxy/api/rdf-loader", {
                     method: "POST",
@@ -5329,15 +5829,12 @@ useEffect(() => {
                     }),
                   });
                   const data = await response.json();
-        rememberShortforms(data?.shortforms);
+                  rememberShortforms(data?.shortforms);
                   if (!response.ok)
                     throw new Error(data.error || "RDF load failed.");
-                  setRdfLoadMessage(data.message || "RDF load completed.");
+                  toast.add({ title: "RDF load completed", description: data.message || "The RDF document was loaded into the target graph.", type: "success" });
                 } catch (error) {
-                  setRdfLoadError(true);
-                  setRdfLoadMessage(
-                    error instanceof Error ? error.message : "RDF load failed.",
-                  );
+                  toast.add({ title: "RDF load failed", description: error instanceof Error ? error.message : "RDF load failed.", type: "error" });
                 } finally {
                   setIsRdfLoading(false);
                 }
@@ -5393,15 +5890,6 @@ useEffect(() => {
                 command on the local server. It does not show byte-level
                 progress and is not intended for multi-gigabyte dumps.
               </div>
-              {rdfLoadMessage && (
-                <div
-                  role="status"
-                  aria-live="polite"
-                  className={`rounded-md border p-3 text-sm ${rdfLoadError ? "border-destructive text-destructive" : "border-emerald-600 text-emerald-700 dark:text-emerald-400"}`}
-                >
-                  {rdfLoadMessage}
-                </div>
-              )}
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
@@ -5424,9 +5912,8 @@ useEffect(() => {
                 </button>
               </div>
             </form>
-          </section>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
 
       {endpointMenuError && (
         <p role="alert" className="border-b px-4 py-1.5 text-xs text-destructive">
@@ -5435,7 +5922,7 @@ useEffect(() => {
       )}
 
       <div className="shrink-0">
-        <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-start gap-2 bg-background px-4 pt-7 pb-2">
+        <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-start gap-2 bg-background px-4 pt-2 pb-7">
         <span
           className="relative flex min-w-0 items-center gap-1"
           onMouseLeave={() => { if (!namePropertyMenuOpen) setRootSearchExpanded(false); }}
@@ -5446,11 +5933,10 @@ useEffect(() => {
                 {searchInputGroup}
               </div>
             ) : (
-              <button
+              <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={() => { clearTutorialPreview(); setDefaultLeftTab("personal"); navigateToPropertyPath("query-root"); }}
                 className={`relative cursor-pointer rounded-none border-0 px-2.5 pb-1.5 pt-4 text-sm ${facetHoverPreview?.kind === "record" ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200" : getPropertyPath().length === 0 ? "bg-accent font-medium" : "bg-background hover:bg-accent"}`}
-                title={`Return to the top-level query view${classBreadcrumbLabels(null).length ? ` · Classes: ${classBreadcrumbLabels(null).join(", ")}` : ""}`}
               >
                 {classBreadcrumbLabels(null).length > 0 && (
                   <span className="absolute left-1 top-0 max-w-[calc(100%-8px)] truncate text-left text-[9px] font-normal leading-3 text-muted-foreground" aria-label={`Classes: ${classBreadcrumbLabels(null).join(", ")}`}>
@@ -5464,10 +5950,10 @@ useEffect(() => {
                     : textSearchMode === "uri"
                       ? search
                       : `"${search}"`}
-              </button>
+              </button>} /><TooltipContent>{`Return to the top-level query view${classBreadcrumbLabels(null).length ? ` · Classes: ${classBreadcrumbLabels(null).join(", ")}` : ""}`}</TooltipContent></Tooltip>
             )}
             {!rootSearchExpanded && queryTree.children.some((node) => node.name === "class") && (
-              <button
+              <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={() => {
                   const rootClasses = queryTree.children.filter((node) => node.name === "class");
@@ -5476,24 +5962,21 @@ useEffect(() => {
                 }}
                 className="flex h-auto min-h-10 w-7 shrink-0 items-center justify-center border-l border-input text-muted-foreground hover:bg-accent hover:text-destructive"
                 aria-label="Remove the last root class constraint"
-                title="Remove the last root class constraint"
-              >−</button>
+              >−</button>} /><TooltipContent>{"Remove the last root class constraint"}</TooltipContent></Tooltip>
             )}
-            {!rootSearchExpanded && <button
+            {!rootSearchExpanded && <Tooltip><TooltipTrigger render={<button
               type="button"
-              onMouseEnter={() => setRootSearchExpanded(true)}
               onFocus={() => setRootSearchExpanded(true)}
               onClick={() => setRootSearchExpanded(true)}
               className="flex h-auto min-h-10 w-7 shrink-0 items-center justify-center rounded border border-input py-0 text-muted-foreground hover:bg-accent hover:text-foreground"
               aria-label={`Search signal: ${signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}`}
-              title={signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}
             >
               <ActiveSignalIcon className="size-4" aria-hidden="true" />
-            </button>}
+            </button>} /><TooltipContent>{signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}</TooltipContent></Tooltip>}
           </ButtonGroup>
-          {!rootSearchExpanded && (breadcrumbPreviewSummaries["query-root"] || breadcrumbPreviewPendingIds.has("query-root")) && (
+          {(breadcrumbPreviewSummaries["query-root"] || breadcrumbPreviewPendingIds.has("query-root")) && (
             /* 15px centers this compact metadata badge beneath the next slash. */
-            <span className="pointer-events-none absolute left-[calc(100%+15px)] bottom-full z-10 -translate-x-1/2 pb-1">
+            <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
               {breadcrumbPreviewSummaries["query-root"] ? (
                 <Badge variant="outline" className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3">
                   <span className="max-w-32 truncate">{breadcrumbPreviewSummaries["query-root"].label || "—"}</span>
@@ -5531,19 +6014,19 @@ useEffect(() => {
                 const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
                 const isPending = breadcrumbPreviewPendingIds.has(crumb.id);
                 if (isTutorialSuccessor) return (
-                  <span className="pointer-events-none absolute left-[calc(100%+15px)] bottom-full z-10 -translate-x-1/2 pb-1">
+                  <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
                     <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap border-purple-400/70 text-[10px] font-normal leading-3 text-purple-700 dark:text-purple-300">Preview · …</Badge>
                   </span>
                 );
                 return summary || isPending ? (
                   /* Match the next slash center: 8px nav gap + 7px half of the 14px icon. */
-                  <span className="pointer-events-none absolute left-[calc(100%+15px)] bottom-full z-10 -translate-x-1/2 pb-1">
+                  <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
                     {summary ? (
-                      <Badge variant="outline" className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" title={`${summary.label} · ${summary.count ?? "…"}`}>
+                      <Tooltip><TooltipTrigger render={<Badge variant="outline" className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3">
                         <span className="max-w-32 truncate">{summary.label || "—"}</span>
                         <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
                         <span>{summary.count ?? "…"}</span>
-                      </Badge>
+                      </Badge>} /><TooltipContent>{`${summary.label} · ${summary.count ?? "…"}`}</TooltipContent></Tooltip>
                     ) : (
                       <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" aria-label={`Loading metadata for ${breadcrumbBaseLabel}`}>
                         <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
@@ -5555,7 +6038,7 @@ useEffect(() => {
               })()}
               {/* w-max lets the crumb stretch to its full "prop = value" statement; max-w-full only wraps it when it exceeds the whole bar. */}
               <ButtonGroup aria-label={`Controls for ${breadcrumbLabel}`} className={`w-max max-w-full [&>*+*]:!border-l-0 ${tutorialBreadcrumbTargetId === crumb.id ? "rounded-md !border-purple-500/80" : ""}`}>
-                <button
+                <Tooltip><TooltipTrigger render={<button
                   type="button"
                   onClick={() => { clearTutorialPreview(); setDefaultLeftTab("personal"); navigateToPropertyPath(crumb.id); }}
                   className={`relative min-w-0 cursor-pointer break-words rounded-none border-0 px-2.5 pb-1.5 pt-4 text-left text-sm hover:bg-accent ${
@@ -5567,7 +6050,6 @@ useEffect(() => {
         ? "bg-background text-muted-foreground"
         : "bg-background text-foreground"
 }`}
-                  title={`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}
                   aria-current={
   index === activeBreadcrumbIndex ? "location" : undefined
 }
@@ -5582,42 +6064,41 @@ useEffect(() => {
                   {breadcrumbBoundValues.map((value) => (
                     <span key={value.id} className="ml-1.5 inline-flex items-baseline gap-1">
                       <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
-                      <span title={value.text ?? ""}>{boundValueLabel(value)}</span>
+                      <span>{boundValueLabel(value)}</span>
                     </span>
                   ))}
-                </button>
-                <button
+                </button>} /><TooltipContent>{`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}</TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger render={<button
                   type="button"
                   onClick={() => { clearTutorialPreview(); popBreadcrumbOrBinding(crumb); }}
                   className="flex h-auto min-h-full w-7 shrink-0 self-stretch items-center justify-center rounded-none border-0 py-0 text-base leading-none text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                   aria-label={topBoundValue
                     ? `Remove value ${boundValueLabel(topBoundValue)} bound to ${breadcrumbLabel}`
                     : `Pop ${breadcrumbLabel} from the breadcrumb stack`}
-                  title={topBoundValue
-                    ? "Remove the bound value; click again to pop this relationship"
-                    : "Pop this relationship and its descendants; preserve a sibling when available"}
                 >
                   −
-                </button>
+                </button>} /><TooltipContent>{topBoundValue
+                    ? "Remove the bound value; click again to pop this relationship"
+                    : "Pop this relationship and its descendants; preserve a sibling when available"}</TooltipContent></Tooltip>
                 {breadcrumbSiblings.length > 0 && (
                   <>
                     <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
+                      <Tooltip>
+                        <TooltipTrigger render={<DropdownMenuTrigger asChild><button
                           type="button"
                           aria-label={`Choose a sibling for ${compactIri(crumb.uri)}`}
-                          title="Choose a sibling relationship"
                           className={`flex h-auto min-h-10 w-8 shrink-0 self-stretch items-center justify-center rounded-none border-0 p-0 ${tutorialBreadcrumbTargetId === crumb.id ? "bg-transparent text-purple-800 dark:text-purple-200" : `bg-background ${isInactiveSuffix ? "text-muted-foreground" : "text-foreground"}`} outline-none hover:bg-accent focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=open]:bg-accent`}
                         >
                           <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m4 6 4 4 4-4" /></svg>
-                        </button>
-                      </DropdownMenuTrigger>
+                        </button></DropdownMenuTrigger>} />
+                        <TooltipContent>{"Choose a sibling relationship"}</TooltipContent>
+                      </Tooltip>
                       {/* The shared menu is sized to its trigger by default; w-max lets it show every full "prop = value" item. */}
                       <DropdownMenuContent align="end" className="w-max min-w-40 max-w-[calc(100vw-2rem)]">
                         {breadcrumbSiblings.map((sibling) => (
                           <DropdownMenuItem
                             key={sibling.id}
-                            onSelect={() => { clearTutorialPreview(); moveViewToSibling(crumb.id, sibling.id); }}
+                            onClick={() => { clearTutorialPreview(); moveViewToSibling(crumb.id, sibling.id); }}
                             className="whitespace-normal break-words"
                           >
                             {sibling.attributes.exclude?.trim().toLowerCase() === "yes" && <CircleSlash className="mr-2 inline size-3.5" aria-label="Excluded" />}
@@ -5625,7 +6106,7 @@ useEffect(() => {
                             {boundValueNodes(sibling).map((value) => (
                               <span key={value.id} className="ml-1.5 inline-flex items-baseline gap-1">
                                 <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
-                                <span title={value.text ?? ""}>{boundValueLabel(value)}</span>
+                                <Tooltip><TooltipTrigger render={<span>{boundValueLabel(value)}</span>} /><TooltipContent>{value.text ?? ""}</TooltipContent></Tooltip>
                               </span>
                             ))}
                           </DropdownMenuItem>
@@ -5639,6 +6120,7 @@ useEffect(() => {
           );
         })}
         </nav>
+
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -5657,18 +6139,17 @@ useEffect(() => {
   className="inline-flex items-center gap-2 px-2 text-xs font-medium hover:bg-accent"
 >
   <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden="true" />
-  Return to Facets
+  Return to Filters
 </button>
                       <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-                      <button
+                      <Tooltip><TooltipTrigger render={<button
                         type="button"
                         onClick={() => setDefaultLeftTab("personal")}
                         className="cursor-pointer px-3 py-1.5 text-sm hover:bg-accent"
                         aria-label={`Show Filters, ${personalWidgets.length + activeRoleFilters.length + (classFacets.length > 0 && !isLoadingClasses ? 1 : 0) + (graphFacets.length > 0 ? 1 : 0)} facets`}
-                        title="Show Filters"
                       >
                         {personalWidgets.length + activeRoleFilters.length + (classFacets.length > 0 && !isLoadingClasses ? 1 : 0) + (graphFacets.length > 0 ? 1 : 0)}
-                      </button>
+                      </button>} /><TooltipContent>{"Show Filters"}</TooltipContent></Tooltip>
                     </ButtonGroup>
                   </>
                 ) : (
@@ -5683,7 +6164,7 @@ useEffect(() => {
                       <ButtonGroup aria-label="Configure properties">
                         <button type="button" onClick={() => { setFocusListOrder("Properties"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="px-2 text-xs font-medium hover:bg-accent">Configure Properties</button>
                         <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-                        <button
+                        <Tooltip><TooltipTrigger render={<button
                           type="button"
                           onClick={() => {
                             setFocusListOrder("Properties");
@@ -5692,15 +6173,14 @@ useEffect(() => {
                           }}
                           className="px-3 py-1.5 text-sm hover:bg-accent"
                           aria-label={`Show Focus properties, ${propertyFacets.length} properties`}
-                          title="Show Focus properties first"
-                        >{propertyFacets.length}</button>
+                        >{propertyFacets.length}</button>} /><TooltipContent>{"Show Focus properties first"}</TooltipContent></Tooltip>
                       </ButtonGroup>
                     )}
                     {roleFacets.length > 0 && (
                       <ButtonGroup aria-label="Configure roles">
                         <button type="button" onClick={() => { setFocusListOrder("Roles"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="px-2 text-xs font-medium hover:bg-accent">Configure Roles</button>
                         <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-                        <button
+                        <Tooltip><TooltipTrigger render={<button
                           type="button"
                           onClick={() => {
                             setFocusListOrder("Roles");
@@ -5709,26 +6189,23 @@ useEffect(() => {
                           }}
                           className="px-3 py-1.5 text-sm hover:bg-accent"
                           aria-label={`Show Focus roles, ${roleFacets.length} roles`}
-                          title="Show Focus roles first"
-                        >{roleFacets.length}</button>
+                        >{roleFacets.length}</button>} /><TooltipContent>{"Show Focus roles first"}</TooltipContent></Tooltip>
                       </ButtonGroup>
                     )}
                     {autoConfigureFacetCount > 0 && (
                       <ButtonGroup aria-label="Auto-configure facets">
-                        <button
+                        <Tooltip><TooltipTrigger render={<button
                           type="button"
                           onClick={runAutoConfigure}
                           className="px-2 text-xs font-medium hover:bg-accent"
-                          title="Add high-frequency Properties and Roles that apply to the current query scope"
-                        >Auto-configure</button>
+                        >Auto-configure</button>} /><TooltipContent>{"Add high-frequency Properties and Roles that apply to the current query scope"}</TooltipContent></Tooltip>
                         <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-                        <button
+                        <Tooltip><TooltipTrigger render={<button
                           type="button"
                           onClick={runAutoConfigure}
                           className="px-3 py-1.5 text-sm hover:bg-accent"
                           aria-label={`Auto-configure ${autoConfigureFacetCount} facets`}
-                          title={`${autoConfigureFacetCount} facets will be added`}
-                        >{autoConfigureFacetCount}</button>
+                        >{autoConfigureFacetCount}</button>} /><TooltipContent>{`${autoConfigureFacetCount} facets will be added`}</TooltipContent></Tooltip>
                       </ButtonGroup>
                     )}
                   </>
@@ -5865,17 +6342,16 @@ useEffect(() => {
                                 countFilename="roles-first-item-count.sparql"
                               />
                             )}
-                            <span
+                            <Tooltip><TooltipTrigger render={<span
                               className={`ml-auto shrink-0 px-2 text-xs font-normal ${(group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError) ? "text-destructive" : group === "Properties" || group === "Roles" ? "text-sky-100/80 dark:text-sky-200/80" : "text-muted-foreground"}`}
                               aria-live="polite"
-                              title={group === "Properties" ? propertyFacetError : group === "Classes" ? classFacetError : group === "Roles" ? roleFacetError : undefined}
                             >
                               {(group === "Properties" && isLoadingProperties) || (group === "Classes" && isLoadingClasses) || (group === "Roles" && isLoadingRoles)
                                 ? "Updating…"
                                 : (group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError)
                                   ? "Update failed"
                                   : group === "Properties" ? propertyFacets.length : group === "Classes" ? classFacets.length : group === "Roles" ? roleFacets.length : items.length}
-                            </span>
+                            </span>} /><TooltipContent>{group === "Properties" ? propertyFacetError : group === "Classes" ? classFacetError : group === "Roles" ? roleFacetError : undefined}</TooltipContent></Tooltip>
                           </div>
 
                           {(group === "Properties" || group === "Roles") &&
@@ -5913,33 +6389,31 @@ useEffect(() => {
                                           : "size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"}
                                       />
                                       {group === "Properties" ? (
-                                        <button
+                                        <Tooltip><TooltipTrigger render={<button
                                           type="button"
                                           className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : item.count === 0 ? "text-destructive" : ""}`}
                                           onMouseEnter={() => beginFacetHoverPreview(item.key, "forward", item.label, "configure")}
                                           onMouseLeave={clearTutorialPreview}
                                           onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "forward"); }}
-                                          title={`Drill down through ${item.label}`}
                                         >
                                           {item.label}
                                           {autoConfiguredFacetKeys.has(`property::${item.key}`) && (
                                             <Bot className="ml-1 inline size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                                           )}
-                                        </button>
+                                        </button>} /><TooltipContent>{`Drill down through ${item.label}`}</TooltipContent></Tooltip>
                                       ) : (
-                                        <button
+                                        <Tooltip><TooltipTrigger render={<button
                                           type="button"
                                           className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : item.count === 0 ? "text-destructive" : ""}`}
                                           onMouseEnter={() => beginFacetHoverPreview(item.key, "reverse", item.label, "configure")}
                                           onMouseLeave={clearTutorialPreview}
                                           onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "reverse"); }}
-                                          title={`Filter by role ${item.label}`}
                                         >
                                           {item.label}
                                           {autoConfiguredFacetKeys.has(`property-in::${item.key}`) && (
                                             <Bot className="ml-1 inline size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                                           )}
-                                        </button>
+                                        </button>} /><TooltipContent>{`Filter by role ${item.label}`}</TooltipContent></Tooltip>
                                       )}
                                       <DistinctCount
                                         tree={queryTree}
@@ -6053,48 +6527,44 @@ useEffect(() => {
                                   />
                                 ) : null}
                                 {group === "Properties" ? (
-                                  <button
+                                  <Tooltip><TooltipTrigger render={<button
                                     type="button"
                                     className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : isZeroCount ? "text-destructive" : ""}`}
                                     onMouseEnter={() => beginFacetHoverPreview(item.key, "forward", item.label, "configure")}
                                     onMouseLeave={clearTutorialPreview}
                                     onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "forward"); }}
-                                    title={`Drill down through ${item.label}`}
                                   >
                                     {item.label}
-                                  </button>
+                                  </button>} /><TooltipContent>{`Drill down through ${item.label}`}</TooltipContent></Tooltip>
                                 ) : group === "Roles" ? (
-                                  <button
+                                  <Tooltip><TooltipTrigger render={<button
                                     type="button"
                                     className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : isZeroCount ? "text-destructive" : ""}`}
                                     onMouseEnter={() => beginFacetHoverPreview(item.key, "reverse", item.label, "configure")}
                                     onMouseLeave={clearTutorialPreview}
                                     onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "reverse"); }}
-                                    title={`Filter by role ${item.label}`}
                                   >
                                     {item.label}
-                                  </button>
+                                  </button>} /><TooltipContent>{`Filter by role ${item.label}`}</TooltipContent></Tooltip>
                                 ) : group === "Classes" ? (
-                                  <button
+                                  <Tooltip><TooltipTrigger render={<button
                                     type="button"
                                     className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
                                     onClick={() => {
                                       if (!selectedClasses.has(item.key)) toggleClass(item.key, true);
                                       showClassResults(item.key, activeLeafId);
                                     }}
-                                    title={`Show results for class ${toLabel(item.key)}`}
                                   >
                                     {toLabel(item.key)}
-                                  </button>
+                                  </button>} /><TooltipContent>{`Show results for class ${toLabel(item.key)}`}</TooltipContent></Tooltip>
                                 ) : group === "Graphs" ? (
-                                  <button
+                                  <Tooltip><TooltipTrigger render={<button
                                     type="button"
                                     className="min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer"
                                     onClick={() => bindGraph(item.key)}
-                                    title={`Bind graph ${item.key}`}
                                   >
                                     {item.label}
-                                  </button>
+                                  </button>} /><TooltipContent>{`Bind graph ${item.key}`}</TooltipContent></Tooltip>
                                 ) : (
                                   <span className="min-w-0 flex-1 break-all">{item.label}</span>
                                 )}
@@ -6139,14 +6609,13 @@ useEffect(() => {
                   <div className="space-y-3">
                     <article ref={categoriesWidgetRef} className={`flex min-w-0 flex-col ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
                       <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
-                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes")}\n<!-- FCT API option: view=classes -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /><button
+                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes")}\n<!-- FCT API option: view=classes -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /><Tooltip><TooltipTrigger render={<button
                           type="button"
                           aria-pressed={categoriesTreeMode}
                           onClick={() => setCategoriesTreeMode((current) => !current)}
                           className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${categoriesTreeMode ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`}
                           aria-label={categoriesTreeMode ? "Show categories as a flat list" : "Group categories by ontology"}
-                          title={categoriesTreeMode ? "Show flat category list" : "Group categories by ontology"}
-                        >{categoriesTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />}</button><button
+                        >{categoriesTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{categoriesTreeMode ? "Show flat category list" : "Group categories by ontology"}</TooltipContent></Tooltip><Tooltip><TooltipTrigger render={<button
                           type="button"
                           aria-pressed={isGroupByCategory}
                           onClick={() => {
@@ -6160,19 +6629,17 @@ useEffect(() => {
                           }}
                           className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${isGroupByCategory ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
                           aria-label={isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}
-                          title={isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}
-                        ><UsersRound className="size-4" aria-hidden="true" /></button></div>
-                        <span
+                        ><UsersRound className="size-4" aria-hidden="true" /></button>} /><TooltipContent>{isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}</TooltipContent></Tooltip></div>
+                        <Tooltip><TooltipTrigger render={<span
                           className={`text-xs ${classFacetError ? "text-destructive" : "text-muted-foreground"}`}
                           aria-live="polite"
-                          title={classFacetError || undefined}
                         >
                           {isLoadingClasses
                             ? "Updating…"
                             : classFacetError
                               ? "Update failed"
                               : visibleClassDisplayFacets.length}
-                        </span>
+                        </span>} /><TooltipContent>{classFacetError || undefined}</TooltipContent></Tooltip>
                       </header>
                       {classFacetError ? (
                         <p className="text-xs text-destructive">{classFacetError}</p>
@@ -6206,15 +6673,14 @@ useEffect(() => {
                                           ? "relative size-4 shrink-0 appearance-none rounded-[3px] border border-black bg-white checked:border-black checked:bg-black checked:after:absolute checked:after:inset-0 checked:after:flex checked:after:items-center checked:after:justify-center checked:after:text-[14px] checked:after:font-bold checked:after:leading-none checked:after:text-white checked:after:content-['×'] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-invalid:!border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:!border-destructive/50 dark:aria-invalid:ring-destructive/40"
                                           : "size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"}
                                       />
-                                      <button
+                                      <Tooltip><TooltipTrigger render={<button
                                         type="button"
                                         className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${count === 0 ? "text-destructive" : ""}`}
                                         onClick={() => isGroupByCategory ? scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri), matches: [], termType: "uri" }) : showClassResults(item.uri, activeLeafId)}
-                                        title={isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}
                                       >
                                         {isFacetExcluded("Classes", item.uri) && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                                         {toLabel(item.uri)}
-                                      </button>
+                                      </button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}</TooltipContent></Tooltip>
                                       <DistinctCount
                                         tree={queryTree}
                                         kind="class"
@@ -6266,7 +6732,7 @@ useEffect(() => {
                                         <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50" style={{ paddingLeft: `${8 + depth * 14}px` }}>
                                           {node.children.length > 0 ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" /> : <span className="size-3.5 shrink-0" aria-hidden="true" />}
                                           <input type="checkbox" checked={selectedClasses.has(item.uri)} onChange={(event) => toggleClass(item.uri, event.target.checked)} aria-label={`Filter by class ${toLabel(item.uri)}`} className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} />
-                                          <button type="button" className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`} onClick={() => { if (isGroupByCategory) scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri), matches: [], termType: "uri" }); else { if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true); showClassResults(item.uri, activeLeafId); } }} title={isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}>{toLabel(item.uri)}</button>
+                                          <Tooltip><TooltipTrigger render={<button type="button" className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`} onClick={() => { if (isGroupByCategory) scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri), matches: [], termType: "uri" }); else { if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true); showClassResults(item.uri, activeLeafId); } }}>{toLabel(item.uri)}</button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}</TooltipContent></Tooltip>
                                           <DistinctCount tree={queryTree} kind="class" uri={item.uri} onCountChange={(query, count) => setClassCandidateCounts((current) => current[query] === count ? current : { ...current, [query]: count })} />
                                         </div>
                                         {node.children.length > 0 && <div className="ml-2 border-l border-border/60">{node.children.map((child) => renderTreeNode(child, depth + 1))}</div>}
@@ -6288,7 +6754,7 @@ useEffect(() => {
                                     className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
                                     aria-invalid={isZeroCount ? true : undefined}
                                   />
-                                  <button
+                                  <Tooltip><TooltipTrigger render={<button
                                     type="button"
                                     className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
                                     onClick={() => {
@@ -6299,10 +6765,9 @@ useEffect(() => {
                                         showClassResults(item.uri, activeLeafId);
                                       }
                                     }}
-                                    title={isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}
                                   >
                                     {toLabel(item.uri)}
-                                  </button>
+                                  </button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}</TooltipContent></Tooltip>
                                   <DistinctCount
                                     tree={queryTree}
                                     kind="class"
@@ -6332,18 +6797,17 @@ useEffect(() => {
                           <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByRole ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1">
-                                <button
+                                <Tooltip><TooltipTrigger render={<button
                                   type="button"
                                   className={`cursor-pointer text-left text-sm font-semibold underline-offset-2 hover:underline ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === uri && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : ""}`}
                                   onMouseEnter={() => beginFacetHoverPreview(uri, "reverse", label.trim(), "personal")}
                                   onMouseLeave={clearTutorialPreview}
                                   onClick={() => navigateToPropertyPath(roleNode.id)}
-                                  title={`Navigate to role scope ${label}`}
                                 >
                                   {isGroupByRole && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                                   {excluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                                   {label}
-                                </button>
+                                </button>} /><TooltipContent>{`Navigate to role scope ${label}`}</TooltipContent></Tooltip>
                                 {autoConfiguredFacetKeys.has(`property-in::${uri}`) && (
                                   <Bot className="size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                                 )}
@@ -6356,7 +6820,7 @@ useEffect(() => {
                                     countFilename="roles-first-item-count.sparql"
                                   />
                                   {!excluded && (
-                                    <button
+                                    <Tooltip><TooltipTrigger render={<button
                                       type="button"
                                       disabled={!canGroupByRole}
                                       aria-pressed={isGroupByRole}
@@ -6371,35 +6835,32 @@ useEffect(() => {
                                       }}
                                       className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:pointer-events-none disabled:opacity-30 ${isGroupByRole ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
                                       aria-label={isGroupByRole ? `Stop grouping by ${roleLabel}` : `Group results by ${roleLabel}`}
-                                      title={isGroupByRole ? `Stop grouping by ${roleLabel}` : canGroupByRole ? `Group results by ${roleLabel}` : "Select this role in the active query before grouping by it"}
                                     >
                                       <UsersRound className="size-4" aria-hidden="true" />
-                                    </button>
+                                    </button>} /><TooltipContent>{isGroupByRole ? `Stop grouping by ${roleLabel}` : canGroupByRole ? `Group results by ${roleLabel}` : "Select this role in the active query before grouping by it"}</TooltipContent></Tooltip>
                                   )}
-                                  <button
+                                  <Tooltip><TooltipTrigger render={<button
                                     type="button"
                                     className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
                                     onClick={() => deleteNode(roleNode.id)}
                                     aria-label={`Remove role filter ${label}`}
-                                    title={`Remove role filter ${roleLabel}`}
                                   >
                                     <Trash2 className="size-4" aria-hidden="true" />
-                                  </button>
+                                  </button>} /><TooltipContent>{`Remove role filter ${roleLabel}`}</TooltipContent></Tooltip>
                                 </div>
                               </div>
-                              <p className="mt-1 break-all text-xs text-muted-foreground" title={uri}>{uri}</p>
+                              <Tooltip><TooltipTrigger render={<p className="mt-1 break-all text-xs text-muted-foreground">{uri}</p>} /><TooltipContent>{uri}</TooltipContent></Tooltip>
                             </div>
-                            <span
+                            <Tooltip><TooltipTrigger render={<span
                               className={`shrink-0 text-xs ${roleWidgetStatuses[roleNode.id]?.error ? "text-destructive" : "text-muted-foreground"}`}
                               aria-live="polite"
-                              title={roleWidgetStatuses[roleNode.id]?.error || undefined}
                             >
                               {roleWidgetStatuses[roleNode.id]?.loading ?? true
                                 ? "Updating…"
                                 : roleWidgetStatuses[roleNode.id]?.error
                                   ? "Update failed"
                                   : roleWidgetStatuses[roleNode.id]?.count ?? 0}
-                            </span>
+                            </span>} /><TooltipContent>{roleWidgetStatuses[roleNode.id]?.error || undefined}</TooltipContent></Tooltip>
                           </header>
                           <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} />
                         </article>
@@ -6412,13 +6873,12 @@ useEffect(() => {
                           <h2 className="text-sm font-semibold">Datasites</h2>
                           <QueryInspectorButton query={`${queryWithoutPagingXml()}\n<!-- FCT API option: graphOnly=true -->`} filename="datasites-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
                           {queryTree.attributes.graph && (
-                            <button
+                            <Tooltip><TooltipTrigger render={<button
                               type="button"
                               onClick={clearGraph}
                               className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
                               aria-label="Clear graph selection"
-                              title="Clear datasite selection and Datasite field"
-                            ><X className="size-4" aria-hidden="true" /></button>
+                            ><X className="size-4" aria-hidden="true" /></button>} /><TooltipContent>{"Clear datasite selection and Datasite field"}</TooltipContent></Tooltip>
                           )}
                           <div
                             aria-label="Sort datasites"
@@ -6484,9 +6944,9 @@ useEffect(() => {
                                 <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri} onChange={() => bindGraph(item.uri)} aria-label={`Bind datasite ${item.label}`} className="mt-0.5 size-4 shrink-0 accent-current" />
                                 <span className="min-w-0 flex-1">
                                   <span className="block break-words">{item.label}</span>
-                                  <span className="block break-all text-xs text-muted-foreground" title={item.uri}>{item.uri}</span>
+                                  <Tooltip><TooltipTrigger render={<span className="block break-all text-xs text-muted-foreground">{item.uri}</span>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
                                 </span>
-                                <span className="shrink-0 text-xs text-muted-foreground" title={`${item.count} matching resources`}>{item.count}</span>
+                                <Tooltip><TooltipTrigger render={<span className="shrink-0 text-xs text-muted-foreground">{item.count}</span>} /><TooltipContent>{`${item.count} matching resources`}</TooltipContent></Tooltip>
                               </label>
                             ))}
                           </div>
@@ -6511,7 +6971,7 @@ useEffect(() => {
             </ResizablePanel>
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize={45} minSize={25} className="min-w-0">
-            <section className="flex h-full min-h-0 min-w-0 flex-col border-r">
+            <section ref={centralPaneRef} className="flex h-full min-h-0 min-w-0 flex-col border-r">
               <div className="group/header shrink-0 border-b px-3 pb-3 pt-0">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm">
                   <span className="shrink-0 text-muted-foreground">
@@ -6664,14 +7124,13 @@ useEffect(() => {
                                 const displayValue = term.type === "uri" ? toLabel(term.value) : term.value;
                                 const label = `${visiblePropertyLabel}: ${displayValue}${term.lang ? ` @${term.lang}` : ""}${term.datatype ? `^^${term.datatype}` : ""}`;
                                 return (
-                                  <span
+                                  <Tooltip><TooltipTrigger render={<span
                                     key={`${scopeValue.direction}:${scopeValue.property}:${term.value}:${term.lang ?? ""}:${term.datatype ?? ""}:${termIndex}`}
-                                    title={label}
                                     className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-1 text-[11px] font-normal text-muted-foreground"
                                   >
                                     <span className="font-medium text-foreground">{visiblePropertyLabel}</span>
                                     <span className="max-w-[240px] truncate">{displayValue}</span>
-                                  </span>
+                                  </span>} /><TooltipContent>{label}</TooltipContent></Tooltip>
                                 );
                               }))}
                             </span>
@@ -6772,7 +7231,7 @@ useEffect(() => {
                                 else setRoleValue(selectedGroupByOption!.uri, { text: expectedBinding.text, datatype: expectedBinding.datatype, ...(expectedBinding.lang ? { lang: expectedBinding.lang } : {}) }, event.currentTarget.checked);
                               }} aria-label={`Filter ${selectedGroupByOption!.label} by ${groupValueLabel}`} className="mt-0.5 size-4 shrink-0 accent-current" />
                               <div className="min-w-0 flex-1">
-                                <button type="button" onClick={() => setSelectedUri(groupValue.uri)} className="block max-w-full cursor-pointer break-words text-left text-sm font-semibold hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Load this group value in the Record viewer">{groupValueLabel}</button>
+                                <Tooltip><TooltipTrigger render={<button type="button" onClick={() => setSelectedUri(groupValue.uri)} className="block max-w-full cursor-pointer break-words text-left text-sm font-semibold hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{groupValueLabel}</button>} /><TooltipContent>{"Load this group value in the Record viewer"}</TooltipContent></Tooltip>
                                 <p className="mt-0.5 break-all text-xs text-muted-foreground">{groupValue.uri}</p>
                               </div>
                               <span className="shrink-0 text-xs text-muted-foreground">{members.loading ? "…" : `${members.count ?? members.results.length} ${(members.count ?? members.results.length) === 1 ? "item" : "items"}`}</span>
@@ -6808,14 +7267,41 @@ useEffect(() => {
                   <CodeBlock className="h-full min-h-0" language={querySourceFormat === "xml" ? "xml" : "sparql"} code={querySourceFormat === "xml" ? prettyQueryXml : sourceSparql} filename={querySourceFormat === "xml" ? "fct-query.xml" : "query.sparql"} />
                 </div>
               )}
-              {/* Query Tree pane: grows up from the toolbar when opened and slides back down when closed. */}
+              {/* Drag the separator to resize the Results / Query Tree split. */}
+              {queryTreeOpen && <div
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize Query Tree height"
+                aria-valuemin={15}
+                aria-valuemax={75}
+                aria-valuenow={Math.round(queryTreeHeightPercent)}
+                tabIndex={0}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                }}
+                onPointerMove={(event) => {
+                  if (!(event.buttons & 1) || !centralPaneRef.current) return;
+                  const bounds = centralPaneRef.current.getBoundingClientRect();
+                  if (bounds.height <= 0) return;
+                  const next = Math.max(15, Math.min(75, ((bounds.bottom - event.clientY) / bounds.height) * 100));
+                  setQueryTreeHeightPercent(Math.round(next * 10) / 10);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+                  event.preventDefault();
+                  setQueryTreeHeightPercent((height) => Math.max(15, Math.min(75, height + (event.key === "ArrowUp" ? 2 : -2))));
+                }}
+                className="z-10 flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center border-y border-border bg-muted/70 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              ><span className="h-0.5 w-10 rounded-full bg-muted-foreground/60" /></div>}
+              {/* Query Tree pane: its height is user-resizable and persisted in IndexedDB. */}
               <div
                 id="central-panel-query-tree"
                 role="region"
                 aria-label="Query Tree"
                 aria-hidden={!queryTreeOpen}
-                style={{ height: queryTreeOpen ? "40%" : "0%" }}
-                className={`shrink-0 overflow-hidden bg-background transition-[height,visibility] duration-300 ease-out motion-reduce:transition-none ${queryTreeOpen ? "visible border-t" : "invisible"}`}
+                style={{ height: queryTreeOpen ? `${queryTreeHeightPercent}%` : "0%" }}
+                className={`shrink-0 overflow-hidden bg-background ${queryTreeOpen ? "visible border-t" : "invisible"}`}
               >
                 <div className="h-full overflow-auto p-3">
                   <div className="mb-3 flex items-center justify-between gap-3">
@@ -6902,7 +7388,16 @@ useEffect(() => {
                       <TooltipTrigger render={
                         <Toggle
                           pressed={centralTab === "view-query"}
-                          onPressedChange={(pressed) => setCentralTab(pressed ? "view-query" : (groupByPropertyUri ? "groups" : "results"))}
+                          onPressedChange={(pressed) => {
+                            if (pressed) {
+                              groupByBeforeCodeViewRef.current = groupByPropertyUri;
+                              setCentralTab("view-query");
+                            } else {
+                              const retainedGroupBy = groupByBeforeCodeViewRef.current || groupByPropertyUri;
+                              if (retainedGroupBy) setGroupByPropertyUri(retainedGroupBy);
+                              setCentralTab(retainedGroupBy ? "groups" : "results");
+                            }
+                          }}
                           className="size-9 shrink-0 border-0 p-0 text-sm data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
                           aria-label="View source"
                         >
@@ -6923,14 +7418,13 @@ useEffect(() => {
               <div className="border-b p-4">
                 <h2 className="text-base font-semibold">
                   {selectedUri ? (
-                    <button
+                    <Tooltip><TooltipTrigger render={<button
                       type="button"
                       className={`cursor-pointer text-left underline-offset-2 hover:underline ${facetHoverPreview?.kind === "record" && facetHoverPreview.uri === selectedUri ? "text-purple-700 dark:text-purple-300" : ""}`}
                       onClick={() => { clearTutorialPreview(); applyRecordAsRootValue(selectedUri); }}
                       onMouseEnter={() => beginRecordHoverPreview(selectedUri, selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri)))}
                       onMouseLeave={clearTutorialPreview}
-                      title={`Set ${selectedUri} as the root record value`}
-                    >{selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri))}</button>
+                    >{selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri))}</button>} /><TooltipContent>{`Set ${selectedUri} as the root record value`}</TooltipContent></Tooltip>
                   ) : "Record"}
                 </h2>
                 <p className="mt-1 break-all text-xs text-muted-foreground">

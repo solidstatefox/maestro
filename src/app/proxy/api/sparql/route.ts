@@ -1,57 +1,7 @@
 import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
-
-type FctEndpoint = { id: string; label: string; url: string; group: string };
-
-function slugify(value: string) {
-  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function getConfiguredEndpoints(): FctEndpoint[] {
-  const configured = (process.env.FCT_ENDPOINTS ?? "")
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const separator = entry.indexOf("=");
-      if (separator <= 0) return null;
-      const left = entry.slice(0, separator).trim();
-      const rawUrl = entry.slice(separator + 1).trim();
-      if (!left || !/^https?:\/\//i.test(rawUrl)) return null;
-      const groupSeparator = left.indexOf("::");
-      const group = groupSeparator >= 0 ? left.slice(0, groupSeparator).trim() : "Endpoints";
-      const label = (groupSeparator >= 0 ? left.slice(groupSeparator + 2) : left).trim();
-      if (!label) return null;
-
-      return {
-        id: groupSeparator >= 0 ? slugify(`${group}-${label}`) : slugify(label),
-        group: group || "Endpoints",
-        label,
-        url: rawUrl,
-      };
-    })
-    .filter((endpoint): endpoint is FctEndpoint => Boolean(endpoint));
-
-  const legacyUrl = (process.env.FCT_ENDPOINT ?? "").trim();
-  if (legacyUrl && !configured.some((endpoint) => endpoint.url === legacyUrl)) {
-    configured.unshift({ id: slugify("Current VOS"), group: "Endpoints", label: "Current VOS", url: legacyUrl });
-  }
-
-  const seen = new Set<string>();
-  return configured.filter((endpoint) => {
-    if (seen.has(endpoint.id)) return false;
-    seen.add(endpoint.id);
-    return true;
-  });
-}
-
-function getSelectedEndpointId(request: Request, endpoints: FctEndpoint[]) {
-  const cookie = request.headers.get("cookie") ?? "";
-  const match = cookie.match(/(?:^|;\s*)fct_endpoint=([^;]+)/);
-  const id = match ? decodeURIComponent(match[1]) : "";
-  return endpoints.some((endpoint) => endpoint.id === id) ? id : endpoints[0]?.id ?? "";
-}
+import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
 
 function isSafeIri(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 &&
@@ -225,16 +175,56 @@ async function querySparql(endpoint: string, query: string): Promise<SparqlQuery
   }
 }
 
+/** Expand Node/Undici fetch errors, whose top-level message is often only "fetch failed". */
+function describeProxyError(error: unknown, depth = 0): Record<string, unknown> {
+  if (!(error instanceof Error)) {
+    if (error && typeof error === "object") {
+      const record = error as Record<string, unknown>;
+      return Object.fromEntries(Object.entries(record).map(([key, value]) => [
+        key,
+        value instanceof Error ? describeProxyError(value, depth + 1) : value,
+      ]));
+    }
+    return { value: String(error) };
+  }
+  const detail: Record<string, unknown> = { name: error.name, message: error.message };
+  if (error.stack) detail.stack = error.stack;
+  const nodeError = error as Error & { code?: unknown; errno?: unknown; syscall?: unknown; hostname?: unknown; address?: unknown; port?: unknown; cause?: unknown };
+  for (const key of ["code", "errno", "syscall", "hostname", "address", "port"] as const) {
+    if (nodeError[key] !== undefined) detail[key] = nodeError[key];
+  }
+  if (nodeError.cause !== undefined && depth < 4) {
+    detail.cause = nodeError.cause instanceof Error
+      ? describeProxyError(nodeError.cause, depth + 1)
+      : String(nodeError.cause);
+  }
+  return detail;
+}
+
+function safeEndpointForDiagnostics(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    url.username = "";
+    url.password = "";
+    return url.toString();
+  } catch {
+    return endpoint;
+  }
+}
+
 export async function POST(request: Request) {
   logProxyCaller(request, "sparql.POST");
+  let diagnosticEndpoint = "";
+  let diagnosticOperation = "parse request";
+  let diagnosticQuery = "";
   try {
     const body = await request.json().catch(() => null);
-    const endpointList = getConfiguredEndpoints();
-    const endpointId = getSelectedEndpointId(request, endpointList);
-    const selectedEndpoint = endpointList.find((item) => item.id === endpointId);
+    const endpointList = await getConfiguredFctEndpoints();
+    const selectedEndpoint = selectConfiguredFctEndpoint(request, endpointList);
     const fctEndpoint = selectedEndpoint?.url;
+    diagnosticEndpoint = fctEndpoint ?? "";
     if (!fctEndpoint) {
-      return NextResponse.json({ error: "No FCT endpoints are configured." }, { status: 500 });
+      return NextResponse.json({ error: "No Datasites are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
     }
 
     // The Results pane compiles the authoritative FCT query tree to SPARQL on
@@ -246,6 +236,8 @@ export async function POST(request: Request) {
           !/\bAS\s+\?c1\b/i.test(resultsQuery) || /\b(?:INSERT|DELETE|CLEAR|LOAD|CREATE|DROP|MOVE|COPY|ADD)\b/i.test(resultsQuery)) {
         return NextResponse.json({ error: "A client-generated SELECT Results SPARQL query with ?c1 is required." }, { status: 400 });
       }
+      diagnosticOperation = "Results SPARQL query";
+      diagnosticQuery = resultsQuery;
       const { responseText, response, key } = await querySparql(fctEndpoint, resultsQuery);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
@@ -278,6 +270,8 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "The client must provide a scalar COUNT(...) AS ?ct SPARQL query." }, { status: 400 });
       }
 
+      diagnosticOperation = "facet value count SPARQL query";
+      diagnosticQuery = countQuery;
       const { responseText, response, key } = await querySparql(fctEndpoint, countQuery);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
@@ -318,6 +312,8 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Could not safely add the high-frequency facets to the generated SPARQL query." }, { status: 400 });
       }
 
+      diagnosticOperation = "facet intersection SPARQL query";
+      diagnosticQuery = built.query;
       const { responseText, response, key } = await querySparql(fctEndpoint, built.query);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
@@ -368,6 +364,8 @@ export async function POST(request: Request) {
       branches.push(`{ VALUES ?resource { ${resourceValues} } VALUES ?property { ${iriList(roles)} } ?value ?property ?resource . BIND("reverse" AS ?direction) }`);
     }
     const query = `SELECT DISTINCT ?resource ?property ?direction ?value WHERE { ${branches.join(" UNION ")} }`;
+    diagnosticOperation = "result relationship enrichment SPARQL query";
+    diagnosticQuery = query;
     const { responseText, response, key } = await querySparql(fctEndpoint, query);
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.ok) {
@@ -392,8 +390,19 @@ export async function POST(request: Request) {
       headers: { "Content-Type": "application/sparql-results+json; charset=utf-8", "Cache-Control": "no-store" },
     });
   } catch (error) {
+    const diagnostics = {
+      route: "sparql.POST",
+      operation: diagnosticOperation,
+      endpoint: diagnosticEndpoint ? safeEndpointForDiagnostics(diagnosticEndpoint) : null,
+      query: diagnosticQuery || null,
+      error: describeProxyError(error),
+    };
+    console.error("[Maestro SPARQL proxy] Upstream request failed.", diagnostics);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Could not query the SPARQL endpoint." },
+      {
+        error: error instanceof Error ? error.message : "Could not query the SPARQL endpoint.",
+        details: diagnostics,
+      },
       { status: 500 },
     );
   }

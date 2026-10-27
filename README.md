@@ -7,11 +7,11 @@ A web-based dashboard for exploring RDF data through Virtuoso's Faceted Browser 
 - [Node.js](https://nodejs.org/) (LTS recommended)
 - npm
 - A reachable **Virtuoso server exposing the Faceted Browser (FCT) API** for the RDF data you want to explore. Maestro's main browsing interface depends on Virtuoso's FCT API; an arbitrary SPARQL endpoint alone is not a replacement for this.
-- A reachable **personal SPARQL endpoint that permits the required reads and writes**. Maestro uses this store for its Datasites registry, saved query bookmarks, and ontology cache. A read-only endpoint is not sufficient.
+- A reachable **personal SPARQL endpoint that permits the required reads and writes**. Maestro uses this store for its Datasites registry, query History, and ontology data. A read-only endpoint is not sufficient.
 - For the setup documented below, use **Virtuoso Community Edition** as the personal SPARQL store, and have administrator access to configure the SPARQL role and per-Datasite permissions. The permission instructions and `LOAD` behavior below are Virtuoso-specific.
-- Network access from the personal Virtuoso server to public ontology RDF documents if you want Maestro to ingest ontology documents into the ontology cache.
+- Network access from the personal Virtuoso server to public ontology RDF documents if you want Maestro to ingest ontology documents into the ontology Datasite.
 
-You can use different servers for the FCT data endpoint and the personal SPARQL store. The personal store is where Maestro keeps its own registry/bookmark/cache data; it does not have to be the same server that hosts the RDF data you browse.
+You can use different servers for the FCT data endpoint and the personal SPARQL store. The personal store is where Maestro keeps its own registry, History, and ontology data; it does not have to be the same server that hosts the RDF data you browse.
 
 ## Getting Started
 
@@ -33,35 +33,34 @@ npm ci
 Maestro needs a writable personal SPARQL store before these features can work. At minimum, the configured endpoint/account must be able to:
 
 - Read the Datasites registry.
-- Read and write saved query bookmarks.
-- Read and write the ontology cache, including loading public RDF documents into that cache if you use ontology ingestion.
+- Read and write query History.
+- Read and write ontology data, including loading public RDF documents if ontology ingestion is enabled.
 
-The setup below assumes that the personal store is **Virtuoso Community Edition**. The example graph IRIs are defaults/examples; use the same IRIs consistently in `.env.local`, the Virtuoso permissions, and any data you load into the registry.
-
-Maestro uses four configurable Datasite IRIs: `MAESTRO_DATASERVERS_GRAPH`, `MAESTRO_QUERY_FAVORITES_GRAPH`, `MAESTRO_ONTOLOGY_CACHE_GRAPH`, and `MAESTRO_IDS_NAMESPACE`. Set each property to the Datasite IRI you want Maestro to use.
-
-Create `.env.local` in the project root (you can copy `.env.example`) and configure it like this for a local Virtuoso Community Edition server:
+The setup below assumes that the personal store is **Virtuoso Community Edition**. Configure the following required properties in `.env.local` (you can copy `.env.example`). The comments describe the kind of value expected; use your own file path and Datasite IRIs rather than assuming any particular graph names.
 
 ```env
-MAESTRO_QUERY_CACHE_MAX_ENTRIES=1000
-MAESTRO_DATASERVERS_GRAPH=gttp://ggg.maestro.ecosys/dataservers
-MAESTRO_QUERY_FAVORITES_GRAPH=gttp://ggg.maestro.ecosys/query-favorites
-MAESTRO_ONTOLOGY_CACHE_GRAPH=gttp://ggg.maestro.ecosys/ontology-cache
-MAESTRO_IDS_NAMESPACE=gttp://ggg.maestro.ecosys/ids/
-PERSONAL_SPARQL_ENDPOINT=http://localhost:8890/sparql
-RDF_LOADER_USERNAME=
-RDF_LOADER_PASSWORD=
+# HTTP URL of the personal SPARQL endpoint Maestro uses for its registry and history/ontology data.
+PERSONAL_SPARQL_ENDPOINT=
+
+# Filesystem path to the local Turtle RDF file that describes the Datasites registry.
+# Maestro reads this file at server startup and replaces the triples in SITE_SPARQL_ENDPOINTS with its contents.
+SPARQL_ENDPOINTS=
+
+# Datasite IRI (RDF graph URI) where Maestro stores the selectable Datasites registry.
+SITE_SPARQL_ENDPOINTS=
+
+# Datasite IRI (RDF graph URI) where Maestro stores query History.
+SITE_HISTORY=
+
+# Datasite IRI (RDF graph URI) used for ontology data needed by the Categories hierarchy.
+SITE_ONTOLOGY=
 ```
 
-The three main Datasites have distinct purposes:
+`SPARQL_ENDPOINTS` is a **local filesystem path**, not a URL or graph IRI. It points to a Turtle file containing the RDF that describes the Datasites available in Maestro. `SITE_SPARQL_ENDPOINTS`, `SITE_HISTORY`, and `SITE_ONTOLOGY` are **Datasite IRIs** (RDF graph names), not file paths. Set each to the graph IRI you want Maestro to use, and use those exact same values when configuring Virtuoso permissions.
 
-- `gttp://ggg.maestro.ecosys/dataservers` — the RDF registry that lists selectable Datasites and their display groups. Maestro reads this Datasite.
-- `gttp://ggg.maestro.ecosys/query-favorites` — saved query bookmarks and the original FCT query XML. Maestro reads and writes this Datasite.
-- `gttp://ggg.maestro.ecosys/ontology-cache` — RDF documents discovered for the Categories hierarchy. Maestro reads and ingests RDF into this Datasite.
+The selectable endpoint URLs are stored as RDF records in the graph named by `SITE_SPARQL_ENDPOINTS`, rather than as `Name=URL` entries in `.env.local`. **The Turtle file must contain records for the Datasites you want to select**; configuring the graph IRI does not itself register endpoint URLs. Make sure the records point to reachable Virtuoso FCT endpoints.
 
-The selectable endpoint URLs are stored as RDF records in the configured Datasites registry, rather than as `Name=URL` entries in `.env.local`. **The registry must contain records for the Datasites you want to select**; setting the registry graph IRI does not automatically register those endpoints. Make sure the records point to reachable Virtuoso FCT endpoints. If the registry is empty or its records are missing/incorrect, the Datasite selector will not have usable entries.
-
-`PERSONAL_SPARQL_ENDPOINT` identifies the personal SPARQL HTTP endpoint used for these operations; it is separate from the FCT endpoint URLs registered as Datasites. `RDF_LOADER_USERNAME` and `RDF_LOADER_PASSWORD` are optional credentials for the Virtuoso `/sparql-auth` endpoint. The endpoint path matters for Virtuoso authentication:
+`PERSONAL_SPARQL_ENDPOINT` identifies the personal SPARQL HTTP endpoint used for the Datasites registry, History, and ontology operations; it is separate from the FCT endpoint URLs registered as Datasites. `RDF_LOADER_USERNAME` and `RDF_LOADER_PASSWORD` are optional credentials for the Virtuoso `/sparql-auth` endpoint. The endpoint path matters for Virtuoso authentication:
 
 - `/sparql` uses Virtuoso's shared `SPARQL` service account. Supplying Basic Auth variables does not make the standard endpoint act as a different database user.
 - `/sparql-auth` authenticates using the database account supplied in `RDF_LOADER_USERNAME` and `RDF_LOADER_PASSWORD`. Use this path if you want Maestro to use a dedicated account.
@@ -72,7 +71,7 @@ For example, to use a dedicated account, set `PERSONAL_SPARQL_ENDPOINT=http://lo
 
 Virtuoso checks both the SPARQL role and the user's permission on each Datasite. Granting a role alone is not enough. Configure permissions as a Virtuoso administrator (`dba`) in Conductor at `http://localhost:8890/conductor`. See the official [SPARQL endpoint security documentation](https://docs.openlinksw.com/virtuoso/rdfsparqlprotocolendpoint/), [RDF graph-level security documentation](https://docs.openlinksw.com/virtuoso/rdfgraphsecuritylevel/), and [graph security configuration examples](https://docs.openlinksw.com/virtuoso/rdfgraphsecurityintconfsec/).
 
-**1. Grant only the SPARQL role Maestro needs.** Maestro runs `SELECT` queries and SPARQL updates (`INSERT DATA` for bookmarks and `LOAD` for ontology ingestion). Virtuoso documents that `SPARQL_UPDATE` includes `SPARQL_SELECT`, so you do not need to grant every available role. In Conductor, go to **System Admin → User Accounts → Users → Edit** for the relevant account, set its user type to **SQL/ODBC and WebDAV** (wording may vary by Virtuoso version), add the `SPARQL_UPDATE` role, and save.
+**1. Grant only the SPARQL role Maestro needs.** Maestro runs `SELECT` queries and SPARQL updates for its registry/History/ontology data, including `LOAD` for ontology ingestion. Virtuoso documents that `SPARQL_UPDATE` includes `SPARQL_SELECT`, so you do not need to grant every available role. In Conductor, go to **System Admin → User Accounts → Users → Edit** for the relevant account, set its user type to **SQL/ODBC and WebDAV** (wording may vary by Virtuoso version), add the `SPARQL_UPDATE` role, and save.
 
 - If `PERSONAL_SPARQL_ENDPOINT` ends in `/sparql`, grant `SPARQL_UPDATE` to the built-in **`SPARQL`** service account, because that endpoint executes requests as that account. The Basic Auth username/password in `.env.local` do **not** change that identity.
 - If it ends in `/sparql-auth`, grant `SPARQL_UPDATE` to the account named by `RDF_LOADER_USERNAME`; this endpoint uses those credentials to authenticate the configured account.
@@ -80,26 +79,28 @@ Virtuoso checks both the SPARQL role and the user's permission on each Datasite.
 
 **2. Grant Datasite access.** In Conductor's SQL execution interface, logged in as `dba`, run the statements for the account that actually serves requests. These permission masks are: `1` = read; `3` = read + SPARQL Update write; `7` = read + SPARQL Update write + RDF network-resource fetch (the additional bit 4 permission).
 
-For the standard `/sparql` endpoint, grant the minimum permissions to the built-in `SPARQL` account:
+For the standard `/sparql` endpoint, grant permissions to the built-in `SPARQL` account. Replace each property placeholder with the **value configured for that property** in `.env.local`; do not use the property name itself as the graph IRI.
 
 ```sql
--- Datasites registry: read only
+-- Datasites registry: read only; use the value of SITE_SPARQL_ENDPOINTS
 DB.DBA.RDF_GRAPH_USER_PERMS_SET(
-  'gttp://ggg.maestro.ecosys/dataservers', 'SPARQL', 1
+  '[value of SITE_SPARQL_ENDPOINTS]', 'SPARQL', 1
 );
--- Saved bookmarks: read and write
+
+-- Query History: read and write; use the value of SITE_HISTORY
 DB.DBA.RDF_GRAPH_USER_PERMS_SET(
-  'gttp://ggg.maestro.ecosys/query-favorites', 'SPARQL', 3
+  '[value of SITE_HISTORY]', 'SPARQL', 3
 );
--- Ontology cache: read, write, and LOAD remote RDF documents
+
+-- Ontology data: read, write, and LOAD remote RDF documents; use the value of SITE_ONTOLOGY
 DB.DBA.RDF_GRAPH_USER_PERMS_SET(
-  'gttp://ggg.maestro.ecosys/ontology-cache', 'SPARQL', 7
+  '[value of SITE_ONTOLOGY]', 'SPARQL', 7
 );
 ```
 
-For `/sparql-auth`, repeat those three statements with the actual account configured as `RDF_LOADER_USERNAME` in place of `'SPARQL'` (for example, `'maestro_app'`). For example, if you intentionally use **both** endpoint paths, run the statements for `SPARQL` and again for the configured account. Do not grant either account write access to every graph. If your Datasite IRIs differ from the examples, use the exact IRIs configured by the corresponding `MAESTRO_*_GRAPH` variables.
+For `/sparql-auth`, repeat these statements with the actual account configured as `RDF_LOADER_USERNAME` in place of `'SPARQL'` (for example, `'maestro_app'`). If you use both endpoint paths, run the statements for `SPARQL` and again for the configured account. Do not grant either account write access to every graph.
 
-These permissions are the minimum for Maestro's current behavior: it only reads the Datasites registry, reads/writes saved query favorites, and reads/writes the ontology cache while loading remote RDF. If you later disable ontology ingestion, the ontology Datasite permissions can be reduced accordingly.
+These permissions provide read access to the Datasites registry, read/write access to History, and read/write plus remote RDF loading access to the ontology Datasite. If Maestro's use of any Datasite changes, adjust that graph's permission mask to match the required operations.
 
 **Using a non-Virtuoso personal SPARQL store:** the configuration variable accepts an endpoint URL, but the SQL permission commands and the remote-RDF `LOAD` instructions above are Virtuoso-specific. A different SPARQL implementation must provide equivalent write access to the configured graphs and support the ontology-ingestion behavior Maestro uses; this README does not provide setup instructions for other stores. An endpoint that only allows `SELECT`, or that blocks SPARQL Update, will not be sufficient.
 

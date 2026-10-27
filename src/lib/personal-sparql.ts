@@ -1,30 +1,69 @@
-/** Shared server-side access to the user's personal SPARQL store and RDF-backed Datasites registry. */
-const DEFAULT_DATASERVERS_GRAPH = "gttp://ggg.maestro.ecosys/dataservers";
-const DEFAULT_QUERY_FAVORITES_GRAPH = "gttp://ggg.maestro.ecosys/query-favorites";
-const DEFAULT_ONTOLOGY_GRAPH = "gttp://ggg.maestro.ecosys/ontology-cache";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
-/** Read the app's named-graph list from SPARQL_ENDPOINTS. Each URI is identified by its final path segment. */
-export function configuredNamedGraph(name: "dataservers" | "query-favorites" | "ontology-cache", fallback: string): string {
-  const configured = (process.env.SPARQL_ENDPOINTS || "")
-    .split(";")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const graph = configured.find((value) => value.replace(/\\:/g, ":").replace(/\/+$/, "").endsWith(`/${name}`));
-  const selected = graph?.replace(/\\:/g, ":") || fallback;
-  if (/[<>"{}|^`\\\s]/u.test(selected)) throw new Error(`Configured ${name} graph contains characters that are not allowed in an IRI.`);
-  return selected;
-}
-
-export const DATASERVERS_GRAPH = configuredNamedGraph("dataservers", DEFAULT_DATASERVERS_GRAPH);
-export const QUERY_FAVORITES_GRAPH = configuredNamedGraph("query-favorites", DEFAULT_QUERY_FAVORITES_GRAPH);
-export const VFCT_NS = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#";
+/** Shared server-side access to Maestro's personal SPARQL store and Datasites registry. */
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const RDFS_NS = "http://www.w3.org/2000/01/rdf-schema#";
 const DCTERMS_NS = "http://purl.org/dc/terms/";
 const SKOS_NS = "http://www.w3.org/2004/02/skos/core#";
 const SCHEMA_NS = "https://schema.org/";
+
+/** Required graph configuration is read from its dedicated environment property, never inferred from SPARQL_ENDPOINTS. */
+function requiredGraph(property: "SITE_SPARQL_ENDPOINTS" | "SITE_HISTORY" | "SITE_ONTOLOGY"): string {
+  const graph = (process.env[property] ?? "").trim().replace(/\\:/g, ":");
+  if (!graph) throw new Error(`${property} must be configured with a Datasite graph IRI.`);
+  if (!/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(graph)) {
+    throw new Error(`${property} must be a valid absolute Datasite graph IRI.`);
+  }
+  return graph;
+}
+
+export const getDataserversGraph = (): string => requiredGraph("SITE_SPARQL_ENDPOINTS");
+export const getHistoryGraph = (): string => requiredGraph("SITE_HISTORY");
+export const getOntologyGraph = (): string => requiredGraph("SITE_ONTOLOGY");
+export const VFCT_NS = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#";
 export const MAESTRO_IDS_NS = "gttp://ggg.maestro.ecosys/ids/";
-export const getOntologyGraph = (): string => configuredNamedGraph("ontology-cache", DEFAULT_ONTOLOGY_GRAPH);
+
+let dataserversSeedPromise: Promise<void> | null = null;
+
+/** Read the configured Turtle seed and replace the configured Datasites graph through Virtuoso's Graph Store HTTP Protocol. */
+export async function ensureDataserversRegistrySeeded(): Promise<void> {
+  if (dataserversSeedPromise) return dataserversSeedPromise;
+  dataserversSeedPromise = (async () => {
+    const configuredPath = (process.env.SPARQL_ENDPOINTS ?? "").trim();
+    if (!configuredPath) throw new Error("SPARQL_ENDPOINTS must be configured with a path to the Datasites Turtle seed file.");
+    const seedPath = resolve(process.cwd(), configuredPath);
+    const turtle = await readFile(seedPath, "utf8");
+    if (!turtle.trim()) throw new Error(`The Datasites Turtle seed file is empty: ${seedPath}`);
+
+    const endpoint = personalSparqlUrl();
+    const graph = getDataserversGraph();
+    const graphStoreUrl = new URL(endpoint);
+    graphStoreUrl.pathname = /\/sparql-auth\/?$/i.test(graphStoreUrl.pathname)
+      ? graphStoreUrl.pathname.replace(/\/sparql-auth\/?$/i, "/sparql-graph-crud-auth")
+      : graphStoreUrl.pathname.replace(/\/sparql\/?$/i, "/sparql-graph-crud");
+    graphStoreUrl.search = "";
+    graphStoreUrl.hash = "";
+    graphStoreUrl.searchParams.set("graph", graph);
+
+    const response = await fetch(graphStoreUrl, {
+      method: "PUT",
+      headers: personalSparqlHeaders("text/turtle; charset=utf-8", "text/plain, text/html, application/json, */*"),
+      body: turtle,
+      cache: "no-store",
+      signal: AbortSignal.timeout(30000),
+    });
+    const responseText = (await response.text()).slice(0, 3000);
+    if (!response.ok || /(?:Virtuoso\s+Exception|Error\s+SR|SPARQL\s+.*Error|failed)/i.test(responseText) && !/0 errors/i.test(responseText)) {
+      throw new Error(`Could not replace Datasites graph ${graph} from ${seedPath} (HTTP ${response.status}): ${responseText || "no response details"}`);
+    }
+    console.info(`Maestro replaced Datasites graph ${graph} from ${seedPath}.`);
+  })().catch((error) => {
+    dataserversSeedPromise = null;
+    throw error;
+  });
+  return dataserversSeedPromise;
+}
 
 export type FctEndpoint = { id: string; label: string; url: string; group: string };
 type SparqlJson = { results?: { bindings?: Record<string, { type?: string; value?: string }>[] } };
@@ -111,10 +150,12 @@ function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-/** Load endpoint records and their groups from the configured RDF dataservers graph. No env-list fallback is intentional. */
+/** Seed the registry once, then load endpoint records and groups from its configured RDF graph. No env-list fallback is intentional. */
 export async function getConfiguredFctEndpoints(): Promise<FctEndpoint[]> {
-  const legacyNs = `${DATASERVERS_GRAPH}#`;
-  const query = `PREFIX rdf: <${RDF_NS}>\nPREFIX rdfs: <${RDFS_NS}>\nPREFIX dcterms: <${DCTERMS_NS}>\nPREFIX skos: <${SKOS_NS}>\nPREFIX schema: <${SCHEMA_NS}>\nSELECT DISTINCT ?server ?name ?url ?groupName ?groupOrder ?serverOrder WHERE { GRAPH <${DATASERVERS_GRAPH}> { { ?server rdf:type schema:EntryPoint ; rdfs:label ?name ; schema:url ?url . OPTIONAL { ?server schema:position ?serverOrder } OPTIONAL { ?server dcterms:isPartOf ?group . ?group rdf:type skos:Collection ; rdfs:label ?groupName . OPTIONAL { ?group schema:position ?groupOrder } } } UNION { ?server rdf:type <${legacyNs}Dataserver> ; <${legacyNs}serverName> ?name ; <${legacyNs}serverURL> ?url . OPTIONAL { ?server <${legacyNs}serverOrder> ?serverOrder } OPTIONAL { ?server <${legacyNs}inGroup> ?group . ?group <${legacyNs}groupName> ?groupName . OPTIONAL { ?group <${legacyNs}groupOrder> ?groupOrder } } } } } ORDER BY COALESCE(?groupOrder, 9999) COALESCE(?serverOrder, 9999) STR(?name)`;
+  await ensureDataserversRegistrySeeded();
+  const dataserversGraph = getDataserversGraph();
+  const legacyNs = `${dataserversGraph}#`;
+  const query = `PREFIX rdf: <${RDF_NS}>\nPREFIX rdfs: <${RDFS_NS}>\nPREFIX dcterms: <${DCTERMS_NS}>\nPREFIX skos: <${SKOS_NS}>\nPREFIX schema: <${SCHEMA_NS}>\nSELECT DISTINCT ?server ?name ?url ?groupName ?groupOrder ?serverOrder WHERE { GRAPH <${dataserversGraph}> { { ?server rdf:type schema:EntryPoint ; rdfs:label ?name ; schema:url ?url . OPTIONAL { ?server schema:position ?serverOrder } OPTIONAL { ?server dcterms:isPartOf ?group . ?group rdf:type skos:Collection ; rdfs:label ?groupName . OPTIONAL { ?group schema:position ?groupOrder } } } UNION { ?server rdf:type <${legacyNs}Dataserver> ; <${legacyNs}serverName> ?name ; <${legacyNs}serverURL> ?url . OPTIONAL { ?server <${legacyNs}serverOrder> ?serverOrder } OPTIONAL { ?server <${legacyNs}inGroup> ?group . ?group <${legacyNs}groupName> ?groupName . OPTIONAL { ?group <${legacyNs}groupOrder> ?groupOrder } } } } } ORDER BY COALESCE(?groupOrder, 9999) COALESCE(?serverOrder, 9999) STR(?name)`;
   const payload = await queryPersonalSparql(query);
   const endpoints: FctEndpoint[] = [];
   for (const binding of payload.results?.bindings ?? []) {
@@ -131,4 +172,19 @@ export async function getConfiguredFctEndpoints(): Promise<FctEndpoint[]> {
     seen.add(endpoint.id);
     return true;
   });
+}
+
+
+/** Resolve the endpoint selected by the shared fct_endpoint cookie, falling back to the first Datasite. */
+export function selectConfiguredFctEndpoint(request: Request, endpoints: FctEndpoint[]): FctEndpoint | null {
+  const cookie = request.headers.get("cookie") ?? "";
+  const match = cookie.match(/(?:^|;\s*)fct_endpoint=([^;]+)/);
+  let selectedId = "";
+  try { selectedId = match ? decodeURIComponent(match[1]) : ""; } catch { selectedId = ""; }
+  return endpoints.find((endpoint) => endpoint.id === selectedId) ?? endpoints[0] ?? null;
+}
+
+/** Load the shared RDF-backed endpoint list and resolve the selected endpoint for routes that do not need the full list. */
+export async function getSelectedFctEndpoint(request: Request): Promise<FctEndpoint | null> {
+  return selectConfiguredFctEndpoint(request, await getConfiguredFctEndpoints());
 }

@@ -3,20 +3,8 @@ import { NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
 import { compileFctXmlToSparql, type SparqlJsonResults, type SparqlBindingTerm } from "@/lib/fct-sparql-translator";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
-import { DATASERVERS_GRAPH, getConfiguredFctEndpoints } from "@/lib/personal-sparql";
+import { getDataserversGraph, getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
 
-type SparqlEndpoint = { id: string; label: string; url: string; group: string };
-
-async function getConfiguredEndpoints(): Promise<SparqlEndpoint[]> {
-  return getConfiguredFctEndpoints();
-}
-
-function getSelectedEndpointId(request: Request, endpoints: SparqlEndpoint[]) {
-  const cookie = request.headers.get("cookie") ?? "";
-  const match = cookie.match(/(?:^|;\s*)fct_endpoint=([^;]+)/);
-  const id = match ? decodeURIComponent(match[1]) : "";
-  return endpoints.some((endpoint) => endpoint.id === id) ? id : endpoints[0]?.id ?? "";
-}
 
 function parseResults(text: string): SparqlJsonResults | null {
   try {
@@ -277,16 +265,13 @@ function parseDescribeRdfXml(source: string): Record<string, SparqlBindingTerm>[
 
 export async function GET(request: Request) {
   logProxyCaller(request, "fct.GET");
-  let endpoints: SparqlEndpoint[];
-  try { endpoints = await getConfiguredEndpoints(); }
+  let endpoints: Awaited<ReturnType<typeof getConfiguredFctEndpoints>>;
+  try { endpoints = await getConfiguredFctEndpoints(); }
   catch (error) {
     return NextResponse.json({ error: `Could not load Datasites from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}` }, { status: 503 });
   }
   const url = new URL(request.url);
-  const cookie = request.headers.get("cookie") ?? "";
-  const cookieMatch = cookie.match(/(?:^|;\s*)fct_endpoint=([^;]+)/);
-  const cookieId = cookieMatch ? decodeURIComponent(cookieMatch[1]) : "";
-  const selectedId = endpoints.some((endpoint) => endpoint.id === cookieId) ? cookieId : "";
+  const selectedId = selectConfiguredFctEndpoint(request, endpoints)?.id ?? "";
   if (url.searchParams.get("health") !== "1") {
     return NextResponse.json({ endpoints: endpoints.map(({ id, label, url, group }) => ({ id, label, url, group })), selectedId });
   }
@@ -337,8 +322,8 @@ export async function POST(request: Request) {
     const body: Record<string, unknown> | null = contentType.includes("xml")
       ? { queryXml: requestBodyText }
       : (() => { try { return JSON.parse(requestBodyText) as Record<string, unknown>; } catch { return null; } })();
-    let endpoints: SparqlEndpoint[];
-    try { endpoints = await getConfiguredEndpoints(); }
+    let endpoints: Awaited<ReturnType<typeof getConfiguredFctEndpoints>>;
+    try { endpoints = await getConfiguredFctEndpoints(); }
     catch (error) {
       return fctError(`Could not load Datasites from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}`, 503);
     }
@@ -351,9 +336,8 @@ export async function POST(request: Request) {
       return response;
     }
 
-    const endpointId = getSelectedEndpointId(request, endpoints);
-    const endpoint = endpoints.find((item) => item.id === endpointId);
-    if (!endpoint) return fctError(`No Datasites are configured in the personal SPARQL store graph ${DATASERVERS_GRAPH}.`, 500);
+    const endpoint = selectConfiguredFctEndpoint(request, endpoints);
+    if (!endpoint) return fctError(`No Datasites are configured in the personal SPARQL store graph ${getDataserversGraph()}.`, 503);
 
     let queryXml = typeof body?.queryXml === "string" ? body.queryXml.trim() : "";
     if (!queryXml && typeof body?.text === "string") {

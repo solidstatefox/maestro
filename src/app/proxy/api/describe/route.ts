@@ -1,49 +1,7 @@
 import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
-
-type FctEndpoint = { id: string; label: string; url: string; group: string };
-
-function slugify(value: string) {
-  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function getConfiguredEndpoints(): FctEndpoint[] {
-  const configured = (process.env.FCT_ENDPOINTS ?? "")
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const separator = entry.indexOf("=");
-      if (separator <= 0) return null;
-      const left = entry.slice(0, separator).trim();
-      const url = entry.slice(separator + 1).trim();
-      if (!left || !/^https?:\/\//i.test(url)) return null;
-      const groupSeparator = left.indexOf("::");
-      const group = groupSeparator >= 0 ? left.slice(0, groupSeparator).trim() : "Endpoints";
-      const label = (groupSeparator >= 0 ? left.slice(groupSeparator + 2) : left).trim();
-      if (!label) return null;
-      return { id: groupSeparator >= 0 ? slugify(`${group}-${label}`) : slugify(label), group: group || "Endpoints", label, url };
-    })
-    .filter((endpoint): endpoint is FctEndpoint => Boolean(endpoint));
-  const legacyUrl = (process.env.FCT_ENDPOINT ?? "").trim();
-  if (legacyUrl && !configured.some((endpoint) => endpoint.url === legacyUrl)) {
-    configured.unshift({ id: slugify("Current VOS"), group: "Endpoints", label: "Current VOS", url: legacyUrl });
-  }
-  const seen = new Set<string>();
-  return configured.filter((endpoint) => {
-    if (seen.has(endpoint.id)) return false;
-    seen.add(endpoint.id);
-    return true;
-  });
-}
-
-function getSelectedEndpointId(request: Request, endpoints: FctEndpoint[]) {
-  const cookie = request.headers.get("cookie") ?? "";
-  const match = cookie.match(/(?:^|;\s*)fct_endpoint=([^;]+)/);
-  const id = match ? decodeURIComponent(match[1]) : "";
-  return endpoints.some((endpoint) => endpoint.id === id) ? id : endpoints[0]?.id ?? "";
-}
+import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
 
 function isSafeIri(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 &&
@@ -57,10 +15,9 @@ export async function POST(request: Request) {
     if (!isSafeIri(body?.iri)) {
       return NextResponse.json({ error: "A valid resource IRI is required for DESCRIBE." }, { status: 400 });
     }
-    const endpoints = getConfiguredEndpoints();
-    const endpointId = getSelectedEndpointId(request, endpoints);
-    const endpoint = endpoints.find((item) => item.id === endpointId);
-    if (!endpoint) return NextResponse.json({ error: "No FCT endpoints are configured." }, { status: 500 });
+    const endpoints = await getConfiguredFctEndpoints();
+    const endpoint = selectConfiguredFctEndpoint(request, endpoints);
+    if (!endpoint) return NextResponse.json({ error: "No Datasites are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
 
     const sparqlUrl = new URL("/sparql", endpoint.url);
     const query = `DESCRIBE <${body.iri}>`;

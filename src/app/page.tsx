@@ -7225,7 +7225,7 @@ useEffect(() => {
                           const expectedBinding = groupValueBinding(groupValue);
                           const bound = (selectedRelationshipNode?.children ?? []).some((child) => child.name === "value" && child.text === expectedBinding.text && (child.attributes.datatype ?? "uri") === expectedBinding.datatype && (child.attributes["xml:lang"] ?? "") === (expectedBinding.lang ?? ""));
                           return <article key={memberKey} ref={(element) => { if (element) groupCardRefs.current.set(memberKey, element); else groupCardRefs.current.delete(memberKey); }} data-group-card="true" className="flex min-w-0 flex-col rounded-md border border-border">
-                            <header className="group/header flex items-start gap-2 border-b border-border px-3 py-2">
+                            <header className="group/header flex items-start gap-2 border-b border-border bg-muted px-3 py-2">
                               <input type="checkbox" checked={bound} onChange={(event) => {
                                 if (selectedGroupByOption!.direction === "forward") setPropertyValue(activeLeafId, selectedGroupByOption!.uri, { text: expectedBinding.text, datatype: expectedBinding.datatype, ...(expectedBinding.lang ? { lang: expectedBinding.lang } : {}) }, event.currentTarget.checked);
                                 else setRoleValue(selectedGroupByOption!.uri, { text: expectedBinding.text, datatype: expectedBinding.datatype, ...(expectedBinding.lang ? { lang: expectedBinding.lang } : {}) }, event.currentTarget.checked);

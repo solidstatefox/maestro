@@ -1,4 +1,5 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
+import { normalizeFctValue } from "./fct-value-policy";
 
 type XmlNode = {
   name: string;
@@ -81,7 +82,8 @@ const parser = new XMLParser({
   attributeNamePrefix: "@_",
   textNodeName: "#text",
   parseTagValue: false,
-  trimValues: true,
+  // Preserve source text here; FCT value normalization is explicit and shared.
+  trimValues: false,
 });
 
 const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -198,13 +200,14 @@ function iri(value: string): SparqlTerm | null {
 function valueTerm(node: XmlNode): SparqlTerm | null {
   const datatype = (node.attributes.datatype ?? "").trim();
   const language = (node.attributes["xml:lang"] ?? node.attributes.lang ?? "").trim();
-  if (datatype.toLowerCase() === "uri" || datatype.toLowerCase() === "url") return iri(node.text);
+  const value = normalizeFctValue(node.text);
+  if (datatype.toLowerCase() === "uri" || datatype.toLowerCase() === "url") return iri(value);
   if (datatype.toLowerCase() === "bnode" || datatype.toLowerCase() === "blank-node") return null;
   if (language && !/^[A-Za-z]+(?:-[A-Za-z0-9]+)*$/.test(language)) return null;
-  if (language) return literalTerm(node.text, language);
-  if (!datatype || ["string", "literal", "plainstring", "http://www.openlinksw.com/schemas/facets/dtp/plainstring"].includes(datatype.toLowerCase())) return literalTerm(node.text);
+  if (language) return literalTerm(value, language);
+  if (!datatype || ["string", "literal", "plainstring", "http://www.openlinksw.com/schemas/facets/dtp/plainstring"].includes(datatype.toLowerCase())) return literalTerm(value);
   const datatypeIri = iri(datatype);
-  return datatypeIri ? literalTerm(node.text, undefined, datatypeIri) : null;
+  return datatypeIri ? literalTerm(value, undefined, datatypeIri) : null;
 }
 
 function searchTerms(searchText: string): SparqlTerm | null {

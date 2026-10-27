@@ -94,7 +94,11 @@ export async function POST(request: Request) {
       `${iri(queryResource)} <${RDF_NS}value> ${sparqlString(queryXml)}^^<${RDF_NS}XMLLiteral>`,
     ];
     if (description) triples.push(`${iri(bookmark)} <${DCTERMS_NS}description> ${sparqlString(description)}`);
-    if (shareLinkIri) triples.push(`${iri(queryResource)} <${SCHEMA_NS}url> ${iri(shareLinkIri)}`);
+    if (shareLinkIri) {
+      // Keep the link on the bookmark (what the list reads) and on the saved query resource.
+      triples.push(`${iri(bookmark)} <${SCHEMA_NS}url> ${iri(shareLinkIri)}`);
+      triples.push(`${iri(queryResource)} <${SCHEMA_NS}url> ${iri(shareLinkIri)}`);
+    }
 
     for (const tag of tags) {
       if (tagVocabulary === "dcterms") {
@@ -159,7 +163,7 @@ export async function POST(request: Request) {
 /** Read Annotea bookmarks and older favorites written by previous Maestro versions. */
 export async function GET() {
   try {
-    const query = `PREFIX rdf: <${RDF_NS}> PREFIX rdfs: <${RDFS_NS}> PREFIX dcterms: <${DCTERMS_NS}> PREFIX a: <${ANNOTATION_NS}> PREFIX b: <${BOOKMARK_NS}> PREFIX vfct: <${VFCT_NS}> PREFIX sioc: <${SIOC_NS}> SELECT DISTINCT ?bookmark ?title ?description ?created ?queryXML WHERE { GRAPH <${QUERY_FAVORITES_GRAPH}> { { ?bookmark rdf:type b:Bookmark } UNION { ?bookmark rdf:type sioc:Item } UNION { ?bookmark rdf:type vfct:QueryBookmark } OPTIONAL { ?bookmark dcterms:title ?dcTitle } OPTIONAL { ?bookmark rdfs:label ?standardTitle } OPTIONAL { ?bookmark vfct:label ?legacyTitle } BIND(COALESCE(?dcTitle, ?standardTitle, ?legacyTitle, STR(?bookmark)) AS ?title) OPTIONAL { ?bookmark dcterms:description ?description } OPTIONAL { ?bookmark a:created ?annoteaCreated } OPTIONAL { ?bookmark dcterms:created ?dctermsCreated } OPTIONAL { ?bookmark dcterms:date ?dctermsDate } OPTIONAL { ?bookmark vfct:created ?legacyCreated } BIND(COALESCE(?annoteaCreated, ?dctermsCreated, ?dctermsDate, ?legacyCreated) AS ?created) { ?bookmark b:recalls ?query . ?query rdf:value ?queryXML . } UNION { ?bookmark dcterms:references ?query . ?query rdf:value ?queryXML . } UNION { ?bookmark vfct:savedQuery ?legacyQuery . ?legacyQuery vfct:queryXML ?queryXML . } } } ORDER BY DESC(?created) ?title`;
+    const query = `PREFIX rdf: <${RDF_NS}> PREFIX rdfs: <${RDFS_NS}> PREFIX dcterms: <${DCTERMS_NS}> PREFIX a: <${ANNOTATION_NS}> PREFIX b: <${BOOKMARK_NS}> PREFIX vfct: <${VFCT_NS}> PREFIX sioc: <${SIOC_NS}> PREFIX schema: <${SCHEMA_NS}> SELECT DISTINCT ?bookmark ?title ?description ?created ?queryXML ?shareUrl WHERE { GRAPH <${QUERY_FAVORITES_GRAPH}> { { ?bookmark rdf:type b:Bookmark } UNION { ?bookmark rdf:type sioc:Item } UNION { ?bookmark rdf:type vfct:QueryBookmark } OPTIONAL { ?bookmark dcterms:title ?dcTitle } OPTIONAL { ?bookmark rdfs:label ?standardTitle } OPTIONAL { ?bookmark vfct:label ?legacyTitle } BIND(COALESCE(?dcTitle, ?standardTitle, ?legacyTitle, STR(?bookmark)) AS ?title) OPTIONAL { ?bookmark dcterms:description ?description } OPTIONAL { ?bookmark a:created ?annoteaCreated } OPTIONAL { ?bookmark dcterms:created ?dctermsCreated } OPTIONAL { ?bookmark dcterms:date ?dctermsDate } OPTIONAL { ?bookmark vfct:created ?legacyCreated } BIND(COALESCE(?annoteaCreated, ?dctermsCreated, ?dctermsDate, ?legacyCreated) AS ?created) OPTIONAL { ?bookmark schema:url ?bookmarkUrl } { ?bookmark b:recalls ?query . ?query rdf:value ?queryXML . OPTIONAL { ?query schema:url ?queryUrl } } UNION { ?bookmark dcterms:references ?query . ?query rdf:value ?queryXML . OPTIONAL { ?query schema:url ?queryUrl } } UNION { ?bookmark vfct:savedQuery ?legacyQuery . ?legacyQuery vfct:queryXML ?queryXML . } BIND(COALESCE(?bookmarkUrl, ?queryUrl) AS ?shareUrl) } } ORDER BY DESC(?created) ?title`;
     const result = await queryPersonalSparql(query);
     const favorites = (result.results?.bindings ?? []).map((row) => ({
       uri: row.bookmark?.value ?? "",
@@ -167,7 +171,11 @@ export async function GET() {
       description: row.description?.value ?? "",
       created: row.created?.value ?? "",
       queryXml: row.queryXML?.value ?? "",
-    })).filter((item) => item.uri && item.queryXml);
+      // Only http(s) links are returned, so the page can never render a script URL.
+      shareUrl: /^https?:\/\//i.test(row.shareUrl?.value ?? "") ? row.shareUrl!.value : "",
+    })).filter((item) => item.uri && item.queryXml)
+      // A bookmark that was saved more than once with different links would repeat; keep the first.
+      .filter((item, index, all) => all.findIndex((other) => other.uri === item.uri && other.queryXml === item.queryXml) === index);
     return NextResponse.json({ favorites });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Could not load query favorites." }, { status: 503 });

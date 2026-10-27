@@ -1,4 +1,5 @@
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
+import { normalizeFctValue } from "./fct-value-policy";
 
 type CompilerState = {
   nextVariable: number;
@@ -25,7 +26,7 @@ function textTerms(value: string): string[] {
 }
 
 function valueTerm(node: FctQueryNode): string | null {
-  const value = node.text?.trim() ?? "";
+  const value = normalizeFctValue(node.text);
   if (!value) return null;
   const datatype = (node.attributes.datatype ?? "").trim().toLowerCase();
   if (datatype === "uri") return iriTerm(value);

@@ -84,6 +84,35 @@ export function createPropertyWidgetQuery(
   const selectedRoleIsAncestor = direction === "reverse" && Boolean(selectedNodeId) &&
     treeNodeContainsId(tree.children, selectedNodeId!, "query-view");
 
+  // When the active view is already carried by the target relationship, that
+  // relationship is the facet binding. Reuse it rather than adding a duplicate
+  // nested edge (e.g. Locality -> Locality), which would make the Personal
+  // facet return no values. Keep its constraints and only normalize the view.
+  if (forPersonalFacet) {
+    const relationshipName = direction === "forward" ? "property" : "property-of";
+    let reusedCarrier = false;
+    const reuseCarrier = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => {
+      const isCarrier = !reusedCarrier && node.name === relationshipName &&
+        node.attributes.iri === propertyUri &&
+        node.children.some((child) => child.id === "query-view");
+      if (isCarrier) {
+        reusedCarrier = true;
+        const attributes = { ...node.attributes };
+        delete attributes.exclude;
+        return {
+          ...node,
+          attributes,
+          children: node.children.map((child) => child.id === "query-view"
+            ? { ...copyNode(child), attributes: { ...child.attributes, type: "list", offset: "0" }, children: [] }
+            : copyNode(child)),
+        };
+      }
+      return { ...node, attributes: { ...node.attributes }, children: reuseCarrier(node.children) };
+    });
+    const children = reuseCarrier(tree.children);
+    if (reusedCarrier) return { ...tree, attributes: { ...tree.attributes }, children };
+  }
+
   // For an ordinary relationship, delegate insertion/reuse to the shared query
   // API. It reuses a matching sibling relationship rather than manufacturing a
   // second property node beside an existing constrained one.

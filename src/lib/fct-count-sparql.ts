@@ -1,4 +1,5 @@
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
+import { normalizeFctValue } from "./fct-value-policy";
 
 type CompilerState = {
   nextVariable: number;
@@ -22,7 +23,7 @@ function iriTerm(value: string | undefined): string | null {
 }
 
 function valueTerm(node: FctQueryNode): string | null {
-  const value = node.text ?? "";
+  const value = normalizeFctValue(node.text);
   const datatype = node.attributes.datatype ?? "";
   const language = node.attributes["xml:lang"] ?? node.attributes.lang ?? "";
   if (datatype === "uri" || datatype === "url") return iriTerm(value);

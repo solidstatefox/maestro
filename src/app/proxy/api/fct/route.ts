@@ -80,9 +80,18 @@ async function resolveFctLabels(
   const values = safeUris.map((uri) => `<${uri}>`).join(" ");
   const query = [
     'DEFINE input:inference "facets"',
-    "SELECT ?s ?label WHERE {",
+    "SELECT ?s ?p ?label WHERE {",
     `  VALUES ?s { ${values} }`,
-    `  ?s <${VIRTRDF_LABEL}> ?label .`,
+    "  ?s ?p ?label .",
+    "  FILTER (?p IN (",
+    `    <${VIRTRDF_LABEL}>,`,
+    "    <http://www.w3.org/2000/01/rdf-schema#label>,",
+    "    <http://www.w3.org/2004/02/skos/core#prefLabel>,",
+    "    <http://xmlns.com/foaf/0.1/name>,",
+    "    <http://purl.org/dc/terms/title>,",
+    "    <http://purl.org/dc/elements/1.1/title>,",
+    "    <https://schema.org/name>",
+    "  ))",
     "  FILTER (isLiteral(?label))",
     "}",
     "ORDER BY STR(?s)",
@@ -94,27 +103,39 @@ async function resolveFctLabels(
     if (!parsed) return labels;
     if (result.response.status === 200) setQueryCache(result.key, result.text);
 
-    const candidates = new Map<string, SparqlBindingTerm[]>();
+    const candidates = new Map<string, { predicate: string; label: SparqlBindingTerm }[]>();
+    const predicatePriority = new Map<string, number>([
+      [VIRTRDF_LABEL, 0],
+      ["http://www.w3.org/2000/01/rdf-schema#label", 1],
+      ["http://www.w3.org/2004/02/skos/core#prefLabel", 2],
+      ["http://xmlns.com/foaf/0.1/name", 3],
+      ["http://purl.org/dc/terms/title", 4],
+      ["http://purl.org/dc/elements/1.1/title", 5],
+      ["https://schema.org/name", 6],
+    ]);
     for (const row of parsed.results?.bindings ?? []) {
       const subject = row.s?.value;
+      const predicate = row.p?.value;
       const label = row.label;
-      if (!subject || !label || label.type !== "literal") continue;
+      if (!subject || !predicate || !label || label.type !== "literal" || !predicatePriority.has(predicate)) continue;
       const existing = candidates.get(subject) ?? [];
-      existing.push(label);
+      existing.push({ predicate, label });
       candidates.set(subject, existing);
     }
     const languages = preferredLanguages(acceptLanguage);
     for (const [uri, options] of candidates) {
       options.sort((a, b) => {
-        const aLang = labelLanguage(a);
-        const bLang = labelLanguage(b);
+        const predicateRank = (predicatePriority.get(a.predicate) ?? 99) - (predicatePriority.get(b.predicate) ?? 99);
+        if (predicateRank) return predicateRank;
+        const aLang = labelLanguage(a.label);
+        const bLang = labelLanguage(b.label);
         const aIndex = aLang ? languages.findIndex((lang) => aLang === lang || aLang.startsWith(`${lang}-`)) : languages.length;
         const bIndex = bLang ? languages.findIndex((lang) => bLang === lang || bLang.startsWith(`${lang}-`)) : languages.length;
         const aRank = aIndex < 0 ? languages.length + 1 : aIndex;
         const bRank = bIndex < 0 ? languages.length + 1 : bIndex;
         return aRank - bRank;
       });
-      labels.set(uri, options[0].value);
+      labels.set(uri, options[0].label.value);
     }
   } catch {
     // Label lookup is supplementary: preserve the URI-derived fallback.

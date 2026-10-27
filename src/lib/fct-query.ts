@@ -9,6 +9,12 @@ export type FctUiResultSummary = {
   label: string;
   /** Result-set count (ct) for that same view. */
   count: number | null;
+  /**
+   * Identity of the record the label came from. The next breadcrumb badge is
+   * resolved from this record, so a whole badge chain describes one record path.
+   */
+  uri?: string;
+  termType?: "uri" | "literal" | "bnode";
 };
 
 export type FctQueryNode = {

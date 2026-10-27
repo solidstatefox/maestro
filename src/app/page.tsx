@@ -19,7 +19,7 @@ import {
 import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, Equal, RotateCcw, Bookmark } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, Equal, RotateCcw, Bookmark } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -562,15 +562,26 @@ function DistinctCount({
  * decide whether a serialized <property> sibling appears in the Selected list.
  */
 function getActiveViewPropertyFilters(tree: FctQueryTree): FctQueryNode[] {
-  function findScope(nodes: FctQueryNode[]): FctQueryNode[] | null {
-    if (nodes.some((node) => node.id === "query-view")) return nodes;
+  function findScope(
+    nodes: FctQueryNode[],
+  ): { siblings: FctQueryNode[]; carrier?: FctQueryNode } | null {
+    if (nodes.some((node) => node.id === "query-view")) return { siblings: nodes };
     for (const node of nodes) {
+      // A property that directly contains the active view is itself the
+      // current path/facet binding; looking only at the view's children loses it.
+      if (node.children.some((child) => child.id === "query-view")) {
+        return { siblings: node.children, carrier: node };
+      }
       const nested = findScope(node.children);
       if (nested) return nested;
     }
     return null;
   }
-  return (findScope(tree.children) ?? []).filter((node) =>
+  const scope = findScope(tree.children);
+  const candidates = scope
+    ? [...(scope.carrier ? [scope.carrier] : []), ...scope.siblings]
+    : [];
+  return candidates.filter((node) =>
     node.name === "property" && typeof node.attributes.iri === "string" && node.attributes.iri.length > 0,
   );
 }
@@ -1157,7 +1168,7 @@ export default function Home() {
   const [bookmarkSaving, setBookmarkSaving] = useState(false);
   const [isQueryBookmarked, setIsQueryBookmarked] = useState(false);
   const [bookmarkCheckRevision, setBookmarkCheckRevision] = useState(0);
-  const [queryFavorites, setQueryFavorites] = useState<{ uri: string; title: string; created: string; queryXml: string }[]>([]);
+  const [queryFavorites, setQueryFavorites] = useState<{ uri: string; title: string; created: string; queryXml: string; shareUrl?: string }[]>([]);
   const [favoritesMessage, setFavoritesMessage] = useState("");
   const [favoritesLoading, setFavoritesLoading] = useState(false);
   const [fctEndpoints, setFctEndpoints] = useState<EndpointOption[]>([]);
@@ -1185,6 +1196,8 @@ export default function Home() {
   const restoredGraphTextRef = useRef<string | null>(null);
   const [findEndpointsEnabled, setFindEndpointsEnabled] = useState(false);
   const [centralTab, setCentralTab] = useState<"results" | "groups" | "query-tree" | "view-query">("results");
+  // The Query Tree is its own pane under the results, not a replacement tab.
+  const [queryTreeOpen, setQueryTreeOpen] = useState(false);
   const [showResultBadges, setShowResultBadges] = useState(false);
   const [querySourceFormat, setQuerySourceFormat] = useState<"xml" | "sparql">("xml");
   const [sparqlQuery, setSparqlQuery] = useState("");
@@ -1789,12 +1802,23 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         setEndpointStatuses({});
         setEndpointChecksTotal(endpoints.length);
         setEndpointMenuError("");
-        await runEndpointChecks(
-          endpoints,
-          !effectiveSelection,
-          effectiveSelection,
-          () => cancelled,
-        );
+
+        // A shared URL may explicitly choose a data server. Check only that
+        // server on initial load; otherwise leave every server's health unknown
+        // until the user selects it or manually refreshes all servers.
+        if (typeof requestedUrlSelection === "string" && requestedUrlSelection) {
+          const requestedEndpoint = endpoints.find(
+            (endpoint) => endpoint.id === effectiveSelection,
+          );
+          if (requestedEndpoint) {
+            await runEndpointChecks(
+              [requestedEndpoint],
+              false,
+              effectiveSelection,
+              () => cancelled,
+            );
+          }
+        }
       } catch (error) {
         if (!cancelled)
           setEndpointMenuError(
@@ -1906,7 +1930,20 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   }
 
   async function chooseFctEndpoint(endpointId: string) {
-    if (!endpointId || endpointId === selectedEndpointId) return;
+    if (!endpointId) return;
+
+    // A grey status means this server has not been checked yet. Check it lazily
+    // when the user chooses it, including when it is already the selected server.
+    if (!endpointStatuses[endpointId]) {
+      const endpoint = fctEndpoints.find((item) => item.id === endpointId);
+      if (endpoint) {
+        setEndpointMenuError("");
+        await runEndpointChecks([endpoint], false, selectedEndpointId);
+        setIsCheckingEndpoints(false);
+      }
+    }
+
+    if (endpointId === selectedEndpointId) return;
     setEndpointMenuError("");
     try {
       const response = await fetch("/proxy/api/fct", {
@@ -2098,15 +2135,13 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       if (typeof restored.graphsPage === "number" && Number.isFinite(restored.graphsPage)) setGraphsPage(Math.max(0, Math.floor(restored.graphsPage)));
       if (typeof restored.rolesPage === "number" && Number.isFinite(restored.rolesPage)) setRolesPage(Math.max(0, Math.floor(restored.rolesPage)));
       if (typeof restored.findEndpointsEnabled === "boolean") setFindEndpointsEnabled(restored.findEndpointsEnabled);
-      if (["results", "groups", "query-tree", "view-query"].includes(restored.centralTab ?? "")) setCentralTab(restored.centralTab!);
-      // Store the visible toggle state explicitly as well as the full pane mode.
-      // This makes the share URL unambiguous while preserving the Groups pane
-      // when the Results/Query toggle is off.
-      if (typeof restored.queryToggle === "boolean") {
-        setCentralTab(restored.queryToggle
-          ? (restored.centralTab === "view-query" ? "view-query" : "query-tree")
-          : (restored.centralTab === "groups" ? "groups" : "results"));
+      // "query-tree" was a full-pane tab in older share links; it is now the
+      // lower pane, so it maps to Results plus an open Query Tree pane.
+      if (["results", "groups", "query-tree", "view-query"].includes(restored.centralTab ?? "")) {
+        setCentralTab(restored.centralTab === "query-tree" ? "results" : restored.centralTab!);
       }
+      if (typeof restored.queryToggle === "boolean") setQueryTreeOpen(restored.queryToggle);
+      else if (restored.centralTab === "query-tree") setQueryTreeOpen(true);
       if (typeof restored.showResultBadges === "boolean") setShowResultBadges(restored.showResultBadges);
       if (typeof restored.badgesToggle === "boolean") setShowResultBadges(restored.badgesToggle);
       if (restored.querySourceFormat === "xml" || restored.querySourceFormat === "sparql") setQuerySourceFormat(restored.querySourceFormat);
@@ -2161,7 +2196,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       rolesPage,
       findEndpointsEnabled,
       centralTab,
-      queryToggle: centralTab === "query-tree" || centralTab === "view-query",
+      queryToggle: queryTreeOpen,
       showResultBadges,
       badgesToggle: showResultBadges,
       querySourceFormat,
@@ -2185,7 +2220,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     params.set("state", JSON.stringify(state));
     const nextUrl = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", nextUrl);
-  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris]);
+  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris]);
 
   // The graph text box may contain an unapplied draft distinct from the query's graph binding.
   // Restore that draft after the query-graph synchronization effect has run once.
@@ -3320,7 +3355,13 @@ const tutorialBreadcrumbTargetId = tutorialMode && facetHoverPreview?.kind === "
   ? facetHoverPreview.successorNodeId ?? null
   : null;
 const breadcrumbPreviewPathKey = `query-root|${displayedBreadcrumbPath.map((crumb) => crumb.id).join("|")}`;
-const makeBreadcrumbScopedTree = (targetId: string): FctQueryTree | null => {
+const makeBreadcrumbScopedTree = (
+  targetId: string,
+  // Predecessor records the badge chain has already resolved. Each is bound as a
+  // <value> on its own node, so the target scope can only return values reached
+  // from that exact record (R0 -p1-> R1 -p2-> R2 ...).
+  pins: { nodeId: string; uri: string }[] = [],
+): FctQueryTree | null => {
   // Metadata queries are clones of the live query. Only the active <view> is
   // moved to the target scope and normalized to one result at offset zero.
   const cloned = JSON.parse(JSON.stringify(queryTree)) as FctQueryTree;
@@ -3333,6 +3374,31 @@ const makeBreadcrumbScopedTree = (targetId: string): FctQueryTree | null => {
   };
   cloned.children = cloned.children.filter((node) => node.name !== "view");
   removeViews(cloned.children);
+  const pinValue = (nodeId: string, uri: string): FctQueryNode => ({
+    id: `badge-pin-${nodeId}`,
+    name: "value",
+    attributes: { datatype: "uri" },
+    text: uri,
+    children: [],
+  });
+  const alreadyBound = (nodes: FctQueryNode[], uri: string) =>
+    nodes.some((node) => node.name === "value" && node.text === uri);
+  for (const pin of pins) {
+    if (pin.nodeId === "query-root") {
+      if (!alreadyBound(cloned.children, pin.uri)) cloned.children.push(pinValue(pin.nodeId, pin.uri));
+      continue;
+    }
+    const pinTarget = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
+      for (const node of nodes) {
+        if (node.id === pin.nodeId) return node;
+        const nested = pinTarget(node.children);
+        if (nested) return nested;
+      }
+      return undefined;
+    };
+    const target = pinTarget(cloned.children);
+    if (target && !alreadyBound(target.children, pin.uri)) target.children.push(pinValue(pin.nodeId, pin.uri));
+  }
   const viewNode: FctQueryNode = {
     id: "query-view",
     name: "view",
@@ -3373,6 +3439,7 @@ useEffect(() => {
   const summary: FctUiResultSummary = {
     label: first ? (first.label?.trim() || first.title?.trim() || toLabel(first.uri)) : "—",
     count: effectiveResultsTotalCount,
+    ...(first ? { uri: first.uri, termType: first.termType ?? "uri" } : {}),
   };
   metadataRegistryRef.current.set(metadataRegistryKey(scopedTree), summary);
   // Bound the in-memory registry so navigating across many queries cannot grow it indefinitely.
@@ -3392,12 +3459,8 @@ useEffect(() => {
   let cancelled = false;
   const targetCrumbs = [{ id: "query-root", uri: "" }, ...displayedBreadcrumbPath.map((crumb) => ({ id: crumb.id, uri: crumb.uri }))];
   const activeScopeId = activeLeafId ?? "query-root";
-  const initialPendingIds = new Set(targetCrumbs.flatMap((crumb) => {
-    const scopedTree = makeBreadcrumbScopedTree(crumb.id);
-    return scopedTree && !metadataRegistryRef.current.has(metadataRegistryKey(scopedTree)) ? [crumb.id] : [];
-  }));
-  if (isSearching || isCountingResults) initialPendingIds.add(activeScopeId);
-  setBreadcrumbPreviewPendingIds(initialPendingIds);
+  const centerPaneIsLoading = isSearching || isCountingResults;
+  const cachedSummary = (tree: FctQueryTree) => metadataRegistryRef.current.get(metadataRegistryKey(tree));
   const request = async (xml: string, component: string) => {
     const response = await fetch("/proxy/api/fct", {
       method: "POST",
@@ -3408,56 +3471,127 @@ useEffect(() => {
     });
     return await readFctResponse(response);
   };
-  const timer = window.setTimeout(() => {
-    void Promise.all(targetCrumbs.map(async (crumb) => {
-      const scopedTree = makeBreadcrumbScopedTree(crumb.id);
-      if (!scopedTree) return null;
-      const registryKey = metadataRegistryKey(scopedTree);
-      const cached = metadataRegistryRef.current.get(registryKey);
-      if (cached) return [crumb.id, cached] as const;
-      // Let the center-pane loader supply metadata for its own scope rather than
-      // racing it with a redundant breadcrumb request.
-      if (crumb.id === activeScopeId && (isSearching || isCountingResults)) return null;
-      try {
-        const countSparql = buildFctCountSparql(scopedTree);
-        const [textData, countResponse] = await Promise.all([
-          request(serializeFctQuery(scopedTree), `BreadcrumbPreview:${crumb.id}:text`),
-          countSparql ? fetch("/proxy/api/sparql", {
-            method: "POST",
-            cache: "no-store",
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-preview-count", `BreadcrumbPreview:${crumb.id}:count`) },
-            body: JSON.stringify({ facetValueCount: { sparql: countSparql } }),
-            signal: controller.signal,
-          }) : Promise.resolve(null),
-        ]);
-        let count: number | null = null;
-        if (countResponse?.ok) {
-          const countPayload = await countResponse.json() as { count?: unknown };
-          const parsedCount = Number(countPayload.count);
-          if (Number.isSafeInteger(parsedCount) && parsedCount >= 0) count = parsedCount;
-        }
-        const first = textData.results[0];
-        const summary: FctUiResultSummary = {
-          label: first ? (first.label?.trim() || first.title?.trim() || toLabel(first.uri)) : "—",
-          count,
-        };
-        metadataRegistryRef.current.set(registryKey, summary);
-        return [crumb.id, summary] as const;
-      } catch (error) {
-        if (!controller.signal.aborted) console.info("Maestro breadcrumb preview lookup failed", { crumb: crumb.uri, error });
-        return null;
+  const recordSummary = (first: FctResult | undefined, count: number | null): FctUiResultSummary => ({
+    label: first ? (first.label?.trim() || first.title?.trim() || toLabel(first.uri)) : "—",
+    count,
+    ...(first ? { uri: first.uri, termType: first.termType ?? "uri" } : {}),
+  });
+  /** Whole-scope first record plus result count (the same query the center pane runs). */
+  const fetchScopeSummary = async (tree: FctQueryTree, crumbId: string): Promise<FctUiResultSummary | null> => {
+    try {
+      const countSparql = buildFctCountSparql(tree);
+      const [textData, countResponse] = await Promise.all([
+        request(serializeFctQuery(tree), `BreadcrumbPreview:${crumbId}:text`),
+        countSparql ? fetch("/proxy/api/sparql", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-preview-count", `BreadcrumbPreview:${crumbId}:count`) },
+          body: JSON.stringify({ facetValueCount: { sparql: countSparql } }),
+          signal: controller.signal,
+        }) : Promise.resolve(null),
+      ]);
+      let count: number | null = null;
+      if (countResponse?.ok) {
+        const countPayload = await countResponse.json() as { count?: unknown };
+        const parsedCount = Number(countPayload.count);
+        if (Number.isSafeInteger(parsedCount) && parsedCount >= 0) count = parsedCount;
       }
-    })).then((items) => {
+      const summary = recordSummary(textData.results[0], count);
+      metadataRegistryRef.current.set(metadataRegistryKey(tree), summary);
+      return summary;
+    } catch (error) {
+      if (!controller.signal.aborted) console.info("Maestro breadcrumb preview lookup failed", { crumb: crumbId, error });
+      return null;
+    }
+  };
+  /** First record only, for a scope whose predecessors are pinned to specific records. */
+  const fetchChainRecord = async (tree: FctQueryTree, crumbId: string): Promise<FctUiResultSummary | null> => {
+    try {
+      const textData = await request(serializeFctQuery(tree), `BreadcrumbPreview:${crumbId}:chain`);
+      const summary = recordSummary(textData.results[0], null);
+      metadataRegistryRef.current.set(metadataRegistryKey(tree), summary);
+      return summary;
+    } catch (error) {
+      if (!controller.signal.aborted) console.info("Maestro breadcrumb chain lookup failed", { crumb: crumbId, error });
+      return null;
+    }
+  };
+
+  // Walk the breadcrumb left to right so every label comes from ONE record path:
+  // the root badge shows record R0, and each next badge shows the first value of
+  // that crumb's property (or property-of) on the previous badge's record. The ct
+  // stays the size of the whole result set at that node. With fetchMissing=false
+  // this only reads caches and never awaits, so it completes synchronously.
+  const walkChain = async (fetchMissing: boolean, onStep?: (id: string, summary: FctUiResultSummary) => void) => {
+    const resolved: Record<string, FctUiResultSummary> = {};
+    // undefined = not known yet, null = no usable record (empty set / not a resource).
+    const records: Array<FctUiResultSummary | null | undefined> = [];
+    for (let index = 0; index < targetCrumbs.length; index += 1) {
+      const crumb = targetCrumbs[index];
+      const scopeTree = makeBreadcrumbScopedTree(crumb.id);
+      if (!scopeTree) { records[index] = undefined; continue; }
+      let scope = cachedSummary(scopeTree);
+      if (!scope && fetchMissing && !(crumb.id === activeScopeId && centerPaneIsLoading)) {
+        // The center pane registers its own scope; don't race it with a duplicate request.
+        scope = (await fetchScopeSummary(scopeTree, crumb.id)) ?? undefined;
+      }
+      if (cancelled || controller.signal.aborted) return resolved;
+
+      if (index === 0) {
+        records[0] = scope ?? undefined;
+        if (scope) { resolved[crumb.id] = scope; onStep?.(crumb.id, scope); }
+        continue;
+      }
+      const previous = records[index - 1];
+      if (previous === undefined) { records[index] = undefined; continue; }
+      if (previous === null || previous.termType !== "uri" || !previous.uri) {
+        // A literal or empty set has no properties to follow.
+        records[index] = null;
+        resolved[crumb.id] = { label: "—", count: scope?.count ?? null };
+        onStep?.(crumb.id, resolved[crumb.id]);
+        continue;
+      }
+      const pins: { nodeId: string; uri: string }[] = [];
+      for (let earlier = 0; earlier < index; earlier += 1) {
+        const record = records[earlier];
+        if (record?.uri) pins.push({ nodeId: targetCrumbs[earlier].id, uri: record.uri });
+      }
+      const chainTree = makeBreadcrumbScopedTree(crumb.id, pins);
+      if (!chainTree) { records[index] = undefined; continue; }
+      let chained = cachedSummary(chainTree);
+      if (!chained && fetchMissing) chained = (await fetchChainRecord(chainTree, crumb.id)) ?? undefined;
+      if (cancelled || controller.signal.aborted) return resolved;
+      if (!chained) { records[index] = undefined; continue; }
+      records[index] = chained.uri ? chained : null;
+      resolved[crumb.id] = { label: chained.label, count: scope?.count ?? null, ...(chained.uri ? { uri: chained.uri, termType: chained.termType } : {}) };
+      onStep?.(crumb.id, resolved[crumb.id]);
+    }
+    return resolved;
+  };
+
+  // Show whatever the caches already resolve; only the rest is "Loading…".
+  // With fetchMissing=false walkChain never reaches an await, so this callback
+  // fills syncResolved synchronously, before the lines below read it.
+  const syncResolved: Record<string, FctUiResultSummary> = {};
+  void walkChain(false, (id, summary) => { syncResolved[id] = summary; });
+  setBreadcrumbPreviewSummaries((current) => ({ ...current, ...syncResolved }));
+  setBreadcrumbPreviewPendingIds(new Set(targetCrumbs.filter((crumb) => !syncResolved[crumb.id]).map((crumb) => crumb.id)));
+
+  const timer = window.setTimeout(() => {
+    void walkChain(true, (id, summary) => {
       if (cancelled || controller.signal.aborted) return;
-      const nextSummaries: Record<string, FctUiResultSummary> = {};
-      for (const item of items) if (item) nextSummaries[item[0]] = item[1];
-      setBreadcrumbPreviewSummaries(nextSummaries);
-      // The active scope can be supplied by the center-pane result/count pipeline.
-      setBreadcrumbPreviewPendingIds(new Set(
-        (isSearching || isCountingResults) && initialPendingIds.has(activeScopeId) && !nextSummaries[activeScopeId]
-          ? [activeScopeId]
-          : [],
-      ));
+      setBreadcrumbPreviewSummaries((current) => ({ ...current, [id]: summary }));
+      setBreadcrumbPreviewPendingIds((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }).then((resolved) => {
+      if (cancelled || controller.signal.aborted) return;
+      // Drop summaries for crumbs that no longer exist or could not be resolved.
+      setBreadcrumbPreviewSummaries(resolved);
+      setBreadcrumbPreviewPendingIds(new Set(centerPaneIsLoading && !resolved[activeScopeId] ? [activeScopeId] : []));
     });
   }, 120);
   return () => {
@@ -4068,7 +4202,7 @@ useEffect(() => {
       return `Focus · limit ${node.attributes.limit ?? "30"} · offset ${node.attributes.offset ?? "0"}`;
     }
     if (node.name === "value")
-      return node.text ? `Value: ${node.text}` : "Value";
+      return node.text || "Value";
     if (node.name === "property-of") {
       // Depending on the source XML, reverse relationships may expose their
       // predicate through iri, property, role, or text. Prefer the Roles facet
@@ -4160,6 +4294,16 @@ useEffect(() => {
     const inlineClassNodes = node.children.filter((child) => child.name === "class");
     const rootClassesOnThisNode = node.id === rootClassCarrierId ? rootClassNodes : [];
     const topInlineClass = [...inlineClassNodes, ...rootClassesOnThisNode][inlineClassNodes.length + rootClassesOnThisNode.length - 1];
+    // The root row (Everything / search text / root URI value) is a stack too. Its
+    // text or value is on top and comes off first, like a <value> on a property;
+    // then the root classes pop one at a time. With none of them there is nothing
+    // to remove, so the minus is not shown at all.
+    const isRootCarrierRow = isRoot && node.id === rootClassCarrierId;
+    const rootTextOrValue = isRootCarrierRow && (
+      (node.id === "query-text" && Boolean(node.text?.trim() || search.trim())) ||
+      (node.name === "value" && Boolean(node.text?.trim())));
+    const showMinus = !isRootCarrierRow || rootTextOrValue || rootClassesOnThisNode.length > 0;
+    const lockedNode = protectedNode && !isRootCarrierRow;
     const visibleChildren = node.children.filter((child) =>
       child.id !== "query-view" && child.name !== "class" && !(inlinesValues && child.name === "value" && Boolean(child.text)));
     const hasVisibleChildren = visibleChildren.length > 0;
@@ -4231,32 +4375,49 @@ useEffect(() => {
               </span>
             ))}
           </span>
+          {showMinus && (
           <button
             type="button"
             aria-label={
-              protectedNode
+              lockedNode
                 ? `${queryNodeLabel(node)} is required`
-                : topInlineValue
-                  ? `Remove value ${boundValueLabel(topInlineValue)} from ${queryNodeLabel(node)}`
-                  : topInlineClass
-                    ? `Remove class ${toLabel(topInlineClass.attributes.iri ?? "class")} from ${queryNodeLabel(node)}`
-                    : `Remove ${queryNodeLabel(node)} and its children`
+                : isRootCarrierRow
+                  ? rootTextOrValue
+                    ? node.name === "value" ? "Remove the root value" : "Clear the search text"
+                    : `Remove class ${toLabel(topInlineClass?.attributes.iri ?? "class")} from the root`
+                  : topInlineValue
+                    ? `Remove value ${boundValueLabel(topInlineValue)} from ${queryNodeLabel(node)}`
+                    : topInlineClass
+                      ? `Remove class ${toLabel(topInlineClass.attributes.iri ?? "class")} from ${queryNodeLabel(node)}`
+                      : `Remove ${queryNodeLabel(node)} and its children`
             }
             title={
-              protectedNode
+              lockedNode
                 ? "Required query node"
-                : topInlineValue
-                  ? "Remove the bound value; click again to remove the node"
-                  : topInlineClass
-                    ? "Remove the last class constraint; click again to remove the node"
-                    : "Remove this node and all descendants"
+                : isRootCarrierRow
+                  ? rootTextOrValue
+                    ? `${node.name === "value" ? "Remove the root value" : "Clear the search text"}${rootClassesOnThisNode.length > 0 ? "; click again to remove the last class" : ""}`
+                    : "Remove the last root class constraint"
+                  : topInlineValue
+                    ? "Remove the bound value; click again to remove the node"
+                    : topInlineClass
+                      ? "Remove the last class constraint; click again to remove the node"
+                      : "Remove this node and all descendants"
             }
-            disabled={protectedNode}
-            onClick={() => deleteNode(topInlineValue ? topInlineValue.id : topInlineClass ? topInlineClass.id : node.id)}
+            disabled={lockedNode}
+            onClick={() => {
+              if (isRootCarrierRow) {
+                if (rootTextOrValue) updateSearchText("");
+                else if (topInlineClass) deleteNode(topInlineClass.id);
+                return;
+              }
+              deleteNode(topInlineValue ? topInlineValue.id : topInlineClass ? topInlineClass.id : node.id);
+            }}
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded border text-base leading-none text-muted-foreground hover:border-destructive hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-25"
           >
             −
           </button>
+          )}
         </div>
         {hasVisibleChildren && !isCollapsed && (
           <ul
@@ -4729,7 +4890,7 @@ useEffect(() => {
         />
       ))}
 
-      <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b px-4 py-2">
+      <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-2">
           <ButtonGroup aria-label="Datasite navigation" className="shrink-0 border-0 shadow-none">
             <Tooltip><TooltipTrigger render={<button type="button" onClick={() => navigateGraphHistory(graphNavigationIndex - 1)} disabled={graphNavigationIndex <= 0} aria-label="Previous datasite" title="Previous datasite" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent disabled:opacity-40"><ArrowLeft className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Previous datasite</TooltipContent></Tooltip>
@@ -4787,7 +4948,8 @@ useEffect(() => {
                             const mark =
                               status?.status === 200 ? "🟢 " :
                               status?.state === "server-error" ? "🔴 " :
-                              status && ["unreachable", "timeout"].includes(status.state) ? "🟠 " : "";
+                              status && ["unreachable", "timeout"].includes(status.state) ? "🟠 " :
+                              status ? "" : "⚪ ";
                             const statusText = status?.status != null
                               ? ` (${new URL(endpoint.url).protocol.replace(":", "").toUpperCase()} ${status.status})`
                               : status ? ` (${status.state})` : "";
@@ -4977,7 +5139,7 @@ useEffect(() => {
                   }}>{favoritesLoading ? "Loading…" : "Show Favorites"}</Button>
                 </div>
                 {favoritesMessage && <p role="status" className="text-xs text-muted-foreground">{favoritesMessage}</p>}
-                {queryFavorites.length > 0 && <ul className="max-h-40 overflow-y-auto text-xs text-muted-foreground">{queryFavorites.map((favorite) => <li key={favorite.uri} className="border-t py-1.5"><span className="font-medium text-foreground">{favorite.title}</span>{favorite.created ? <span className="ml-2">{new Date(favorite.created).toLocaleString()}</span> : null}</li>)}</ul>}
+                {queryFavorites.length > 0 && <ul className="max-h-40 overflow-y-auto text-xs text-muted-foreground">{queryFavorites.map((favorite) => <li key={favorite.uri} className="border-t py-1.5"><span className="font-medium text-foreground">{favorite.title}</span>{favorite.created ? <span className="ml-2">{new Date(favorite.created).toLocaleString()}</span> : null}{favorite.shareUrl && /^https?:\/\//i.test(favorite.shareUrl) ? <a href={favorite.shareUrl} target="_blank" rel="noopener noreferrer" title={favorite.shareUrl} className="ml-2 text-foreground underline underline-offset-2 hover:text-primary">Share URL</a> : null}</li>)}</ul>}
               </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
@@ -5273,7 +5435,7 @@ useEffect(() => {
       )}
 
       <div className="shrink-0">
-        <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-start gap-2 bg-background px-4 pt-2 pb-7">
+        <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-start gap-2 bg-background px-4 pt-7 pb-2">
         <span
           className="relative flex min-w-0 items-center gap-1"
           onMouseLeave={() => { if (!namePropertyMenuOpen) setRootSearchExpanded(false); }}
@@ -5331,7 +5493,7 @@ useEffect(() => {
           </ButtonGroup>
           {!rootSearchExpanded && (breadcrumbPreviewSummaries["query-root"] || breadcrumbPreviewPendingIds.has("query-root")) && (
             /* 15px centers this compact metadata badge beneath the next slash. */
-            <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
+            <span className="pointer-events-none absolute left-[calc(100%+15px)] bottom-full z-10 -translate-x-1/2 pb-1">
               {breadcrumbPreviewSummaries["query-root"] ? (
                 <Badge variant="outline" className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3">
                   <span className="max-w-32 truncate">{breadcrumbPreviewSummaries["query-root"].label || "—"}</span>
@@ -5369,13 +5531,13 @@ useEffect(() => {
                 const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
                 const isPending = breadcrumbPreviewPendingIds.has(crumb.id);
                 if (isTutorialSuccessor) return (
-                  <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
+                  <span className="pointer-events-none absolute left-[calc(100%+15px)] bottom-full z-10 -translate-x-1/2 pb-1">
                     <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap border-purple-400/70 text-[10px] font-normal leading-3 text-purple-700 dark:text-purple-300">Preview · …</Badge>
                   </span>
                 );
                 return summary || isPending ? (
                   /* Match the next slash center: 8px nav gap + 7px half of the 14px icon. */
-                  <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
+                  <span className="pointer-events-none absolute left-[calc(100%+15px)] bottom-full z-10 -translate-x-1/2 pb-1">
                     {summary ? (
                       <Badge variant="outline" className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" title={`${summary.label} · ${summary.count ?? "…"}`}>
                         <span className="max-w-32 truncate">{summary.label || "—"}</span>
@@ -5489,7 +5651,14 @@ useEffect(() => {
                 {defaultLeftTab === "facets" ? (
                   <>
                     <ButtonGroup aria-label="Return to facets">
-                      <button type="button" onClick={() => setDefaultLeftTab("personal")} className="px-2 text-xs font-medium hover:bg-accent">Return to Facets</button>
+                      <button
+  type="button"
+  onClick={() => setDefaultLeftTab("personal")}
+  className="inline-flex items-center gap-2 px-2 text-xs font-medium hover:bg-accent"
+>
+  <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden="true" />
+  Return to Facets
+</button>
                       <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
                       <button
                         type="button"
@@ -6621,30 +6790,6 @@ useEffect(() => {
                 </div>
               )}
 
-              {centralTab === "query-tree" && (
-                <div
-                  id="central-panel-query-tree"
-                  role="tabpanel"
-                  aria-labelledby="central-tab-query-tree"
-                  className="min-h-0 flex-1 overflow-auto p-3"
-                >
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <p className="text-xs text-muted-foreground">
-                      Live query structure. Changes in Filters, Focus, navigation, and bindings appear here immediately.
-                    </p>
-                  </div>
-                  <ul className="space-y-1">
-                    {!search.trim() && !searchNode && !uriNode?.text?.trim() && renderQueryNode({
-                      id: "query-everything",
-                      name: "everything",
-                      attributes: {},
-                      children: [],
-                    })}
-                    {queryTree.children.filter((node) => node.name !== "class").map((node) => <Fragment key={node.id}>{renderQueryNode(node)}</Fragment>)}
-                  </ul>
-                </div>
-              )}
-
               {centralTab === "view-query" && (
                 <div
                   id="central-panel-view-query"
@@ -6658,11 +6803,41 @@ useEffect(() => {
                       <Toggle pressed={querySourceFormat === "xml"} onPressedChange={(pressed) => { if (pressed) setQuerySourceFormat("xml"); }} className="rounded-none border-0 px-3 py-1.5 text-xs">XML</Toggle>
                       <Toggle pressed={querySourceFormat === "sparql"} onPressedChange={(pressed) => { if (pressed) setQuerySourceFormat("sparql"); }} className="rounded-none border-0 px-3 py-1.5 text-xs">SPARQL</Toggle>
                     </ButtonGroup>
-                    <button type="button" onClick={() => setCentralTab("query-tree")} className="shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent">Back to Query</button>
+                    <button type="button" onClick={() => { setCentralTab(groupByPropertyUri ? "groups" : "results"); setQueryTreeOpen(true); }} className="shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent">Back to Query</button>
                   </div>
                   <CodeBlock className="h-full min-h-0" language={querySourceFormat === "xml" ? "xml" : "sparql"} code={querySourceFormat === "xml" ? prettyQueryXml : sourceSparql} filename={querySourceFormat === "xml" ? "fct-query.xml" : "query.sparql"} />
                 </div>
               )}
+              {/* Query Tree pane: grows up from the toolbar when opened and slides back down when closed. */}
+              <div
+                id="central-panel-query-tree"
+                role="region"
+                aria-label="Query Tree"
+                aria-hidden={!queryTreeOpen}
+                style={{ height: queryTreeOpen ? "40%" : "0%" }}
+                className={`shrink-0 overflow-hidden bg-background transition-[height,visibility] duration-300 ease-out motion-reduce:transition-none ${queryTreeOpen ? "visible border-t" : "invisible"}`}
+              >
+                <div className="h-full overflow-auto p-3">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="text-xs text-muted-foreground">
+                      Live query structure. Changes in Filters, Focus, navigation, and bindings appear here immediately.
+                    </p>
+                  </div>
+                  <ul className="space-y-1">
+                    {!search.trim() && !searchNode && !uriNode?.text?.trim() && renderQueryNode({
+                      id: "query-everything",
+                      name: "everything",
+                      attributes: {},
+                      children: [],
+                    })}
+                    {/* <text> and <value> always lead the tree; the sort is stable, so the rest keep query order. */}
+                    {queryTree.children
+                      .filter((node) => node.name !== "class")
+                      .sort((left, right) => Number(right.name === "text" || right.name === "value") - Number(left.name === "text" || left.name === "value"))
+                      .map((node) => <Fragment key={node.id}>{renderQueryNode(node)}</Fragment>)}
+                  </ul>
+                </div>
+              </div>
               <div className="group/header shrink-0 border-t bg-muted p-3">
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
@@ -6679,15 +6854,17 @@ useEffect(() => {
                     <Tooltip>
                       <TooltipTrigger render={
                         <Toggle
-                          pressed={centralTab === "query-tree" || centralTab === "view-query"}
-                          onPressedChange={(pressed) => setCentralTab(pressed ? "query-tree" : (groupByPropertyUri ? "groups" : "results"))}
+                          pressed={queryTreeOpen}
+                          onPressedChange={setQueryTreeOpen}
                           className="size-9 shrink-0 border-0 p-0 text-sm data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
-                          aria-label={centralTab === "query-tree" || centralTab === "view-query" ? "Query" : "Results"}
+                          aria-label={queryTreeOpen ? "Hide Query Tree" : "Show Query Tree"}
+                          aria-controls="central-panel-query-tree"
+                          aria-expanded={queryTreeOpen}
                         >
-                          {centralTab === "query-tree" || centralTab === "view-query" ? <Code2 aria-hidden="true" className="size-4" /> : <List aria-hidden="true" className="size-4" />}
+                          <ListTree aria-hidden="true" className="size-4" />
                         </Toggle>
                       } />
-                      <TooltipContent>{centralTab === "query-tree" || centralTab === "view-query" ? "Query" : "Results"}</TooltipContent>
+                      <TooltipContent>{queryTreeOpen ? "Hide Query Tree" : "Show Query Tree"}</TooltipContent>
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger render={
@@ -6725,7 +6902,7 @@ useEffect(() => {
                       <TooltipTrigger render={
                         <Toggle
                           pressed={centralTab === "view-query"}
-                          onPressedChange={(pressed) => setCentralTab(pressed ? "view-query" : "query-tree")}
+                          onPressedChange={(pressed) => setCentralTab(pressed ? "view-query" : (groupByPropertyUri ? "groups" : "results"))}
                           className="size-9 shrink-0 border-0 p-0 text-sm data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
                           aria-label="View source"
                         >
@@ -6763,7 +6940,11 @@ useEffect(() => {
               <div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
                 {describedRecord.length > 0 ? (
                   <span className="text-xs text-muted-foreground">
-                    {describedPropertyCount} properties · {describedRoleCount} roles · {describedRecord.length} values
+                    {[
+                      describedPropertyCount > 0 ? `${describedPropertyCount} properties` : null,
+                      describedRoleCount > 0 ? `${describedRoleCount} roles` : null,
+                      describedRecord.length > 0 ? `${describedRecord.length} values` : null,
+                    ].filter((part): part is string => part !== null).join(" · ")}
                   </span>
                 ) : <span />}
                 {describedProperties.length > RECORD_DESCRIPTION_PAGE_SIZE && (

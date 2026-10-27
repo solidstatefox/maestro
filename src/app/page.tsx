@@ -22,7 +22,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, Network, RefreshCw, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, Bookmark, History } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -76,6 +76,11 @@ const facets = {
   Roles: [],
   Graphs: [],
 };
+
+/** Shared static colors for the Configure pane's green scheme. */
+const CONFIGURE_LIST_BACKGROUND_COLOR = "#EFF6FC";
+const CONFIGURE_HEADER_BACKGROUND_COLOR = "#6BA8E0"//"#0078D4";
+const CONFIGURE_HEADER_BORDER_COLOR = "#005A9E";
 
 const DEFAULT_RESULTS_PAGE_SIZE = 30;
 const RESULTS_PAGE_SIZE_STORAGE_KEY = "maestro-results-page-size";
@@ -1195,6 +1200,7 @@ export default function Home() {
   const pendingHistoryVisitRef = useRef<{ queryXml: string; stateUrl: string } | null>(null);
   const [fctEndpoints, setFctEndpoints] = useState<EndpointOption[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState("");
+  const activeBreadcrumbButtonRef = useRef<HTMLButtonElement | null>(null);
   const [endpointStatuses, setEndpointStatuses] = useState<
     Record<string, EndpointStatus>
   >({});
@@ -1842,10 +1848,17 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   useEffect(() => {
     let cancelled = false;
     async function loadEndpointMenu() {
+      // Capture the initial URL selection before awaiting the endpoint-menu
+      // request. The URL-state writer can otherwise replace the initial state
+      // while this request is in flight, losing the requested data server.
+      const requestedUrlSelection = readShareableUiState()?.selectedEndpointId;
       setIsCheckingEndpoints(true);
       setEndpointChecksCompleted(0);
+      setSelectedEndpointId("");
+      setEndpointStatuses({});
       try {
-        // Load every configured endpoint first, so the menu appears before health checks finish.
+        // Load the configured server list without probing every server. Only
+        // the one candidate that will become active is health-checked on startup.
         const response = await fetch("/proxy/api/fct", { cache: "no-store", headers: proxyDebugHeaders("endpoint-menu", "EndpointMenu") });
         const data = await response.json();
         rememberShortforms(data?.shortforms);
@@ -1855,52 +1868,68 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         const endpoints = Array.isArray(data.endpoints)
           ? (data.endpoints as EndpointOption[])
           : [];
-        const savedSelection =
-          typeof data.selectedId === "string" ? data.selectedId : "";
-        const requestedUrlSelection = readShareableUiState()?.selectedEndpointId;
-        let effectiveSelection = savedSelection;
-        if (typeof requestedUrlSelection === "string" && endpoints.some((endpoint) => endpoint.id === requestedUrlSelection)) {
-          if (requestedUrlSelection !== savedSelection) {
-            const selectResponse = await fetch("/proxy/api/fct", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-url-restore", "EndpointMenu") },
-              body: JSON.stringify({ selectEndpointId: requestedUrlSelection }),
-            });
-            const selectData = await selectResponse.json();
-            rememberShortforms(selectData?.shortforms);
-            if (!selectResponse.ok) throw new Error(selectData.error ?? "Could not restore the data server from the share URL.");
-          }
-          effectiveSelection = requestedUrlSelection;
-        }
+        const savedSelection = typeof data.selectedId === "string" ? data.selectedId : "";
+        const requestedSelection =
+          typeof requestedUrlSelection === "string" && endpoints.some((endpoint) => endpoint.id === requestedUrlSelection)
+            ? requestedUrlSelection
+            : savedSelection;
+
         setFctEndpoints(endpoints);
-        setSelectedEndpointId(effectiveSelection);
-        setEndpointStatuses({});
-        setEndpointChecksTotal(endpoints.length);
         setEndpointMenuError("");
 
-        // A shared URL may explicitly choose a data server. Check only that
-        // server on initial load; otherwise leave every server's health unknown
-        // until the user selects it or manually refreshes all servers.
-        if (typeof requestedUrlSelection === "string" && requestedUrlSelection) {
-          const requestedEndpoint = endpoints.find(
-            (endpoint) => endpoint.id === effectiveSelection,
-          );
-          if (requestedEndpoint) {
-            await runEndpointChecks(
-              [requestedEndpoint],
-              false,
-              effectiveSelection,
-              () => cancelled,
-            );
-          }
+        // Choose one candidate only: URL/session preference, then proxy-saved
+        // selection, then the first configured server. Other servers remain
+        // unchecked (grey) until the user explicitly selects or checks them.
+        const effectiveSelection = requestedSelection || endpoints[0]?.id || "";
+        if (!effectiveSelection) {
+          setSelectedEndpointId("");
+          setEndpointMenuError("No data servers are configured. Configure a reachable server before browsing data.");
+          return;
+        }
+        const selectedEndpoint = endpoints.find((endpoint) => endpoint.id === effectiveSelection);
+        if (!selectedEndpoint) {
+          setSelectedEndpointId("");
+          setEndpointMenuError("The requested data server is not in the configured server list.");
+          return;
+        }
+
+        setEndpointChecksTotal(1);
+        const checked = await runEndpointChecks([selectedEndpoint], () => cancelled);
+        if (cancelled) return;
+        const status = checked[effectiveSelection];
+        const isReachable = status?.status != null && status.status < 400 && status.state === "ok";
+        if (!isReachable) {
+          setSelectedEndpointId("");
+          setEndpointMenuError(`Data server ${selectedEndpoint.label} did not pass its health check. Choose another server to load it.`);
+          return;
+        }
+
+        // Synchronize the proxy cookie only after the single candidate passes
+        // its health check, so the UI and actual query destination cannot diverge.
+        const selectResponse = await fetch("/proxy/api/fct", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-initial-select", "EndpointMenu") },
+          body: JSON.stringify({ selectEndpointId: effectiveSelection }),
+          cache: "no-store",
+        });
+        const selectData = await selectResponse.json();
+        rememberShortforms(selectData?.shortforms);
+        if (!selectResponse.ok || selectData.selectedId !== effectiveSelection) {
+          throw new Error(selectData.error ?? "Could not select the loaded data server.");
+        }
+        if (!cancelled) {
+          setSelectedEndpointId(effectiveSelection);
+          refreshQuery();
         }
       } catch (error) {
-        if (!cancelled)
+        if (!cancelled) {
+          setSelectedEndpointId("");
           setEndpointMenuError(
             error instanceof Error
               ? error.message
               : "Could not load FCT endpoints.",
           );
+        }
       } finally {
         if (!cancelled) setIsCheckingEndpoints(false);
       }
@@ -1913,10 +1942,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
   async function runEndpointChecks(
     endpoints: EndpointOption[],
-    autoSelectFirstReachable: boolean,
-    existingSelection: string,
     isCancelled: () => boolean = () => false,
-  ) {
+  ): Promise<Record<string, EndpointStatus>> {
     setIsCheckingEndpoints(true);
     setEndpointChecksCompleted(0);
     setEndpointChecksTotal(endpoints.length);
@@ -1957,86 +1984,74 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       }),
     );
 
-    if (isCancelled()) return;
+    if (isCancelled()) return results;
 
-    // Keep an existing session choice. On a fresh session, choose the first reachable
-    // endpoint in configured order, not whichever health request happens to finish first.
-    if (autoSelectFirstReachable && !existingSelection) {
-      const firstReachable = endpoints.find(
-        (endpoint) =>
-          results[endpoint.id]?.status != null &&
-          results[endpoint.id].status! < 400,
-      );
-      if (firstReachable) {
-        try {
-          const response = await fetch("/proxy/api/fct", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-auto-select", "EndpointMenu") },
-            body: JSON.stringify({
-              selectEndpointId: firstReachable.id,
-            }),
-          });
-          const data = await response.json();
-        rememberShortforms(data?.shortforms);
-          if (!response.ok)
-            throw new Error(
-              data.error ?? "Could not select the first reachable FCT endpoint.",
-            );
-          if (!isCancelled()) {
-            setSelectedEndpointId(firstReachable.id);
-            refreshQuery();
-          }
-        } catch (error) {
-          if (!isCancelled())
-            setEndpointMenuError(
-              error instanceof Error
-                ? error.message
-                : "Could not select the first reachable FCT endpoint.",
-            );
-        }
-      }
-    }
+    return results;
   }
 
   async function checkFctEndpoints() {
     setEndpointMenuError("");
-    await runEndpointChecks(fctEndpoints, false, selectedEndpointId);
+    await runEndpointChecks(fctEndpoints);
     setIsCheckingEndpoints(false);
   }
 
-  async function chooseFctEndpoint(endpointId: string) {
+  /** Select a server in the proxy cookie before restoring query/UI state that depends on it. */
+  async function synchronizeFctEndpointSelection(endpointId: string) {
     if (!endpointId) return;
-
-    // Trust a green endpoint until an actual interaction fails. Selecting it
-    // should not add a redundant health request; unknown or unhealthy endpoints
-    // are checked lazily when selected.
-    const knownStatus = endpointStatuses[endpointId];
-    const isGreen = knownStatus?.state === "ok" && knownStatus.status !== null && knownStatus.status < 400;
-    if (isGreen) {
-      // Keep reporting the existing green state; do not issue a health request.
-    } else {
-      const endpoint = fctEndpoints.find((item) => item.id === endpointId);
-      if (endpoint) {
-        setEndpointMenuError("");
-        await runEndpointChecks([endpoint], false, selectedEndpointId);
-        setIsCheckingEndpoints(false);
-      }
+    const endpoint = fctEndpoints.find((item) => item.id === endpointId);
+    if (!endpoint) throw new Error(`The saved query refers to an unknown data server: ${endpointId}`);
+    const checked = await runEndpointChecks([endpoint]);
+    setIsCheckingEndpoints(false);
+    const health = checked[endpointId];
+    if (!(health?.state === "ok" && health.status != null && health.status < 400)) {
+      throw new Error(`Data server ${endpoint.label} did not pass its health check; the saved query was not switched to it.`);
     }
+    const response = await fetch("/proxy/api/fct", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-state-restore", "EndpointMenu") },
+      body: JSON.stringify({ selectEndpointId: endpointId }),
+      cache: "no-store",
+    });
+    const data = await response.json() as { selectedId?: string; error?: string; shortforms?: unknown };
+    rememberShortforms(data?.shortforms);
+    if (!response.ok || data.selectedId !== endpointId) {
+      throw new Error(data.error ?? `Could not select data server ${endpoint.label}.`);
+    }
+    setSelectedEndpointId(endpointId);
+  }
 
-    if (endpointId === selectedEndpointId) return;
+  async function chooseFctEndpoint(endpointId: string) {
+    if (!endpointId || endpointId === selectedEndpointId) return;
+    const endpoint = fctEndpoints.find((item) => item.id === endpointId);
+    if (!endpoint) return;
+
     setEndpointMenuError("");
     try {
+      // A server must pass a health check before it can become the active
+      // selection. Recheck unknown or previously unhealthy servers on demand.
+      let status = endpointStatuses[endpointId];
+      if (!(status?.state === "ok" && status.status != null && status.status < 400)) {
+        const checked = await runEndpointChecks([endpoint]);
+        setIsCheckingEndpoints(false);
+        status = checked[endpointId];
+      }
+      if (!(status?.state === "ok" && status.status != null && status.status < 400)) {
+        throw new Error(`Data server ${endpoint.label} did not pass its health check; it was not selected.`);
+      }
+
       const response = await fetch("/proxy/api/fct", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-select", "EndpointMenu") },
         body: JSON.stringify({ selectEndpointId: endpointId }),
+        cache: "no-store",
       });
       const data = await response.json();
-        rememberShortforms(data?.shortforms);
-      if (!response.ok)
+      rememberShortforms(data?.shortforms);
+      if (!response.ok || data.selectedId !== endpointId)
         throw new Error(data.error ?? "Could not select FCT endpoint.");
       setSelectedEndpointId(endpointId);
-      // Trigger the existing query and facet effects to reload against the newly selected server.
+      // Trigger the existing query and facet effects only after the proxy
+      // confirms that the same, health-checked endpoint is active.
       refreshQuery();
     } catch (error) {
       setEndpointMenuError(
@@ -2291,7 +2306,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       }
     }
     if (restored) {
-      if (typeof restored.selectedEndpointId === "string") setSelectedEndpointId(restored.selectedEndpointId);
+      // Endpoint selection is synchronized with the proxy cookie by the async navigation/restore caller.
+      // Do not set selectedEndpointId here: doing so alone can make the dropdown disagree with the server receiving queries.
       if (typeof restored.selectedFacet === "string" && restored.selectedFacet.length < 100) setSelectedFacet(restored.selectedFacet);
       if (typeof restored.propertiesPage === "number" && Number.isFinite(restored.propertiesPage)) setPropertiesPage(Math.max(0, Math.floor(restored.propertiesPage)));
       if (typeof restored.classesPage === "number" && Number.isFinite(restored.classesPage)) setClassesPage(Math.max(0, Math.floor(restored.classesPage)));
@@ -2728,6 +2744,32 @@ useEffect(() => {
     const currentPathId = path[path.length - 1]?.id ?? "query-root";
     if (targetId !== currentPathId) clearWidgetsForViewChange();
     navigateToPropertyPathRaw(targetId);
+  }
+
+  /** Root breadcrumb action, shared by its button and the Refresh fallback. */
+  function handleRootBreadcrumbClick() {
+    clearTutorialPreview();
+    setDefaultLeftTab("personal");
+    navigateToPropertyPath("query-root");
+  }
+
+  /** Use the breadcrumb's single navigation path for relationship crumbs. */
+  function handleBreadcrumbClick(targetId: string) {
+    clearTutorialPreview();
+    setDefaultLeftTab("personal");
+    navigateToPropertyPath(targetId);
+  }
+
+  /** Refresh by clicking the exact active breadcrumb button, including its complete click behavior. */
+  function refreshCurrentBreadcrumb() {
+    const activeBreadcrumbButton = activeBreadcrumbButtonRef.current;
+    if (activeBreadcrumbButton) {
+      activeBreadcrumbButton.click();
+      return;
+    }
+    const activeCrumb = displayedBreadcrumbPath[activeBreadcrumbIndex];
+    if (activeCrumb) handleBreadcrumbClick(activeCrumb.id);
+    else handleRootBreadcrumbClick();
   }
 
   function moveViewToSibling(currentFocusId: string, targetId: string) {
@@ -4281,6 +4323,9 @@ useEffect(() => {
 
       historyVisitQueryRef.current = serializeFctQuery(restoredTree);
       historyVisitIdRef.current = payload.historyId;
+      if (typeof restoredUiState?.selectedEndpointId === "string") {
+        await synchronizeFctEndpointSelection(restoredUiState.selectedEndpointId);
+      }
       restoreQueryAndUiState(payload.queryXml, restoredUiState, payload.historyId);
 
       // Keep the current browser URL synchronized without navigating. The URL
@@ -4328,17 +4373,7 @@ useEffect(() => {
       if (!personalEndpoint) {
         throw new Error(`The personal SPARQL endpoint (${payload.personalEndpointUrl}) is not present in the Datasites graph.`);
       }
-      const selectResponse = await fetch("/proxy/api/fct", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history", "SelectPersonalServer") },
-        body: JSON.stringify({ selectEndpointId: personalEndpoint.id }),
-        cache: "no-store",
-      });
-      const selectPayload = await selectResponse.json() as { selectedId?: string; error?: string };
-      if (!selectResponse.ok || selectPayload.selectedId !== personalEndpoint.id) {
-        throw new Error(selectPayload.error ?? `Could not select the personal data server (HTTP ${selectResponse.status}).`);
-      }
-      setSelectedEndpointId(personalEndpoint.id);
+      await synchronizeFctEndpointSelection(personalEndpoint.id);
 
       // Build the History query as a complete FCT query, then pass it through
       // the same restore path used by URL state. That path updates the live
@@ -4389,7 +4424,11 @@ useEffect(() => {
         if (!restoredTree) throw new Error("The next earlier History item contains invalid FCT query XML.");
         historyVisitQueryRef.current = serializeFctQuery(restoredTree);
         historyVisitIdRef.current = payload.nextHistoryId;
-        restoreQueryAndUiState(payload.queryXml, savedUrl ? readShareableUiState(savedUrl.search) : null, payload.nextHistoryId);
+        const restoredUiState = savedUrl ? readShareableUiState(savedUrl.search) : null;
+        if (typeof restoredUiState?.selectedEndpointId === "string") {
+          await synchronizeFctEndpointSelection(restoredUiState.selectedEndpointId);
+        }
+        restoreQueryAndUiState(payload.queryXml, restoredUiState, payload.nextHistoryId);
         const params = new URLSearchParams(window.location.search);
         params.set("q", payload.queryXml);
         params.set("history", payload.nextHistoryId);
@@ -5393,14 +5432,9 @@ useEffect(() => {
       <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-2">
           <ButtonGroup aria-label="Datasite navigation" className="shrink-0 border-0 shadow-none">
-            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent>{historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => {
-              clearTutorialPreview();
-              const params = new URLSearchParams(window.location.search);
-              const restored = restoreQueryAndUiState(params.get("q"), readShareableUiState(), params.get("history"));
-              if (!restored) toast.add({ title: "URL query not restored", description: "The current URL does not contain a valid FCT query. UI settings from the URL were still applied.", type: "warning" });
-            }} aria-label="Restore query and UI from URL" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent"><RefreshCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Restore query and UI state from URL (no browser refresh)</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent>{historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<button type="button" onClick={refreshCurrentBreadcrumb} aria-label="Refresh current query scope" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25"><RotateCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Refresh current query scope using the active breadcrumb</TooltipContent></Tooltip>
           </ButtonGroup>
           {/* One address: [datasite]@[data server], with no gap around the at-sign. */}
           <div className="flex min-w-0 flex-1 items-center">
@@ -5435,6 +5469,7 @@ useEffect(() => {
                     <Tooltip><TooltipTrigger render={<select
                       id="fct-endpoint"
                       value={selectedEndpointId}
+                      disabled={isCheckingEndpoints || fctEndpoints.length === 0}
                       onChange={(event) => void chooseFctEndpoint(event.currentTarget.value)}
                       className="w-80 min-w-0 max-w-full"
                     >
@@ -5935,7 +5970,8 @@ useEffect(() => {
             ) : (
               <Tooltip><TooltipTrigger render={<button
                 type="button"
-                onClick={() => { clearTutorialPreview(); setDefaultLeftTab("personal"); navigateToPropertyPath("query-root"); }}
+                ref={getPropertyPath().length === 0 ? activeBreadcrumbButtonRef : undefined}
+                onClick={handleRootBreadcrumbClick}
                 className={`relative cursor-pointer rounded-none border-0 px-2.5 pb-1.5 pt-4 text-sm ${facetHoverPreview?.kind === "record" ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200" : getPropertyPath().length === 0 ? "bg-accent font-medium" : "bg-background hover:bg-accent"}`}
               >
                 {classBreadcrumbLabels(null).length > 0 && (
@@ -6040,7 +6076,8 @@ useEffect(() => {
               <ButtonGroup aria-label={`Controls for ${breadcrumbLabel}`} className={`w-max max-w-full [&>*+*]:!border-l-0 ${tutorialBreadcrumbTargetId === crumb.id ? "rounded-md !border-purple-500/80" : ""}`}>
                 <Tooltip><TooltipTrigger render={<button
                   type="button"
-                  onClick={() => { clearTutorialPreview(); setDefaultLeftTab("personal"); navigateToPropertyPath(crumb.id); }}
+                  ref={index === activeBreadcrumbIndex ? activeBreadcrumbButtonRef : undefined}
+                  onClick={() => handleBreadcrumbClick(crumb.id)}
                   className={`relative min-w-0 cursor-pointer break-words rounded-none border-0 px-2.5 pb-1.5 pt-4 text-left text-sm hover:bg-accent ${
   tutorialBreadcrumbTargetId === crumb.id
     ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200"
@@ -6211,7 +6248,10 @@ useEffect(() => {
                   </>
                 )}
               </div>
-              <div className={`min-h-0 flex-1 overflow-y-auto p-3 ${defaultLeftTab === "facets" ? "bg-sky-50/70 dark:bg-sky-950/20" : "bg-background"}`}>
+              <div
+                className={`min-h-0 flex-1 overflow-y-auto p-3 ${defaultLeftTab === "facets" ? "" : "bg-background"}`}
+                style={defaultLeftTab === "facets" ? { backgroundColor: CONFIGURE_LIST_BACKGROUND_COLOR } : undefined}
+              >
                 {defaultLeftTab === "facets" && (
                   <>
                     {((Object.keys(facets) as FacetName[]).filter((group) => group !== "Classes" && group !== "Graphs") as FacetName[]).sort((a, b) => {
@@ -6308,16 +6348,17 @@ useEffect(() => {
                       if ((group === "Properties" || group === "Roles") && items.length === 0) return null;
 
                       return (
-                        <section key={group} className="mb-5">
-                          <div className={`group/header mb-2 flex w-full items-center gap-1 border-b ${group === "Properties" || group === "Roles" ? "bg-sky-800 dark:bg-sky-950" : ""}`}>
+                        <section
+                          key={group}
+                          className="mb-5"
+                        >
+                          <div
+                            className={`group/header flex w-full items-center gap-1 rounded-t-md border-b overflow-hidden ${group === "Properties" || group === "Roles" ? "mb-2" : ""}`}
+                            style={{ backgroundColor: CONFIGURE_HEADER_BACKGROUND_COLOR, borderColor: CONFIGURE_HEADER_BORDER_COLOR }}
+                          >
                             <button
-                              className={`flex min-w-0 items-center px-3 py-2 text-left text-sm font-medium ${
-                                group === "Properties" || group === "Roles"
-                                  ? "bg-sky-800 text-sky-50 dark:bg-sky-950 dark:text-sky-100"
-                                  : selectedFacet === group
-                                    ? "text-primary"
-                                    : "text-foreground"
-                              }`}
+                              className="flex min-w-0 items-center px-3 py-2 text-left text-sm font-medium text-white hover:brightness-90"
+                              style={{ backgroundColor: CONFIGURE_HEADER_BACKGROUND_COLOR }}
                               onClick={() => setSelectedFacet(group)}
                             >
                               <span className="truncate">{group}</span>
@@ -6343,7 +6384,7 @@ useEffect(() => {
                               />
                             )}
                             <Tooltip><TooltipTrigger render={<span
-                              className={`ml-auto shrink-0 px-2 text-xs font-normal ${(group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError) ? "text-destructive" : group === "Properties" || group === "Roles" ? "text-sky-100/80 dark:text-sky-200/80" : "text-muted-foreground"}`}
+                              className={`ml-auto shrink-0 px-2 text-xs font-normal ${(group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError) ? "text-red-100" : "text-white/90"}`}
                               aria-live="polite"
                             >
                               {(group === "Properties" && isLoadingProperties) || (group === "Classes" && isLoadingClasses) || (group === "Roles" && isLoadingRoles)
@@ -7194,7 +7235,7 @@ useEffect(() => {
                       : !search.trim()
                         ? "No resources returned for the initial empty-text query."
                         : isSearching
-                          ? "Searching..."
+                          ? "Locating..."
                           : "No matching results."}
                   </p>
                 )}

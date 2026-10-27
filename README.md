@@ -5,8 +5,8 @@ A web dashboard for exploring RDF data through Virtuoso's Faceted Browser (FCT) 
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) LTS and npm
-- A reachable Virtuoso server exposing the FCT API
-- A writable personal SPARQL endpoint for Maestro's Datasites registry, History, and ontology data
+- A reachable Maestro proxy server exposing [Virtuoso's FCT API](https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs)
+- A writable personal SPARQL endpoint for Maestro's Datasites registry, History, ontology data, etc.
 
 The FCT endpoint and personal SPARQL endpoint may be different servers. The permission setup below is for Virtuoso Community Edition.
 

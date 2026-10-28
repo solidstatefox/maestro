@@ -1,0 +1,14 @@
+# Maestro query-history / Bookmark class relationship.
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix bookmark: <http://www.w3.org/2002/01/bookmark#> .
+@prefix vfct: <https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#> .
+@prefix schema: <https://schema.org/> .
+
+bookmark:Bookmark a rdfs:Class ;
+    rdfs:subClassOf vfct:QueryHistoryVisit ;
+    rdfs:label "Bookmark"@en ;
+    rdfs:comment "A query-history visit explicitly saved by the user; schema:identifier stores its query hash."@en .
+
+vfct:QueryHistoryVisit a rdfs:Class ;
+    rdfs:label "Query history visit"@en .

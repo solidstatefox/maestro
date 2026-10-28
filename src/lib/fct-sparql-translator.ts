@@ -44,6 +44,7 @@ type SparqlPattern =
   | { kind: "full-text"; value: SparqlTerm; search: SparqlTerm }
   | { kind: "filter"; expression: SparqlExpression }
   | { kind: "group"; patterns: SparqlPattern[] }
+  | { kind: "not-exists"; patterns: SparqlPattern[] }
   | { kind: "optional"; patterns: SparqlPattern[] }
   | { kind: "graph"; graph: SparqlTerm; patterns: SparqlPattern[] }
   | { kind: "quad-map"; map: SparqlTerm; graph: SparqlTerm; patterns: SparqlPattern[] };
@@ -140,6 +141,7 @@ function serializePattern(pattern: SparqlPattern, depth = 0): string {
     case "full-text": return `${indent}${serializeTerm(pattern.value)} bif:contains ${serializeTerm(pattern.search)} .`;
     case "filter": return `${indent}FILTER ${serializeExpression(pattern.expression)}`;
     case "group": return `${indent}{\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
+    case "not-exists": return `${indent}FILTER NOT EXISTS {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "optional": return `${indent}OPTIONAL {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "graph": return `${indent}GRAPH ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "quad-map": return `${indent}quad map ${serializeTerm(pattern.map)} { graph ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 2)).join("\n")}\n${indent}  } }`;
@@ -262,14 +264,29 @@ function compileConstraints(nodes: XmlNode[], subject: SparqlTerm, patterns: Spa
       if (["yes", "true", "1"].includes((node.attributes.same_as ?? "").trim().toLowerCase())) {
         options.push({ name: "input:same-as", value: "yes" });
       }
-      patterns.push(node.name === "property"
+      const relationshipPattern: SparqlPattern = node.name === "property"
         ? { kind: "triple", subject, predicate, object: related, ...(options.length ? { options } : {}) }
-        : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) });
-      // A facet widget's list view is nested directly under its relationship.
-      // Retain the outer focus so COUNT(DISTINCT outer focus) measures how
-      // many records have each facet value.
-      if (node.children.some((child) => child.name === "view")) state.targetParent = subject;
-      compileConstraints(node.children, related, patterns, errors, state);
+        : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) };
+      const isExcluded = ["yes", "true", "1"].includes((node.attributes.exclude ?? "").trim().toLowerCase());
+      const hasBoundValue = (children: XmlNode[]): boolean => children.some((child) =>
+        child.name === "value" || hasBoundValue(child.children));
+      if (isExcluded && hasBoundValue(node.children)) {
+        // Negate the relationship and its bound-value constraints together.
+        // This means "no matching property/role with this value", rather than
+        // merely negating the value comparison after a positive triple match.
+        const excludedPatterns: SparqlPattern[] = [relationshipPattern];
+        const nestedState = { ...state };
+        compileConstraints(node.children, related, excludedPatterns, errors, nestedState);
+        state.next = nestedState.next;
+        patterns.push({ kind: "not-exists", patterns: excludedPatterns });
+      } else {
+        patterns.push(relationshipPattern);
+        // A facet widget's list view is nested directly under its relationship.
+        // Retain the outer focus so COUNT(DISTINCT outer focus) measures how
+        // many records have each facet value.
+        if (node.children.some((child) => child.name === "view")) state.targetParent = subject;
+        compileConstraints(node.children, related, patterns, errors, state);
+      }
     } else if (node.name === "class") {
       const classIri = iri(node.attributes.iri ?? "");
       if (!classIri) errors.push("The FCT <class> node has a missing or invalid IRI.");

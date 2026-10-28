@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF
+   xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+   xmlns:bookmark="http://www.w3.org/2002/01/bookmark#"
+   xmlns:schema="https://schema.org/"
+   xmlns:dcterms="http://purl.org/dc/terms/"
+   xmlns:vfct="http://openlinksw.com/services/facets/1.0/"
+   xmlns:xsd="http://www.w3.org/2001/XMLSchema#"
+   xmlns:sh="http://www.w3.org/ns/shacl#"
+>
+  <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb5">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
+    <sh:path rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#type"/>
+    <sh:name>Type</sh:name>
+    <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">0</sh:order>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/bookmark">
+    <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
+    <rdfs:label xml:lang="en">Bookmark record policy</rdfs:label>
+    <mui:forClass rdf:resource="http://www.w3.org/2002/01/bookmark#Bookmark"/>
+    <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape"/>
+    <mui:htmlTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb1">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
+    <sh:path rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#type"/>
+    <sh:name>Type</sh:name>
+    <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">0</sh:order>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
+    <sh:targetClass rdf:resource="http://www.w3.org/2002/01/bookmark#Bookmark"/>
+    <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb1"/>
+    <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb2"/>
+    <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb3"/>
+    <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb4"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb7">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
+    <sh:path rdf:resource="https://schema.org/identifier"/>
+    <sh:name>Bookmark hash</sh:name>
+    <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2</sh:order>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb8">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
+    <sh:path rdf:resource="http://purl.org/dc/terms/created"/>
+    <sh:name>Created</sh:name>
+    <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">3</sh:order>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb2">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
+    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
+    <sh:name>Label</sh:name>
+    <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:order>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb3">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
+    <sh:path rdf:resource="http://www.w3.org/2002/01/bookmark#title"/>
+    <sh:name>Title</sh:name>
+    <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2</sh:order>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb4">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
+    <sh:path rdf:resource="http://www.w3.org/2002/01/bookmark#recalls"/>
+    <sh:name>Bookmarked resource</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#IRI"/>
+    <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">3</sh:order>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#QueryHistoryVisitRecordShape">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
+    <sh:targetClass rdf:resource="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#QueryHistoryVisit"/>
+    <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb5"/>
+    <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb6"/>
+    <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb7"/>
+    <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb8"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb6">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
+    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
+    <sh:name>Label</sh:name>
+    <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:order>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate">
+    <rdf:value>&lt;article id="history-record"&gt;&lt;h2 id="history-title" mui:data="http://www.w3.org/2000/01/rdf-schema#label"&gt;&lt;/h2&gt;&lt;p id="history-type-label"&gt;Query history bookmark&lt;/p&gt;&lt;p id="history-hash" mui:data="https://schema.org/identifier"&gt;&lt;/p&gt;&lt;p id="history-created" mui:data="http://purl.org/dc/terms/created"&gt;&lt;/p&gt;&lt;/article&gt;</rdf:value>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/query-history-visit">
+    <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
+    <rdfs:label xml:lang="en">Query history bookmark policy</rdfs:label>
+    <mui:forClass rdf:resource="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#QueryHistoryVisit"/>
+    <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#QueryHistoryVisitRecordShape"/>
+    <mui:htmlTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate">
+    <rdf:value><![CDATA[
+<section id="maestro-record-viewer" data-slot="card" class="mx-auto flex w-full max-w-2xl flex-col gap-6 p-1" mui:framework="next@^16.4.0">
+  <div id="bookmark-hero" data-slot="card" class="relative overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm">
+    <div id="bookmark-hero-glow" aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-sky-500 via-violet-500 to-fuchsia-500"></div>
+    <div id="bookmark-hero-content" class="relative space-y-5 p-6 sm:p-8">
+      <div id="bookmark-kicker-row" class="flex flex-wrap items-center justify-between gap-3">
+        <span id="bookmark-kind" class="inline-flex items-center gap-2 rounded-full border bg-secondary px-3 py-1 text-xs font-semibold tracking-wide text-secondary-foreground">BOOKMARK <span id="bookmark-kind-link-icon" aria-hidden="true" class="inline-flex size-3 items-center justify-center">↗</span></span>
+        <span id="bookmark-state" class="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground"><span id="bookmark-state-dot" aria-hidden="true" class="size-2 rounded-full bg-emerald-500"></span>Saved resource</span>
+      </div>
+      <div id="bookmark-heading-group" class="space-y-2">
+        <p id="bookmark-eyebrow" class="text-sm font-medium text-muted-foreground">Your collection</p>
+        <div id="bookmark-title-row" class="flex min-w-0 items-center gap-2">
+          <a id="bookmark-title-link" class="inline-flex min-w-0 items-center gap-2 break-words text-2xl font-semibold tracking-tight text-primary underline-offset-4 hover:underline cursor-pointer sm:text-3xl" mui:href="xpath:/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyStateUrl']]/fct:column[last()]" target="_blank" rel="noopener noreferrer" aria-label="Open the saved query state">
+            <span id="bookmark-title-text" mui:data="http://purl.org/dc/terms/title"></span>
+            <svg id="bookmark-title-binoculars-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="inline-block size-5 shrink-0" role="img" aria-label="Open saved query">
+              <path id="bookmark-title-binoculars-center" d="M10 10h4"></path>
+              <path id="bookmark-title-binoculars-right-stem" d="M19 7V4a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v3"></path>
+              <path id="bookmark-title-binoculars-right-body" d="M20 21a2 2 0 0 0 2-2v-3.851c0-1.39-2-2.962-2-4.829V8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v11a2 2 0 0 0 2 2z"></path>
+              <path id="bookmark-title-binoculars-crossbar" d="M22 16 2 16"></path>
+              <path id="bookmark-title-binoculars-left-body" d="M4 21a2 2 0 0 1-2-2v-3.851c0-1.39 2-2.962 2-4.829V8a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v11a2 2 0 0 1-2 2z"></path>
+              <path id="bookmark-title-binoculars-left-stem" d="M9 7V4a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v3"></path>
+            </svg>
+          </a>
+        </div>
+        <p id="bookmark-title-detail" class="break-words text-sm leading-6 text-muted-foreground" mui:data="http://purl.org/dc/terms/created"></p>
+      </div>
+      <div id="bookmark-description-section" class="space-y-2 rounded-lg bg-muted/40 p-4">
+        <h3 id="bookmark-description-heading" class="text-sm font-semibold">Description</h3>
+        <p id="bookmark-description" class="whitespace-pre-wrap break-words text-sm leading-7 text-muted-foreground" mui:data="http://purl.org/dc/terms/description"></p>
+      </div>
+      <div id="bookmark-tags-section" class="space-y-2">
+        <h3 id="bookmark-tags-heading" class="text-sm font-semibold">Tags</h3>
+        <div id="bookmark-tags" class="flex flex-wrap gap-2" mui:data="maestro:bookmark-tags"></div>
+      </div>
+      <div id="bookmark-metadata" class="grid gap-3 rounded-lg border p-4 sm:grid-cols-2">
+        <div id="bookmark-hash-field" class="min-w-0 space-y-1">
+          <p id="bookmark-hash-label" class="text-xs font-medium text-muted-foreground">Bookmark hash</p>
+          <p id="bookmark-hash" class="break-all font-mono text-xs leading-5" mui:data="https://schema.org/identifier"></p>
+        </div>
+
+      </div>
+
+    </div>
+    <div id="bookmark-footer" class="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/30 px-6 py-4 text-xs text-muted-foreground sm:px-8">
+      <span id="bookmark-footer-brand" class="font-medium">Maestro Record Viewer</span>
+      <span id="bookmark-footer-note">Rendered from the record's linked data</span>
+    </div>
+  </div>
+</section>
+]]></rdf:value>
+  </rdf:Description>
+</rdf:RDF>

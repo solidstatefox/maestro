@@ -1,5 +1,4 @@
-import { getOntologyGraph } from "@/lib/personal-sparql";
-import { discoverAndIngestOntology } from "./ingest";
+import { ensureGraphDirectorySeeded, getOntologyGraph } from "@/lib/personal-sparql";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 300;
@@ -198,8 +197,9 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as { uris?: unknown } | null;
   const uris = Array.isArray(body?.uris) ? [...new Set(body.uris.filter((uri): uri is string => typeof uri === "string" && uri.length <= 4096 && /^https?:\/\//i.test(uri)).slice(0, 100))] : [];
   try {
-    // First discover each listed class and recursively ingest its public RDF/ontology documents.
-    await discoverAndIngestOntology(uris);
+    // Load the manifest-mapped RDF files before querying the configured ontology graph.
+    // Missing files, manifest entries, and endpoint/load failures surface here at time of use.
+    await ensureGraphDirectorySeeded();
     let output = await queryPersonalStore(uris);
     // Collapse superclass paths through classes that are not in the visible list, so a listed
     // class nests beneath its nearest listed ancestor instead of becoming an unrelated root.

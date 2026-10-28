@@ -189,6 +189,63 @@ function escapeXmlText(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
+const POLICY_QUERY_ACTIONS = new Set([
+  "addProperty", "removeProperty", "setPropertyValues", "setPropertyValue", "setRoleValue",
+  "addNestedProperty", "addNestedPropertyOf", "addClass", "removeClass", "setRoleFilter",
+  "setResultsPage", "showClassResults", "deleteNode", "setSearchText", "resetQuery", "setView",
+  "setQueryAttribute", "setNodeAttribute", "setNodeText", "setValue", "insertNode", "replaceNode", "removeNode",
+]);
+
+/** Split a constrained action's argument list without evaluating source code. */
+function splitPolicyActionArguments(source: string): string[] {
+  const args: string[] = [];
+  let start = 0;
+  let quote = "";
+  let escaped = false;
+  let depth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = "";
+      continue;
+    }
+    if (character === "\"" || character === "'") { quote = character; continue; }
+    if (character === "{" || character === "[" || character === "(") depth += 1;
+    else if (character === "}" || character === "]" || character === ")") depth -= 1;
+    else if (character === "," && depth === 0) {
+      args.push(source.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  if (source.slice(start).trim()) args.push(source.slice(start).trim());
+  return args;
+}
+
+/** Parse only a direct call to an allowlisted query-update API; never eval template code. */
+function parsePolicyQueryAction(source: string, element: Element, recordUri: string): { method: string; args: unknown[] } {
+  if (source.length > 4000) throw new Error("Template action is too long.");
+  const match = source.trim().match(/^fctQueryTreeApi\.([A-Za-z][A-Za-z0-9]*)\(([\s\S]*)\)\s*;?$/);
+  if (!match || !POLICY_QUERY_ACTIONS.has(match[1])) throw new Error("Only direct calls to Maestro's allowlisted query-update API are permitted in mui:action.");
+  const rawArgs = splitPolicyActionArguments(match[2]);
+  const args = rawArgs.map((raw) => {
+    if (raw === "undefined") return undefined;
+    if (raw === "record.uri") return recordUri;
+    if (raw === "result.uri") return ((element.closest("[data-maestro-query-instance]") as HTMLElement | null)?.dataset.resultUri ?? (element as HTMLElement).dataset.resultUri ?? "");
+    const dataBinding = raw.match(/^event\.currentTarget\.dataset\.([A-Za-z][A-Za-z0-9]*)$/);
+    if (dataBinding) return (element as HTMLElement).dataset[dataBinding[1]] ?? "";
+    if (/^(?:true|false|null|-?\d+(?:\.\d+)?)$/.test(raw)) return JSON.parse(raw);
+    if (raw.startsWith("\"") || raw.startsWith("[") || raw.startsWith("{")) {
+      try { return JSON.parse(raw); } catch { throw new Error("Action arguments must be JSON literals or approved record/data bindings."); }
+    }
+    if (raw.startsWith("'") && raw.endsWith("'")) return raw.slice(1, -1).replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+    throw new Error("Action arguments must be literals, record.uri, result.uri, or event.currentTarget.dataset.<name>.");
+  });
+  if (args.length === 0 || args[0] !== undefined) throw new Error("A mui:action must pass undefined as its first argument so Maestro applies the operation to the live query.");
+  return { method: match[1], args };
+}
+
 type ParsedFctResponse = {
   sparql: string;
   viewType: string;
@@ -1159,6 +1216,7 @@ export default function Home() {
   const [clearCacheDialogOpen, setClearCacheDialogOpen] = useState(false);
   const [deleteHistoryDialogOpen, setDeleteHistoryDialogOpen] = useState(false);
   const [isDeletingHistory, setIsDeletingHistory] = useState(false);
+  const [isLoadingHistoryQuery, setIsLoadingHistoryQuery] = useState(false);
   const [localStorageUsageBytes, setLocalStorageUsageBytes] = useState<number | null>(null);
 
   useEffect(() => {
@@ -1228,6 +1286,8 @@ export default function Home() {
   const [queryTreeOpen, setQueryTreeOpen] = useState(false);
   const [queryTreeHeightPercent, setQueryTreeHeightPercent] = useState(40);
   const [queryTreeHeightLoaded, setQueryTreeHeightLoaded] = useState(false);
+  const [recordFormatEnabled, setRecordFormatEnabled] = useState(false);
+  const [recordFormatPreferenceLoaded, setRecordFormatPreferenceLoaded] = useState(false);
   const queryTreeHeightDbRef = useRef<IDBDatabase | null>(null);
   const centralPaneRef = useRef<HTMLElement | null>(null);
   const [showResultBadges, setShowResultBadges] = useState(false);
@@ -1236,6 +1296,7 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === "undefined" || !window.indexedDB) {
       setQueryTreeHeightLoaded(true);
+      setRecordFormatPreferenceLoaded(true);
       return;
     }
     let cancelled = false;
@@ -1248,15 +1309,29 @@ export default function Home() {
       const db = request.result;
       if (cancelled) { db.close(); return; }
       queryTreeHeightDbRef.current = db;
-      const read = db.transaction("preferences", "readonly").objectStore("preferences").get("query-tree-height-percent");
+      const preferences = db.transaction("preferences", "readonly").objectStore("preferences");
+      const read = preferences.get("query-tree-height-percent");
+      const readFormat = preferences.get("record-format-enabled");
       read.onsuccess = () => {
         const value = Number(read.result);
         if (!cancelled && Number.isFinite(value) && value >= 15 && value <= 75) setQueryTreeHeightPercent(value);
         if (!cancelled) setQueryTreeHeightLoaded(true);
       };
       read.onerror = () => { if (!cancelled) setQueryTreeHeightLoaded(true); };
+      readFormat.onsuccess = () => {
+        if (!cancelled) {
+          setRecordFormatEnabled(readFormat.result === true);
+          setRecordFormatPreferenceLoaded(true);
+        }
+      };
+      readFormat.onerror = () => { if (!cancelled) setRecordFormatPreferenceLoaded(true); };
     };
-    request.onerror = () => { if (!cancelled) setQueryTreeHeightLoaded(true); };
+    request.onerror = () => {
+      if (!cancelled) {
+        setQueryTreeHeightLoaded(true);
+        setRecordFormatPreferenceLoaded(true);
+      }
+    };
     return () => {
       cancelled = true;
       queryTreeHeightDbRef.current?.close();
@@ -1276,6 +1351,16 @@ export default function Home() {
     }, 180);
     return () => window.clearTimeout(timer);
   }, [queryTreeHeightPercent, queryTreeHeightLoaded]);
+
+  useEffect(() => {
+    if (!recordFormatPreferenceLoaded || !queryTreeHeightDbRef.current) return;
+    try {
+      const transaction = queryTreeHeightDbRef.current.transaction("preferences", "readwrite");
+      transaction.objectStore("preferences").put(recordFormatEnabled, "record-format-enabled");
+    } catch (error) {
+      console.warn("Maestro could not persist the Format toggle in IndexedDB", error);
+    }
+  }, [recordFormatEnabled, recordFormatPreferenceLoaded]);
   const [querySourceFormat, setQuerySourceFormat] = useState<"xml" | "sparql">("xml");
   const [sparqlQuery, setSparqlQuery] = useState("");
   const [isRdfLoaderOpen, setIsRdfLoaderOpen] = useState(false);
@@ -1883,13 +1968,13 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         const effectiveSelection = requestedSelection || endpoints[0]?.id || "";
         if (!effectiveSelection) {
           setSelectedEndpointId("");
-          setEndpointMenuError("No data servers are configured. Configure a reachable server before browsing data.");
+          setEndpointMenuError("No graph servers are configured. Configure a reachable server before browsing data.");
           return;
         }
         const selectedEndpoint = endpoints.find((endpoint) => endpoint.id === effectiveSelection);
         if (!selectedEndpoint) {
           setSelectedEndpointId("");
-          setEndpointMenuError("The requested data server is not in the configured server list.");
+          setEndpointMenuError("The requested graph server is not in the configured server list.");
           return;
         }
 
@@ -1900,7 +1985,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         const isReachable = status?.status != null && status.status < 400 && status.state === "ok";
         if (!isReachable) {
           setSelectedEndpointId("");
-          setEndpointMenuError(`Data server ${selectedEndpoint.label} did not pass its health check. Choose another server to load it.`);
+          setEndpointMenuError(`Graph server ${selectedEndpoint.label} did not pass its health check. Choose another server to load it.`);
           return;
         }
 
@@ -1915,7 +2000,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         const selectData = await selectResponse.json();
         rememberShortforms(selectData?.shortforms);
         if (!selectResponse.ok || selectData.selectedId !== effectiveSelection) {
-          throw new Error(selectData.error ?? "Could not select the loaded data server.");
+          throw new Error(selectData.error ?? "Could not select the loaded graph server.");
         }
         if (!cancelled) {
           setSelectedEndpointId(effectiveSelection);
@@ -1999,12 +2084,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   async function synchronizeFctEndpointSelection(endpointId: string) {
     if (!endpointId) return;
     const endpoint = fctEndpoints.find((item) => item.id === endpointId);
-    if (!endpoint) throw new Error(`The saved query refers to an unknown data server: ${endpointId}`);
+    if (!endpoint) throw new Error(`The saved query refers to an unknown graph server: ${endpointId}`);
     const checked = await runEndpointChecks([endpoint]);
     setIsCheckingEndpoints(false);
     const health = checked[endpointId];
     if (!(health?.state === "ok" && health.status != null && health.status < 400)) {
-      throw new Error(`Data server ${endpoint.label} did not pass its health check; the saved query was not switched to it.`);
+      throw new Error(`Graph server ${endpoint.label} did not pass its health check; the saved query was not switched to it.`);
     }
     const response = await fetch("/proxy/api/fct", {
       method: "POST",
@@ -2015,7 +2100,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     const data = await response.json() as { selectedId?: string; error?: string; shortforms?: unknown };
     rememberShortforms(data?.shortforms);
     if (!response.ok || data.selectedId !== endpointId) {
-      throw new Error(data.error ?? `Could not select data server ${endpoint.label}.`);
+      throw new Error(data.error ?? `Could not select graph server ${endpoint.label}.`);
     }
     setSelectedEndpointId(endpointId);
   }
@@ -2036,7 +2121,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         status = checked[endpointId];
       }
       if (!(status?.state === "ok" && status.status != null && status.status < 400)) {
-        throw new Error(`Data server ${endpoint.label} did not pass its health check; it was not selected.`);
+        throw new Error(`Graph server ${endpoint.label} did not pass its health check; it was not selected.`);
       }
 
       const response = await fetch("/proxy/api/fct", {
@@ -2180,7 +2265,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         const response = await fetch("/proxy/api/query-favorites", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "check", queryXml }),
+          body: JSON.stringify({ action: "check", queryXml, historyId: historyBookmarkId || undefined }),
           cache: "no-store",
         });
         const payload = await response.json() as { bookmarked?: boolean; historyId?: string | null };
@@ -2196,7 +2281,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       }
     }, 350);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [queryXml, urlStateInitialized, bookmarkCheckRevision]);
+  }, [queryXml, urlStateInitialized, bookmarkCheckRevision, historyBookmarkId]);
 
   // Keep History navigation enabled state synchronized with the actual store.
   // With no loaded History item, the comparison cursor is the current time.
@@ -2791,6 +2876,14 @@ useEffect(() => {
     ? (resultsPageComplete ? results.length : null)
     : Math.max(resultsTotalCount, results.length);
   const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string; direction: "property" | "property-of" }[]>([]);
+  const [recordPolicy, setRecordPolicy] = useState<{ uri: string; recordShape: string; template: string | null } | null>(null);
+  const [isLoadingRecordPolicy, setIsLoadingRecordPolicy] = useState(false);
+  const [recordPolicyError, setRecordPolicyError] = useState("");
+  const [recordValidation, setRecordValidation] = useState<{ conforms: boolean; complete: boolean; violations: { path: string; message: string; value?: string }[]; unsupportedConstraints: string[]; message: string } | null>(null);
+  const [isValidatingRecord, setIsValidatingRecord] = useState(false);
+  const [formattedRecordHtml, setFormattedRecordHtml] = useState("");
+  const [recordFormatError, setRecordFormatError] = useState("");
+  const formattedRecordContainerRef = useRef<HTMLDivElement>(null);
   const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
   const RECORD_DESCRIPTION_PAGE_SIZE = 20;
   
@@ -3506,7 +3599,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         const data = parseFctResponse(responseText);
         if (!cancelled) rememberShortforms(data?.shortforms);
         if (!cancelled) setGraphListSparql(data.sparql ?? "");
-        if (!response.ok) throw new Error(data.error ?? "Failed to load datasites for the current query.");
+        if (!response.ok) throw new Error(data.error ?? "Failed to load graphsites for the current query.");
         if (data.error) throw new Error(data.error);
         if (cancelled) return;
         //const graphs = Array.isArray(data.graphs) ? [...new Set(data.graphs.filter((value: unknown): value is string => typeof value === "string"))] : [];
@@ -3641,6 +3734,397 @@ setGraphFacets(graphs);
     void loadDescription();
     return () => { cancelled = true; controller.abort(); };
   }, [selectedUri, selectedEndpointId, queryTree.attributes.inference, queryTree.attributes["same-as"]]);
+
+  // Discover a record's class policy from the personal SPARQL server after its DESCRIBE data identifies rdf:type values.
+  useEffect(() => {
+    if (!selectedUri || !personalSparqlEndpoint || !describedRecord.length || isDescribing) {
+      setRecordPolicy(null);
+      setRecordPolicyError("");
+      setRecordValidation(null);
+      setFormattedRecordHtml("");
+      setRecordFormatError("");
+      setIsLoadingRecordPolicy(false);
+      return;
+    }
+    const rdfTypeUri = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    const recordTypes = Array.from(new Set(describedRecord
+      .filter((item) => item.direction === "property" && item.property === rdfTypeUri && /^[a-z][a-z0-9+.-]*:/i.test(item.value))
+      .map((item) => item.value)));
+    if (!recordTypes.length) {
+      setRecordPolicy(null);
+      setRecordPolicyError("");
+      setIsLoadingRecordPolicy(false);
+      return;
+    }
+    const controller = new AbortController();
+    setIsLoadingRecordPolicy(true);
+    setRecordPolicy(null);
+    setRecordPolicyError("");
+    fetch("/proxy/api/policies", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-discover", "RecordPolicyDiscovery") },
+      body: JSON.stringify({ action: "discover", recordTypes }),
+      signal: controller.signal,
+    }).then(async (response) => {
+      const payload = await response.json() as { policy?: { uri: string; recordShape: string; template?: string | null } | null; error?: string };
+      if (!response.ok) throw new Error(payload.error || `Policy lookup returned HTTP ${response.status}.`);
+      if (!controller.signal.aborted) setRecordPolicy(payload.policy ? {
+        uri: payload.policy.uri,
+        recordShape: payload.policy.recordShape,
+        template: payload.policy.template ?? null,
+      } : null);
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted && !(error instanceof DOMException && error.name === "AbortError")) {
+        setRecordPolicyError(error instanceof Error ? error.message : "Could not look up the record policy.");
+      }
+    }).finally(() => { if (!controller.signal.aborted) setIsLoadingRecordPolicy(false); });
+    return () => controller.abort();
+  }, [selectedUri, personalSparqlEndpoint, describedRecord, isDescribing]);
+
+  async function validateSelectedRecord() {
+    if (!selectedUri || !recordPolicy) return;
+    setIsValidatingRecord(true);
+    setRecordValidation(null);
+    setRecordPolicyError("");
+    try {
+      const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="10000" offset="0"/></query>`;
+      const describeResponse = await fetch("/proxy/api/fct", {
+        method: "POST", cache: "no-store", headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-policy-validation-describe", "RecordPolicyValidation") }, body: describeQueryXml,
+      });
+      const describeData = await readFctResponse(describeResponse);
+      const triples = describeData.describe.map((triple) => ({
+        subject: triple.subject.value,
+        predicate: triple.predicate.value,
+        object: triple.object.value,
+        objectType: triple.object.termType === "uri" ? "uri" : triple.object.termType === "bnode" ? "bnode" : "literal",
+        ...(triple.object.datatype ? { datatype: ({
+          string: "http://www.w3.org/2001/XMLSchema#string",
+          integer: "http://www.w3.org/2001/XMLSchema#integer",
+          int: "http://www.w3.org/2001/XMLSchema#int",
+          decimal: "http://www.w3.org/2001/XMLSchema#decimal",
+          double: "http://www.w3.org/2001/XMLSchema#double",
+          float: "http://www.w3.org/2001/XMLSchema#float",
+          boolean: "http://www.w3.org/2001/XMLSchema#boolean",
+          date: "http://www.w3.org/2001/XMLSchema#date",
+          dateTime: "http://www.w3.org/2001/XMLSchema#dateTime",
+        } as Record<string, string>)[triple.object.datatype] ?? triple.object.datatype } : {}),
+      }));
+      const response = await fetch("/proxy/api/policies", {
+        method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-validate", "RecordPolicyValidation") },
+        body: JSON.stringify({ action: "validate", recordUri: selectedUri, recordShape: recordPolicy.recordShape, triples }),
+      });
+      const payload = await response.json() as { report?: { conforms: boolean; complete: boolean; violations: { path: string; message: string; value?: string }[]; unsupportedConstraints: string[]; message: string }; error?: string };
+      if (!response.ok || !payload.report) throw new Error(payload.error || `SHACL validation returned HTTP ${response.status}.`);
+      setRecordValidation(payload.report);
+    } catch (error) {
+      setRecordPolicyError(error instanceof Error ? error.message : "Could not validate this record.");
+    } finally {
+      setIsValidatingRecord(false);
+    }
+  }
+
+  async function formatSelectedRecord() {
+    if (!recordPolicy) return;
+    if (!recordPolicy.template) {
+      setRecordFormatError("This policy does not identify an HTML template yet.");
+      setFormattedRecordHtml("");
+      return;
+    }
+    setRecordFormatError("");
+    setFormattedRecordHtml("");
+    try {
+      const templateResponse = await fetch("/proxy/api/policies", {
+        method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-template", "RecordPolicyTemplate") },
+        body: JSON.stringify({ action: "template", template: recordPolicy.template }),
+      });
+      const templatePayload = await templateResponse.json() as { templateHtml?: string; nextName?: string; nextVersion?: string; error?: string };
+      if (!templateResponse.ok || typeof templatePayload.templateHtml !== "string") throw new Error(templatePayload.error || `Template reload returned HTTP ${templateResponse.status}.`);
+      const document = new DOMParser().parseFromString(templatePayload.templateHtml, "text/html");
+      const templateRoot = document.body.firstElementChild;
+      if (!templateRoot || templateRoot.tagName.toLowerCase() !== "section" || templateRoot.id !== "maestro-record-viewer") {
+        throw new Error('The template must have a root <section id="maestro-record-viewer"> so it can replace the default Record viewer content.');
+      }
+      // Use the same npm package/version notation used by registry dependency metadata.
+      const frameworkRequirement = (templateRoot.getAttribute("mui:framework") ?? "").trim();
+      const frameworkMatch = /^([a-z0-9@/._-]+)@\^(\d+)\.(\d+)\.(\d+)$/.exec(frameworkRequirement);
+      if (!frameworkMatch) throw new Error('The template must declare a package requirement such as mui:framework="next@^16.4.0".');
+      if (frameworkMatch[1] !== templatePayload.nextName) throw new Error(`Template framework package "${frameworkMatch[1]}" does not match the installed package "${templatePayload.nextName || "(unknown)"}".`);
+      const installedVersion = /^(\d+)\.(\d+)\.(\d+)/.exec(templatePayload.nextVersion ?? "");
+      if (!installedVersion) throw new Error("Maestro could not determine the installed Next.js version to check this template.");
+      const requiredVersion = frameworkMatch.slice(2).map(Number);
+      const actualVersion = installedVersion.slice(1).map(Number);
+      const versionIsOlder = actualVersion[0] !== requiredVersion[0]
+        ? actualVersion[0] < requiredVersion[0]
+        : actualVersion[1] !== requiredVersion[1]
+          ? actualVersion[1] < requiredVersion[1]
+          : actualVersion[2] < requiredVersion[2];
+      if (actualVersion[0] !== requiredVersion[0] || versionIsOlder) {
+        throw new Error(`This template requires ${frameworkRequirement}; the installed version is ${templatePayload.nextVersion}.`);
+      }
+      const sourceIds = new Set<string>();
+      for (const element of Array.from(document.body.querySelectorAll("*"))) {
+        const id = element.getAttribute("id");
+        if (!id) throw new Error(`Template element <${element.tagName.toLowerCase()}> is missing its required id.`);
+        if (sourceIds.has(id)) throw new Error(`Template contains duplicate id \"${id}\".`);
+        sourceIds.add(id);
+      }
+      const queryDefinitions = new Map<string, Element>();
+      document.querySelectorAll("query[id]").forEach((element) => {
+        const id = element.getAttribute("id");
+        if (id) queryDefinitions.set(id, element);
+      });
+      // Keep XML query definitions and all their IDs in a hidden template area so repeated HTML components do not duplicate those IDs.
+      const queryDefinitionContainer = document.createElement("div");
+      queryDefinitionContainer.hidden = true;
+      queryDefinitionContainer.setAttribute("aria-hidden", "true");
+      queryDefinitionContainer.setAttribute("data-maestro-query-definitions", "true");
+      for (const queryDefinition of queryDefinitions.values()) queryDefinitionContainer.appendChild(queryDefinition);
+      if (queryDefinitions.size > 0) document.body.appendChild(queryDefinitionContainer);
+      const dataCache = new Map<string, Promise<XMLDocument>>();
+      const describeDocument = (uri: string): Promise<XMLDocument> => {
+        const cached = dataCache.get(uri);
+        if (cached) return cached;
+        const promise = (async () => {
+          const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}"><value datatype="uri">${escapeXmlText(uri)}</value><view type="describe" limit="10000" offset="0"/></query>`;
+          const response = await fetch("/proxy/api/fct", {
+            method: "POST", cache: "no-store",
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-binding-describe", "RecordTemplateBinding") },
+            body: describeQueryXml,
+          });
+          const xml = await response.text();
+          if (!response.ok) throw new Error(`Record DESCRIBE returned HTTP ${response.status}: ${xml.slice(0, 500)}`);
+          const parsed = new DOMParser().parseFromString(xml, "application/xml");
+          if (parsed.querySelector("parsererror") || parsed.documentElement.localName !== "facets") throw new Error("Record DESCRIBE did not return a valid fct:facets XML document.");
+          return parsed;
+        })();
+        dataCache.set(uri, promise);
+        return promise;
+      };
+      const xpathValues = (xml: XMLDocument, expression: string): string[] => {
+        const resolver = (prefix: string | null) => prefix === "fct" ? "http://openlinksw.com/services/facets/1.0/" : null;
+        try {
+          const result = xml.evaluate(expression, xml.documentElement, resolver, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+          const values: string[] = [];
+          for (let index = 0; index < result.snapshotLength; index += 1) {
+            const node = result.snapshotItem(index);
+            const value = node?.nodeType === Node.ATTRIBUTE_NODE ? node.nodeValue : node?.textContent;
+            if (value?.trim()) values.push(value.trim());
+          }
+          if (values.length) return values;
+          const scalar = xml.evaluate(expression, xml.documentElement, resolver, XPathResult.STRING_TYPE, null).stringValue;
+          return scalar.trim() ? [scalar.trim()] : [];
+        } catch {
+          // A malformed or unmatched template XPath must never leak into the rendered record.
+          return [];
+        }
+      };
+      const sanitize = (root: Element) => {
+        root.querySelectorAll("script, iframe, object, embed, form, base, link, style, meta[http-equiv]").forEach((element) => element.remove());
+        for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
+          for (const attribute of Array.from(element.attributes)) {
+            const name = attribute.name.toLowerCase();
+            if (/^on/i.test(name) || name === "srcdoc") element.removeAttribute(attribute.name);
+            else if (["href", "src", "action", "formaction", "xlink:href"].includes(name) && /^\s*javascript:/i.test(attribute.value)) element.removeAttribute(attribute.name);
+          }
+        }
+      };
+      const setBoundValue = (element: Element, values: string[]) => {
+        let value = values.join(", ");
+        // Render bookmark creation timestamps as a readable local date/time.
+        if (element.getAttribute("mui:data") === "http://purl.org/dc/terms/created" && values[0]) {
+          const parsedDate = new Date(values[0]);
+          if (!Number.isNaN(parsedDate.getTime())) {
+            value = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(parsedDate);
+          }
+        }
+        const tagName = element.tagName.toLowerCase();
+        if (tagName === "input") element.setAttribute("value", value);
+        else if (tagName === "a" && element.hasAttribute("mui:data")) {
+          const safeUrl = values[0] ?? "";
+          if (/^(https?:\/\/|\/(?!\/)|\.{1,2}\/|\?|#)/i.test(safeUrl)) {
+            element.setAttribute("href", safeUrl);
+            element.setAttribute("target", "_blank");
+            element.setAttribute("rel", "noopener noreferrer");
+          } else element.removeAttribute("href");
+          element.textContent = value;
+        } else if (element.getAttribute("mui:data") === "maestro:bookmark-tags") {
+          element.replaceChildren(...values.map((tag) => {
+            const badge = document.createElement("span");
+            badge.className = "inline-flex items-center rounded-full border bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground";
+            badge.textContent = tag;
+            return badge;
+          }));
+        } else element.textContent = value;
+      };
+      const bindingExpression = (binding: string): string => {
+        if (binding.startsWith("xpath:")) return binding.slice(6).trim();
+        // Backward compatibility for existing templates that still bind by predicate IRI.
+        const escaped = binding.replace(/&/g, "&amp;").replace(/'/g, "&apos;");
+        // Match the predicate wherever it appears in a DESCRIBE row and read the row's final column as its object.
+      // This avoids assuming that every FCT response shape places predicate/object in columns 2 and 3.
+      return `/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='${escaped}']]/fct:column[last()]`;
+      };
+      const bindValues = (root: Element, xml: XMLDocument) => {
+        for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
+          const binding = element.getAttribute("mui:data");
+          if (binding) setBoundValue(element, xpathValues(xml, bindingExpression(binding)));
+          const hrefBinding = element.getAttribute("mui:href");
+          if (hrefBinding) {
+            const href = xpathValues(xml, bindingExpression(hrefBinding))[0] ?? "";
+            element.removeAttribute("mui:href");
+            if (/^(https?:\/\/|\/(?!\/)|\.{1,2}\/|\?|#)/i.test(href)) {
+              element.setAttribute("href", href);
+              element.setAttribute("target", "_blank");
+              element.setAttribute("rel", "noopener noreferrer");
+            } else {
+              element.setAttribute("href", "");
+            }
+          }
+        }
+      };
+
+      const queryComponents = Array.from(document.body.querySelectorAll("[mui\\:query]"))
+        .filter((element) => !element.closest("[data-maestro-query-definitions]"));
+      const elementDepth = (element: Element) => { let depth = 0; for (let parent = element.parentElement; parent; parent = parent.parentElement) depth += 1; return depth; };
+      queryComponents.sort((left, right) => elementDepth(right) - elementDepth(left));
+      let queryInstanceCounter = 0;
+      const makeInstanceIdsUnique = (root: Element) => {
+        const elements = [root, ...Array.from(root.querySelectorAll("*"))];
+        const replacements = new Map<string, string>();
+        for (const element of elements) {
+          const id = element.getAttribute("id");
+          if (!id) continue;
+          const uniqueId = `${id}--maestro-instance-${++queryInstanceCounter}`;
+          replacements.set(id, uniqueId);
+          element.setAttribute("id", uniqueId);
+        }
+        for (const element of elements) {
+          for (const attributeName of ["for", "aria-labelledby", "aria-describedby", "aria-controls", "aria-owns", "headers", "list", "form"]) {
+            const value = element.getAttribute(attributeName);
+            if (!value) continue;
+            const rewritten = value.split(/\s+/).map((id) => replacements.get(id) ?? id).join(" ");
+            element.setAttribute(attributeName, rewritten);
+          }
+          const href = element.getAttribute("href");
+          if (href?.startsWith("#") && replacements.has(href.slice(1))) element.setAttribute("href", `#${replacements.get(href.slice(1))}`);
+        }
+      };
+      for (const component of queryComponents) {
+        const queryId = component.getAttribute("mui:query") ?? "";
+        const queryDefinition = queryDefinitions.get(queryId);
+        if (!queryDefinition) throw new Error(`Template component references missing query id \"${queryId}\".`);
+        const queryXml = queryDefinition.outerHTML;
+        if (queryXml.length > 100000 || !/^\s*<query\b/i.test(queryXml) || !/openlinksw\.com\/services\/facets\/1\.0/.test(queryXml)) {
+          throw new Error(`Embedded query \"${queryId}\" is not a valid bounded Maestro FCT query.`);
+        }
+        const queryResponse = await fetch("/proxy/api/fct", {
+          method: "POST", cache: "no-store",
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-query", "RecordTemplateQuery") },
+          body: queryXml,
+        });
+        const queryData = await readFctResponse(queryResponse);
+        const results = queryData.results.slice(0, 100);
+        const replacements: Element[] = [];
+        for (const result of results) {
+          if (!result.uri || result.termType !== "uri") continue;
+          const clone = component.cloneNode(true) as Element;
+          clone.removeAttribute("mui:query");
+          clone.setAttribute("data-result-uri", result.uri);
+          clone.setAttribute("data-maestro-query-instance", "true");
+          makeInstanceIdsUnique(clone);
+          bindValues(clone, await describeDocument(result.uri));
+          sanitize(clone);
+          replacements.push(clone);
+        }
+        if (replacements.length) component.replaceWith(...replacements);
+        else component.replaceWith(document.createTextNode(""));
+      }
+
+      // Evaluate XPath bindings against the actual fct:facets XML returned by DESCRIBE.
+      const currentDocument = await describeDocument(selectedUri);
+      for (const element of Array.from(document.body.querySelectorAll("[mui\\:data], [mui\\:href]"))) {
+        if (element.closest("[data-maestro-query-instance]")) continue;
+        const binding = element.getAttribute("mui:data");
+        if (binding === "maestro:bookmark-tags") {
+          const tagValues = [
+            ...xpathValues(currentDocument, "/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='http://purl.org/dc/terms/subject']]/fct:column[last()]"),
+            ...xpathValues(currentDocument, "/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='http://rdfs.org/scot/ns#has_tag']]/fct:column[last()]"),
+            ...xpathValues(currentDocument, "/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='http://www.w3.org/2004/02/skos/core#prefLabel']]/fct:column[last()]"),
+          ].filter((value) => !/^[a-z][a-z0-9+.-]*:\/\//i.test(value));
+          setBoundValue(element, [...new Set(tagValues)]);
+        } else if (binding) setBoundValue(element, xpathValues(currentDocument, bindingExpression(binding)));
+        const hrefBinding = element.getAttribute("mui:href");
+        if (hrefBinding) {
+          const href = xpathValues(currentDocument, bindingExpression(hrefBinding))[0] ?? "";
+          element.removeAttribute("mui:href");
+          if (/^(https?:\/\/|\/(?!\/)|\.{1,2}\/|\?|#)/i.test(href)) {
+            element.setAttribute("href", href);
+            element.setAttribute("target", "_blank");
+            element.setAttribute("rel", "noopener noreferrer");
+          } else {
+            // Do not expose unresolved XPath expressions or retain a stale destination.
+            element.setAttribute("href", "");
+          }
+        }
+      }
+      sanitize(document.body);
+      // Embedded XML query definitions remain present with their IDs in the hidden template area.
+      document.querySelectorAll("query").forEach((element) => { element.setAttribute("hidden", ""); element.setAttribute("aria-hidden", "true"); });
+      setFormattedRecordHtml(document.body.innerHTML);
+    } catch (error) {
+      setRecordFormatError(error instanceof Error ? error.message : "Could not format this record.");
+      setFormattedRecordHtml("");
+    }
+  }
+
+  /** Remove only the Bookmark type and bookmark hash from the selected record using the configured personal SPARQL credentials. */
+  async function deleteSelectedRecord() {
+    if (!selectedUri || !window.confirm(`Remove the Bookmark designation and bookmark hash from this record (${selectedUri})? Its other triples and history will be kept.`)) return;
+    try {
+      const response = await fetch("/proxy/api/query-favorites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-viewer-delete", "DeleteRecord") },
+        body: JSON.stringify({ action: "deleteRecord", historyId: selectedUri }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "The record could not be deleted.");
+      setFormattedRecordHtml("");
+      setRecordFormatError("");
+      toast.add({ title: "Bookmark removed", description: "The Bookmark type and hash were removed. The record's other triples were kept.", type: "success" });
+    } catch (error) {
+      toast.add({ title: "Could not delete record", description: error instanceof Error ? error.message : "The configured graph credentials may be missing or invalid.", type: "error" });
+    }
+  }
+
+  useEffect(() => {
+    if (!recordFormatPreferenceLoaded || !recordFormatEnabled || !recordPolicy || !selectedUri || formattedRecordHtml) return;
+    void formatSelectedRecord();
+  }, [recordFormatPreferenceLoaded, recordFormatEnabled, recordPolicy?.uri, recordPolicy?.template, selectedUri, formattedRecordHtml]);
+
+  // Template actions are parsed as a restricted API-call grammar, then dispatched through Maestro's existing query-update API.
+  useEffect(() => {
+    const root = formattedRecordContainerRef.current;
+    if (!root || !formattedRecordHtml) return;
+    const handleTemplateAction = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const actionElement = target.closest("[mui\\:action]");
+      if (!actionElement) return;
+      event.preventDefault();
+      const source = actionElement.getAttribute("mui:action") ?? "";
+      try {
+        const { method, args } = parsePolicyQueryAction(source, actionElement, selectedUri);
+        const api = fctQueryTreeApi as unknown as Record<string, (...values: unknown[]) => unknown>;
+        api[method](...args);
+        setRecordFormatError("");
+      } catch (error) {
+        setRecordFormatError(error instanceof Error ? error.message : "The template action was rejected.");
+      }
+    };
+    root.addEventListener("click", handleTemplateAction);
+    return () => root.removeEventListener("click", handleTemplateAction);
+  }, [formattedRecordHtml, selectedUri]);
 
   // The active scope is the property-path node that currently contains the
   // authoritative <view>; at the root, scope is represented by null.
@@ -4343,8 +4827,9 @@ useEffect(() => {
     }
   }
 
-  async function loadHistoryQuery() {
-    setControlsSheetOpen(false);
+  async function loadHistoryQuery(includeFavorites = false) {
+    if (isLoadingHistoryQuery) return;
+    setIsLoadingHistoryQuery(true);
     try {
       // Use the server-resolved SITE_HISTORY graph rather than duplicating its
       // default in client code, so .env.local remains authoritative.
@@ -4356,7 +4841,7 @@ useEffect(() => {
 
       // History is a personal-store view: select the endpoint configured by
       // PERSONAL_SPARQL_ENDPOINT in .env.local before restoring the query.
-      // The personal endpoint is expected to also exist in the Datasites graph.
+      // The personal endpoint is expected to also exist in the Graphsites graph.
       const normalizeEndpointUrl = (value: string) => {
         const url = new URL(value);
         url.hash = "";
@@ -4371,7 +4856,7 @@ useEffect(() => {
         }
       });
       if (!personalEndpoint) {
-        throw new Error(`The personal SPARQL endpoint (${payload.personalEndpointUrl}) is not present in the Datasites graph.`);
+        throw new Error(`The personal SPARQL endpoint (${payload.personalEndpointUrl}) is not present in the Graphsites graph.`);
       }
       await synchronizeFctEndpointSelection(personalEndpoint.id);
 
@@ -4384,6 +4869,18 @@ useEffect(() => {
         attributes: { ...queryTree.attributes, graph: payload.historyGraph },
         children: [
           { id: "history-bookmark-class", name: "class", attributes: { iri: "http://www.w3.org/2002/01/bookmark#Bookmark" }, children: [] },
+          ...(includeFavorites ? [{
+            id: "favorites-hash-property",
+            name: "property",
+            attributes: { iri: "https://schema.org/identifier" },
+            children: [{
+              id: "favorites-hash-prefix",
+              name: "value",
+              attributes: { op: "starts-with" },
+              text: "sha256:",
+              children: [],
+            }],
+          }] : []),
           { id: "query-view", name: "view", attributes: { type: "text", limit: "30", offset: "0" }, children: [] },
         ],
       };
@@ -4396,9 +4893,19 @@ useEffect(() => {
       setSavedSearchDraft("");
       setGroupByPropertyUri("");
       setCentralTab("results");
+      setControlsSheetOpen(false);
+      toast.add({
+        title: includeFavorites ? "Favorites loaded" : "History loaded",
+        description: includeFavorites
+          ? "Showing bookmarked records with a hash identifier from your personal data server."
+          : "Showing Bookmark records from your personal data server.",
+        type: "success",
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not load query History.";
       toast.add({ title: "Could not load query History", description: message, type: "error" });
+    } finally {
+      setIsLoadingHistoryQuery(false);
     }
   }
 
@@ -5431,41 +5938,41 @@ useEffect(() => {
 
       <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-2">
-          <ButtonGroup aria-label="Datasite navigation" className="shrink-0 border-0 shadow-none">
+          <ButtonGroup aria-label="Graphsite navigation" className="shrink-0 border-0 shadow-none">
             <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent>{historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<button type="button" onClick={refreshCurrentBreadcrumb} aria-label="Refresh current query scope" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25"><RotateCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Refresh current query scope using the active breadcrumb</TooltipContent></Tooltip>
           </ButtonGroup>
-          {/* One address: [datasite]@[data server], with no gap around the at-sign. */}
+          {/* One address: [graphsite]@[graph server], with no gap around the at-sign. */}
           <div className="flex min-w-0 flex-1 items-center">
-            <div className="flex min-w-0 max-w-3xl flex-1 items-stretch overflow-hidden rounded-md border border-input bg-background">
+            <div className="group/graphsite-input flex min-w-0 max-w-3xl flex-1 items-stretch overflow-hidden rounded-md border border-input bg-background">
               <input
                 id="maestro-graph-input"
                 value={graphText}
                 onChange={(event) => setGraphText(event.target.value)}
                 onKeyDown={(event) => { if (event.key === "Enter") applyGraphText(); }}
-                placeholder="Enter keywords or datasite URI"
+                placeholder="Enter keywords or graphsite URI"
                 aria-label="Site URI"
                 className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
               />
               <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={clearGraph}
-                aria-label="Remove datasite"
-                className="inline-flex shrink-0 items-center justify-center px-2.5 hover:bg-accent hover:text-accent-foreground"
-              ><X aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Remove datasite"}</TooltipContent></Tooltip>
+                aria-label="Remove graphsite"
+                className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-hover/graphsite-input:max-w-10 group-hover/graphsite-input:px-2.5 group-hover/graphsite-input:opacity-100 group-focus-within/graphsite-input:max-w-10 group-focus-within/graphsite-input:px-2.5 group-focus-within/graphsite-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
+              ><X aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Remove graphsite"}</TooltipContent></Tooltip>
               <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={applyGraphText}
                 aria-label="Go"
-                className="inline-flex shrink-0 items-center justify-center px-2.5 hover:bg-accent hover:text-accent-foreground"
+                className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-hover/graphsite-input:max-w-10 group-hover/graphsite-input:px-2.5 group-hover/graphsite-input:opacity-100 group-focus-within/graphsite-input:max-w-10 group-focus-within/graphsite-input:px-2.5 group-focus-within/graphsite-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
               ><CirclePlay aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Go"}</TooltipContent></Tooltip>
             </div>
-            <Label htmlFor="fct-endpoint" aria-label="Data server" className="shrink-0 px-2 text-muted-foreground">
+            <Label htmlFor="fct-endpoint" aria-label="Graph server" className="shrink-0 px-2 text-muted-foreground">
               <AtSign aria-hidden="true" className="size-4" />
             </Label>
             <div className="flex min-w-0 items-center gap-2">
-              <ButtonGroup aria-label="Data server selection, discovery, and refresh" className="max-w-full [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
+              <ButtonGroup aria-label="Graph server selection, discovery, and refresh" className="group/graph-server-input max-w-full [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
                     <Tooltip><TooltipTrigger render={<select
                       id="fct-endpoint"
                       value={selectedEndpointId}
@@ -5501,18 +6008,18 @@ useEffect(() => {
                       type="button"
                       pressed={findEndpointsEnabled}
                       onPressedChange={setFindEndpointsEnabled}
-                      aria-label={findEndpointsEnabled ? "Find Data Servers On" : "Find Data Servers Off"}
-                      className="shrink-0 rounded-none px-2.5 data-[state=on]:bg-green-100 data-[state=on]:text-green-800 data-[state=on]:hover:bg-green-200 dark:data-[state=on]:bg-green-950 dark:data-[state=on]:text-green-300 dark:data-[state=on]:hover:bg-green-900"
+                      aria-label={findEndpointsEnabled ? "Find Graph Servers On" : "Find Graph Servers Off"}
+                      className="max-w-0 shrink-0 overflow-hidden rounded-none px-0 opacity-0 transition-all duration-200 group-hover/graph-server-input:max-w-10 group-hover/graph-server-input:px-2.5 group-hover/graph-server-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 data-[state=on]:bg-green-100 data-[state=on]:text-green-800 data-[state=on]:hover:bg-green-200 dark:data-[state=on]:bg-green-950 dark:data-[state=on]:text-green-300 dark:data-[state=on]:hover:bg-green-900"
                     ><Network aria-hidden="true" /></Toggle>
                   } />
-                  <TooltipContent>{findEndpointsEnabled ? "Find Data Servers On" : "Find Data Servers Off"}</TooltipContent>
+                  <TooltipContent>{findEndpointsEnabled ? "Find Graph Servers On" : "Find Graph Servers Off"}</TooltipContent>
                 </Tooltip>
                 <Tooltip><TooltipTrigger render={<button
                   type="button"
                   onClick={() => void checkFctEndpoints()}
                   disabled={isCheckingEndpoints || fctEndpoints.length === 0}
                   aria-label={isCheckingEndpoints ? "Checking servers" : "Check servers"}
-                  className="inline-flex shrink-0 items-center justify-center px-2.5 py-2 text-sm hover:bg-accent disabled:opacity-50"
+                  className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 py-2 text-sm opacity-0 transition-all duration-200 hover:bg-accent group-hover/graph-server-input:max-w-10 group-hover/graph-server-input:px-2.5 group-hover/graph-server-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 disabled:opacity-50"
                 ><RefreshCw aria-hidden="true" className={`size-4 ${isCheckingEndpoints ? "animate-spin" : ""}`} /></button>} /><TooltipContent>{isCheckingEndpoints ? "Checking servers…" : "Check each server with a small FCT query"}</TooltipContent></Tooltip>
               </ButtonGroup>
                   {isCheckingEndpoints && (
@@ -5547,7 +6054,7 @@ useEffect(() => {
                     const response = await fetch("/proxy/api/query-favorites", {
                       method: "POST",
                       headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-bookmark", "RemoveBookmarkHash") },
-                      body: JSON.stringify({ action: "unbookmark", queryXml }),
+                      body: JSON.stringify({ action: "unbookmark", queryXml, historyId: matchingBookmarkId || historyBookmarkId || undefined }),
                       cache: "no-store",
                     });
                     const payload = await response.json() as { removed?: boolean; error?: string };
@@ -5715,8 +6222,12 @@ useEffect(() => {
                 <Label>History</Label>
                 <div className="flex items-center gap-2">
                   <Tooltip>
-                    <TooltipTrigger render={<Button type="button" variant="outline" onClick={loadHistoryQuery}>Show</Button>} />
-                    <TooltipContent className="z-[100]">History — show all Bookmark records</TooltipContent>
+                    <TooltipTrigger render={<Button type="button" variant="outline" disabled={isLoadingHistoryQuery} onClick={() => void loadHistoryQuery()}>{isLoadingHistoryQuery ? "Loading…" : "Show"}</Button>} />
+                    <TooltipContent className="z-[100]">History — show Bookmark records</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger render={<Button type="button" variant="outline" disabled={isLoadingHistoryQuery} onClick={() => void loadHistoryQuery(true)}>{isLoadingHistoryQuery ? "Loading…" : "Show Favorites"}</Button>} />
+                    <TooltipContent className="z-[100]">Favorites — show Bookmark records with a schema:identifier hash</TooltipContent>
                   </Tooltip>
                   <Button type="button" variant="outline" disabled={!historyBookmarkId || isDeletingCurrentHistory || isDeletingHistory} onClick={() => void deleteCurrentQueryHistory()}>{isDeletingCurrentHistory ? "Deleting…" : "Delete"}</Button>
                   <Button type="button" variant="destructive" disabled={isDeletingCurrentHistory || isDeletingHistory} onClick={() => setDeleteHistoryDialogOpen(true)}>Delete All</Button>
@@ -6911,18 +7422,18 @@ useEffect(() => {
                     <article className="flex min-w-0 flex-col">
                       <header className="group/header flex items-center gap-2 px-2 py-2">
                         <div className="flex min-w-0 flex-1 items-center gap-1">
-                          <h2 className="text-sm font-semibold">Datasites</h2>
-                          <QueryInspectorButton query={`${queryWithoutPagingXml()}\n<!-- FCT API option: graphOnly=true -->`} filename="datasites-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
+                          <h2 className="text-sm font-semibold">Graphsites</h2>
+                          <QueryInspectorButton query={`${queryWithoutPagingXml()}\n<!-- FCT API option: graphOnly=true -->`} filename="graphsites-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
                           {queryTree.attributes.graph && (
                             <Tooltip><TooltipTrigger render={<button
                               type="button"
                               onClick={clearGraph}
                               className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
                               aria-label="Clear graph selection"
-                            ><X className="size-4" aria-hidden="true" /></button>} /><TooltipContent>{"Clear datasite selection and Datasite field"}</TooltipContent></Tooltip>
+                            ><X className="size-4" aria-hidden="true" /></button>} /><TooltipContent>{"Clear graphsite selection and Graphsite field"}</TooltipContent></Tooltip>
                           )}
                           <div
-                            aria-label="Sort datasites"
+                            aria-label="Sort graphsites"
                             className={`invisible ml-1 shrink-0 overflow-hidden opacity-0 transition-[width,opacity] duration-200 group-hover/header:visible group-hover/header:opacity-100 focus-within:visible focus-within:opacity-100 ${graphSortPickerExpanded ? "w-28" : "w-7"}`}
                             onMouseEnter={() => setGraphSortPickerExpanded(true)}
                             onMouseLeave={() => setGraphSortPickerExpanded(false)}
@@ -6968,7 +7479,7 @@ useEffect(() => {
                       </header>
                       {graphFacets.length === 0 ? (
                         <p className="px-2 text-xs text-muted-foreground">
-                          {isLoadingGraphs ? "Loading datasites…" : "No registered graphs yet."}
+                          {isLoadingGraphs ? "Loading graphsites…" : "No registered graphs yet."}
                         </p>
                       ) : (
                         <>
@@ -6982,7 +7493,7 @@ useEffect(() => {
                           <div className="space-y-1">
                             {graphFacets.map((item) => (
                               <label key={item.uri} className="flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 cursor-pointer">
-                                <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri} onChange={() => bindGraph(item.uri)} aria-label={`Bind datasite ${item.label}`} className="mt-0.5 size-4 shrink-0 accent-current" />
+                                <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri} onChange={() => bindGraph(item.uri)} aria-label={`Bind graphsite ${item.label}`} className="mt-0.5 size-4 shrink-0 accent-current" />
                                 <span className="min-w-0 flex-1">
                                   <span className="block break-words">{item.label}</span>
                                   <Tooltip><TooltipTrigger render={<span className="block break-all text-xs text-muted-foreground">{item.uri}</span>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
@@ -7471,6 +7982,39 @@ useEffect(() => {
                 <p className="mt-1 break-all text-xs text-muted-foreground">
                   {selectedUri}
                 </p>
+                {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {recordPolicy && <>
+                    <button type="button" onClick={() => void validateSelectedRecord()} disabled={isValidatingRecord} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50">
+                      {isValidatingRecord ? "Validating…" : "Validate"}
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={recordFormatEnabled}
+                      disabled={!recordFormatPreferenceLoaded}
+                      onClick={() => {
+                        const enabled = !recordFormatEnabled;
+                        setRecordFormatEnabled(enabled);
+                        setRecordFormatError("");
+                        if (!enabled) setFormattedRecordHtml("");
+                      }}
+                      className={`rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                    >
+                      Format
+                    </button>
+                    <button type="button" onClick={() => void deleteSelectedRecord()} disabled={!selectedUri} className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">
+                      <Trash2 className="size-4" aria-hidden="true" /> Delete Bookmark
+                    </button>
+                  </>}
+                  {isLoadingRecordPolicy && <span className="text-xs text-muted-foreground">Looking for a record policy…</span>}
+                  {recordPolicyError && <span className="text-xs text-destructive">{recordPolicyError}</span>}
+                </div>}
+                {recordValidation && <div className={`mt-3 rounded-md border p-3 text-sm ${recordValidation.conforms ? "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200" : "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"}`}>
+                  <p className="font-semibold">{recordValidation.complete ? (recordValidation.conforms ? "SHACL validation passed" : "SHACL validation failed") : "Partial SHACL validation"}</p>
+                  <p className="mt-1">{recordValidation.message}</p>
+                  {recordValidation.violations.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-5">{recordValidation.violations.map((violation, index) => <li key={`${violation.path}-${index}`}>{violation.message}</li>)}</ul>}
+                  {recordValidation.unsupportedConstraints.length > 0 && <p className="mt-2 break-all text-xs">Unsupported constraints: {recordValidation.unsupportedConstraints.join(", ")}</p>}
+                </div>}
+                {recordFormatError && <p className="mt-2 text-sm text-destructive">{recordFormatError}</p>}
               </div>
               <div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
                 {describedRecord.length > 0 ? (
@@ -7513,7 +8057,14 @@ useEffect(() => {
   </div>
 )}
               </div>
-              <div className="min-h-0 flex-1 overflow-auto p-4">
+              {!recordFormatPreferenceLoaded || (recordFormatEnabled && !formattedRecordHtml && !recordFormatError) ? (
+                <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status">
+                  {!recordFormatPreferenceLoaded ? "Loading record viewer preference…" : "Loading formatted record…"}
+                </div>
+              ) : formattedRecordHtml ? (
+                <div ref={formattedRecordContainerRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: formattedRecordHtml }} />
+              ) : (
+              <section id="maestro-record-viewer" className="min-h-0 flex-1 overflow-auto p-4">
                 {describedPropertyRows.length > 0 && <section>
                   <h3 className="mb-2 text-sm font-semibold">Properties</h3>
                   <table className="w-full border-collapse text-left text-sm">
@@ -7557,7 +8108,8 @@ useEffect(() => {
                     {isDescribing ? "Loading record…" : selectedUri ? "No description data returned." : "Select a result to describe it."}
                   </p>
                 )}
-              </div>
+              </section>
+              )}
             </section>
             </ResizablePanel>
           </ResizablePanelGroup>

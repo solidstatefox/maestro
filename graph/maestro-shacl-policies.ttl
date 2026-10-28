@@ -1,0 +1,42 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix bookmark: <http://www.w3.org/2002/01/bookmark#> .
+@prefix vfct: <https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#> .
+@prefix schema: <https://schema.org/> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# Initial Record viewer policies. This file is uploaded into the graph named by SITE_SHAPES.
+# Extend these shapes and templates as the Record viewer's presentation vocabulary evolves.
+
+<gttp://ggg.maestro.ecosys/shacl/policy/bookmark> a mui:ClassPolicy ;
+    rdfs:label "Bookmark record policy"@en ;
+    mui:forClass bookmark:Bookmark ;
+    mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape> ;
+    mui:htmlTemplate <gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape> a sh:NodeShape ;
+    sh:targetClass bookmark:Bookmark ;
+    sh:property [ a sh:PropertyShape ; sh:path rdf:type ; sh:name "Type" ; sh:order 0 ] ;
+    sh:property [ a sh:PropertyShape ; sh:path rdfs:label ; sh:name "Label" ; sh:order 1 ] ;
+    sh:property [ a sh:PropertyShape ; sh:path bookmark:title ; sh:name "Title" ; sh:order 2 ] ;
+    sh:property [ a sh:PropertyShape ; sh:path bookmark:recalls ; sh:name "Bookmarked resource" ; sh:nodeKind sh:IRI ; sh:order 3 ] .
+
+<gttp://ggg.maestro.ecosys/shacl/policy/query-history-visit> a mui:ClassPolicy ;
+    rdfs:label "Query history bookmark policy"@en ;
+    mui:forClass vfct:QueryHistoryVisit ;
+    mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#QueryHistoryVisitRecordShape> ;
+    mui:htmlTemplate <gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#QueryHistoryVisitRecordShape> a sh:NodeShape ;
+    sh:targetClass vfct:QueryHistoryVisit ;
+    sh:property [ a sh:PropertyShape ; sh:path rdf:type ; sh:name "Type" ; sh:order 0 ] ;
+    sh:property [ a sh:PropertyShape ; sh:path rdfs:label ; sh:name "Label" ; sh:order 1 ] ;
+    sh:property [ a sh:PropertyShape ; sh:path schema:identifier ; sh:name "Bookmark hash" ; sh:order 2 ] ;
+    sh:property [ a sh:PropertyShape ; sh:path dcterms:created ; sh:name "Created" ; sh:order 3 ] .
+
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> rdf:value "<article id=\"bookmark-record\"><h2 id=\"bookmark-title\" mui:data=\"http://www.w3.org/2000/01/rdf-schema#label\"></h2><p id=\"bookmark-type-label\">Bookmark</p><p id=\"bookmark-resource\" mui:data=\"http://www.w3.org/2002/01/bookmark#recalls\"></p><p id=\"bookmark-title-value\" mui:data=\"http://www.w3.org/2002/01/bookmark#title\"></p></article>" .
+
+<gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> rdf:value "<article id=\"history-record\"><h2 id=\"history-title\" mui:data=\"http://www.w3.org/2000/01/rdf-schema#label\"></h2><p id=\"history-type-label\">Query history bookmark</p><p id=\"history-hash\" mui:data=\"https://schema.org/identifier\"></p><p id=\"history-created\" mui:data=\"http://purl.org/dc/terms/created\"></p></article>" .

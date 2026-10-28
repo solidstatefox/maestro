@@ -1,0 +1,190 @@
+# Maestro UI vocabulary (mui:)
+#
+# Supporting ontology for Maestro's SHACL UI policies. It adds only what
+# SHACL 1.2 UI (https://www.w3.org/TR/shacl12-ui/) does not already provide:
+#   * which SHACL shape renders a class on which Maestro surface, and
+#   * a few extra property roles (shui:PropertyRole instances) that the
+#     built-in Label / Description / Depiction / Classification / Icon roles
+#     do not cover; and
+#   * the HTML template, data binding, query binding, and constrained action
+#     vocabulary used by Maestro's record-formatting workflow.
+#
+# NOTE: shui: is the SHACL UI namespace exactly as printed in the current
+# Working Draft's prefix table. If the final vocabulary file differs (for
+# example a trailing "#"), change the one @prefix line in each file.
+
+@prefix rdf:     <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:     <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:     <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:    <http://www.w3.org/2004/02/skos/core#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix sh:      <http://www.w3.org/ns/shacl#> .
+@prefix shui:    <http://www.w3.org/ns/shacl-ui/> .
+@prefix mui:     <gttp://ggg.maestro.ecosys/ns/ui#> .
+
+<gttp://ggg.maestro.ecosys/ns/ui>
+    a owl:Ontology ;
+    dcterms:title "Maestro UI vocabulary"@en ;
+    dcterms:description "Surfaces, class policies and property roles that connect SHACL shapes to Maestro's record viewer and result set items."@en ;
+    owl:versionInfo "p2-20261027" ;
+    rdfs:seeAlso <https://www.w3.org/TR/shacl12-ui/> .
+
+# ---------------------------------------------------------------------------
+# Surfaces: the places in Maestro where a record is presented.
+# ---------------------------------------------------------------------------
+
+mui:Surface
+    a owl:Class ;
+    rdfs:label "Surface"@en ;
+    rdfs:comment "A place in Maestro's UI where one RDF resource is presented."@en .
+
+mui:RecordViewer
+    a mui:Surface, owl:NamedIndividual ;
+    rdfs:label "Record viewer"@en ;
+    rdfs:comment "The full description of one record: every property and role, grouped and ordered by the shape. Shown when a record is opened."@en .
+
+mui:ResultItem
+    a mui:Surface, owl:NamedIndividual ;
+    rdfs:label "Result set item"@en ;
+    rdfs:comment "The compact card for one record in the result set. It is composed from property roles, not from every property."@en .
+
+# ---------------------------------------------------------------------------
+# Class policies: which shape renders a class on which surface.
+# ---------------------------------------------------------------------------
+
+mui:ClassPolicy
+    a owl:Class ;
+    rdfs:label "Class policy"@en ;
+    rdfs:comment """Declares how instances of one or more classes are presented. A policy points at one SHACL node shape per surface. Only the record shape carries sh:targetClass, so a renderer that looks shapes up by target always finds the canonical shape; item shapes are reached through the policy."""@en .
+
+mui:forClass
+    a owl:ObjectProperty ;
+    rdfs:label "for class"@en ;
+    rdfs:comment "A class whose instances this policy presents. A policy may cover several equivalent classes."@en ;
+    rdfs:domain mui:ClassPolicy ;
+    rdfs:range rdfs:Class .
+
+mui:surfaceShape
+    a owl:ObjectProperty ;
+    rdfs:label "surface shape"@en ;
+    rdfs:comment "The SHACL node shape a renderer applies to a focus node on some surface."@en ;
+    rdfs:domain mui:ClassPolicy ;
+    rdfs:range sh:NodeShape .
+
+mui:forSurface
+    a owl:AnnotationProperty ;
+    rdfs:label "for surface"@en ;
+    rdfs:comment "Annotates a mui:surfaceShape sub-property with the surface it serves."@en ;
+    rdfs:domain owl:ObjectProperty ;
+    rdfs:range mui:Surface .
+
+mui:recordShape
+    a owl:ObjectProperty ;
+    rdfs:subPropertyOf mui:surfaceShape ;
+    mui:forSurface mui:RecordViewer ;
+    rdfs:label "record shape"@en ;
+    rdfs:comment "The shape for the record viewer. Lists every property shape, with groups and sh:order. Exactly one per policy."@en ;
+    rdfs:domain mui:ClassPolicy ;
+    rdfs:range sh:NodeShape .
+
+mui:itemShape
+    a owl:ObjectProperty ;
+    rdfs:subPropertyOf mui:surfaceShape ;
+    mui:forSurface mui:ResultItem ;
+    rdfs:label "item shape"@en ;
+    rdfs:comment """The shape for result set items. By convention it lists exactly the property shapes of the record shape that carry a property role, except mui:IdentifierRole and mui:CodeRole, which are technical and record-viewer only. Exactly one per policy."""@en ;
+    rdfs:domain mui:ClassPolicy ;
+    rdfs:range sh:NodeShape .
+
+# ---------------------------------------------------------------------------
+# Annotation properties on shapes.
+# ---------------------------------------------------------------------------
+
+mui:readOnly
+    a owl:DatatypeProperty ;
+    rdfs:label "read only"@en ;
+    rdfs:comment "True when users must not edit the values: they are system-managed or come from a source Maestro does not write to. On a node shape it applies to every property shape unless overridden."@en ;
+    rdfs:domain [ a owl:Class ; owl:unionOf ( sh:NodeShape sh:PropertyShape ) ] ;
+    rdfs:range xsd:boolean .
+
+mui:syntax
+    a owl:DatatypeProperty ;
+    rdfs:label "syntax"@en ;
+    rdfs:comment "The language of a code value, such as xml, sparql, json or turtle. Used with mui:CodeRole so a viewer can pick highlighting."@en ;
+    rdfs:domain sh:PropertyShape ;
+    rdfs:range xsd:string .
+
+# ---------------------------------------------------------------------------
+# Property roles beyond SHACL UI's built-in Label, Description, Depiction,
+# Classification and Icon roles. Each is an instance of shui:PropertyRole.
+#
+# Annotation style: roles where only the best value should be shown
+# (Label, Description, Depiction, Timestamp) are annotated with SHACL UI's
+# qualified form, so sh:order sets precedence between predicates. Roles where
+# every value is wanted (Classification, KeyInfo, Link, Identifier, Code) use
+# the direct form.
+# ---------------------------------------------------------------------------
+
+mui:KeyInfoRole
+    a shui:PropertyRole, owl:NamedIndividual ;
+    rdfs:label "Key information role"@en ;
+    rdfs:comment "Values worth showing in a summary even though they are not a label, description or date: publisher, licence, size."@en .
+
+mui:TimestampRole
+    a shui:PropertyRole, owl:NamedIndividual ;
+    rdfs:label "Timestamp role"@en ;
+    rdfs:comment "The date or date-time that best says when a resource was created, published or last changed. Used for display and for ordering."@en .
+
+mui:LinkRole
+    a shui:PropertyRole, owl:NamedIndividual ;
+    rdfs:label "Link role"@en ;
+    rdfs:comment "Values that lead somewhere: an outbound URL, an endpoint, a link that restores saved UI state."@en .
+
+mui:IdentifierRole
+    a shui:PropertyRole, owl:NamedIndividual ;
+    rdfs:label "Identifier role"@en ;
+    rdfs:comment "Machine-readable identifiers such as hashes and codes. Technical: shown in the record viewer, never in result items."@en .
+
+mui:CodeRole
+    a shui:PropertyRole, owl:NamedIndividual ;
+    rdfs:label "Code role"@en ;
+    rdfs:comment "Values that are source text (XML, SPARQL, JSON) and should be shown verbatim in a code view. Pair with mui:syntax. Technical: record viewer only."@en .
+
+# ---------------------------------------------------------------------------
+# HTML template policies and safe template annotations used by Maestro.
+# ---------------------------------------------------------------------------
+
+mui:HtmlTemplate
+    a owl:Class ;
+    rdfs:label "HTML template"@en ;
+    rdfs:comment "An HTML fragment used to format a record in Maestro. The template content is stored as a literal on this resource."@en .
+
+mui:htmlTemplate
+    a owl:ObjectProperty ;
+    rdfs:label "HTML template"@en ;
+    rdfs:comment "The HTML template resource used by a class policy's Format action."@en ;
+    rdfs:domain mui:ClassPolicy ;
+    rdfs:range mui:HtmlTemplate .
+
+mui:templateContent
+    a owl:DatatypeProperty ;
+    rdfs:label "template content"@en ;
+    rdfs:comment "The HTML template source. Store the HTML as a literal; CDATA is a serialization detail, not part of the RDF literal value."@en ;
+    rdfs:domain mui:HtmlTemplate ;
+    rdfs:range xsd:string .
+
+mui:data
+    a owl:AnnotationProperty ;
+    rdfs:label "data binding"@en ;
+    rdfs:comment "In a Maestro HTML template, the value is the full property URI whose value(s) in the current query scope populate the element."@en .
+
+mui:query
+    a owl:AnnotationProperty ;
+    rdfs:label "query binding"@en ;
+    rdfs:comment "In a Maestro HTML template, the value is the id of an embedded XML query whose results instantiate the component."@en .
+
+mui:action
+    a owl:AnnotationProperty ;
+    rdfs:label "Maestro action"@en ;
+    rdfs:comment "Declares a constrained interaction routed through Maestro's approved live-query update API. The initial interpreter accepts only a direct allowlisted fctQueryTreeApi method call with literal or approved data-binding arguments; template content is never evaluated as unrestricted JavaScript or TypeScript."@en .

@@ -27,17 +27,13 @@ npm ci
 
 ### 3. Configure the personal SPARQL store and Datasites
 
-Copy `.env.example` to `.env.local` and fill in the required values, following the comments in `.env.example`:
+Copy `.env.example` to `.env.local` and fill in the required values, following the comments:
 
 ```env
-PERSONAL_SPARQL_ENDPOINT=
-SPARQL_ENDPOINTS=
-SITE_SPARQL_ENDPOINTS=
-SITE_HISTORY=
-SITE_ONTOLOGY=
+PERSONAL_SPARQL_ENDPOINT
+RDF_LOADER_USERNAME
+RDF_LOADER_PASSWORD
 ```
-
-`SPARQL_ENDPOINTS` is the local path to a Turtle file listing Datasites. The three `SITE_*` values are graph IRIs and must match the graph names used in Virtuoso permissions. The Turtle file must contain reachable FCT endpoint URLs.
 
 For `/sparql`, Virtuoso uses its built-in `SPARQL` account. For `/sparql-auth`, it uses `RDF_LOADER_USERNAME` and `RDF_LOADER_PASSWORD`. Set these optional credentials if using `/sparql-auth`, then restart Maestro after editing `.env.local`.
 
@@ -45,11 +41,12 @@ For `/sparql`, Virtuoso uses its built-in `SPARQL` account. For `/sparql-auth`, 
 
 In Virtuoso Conductor (`http://localhost:8890/conductor`), log in as `dba` and grant the account used by your endpoint the `SPARQL_UPDATE` role. This role includes `SPARQL_SELECT`.
 
-Run the following SQL for the built-in `SPARQL` account when using `/sparql`. Replace each placeholder with the corresponding graph IRI from `.env.local`:
+Run the following SQL for the built-in `SPARQL` account when using `/sparql`. Replace each placeholder with the corresponding graph IRI from `./graph/manifest.json`:
 
 ```sql
 DB.DBA.RDF_GRAPH_USER_PERMS_SET('[value of SITE_SPARQL_ENDPOINTS]', 'SPARQL', 1);
 DB.DBA.RDF_GRAPH_USER_PERMS_SET('[value of SITE_HISTORY]', 'SPARQL', 3);
+DB.DBA.RDF_GRAPH_USER_PERMS_SET('[value of SITE_SHAPES]', 'SPARQL', 3);
 DB.DBA.RDF_GRAPH_USER_PERMS_SET('[value of SITE_ONTOLOGY]', 'SPARQL', 7);
 ```
 

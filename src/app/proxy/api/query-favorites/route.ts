@@ -24,11 +24,6 @@ function iri(value: string): string {
 function mintedId(prefix: string): string {
   return `${MAESTRO_IDS_NS}${prefix}-${crypto.randomUUID()}#thisistheid`;
 }
-function tagSlug(value: string): string {
-  const slug = value.normalize("NFKD").toLowerCase().replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
-  return slug || "tag";
-}
-
 /** Save Annotea bookmarks using DCMI Terms and established tagging vocabularies. */
 export async function POST(request: Request) {
   try {
@@ -82,6 +77,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ updated: true, historyId });
     }
 
+    if (action === "deleteRecord") {
+      if (!historyId) return NextResponse.json({ error: "A record URI is required." }, { status: 400 });
+      // Unbookmark this record without deleting its history or descriptive data:
+      // remove only the Bookmark class assertion and the bookmark hash identifier.
+      await updatePersonalSparql(`DELETE { GRAPH ${graph} { ${iri(historyId)} <${RDF_NS}type> <${BOOKMARK_NS}Bookmark> . ${iri(historyId)} <${SCHEMA_NS}identifier> ?hash . ${iri(historyId)} <${DCTERMS_NS}created> ?bookmarkCreated } } WHERE { GRAPH ${graph} { OPTIONAL { ${iri(historyId)} <${RDF_NS}type> <${BOOKMARK_NS}Bookmark> } OPTIONAL { ${iri(historyId)} <${SCHEMA_NS}identifier> ?hash } OPTIONAL { ${iri(historyId)} <${DCTERMS_NS}created> ?bookmarkCreated } } }`);
+      return NextResponse.json({ deleted: true, unbookmarked: true, historyId });
+    }
+
     if (action === "read") {
       if (!historyId) return NextResponse.json({ error: "A bookmark ID is required." }, { status: 400 });
       const result = await queryPersonalSparql(`PREFIX rdf: <${RDF_NS}> PREFIX dcterms: <${DCTERMS_NS}> PREFIX rdfs: <${RDFS_NS}> PREFIX schema: <${SCHEMA_NS}> PREFIX vfct: <${VFCT_NS}> SELECT ?type ?title ?description ?stateUrl ?shareUrl WHERE { GRAPH ${graph} { ${iri(historyId)} rdf:type ?type . OPTIONAL { ${iri(historyId)} dcterms:title ?title } OPTIONAL { ${iri(historyId)} dcterms:description ?description } OPTIONAL { ${iri(historyId)} vfct:historyStateUrl ?stateUrl } OPTIONAL { ${iri(historyId)} schema:url ?shareUrl } } } LIMIT 1`);
@@ -91,7 +94,7 @@ export async function POST(request: Request) {
 
     if (action === "deleteHistory") {
       // Delete visit records only; separately created saved-query bookmarks remain intact.
-      await updatePersonalSparql(`DELETE { GRAPH ${graph} { ?visit ?predicate ?object } } WHERE { GRAPH ${graph} { ?visit <${RDF_NS}type> <${historyType}> ; ?predicate ?object } }`);
+      await updatePersonalSparql(`DELETE { GRAPH ${graph} { ?visit ?predicate ?object } } WHERE { GRAPH ${graph} { ?visit <${RDF_NS}type> <${historyType}> ; ?predicate ?object . FILTER NOT EXISTS { ?visit <${SCHEMA_NS}identifier> ?hash } } }`);
       return NextResponse.json({ deleted: true });
     }
 
@@ -113,6 +116,8 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "A serialized FCT <query> document is required to save the bookmark." }, { status: 400 });
       }
       const queryHash = `sha256:${createHash("sha256").update(queryXml, "utf8").digest("hex")}`;
+      // This timestamp marks when the History item was saved as a Bookmark.
+      const bookmarkCreated = new Date().toISOString();
       const title = typeof body.title === "string" ? body.title.trim().slice(0, 500) : "";
       const description = typeof body.description === "string" ? body.description.trim().slice(0, 5000) : "";
       const tags = Array.isArray(body.tags)
@@ -147,16 +152,11 @@ export async function POST(request: Request) {
         if (tagVocabulary === "dcterms") {
           triples.push(`${iri(historyId)} <${DCTERMS_NS}subject> ${sparqlString(tag)}`);
         } else if (tagVocabulary === "scot") {
-          const tagUri = `${MAESTRO_IDS_NS}scot-tag#${tagSlug(tag)}-${crypto.randomUUID()}`;
-          triples.push(`${iri(historyId)} <${SCOT_NS}has_tag> ${iri(tagUri)}`);
-          triples.push(`${iri(tagUri)} <${RDF_NS}type> <${SCOT_NS}Tag>`);
-          triples.push(`${iri(tagUri)} <${RDFS_NS}label> ${sparqlString(tag)}`);
-          triples.push(`${iri(tagUri)} <${SKOS_NS}prefLabel> ${sparqlString(tag)}`);
+          // Keep user-entered tags as literals directly on the bookmark; no minted tag resource.
+          triples.push(`${iri(historyId)} <${SCOT_NS}has_tag> ${sparqlString(tag)}`);
         } else {
-          const tagUri = `${MAESTRO_IDS_NS}skos-tag#${tagSlug(tag)}-${crypto.randomUUID()}`;
-          triples.push(`${iri(historyId)} <${DCTERMS_NS}subject> ${iri(tagUri)}`);
-          triples.push(`${iri(tagUri)} <${RDF_NS}type> <${SKOS_NS}Concept>`);
-          triples.push(`${iri(tagUri)} <${SKOS_NS}prefLabel> ${sparqlString(tag)}`);
+          // SKOS vocabulary choice stores the tag label directly as a literal.
+          triples.push(`${iri(historyId)} <${SKOS_NS}prefLabel> ${sparqlString(tag)}`);
         }
       }
       let nodeCounter = 0;
@@ -193,7 +193,7 @@ export async function POST(request: Request) {
       };
       walk(parsed);
 
-      await updatePersonalSparql(`DELETE { GRAPH ${graph} { ${iri(historyId)} <${DCTERMS_NS}title> ?oldTitle ; <${RDFS_NS}label> ?oldLabel ; <${DCTERMS_NS}description> ?oldDescription ; <${SCHEMA_NS}url> ?oldUrl ; <${SCHEMA_NS}identifier> ?oldHash ; <${historyQuery}> ?oldQuery ; <${DCTERMS_NS}subject> ?oldSubject ; <${SCOT_NS}has_tag> ?oldScotTag } } INSERT { GRAPH ${graph} { ${iri(historyId)} <${DCTERMS_NS}title> ${sparqlString(title || historyId)} ; <${RDFS_NS}label> ${sparqlString(title || historyId)}${description ? ` ; <${DCTERMS_NS}description> ${sparqlString(description)}` : ""} ; <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} ; <${historyQuery}> ${sparqlString(queryXml)}${shareUrl ? ` ; <${SCHEMA_NS}url> ${iri(shareUrl)}` : ""} } } WHERE { OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${DCTERMS_NS}title> ?oldTitle } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${RDFS_NS}label> ?oldLabel } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${DCTERMS_NS}description> ?oldDescription } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${SCHEMA_NS}url> ?oldUrl } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${SCHEMA_NS}identifier> ?oldHash } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${historyQuery}> ?oldQuery } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${DCTERMS_NS}subject> ?oldSubject } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${SCOT_NS}has_tag> ?oldScotTag } } }`);
+      await updatePersonalSparql(`DELETE { GRAPH ${graph} { ${iri(historyId)} <${DCTERMS_NS}title> ?oldTitle ; <${RDFS_NS}label> ?oldLabel ; <${DCTERMS_NS}description> ?oldDescription ; <${SCHEMA_NS}url> ?oldUrl ; <${SCHEMA_NS}identifier> ?oldHash ; <${historyQuery}> ?oldQuery ; <${DCTERMS_NS}created> ?oldCreated ; <${DCTERMS_NS}subject> ?oldSubject ; <${SCOT_NS}has_tag> ?oldScotTag } } INSERT { GRAPH ${graph} { ${iri(historyId)} <${RDF_NS}type> <${BOOKMARK_NS}Bookmark> ; <${DCTERMS_NS}title> ${sparqlString(title || historyId)} ; <${RDFS_NS}label> ${sparqlString(title || historyId)} ; <${DCTERMS_NS}created> ${sparqlString(bookmarkCreated)}^^<${XSD_NS}dateTime>${description ? ` ; <${DCTERMS_NS}description> ${sparqlString(description)}` : ""} ; <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} ; <${historyQuery}> ${sparqlString(queryXml)}${shareUrl ? ` ; <${SCHEMA_NS}url> ${iri(shareUrl)}` : ""} } } WHERE { OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${DCTERMS_NS}title> ?oldTitle } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${RDFS_NS}label> ?oldLabel } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${DCTERMS_NS}description> ?oldDescription } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${SCHEMA_NS}url> ?oldUrl } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${SCHEMA_NS}identifier> ?oldHash } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${historyQuery}> ?oldQuery } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${DCTERMS_NS}created> ?oldCreated } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${DCTERMS_NS}subject> ?oldSubject } } OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${SCOT_NS}has_tag> ?oldScotTag } } }`);
       // Replace the bookmark's query-resource link with a DELETE/INSERT update,
       // rather than accumulating duplicate recalls links on repeated edits.
       await updatePersonalSparql(`DELETE { GRAPH ${graph} { ${iri(historyId)} <${BOOKMARK_NS}recalls> ?oldQueryResource } } INSERT { GRAPH ${graph} { ${triples.map((triple) => `${triple} .`).join("\n")} } } WHERE { OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${BOOKMARK_NS}recalls> ?oldQueryResource } } }`);
@@ -211,8 +211,9 @@ export async function POST(request: Request) {
       const id = `${historyNs}${crypto.randomUUID()}`;
       const created = new Date().toISOString();
       const triples = [
+        // Every navigation creates a History item. It becomes a Bookmark only
+        // when the user explicitly bookmarks it.
         `${iri(id)} <${RDF_NS}type> ${iri(historyType)}`,
-        `${iri(id)} <${RDF_NS}type> ${iri(`${BOOKMARK_NS}Bookmark`)}`,
         `${iri(id)} <${DCTERMS_NS}title> ${sparqlString(`Query ${created}`)}`,
         `${iri(id)} <${RDFS_NS}label> ${sparqlString(`Query ${created}`)}`,
         `${iri(id)} <${historyCreated}> ${sparqlString(created)}^^<${XSD_NS}dateTime>`,
@@ -223,20 +224,31 @@ export async function POST(request: Request) {
       return NextResponse.json({ historyId: id });
     }
     if (action === "check") {
-      const ask = `PREFIX schema: <${SCHEMA_NS}> ASK WHERE { GRAPH ${graph} { ?bookmark schema:identifier ${sparqlString(queryHash)} . } }`;
-      const bookmarked = await askPersonalSparql(ask);
+      // Prefer the active History item when available. Its restored query can
+      // serialize differently from the XML originally hashed at bookmark time.
       let bookmarkId: string | null = null;
-      if (bookmarked) {
+      if (historyId) {
+        const currentAsk = `PREFIX rdf: <${RDF_NS}> PREFIX schema: <${SCHEMA_NS}> PREFIX bookmark: <${BOOKMARK_NS}> ASK WHERE { GRAPH ${graph} { ${iri(historyId)} rdf:type bookmark:Bookmark ; schema:identifier ?hash . } }`;
+        if (await askPersonalSparql(currentAsk)) bookmarkId = historyId;
+      }
+      if (!bookmarkId) {
         const lookup = await queryPersonalSparql(`PREFIX schema: <${SCHEMA_NS}> SELECT ?bookmark WHERE { GRAPH ${graph} { ?bookmark schema:identifier ${sparqlString(queryHash)} . } } LIMIT 1`);
         bookmarkId = lookup.results?.bindings?.[0]?.bookmark?.value ?? null;
       }
-      return NextResponse.json({ bookmarked, hash: queryHash, historyId: bookmarkId });
+      return NextResponse.json({ bookmarked: Boolean(bookmarkId), hash: queryHash, historyId: bookmarkId });
     }
     if (action === "unbookmark") {
+      if (historyId) {
+        const currentAsk = `PREFIX rdf: <${RDF_NS}> PREFIX schema: <${SCHEMA_NS}> PREFIX bookmark: <${BOOKMARK_NS}> ASK WHERE { GRAPH ${graph} { ${iri(historyId)} rdf:type bookmark:Bookmark ; schema:identifier ?hash . } }`;
+        if (await askPersonalSparql(currentAsk)) {
+          await updatePersonalSparql(`DELETE { GRAPH ${graph} { ${iri(historyId)} <${SCHEMA_NS}identifier> ?hash ; <${RDF_NS}type> <${BOOKMARK_NS}Bookmark> ; <${DCTERMS_NS}created> ?bookmarkCreated } } WHERE { GRAPH ${graph} { ${iri(historyId)} <${SCHEMA_NS}identifier> ?hash OPTIONAL { ${iri(historyId)} <${DCTERMS_NS}created> ?bookmarkCreated } } }`);
+          return NextResponse.json({ removed: true, hash: queryHash, historyId });
+        }
+      }
       const ask = `PREFIX schema: <${SCHEMA_NS}> ASK WHERE { GRAPH ${graph} { ?bookmark schema:identifier ${sparqlString(queryHash)} . } }`;
       const bookmarked = await askPersonalSparql(ask);
       if (!bookmarked) return NextResponse.json({ removed: false, error: "No bookmark hash matches this query." }, { status: 404 });
-      await updatePersonalSparql(`DELETE { GRAPH ${graph} { ?bookmark <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} } } WHERE { GRAPH ${graph} { ?bookmark <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} } }`);
+      await updatePersonalSparql(`DELETE { GRAPH ${graph} { ?bookmark <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} ; <${RDF_NS}type> <${BOOKMARK_NS}Bookmark> ; <${DCTERMS_NS}created> ?bookmarkCreated } } WHERE { GRAPH ${graph} { ?bookmark <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} OPTIONAL { ?bookmark <${DCTERMS_NS}created> ?bookmarkCreated } } }`);
       return NextResponse.json({ removed: true, hash: queryHash });
     }
 
@@ -290,17 +302,11 @@ export async function POST(request: Request) {
         // Literal subjects are useful for informal user-defined tags.
         triples.push(`${iri(bookmark)} <${DCTERMS_NS}subject> ${sparqlString(tag)}`);
       } else if (tagVocabulary === "scot") {
-        // SCOT declares scot:has_tag as a subproperty of sioc:topic for sioc:Items.
-        const tagUri = `${MAESTRO_IDS_NS}scot-tag#${tagSlug(tag)}-${crypto.randomUUID()}`;
-        triples.push(`${iri(bookmark)} <${SCOT_NS}has_tag> ${iri(tagUri)}`);
-        triples.push(`${iri(tagUri)} <${RDF_NS}type> <${SCOT_NS}Tag>`);
-        triples.push(`${iri(tagUri)} <${RDFS_NS}label> ${sparqlString(tag)}`);
-        triples.push(`${iri(tagUri)} <${SKOS_NS}prefLabel> ${sparqlString(tag)}`);
+        // Store the user-entered tag as a literal directly on the bookmark.
+        triples.push(`${iri(bookmark)} <${SCOT_NS}has_tag> ${sparqlString(tag)}`);
       } else {
-        const tagUri = `${MAESTRO_IDS_NS}skos-tag#${tagSlug(tag)}-${crypto.randomUUID()}`;
-        triples.push(`${iri(bookmark)} <${DCTERMS_NS}subject> ${iri(tagUri)}`);
-        triples.push(`${iri(tagUri)} <${RDF_NS}type> <${SKOS_NS}Concept>`);
-        triples.push(`${iri(tagUri)} <${SKOS_NS}prefLabel> ${sparqlString(tag)}`);
+        // Store the SKOS tag label directly as a literal; do not mint a concept URI.
+        triples.push(`${iri(bookmark)} <${SKOS_NS}prefLabel> ${sparqlString(tag)}`);
       }
     }
 

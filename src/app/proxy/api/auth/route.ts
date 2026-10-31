@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { logProxyCaller } from "@/lib/proxy-debug";
+import { fetchWithDigestFallback } from "@/lib/digest-auth";
 
 export async function POST(request: Request) {
   logProxyCaller(request, "auth.POST");
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
 
       const sparql = "ASK WHERE { ?s ?p ?o }";
       const probe = async (url: URL, label: string) => {
-        const response = await fetch(url, {
+        const response = await fetchWithDigestFallback(url, {
           method: "POST",
           headers,
           body: new URLSearchParams({ query: sparql }).toString(),

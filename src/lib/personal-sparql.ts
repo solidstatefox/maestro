@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { graphSiteForPrefix } from "./personal-auth";
+import { fetchWithDigestFallback } from "./digest-auth";
 
 /** Shared server-side access to Maestro's personal SPARQL store and RDF-backed Graphsite registry. */
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -164,7 +165,7 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
     for (const destinationGraph of destinationGraphs) {
       const clearGraphUrl = new URL(graphStoreUrl.toString());
       clearGraphUrl.searchParams.set("graph", destinationGraph);
-      const clearResponse = await fetch(clearGraphUrl, {
+      const clearResponse = await fetchWithDigestFallback(clearGraphUrl, {
         method: "DELETE",
         headers: personalSparqlHeaders(request, "text/plain; charset=utf-8", "text/plain, text/html, application/json, */*"),
         cache: "no-store",
@@ -203,7 +204,7 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
           content += `\n\n# Automatically added personal SPARQL endpoint (not explicitly listed in the seed).\n<${MAESTRO_IDS_NS}dataservers/endpoints#personal-sparql> a schema:EntryPoint ;\n    rdfs:label "Personal SPARQL" ;\n    schema:url <${endpoint.toString()}> ;\n    dcterms:isPartOf <${MAESTRO_IDS_NS}dataservers/endpoints> ;\n    schema:position "-1"^^xsd:integer .\n`;
         }
       }
-      const response = await fetch(fileGraphStoreUrl, {
+      const response = await fetchWithDigestFallback(fileGraphStoreUrl, {
         method: "POST",
         headers: personalSparqlHeaders(request, mediaTypes[extname(file.name).toLowerCase()], "text/plain, text/html, application/json, */*"),
         body: content,
@@ -309,7 +310,7 @@ export async function askPersonalSparql(query: string, timeoutMs = 20000, reques
 /** Execute a SPARQL Update against the personal WRITE endpoint (/sparql-auth for sparql-auth logins). */
 export async function updatePersonalSparql(update: string, timeoutMs = 30000, request?: Request): Promise<string> {
   const endpoint = personalSparqlWriteUrl(request);
-  const response = await fetch(endpoint, {
+  const response = await fetchWithDigestFallback(endpoint, {
     method: "POST",
     headers: personalSparqlHeaders(request, "application/sparql-update; charset=UTF-8", "text/plain, text/html, application/json, */*"),
     body: update,

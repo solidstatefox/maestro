@@ -2,6 +2,7 @@ import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 import { clearQueryCache } from "@/lib/query-cache";
 import { personalSparqlWriteUrl, personalSparqlHeaders } from "@/lib/personal-sparql";
+import { fetchWithDigestFallback } from "@/lib/digest-auth";
 
 function validateIri(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
     const headers = personalSparqlHeaders(request, "application/sparql-update; charset=utf-8", "text/plain, text/html, application/json, */*");
 
     const update = `LOAD <${sourceUrl}> INTO GRAPH <${targetGraph}>`;
-    const response = await fetch(endpointUrl, {
+    const response = await fetchWithDigestFallback(endpointUrl, {
       method: "POST",
       headers,
       body: update,

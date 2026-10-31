@@ -8,7 +8,7 @@ import { createHash, randomBytes } from "node:crypto";
  */
 
 function parseChallenge(header: string): Record<string, string> | null {
-  const match = header.match(/^\s*Digest\s+(.*)$/is);
+  const match = header.match(/^\s*Digest\s+([\s\S]*)$/i);
   if (!match) return null;
   const params: Record<string, string> = {};
   for (const part of match[1].matchAll(/([a-z0-9_-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,]+))/gi)) {

@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { graphSiteForPrefix } from "./personal-auth";
-import { fetchWithDigestFallback } from "./digest-auth";
+import { authNote, fetchWithDigestFallback } from "./digest-auth";
 
 /** Shared server-side access to Maestro's personal SPARQL store and RDF-backed Graphsite registry. */
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -160,28 +160,24 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
     graphStoreUrl.search = "";
     graphStoreUrl.hash = "";
 
-    // Clear every distinct manifest destination before loading any documents.
+    // Clear every distinct manifest destination before loading any documents. The clear is a SPARQL Update
+    // (CLEAR SILENT GRAPH) POSTed to the write endpoint (/sparql-auth for sparql-auth logins), the same
+    // call path as every other Maestro write; a graph that does not exist yet is already empty.
     const destinationGraphs = [...new Set(files.map((file) => graphForFile(file.name, request)))].sort();
     for (const destinationGraph of destinationGraphs) {
-      const clearGraphUrl = new URL(graphStoreUrl.toString());
-      clearGraphUrl.searchParams.set("graph", destinationGraph);
-      const clearResponse = await fetchWithDigestFallback(clearGraphUrl, {
-        method: "DELETE",
-        headers: personalSparqlHeaders(request, "text/plain; charset=utf-8", "text/plain, text/html, application/json, */*"),
-        cache: "no-store",
-        signal: AbortSignal.timeout(30000),
-      });
-      const clearResponseText = (await clearResponse.text()).slice(0, 3000);
-      if (!clearResponse.ok && clearResponse.status !== 404) {
-        throw new Error(`Could not clear manifest graph ${destinationGraph} before loading (HTTP ${clearResponse.status}): ${clearResponseText || "no response details"}`);
+      try {
+        await updatePersonalSparql(`CLEAR SILENT GRAPH <${destinationGraph}>`, 30000, request);
+      } catch (error) {
+        throw new Error(`Could not clear manifest graph ${destinationGraph} before loading via ${writeEndpoint.toString()}: ${error instanceof Error ? error.message : String(error)}`);
       }
-      console.info(`Maestro cleared manifest graph ${destinationGraph}${clearResponse.status === 404 ? " (already absent)" : ""}.`);
+      console.info(`Maestro cleared manifest graph ${destinationGraph}.`);
     }
 
     for (const file of files.sort((a, b) => a.name.localeCompare(b.name))) {
       const destinationGraph = graphForFile(file.name, request);
       const fileGraphStoreUrl = new URL(graphStoreUrl.toString());
-      fileGraphStoreUrl.searchParams.set("graph", destinationGraph);
+      // Graph IRI is sent as-is (only URL-structural characters escaped), as in Virtuoso's own curl examples.
+      fileGraphStoreUrl.search = `?graph=${destinationGraph.replace(/[%&#+\s]/g, (c) => encodeURIComponent(c))}`;
       const path = resolve(getGraphDirectory(), file.name);
       let content = await readFile(path, "utf8");
       if (!content.trim()) {
@@ -213,7 +209,7 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
       });
       const responseText = (await response.text()).slice(0, 3000);
       if (!response.ok || /(?:Virtuoso\s+Exception|Error\s+SR|SPARQL\s+.*Error|failed)/i.test(responseText) && !/0 errors/i.test(responseText)) {
-        throw new Error(`Could not load RDF document ${path} into graph ${destinationGraph} (HTTP ${response.status}): ${responseText || "no response details"}`);
+        throw new Error(`Could not load RDF document ${path} into graph ${destinationGraph} (HTTP ${response.status}): ${responseText || "no response details"}${authNote(response) ? ` [${authNote(response)}]` : ""}`);
       }
       console.info(`Maestro loaded ${file.name} into ${destinationGraph}.`);
       loaded.push({ file: file.name, graph: destinationGraph });
@@ -318,7 +314,7 @@ export async function updatePersonalSparql(update: string, timeoutMs = 30000, re
     signal: AbortSignal.timeout(timeoutMs),
   });
   const body = (await response.text()).slice(0, 3000);
-  if (!response.ok) throw new Error(`Personal SPARQL update returned HTTP ${response.status}: ${body}`);
+  if (!response.ok) throw new Error(`Personal SPARQL update returned HTTP ${response.status}: ${body || "no response details"}${authNote(response) ? ` [${authNote(response)}]` : ""}`);
   if (/(?:Virtuoso\s+Exception|Error\s+SR|SPARQL\s+UPDATE\s+Error|failed)/i.test(body) && !/0 errors/i.test(body)) {
     throw new Error(`Personal SPARQL update failed: ${body}`);
   }

@@ -55,15 +55,56 @@ function buildDigestHeader(method: string, url: URL, creds: { user: string; pass
   return `Digest ${fields.join(", ")}`;
 }
 
-/** fetch() that answers a Digest challenge using the credentials in a Basic Authorization header. */
+const authNotes = new WeakMap<Response, string>();
+
+/** What the server asked for on a 401, to include in error messages (never contains credentials). */
+export function authNote(response: Response): string {
+  return authNotes.get(response) ?? "";
+}
+
+const redact = (header: string) => (header ? header.replace(/nonce="[^"]*"|opaque="[^"]*"/gi, "").slice(0, 160) : "none sent");
+
+/**
+ * fetch() for Virtuoso's authenticated endpoints. Sends the Basic Authorization header first (as Maestro always
+ * has) and falls back to HTTP Digest, which /sparql-auth and /sparql-graph-crud-auth use behind OpenLink's gateway:
+ *  1. Basic answered 401 with a Digest challenge  -> answer that challenge.
+ *  2. Basic answered 401 with no challenge at all -> some gateways only issue the challenge to requests that carry
+ *     no Authorization header, so repeat the request without it to obtain the challenge, then answer it.
+ * Request bodies must be strings (they are re-sent).
+ */
 export async function fetchWithDigestFallback(input: URL | string, init: RequestInit & { headers: Record<string, string> }): Promise<Response> {
   const url = typeof input === "string" ? new URL(input) : input;
+  const method = init.method ?? "GET";
   const first = await fetch(url, init);
   if (first.status !== 401) return first;
-  const challenge = parseChallenge(first.headers.get("www-authenticate") ?? "");
+
   const creds = decodeBasic(init.headers.Authorization ?? init.headers.authorization);
-  if (!challenge || !creds) return first;
-  await first.arrayBuffer().catch(() => undefined);
-  const headers = { ...init.headers, Authorization: buildDigestHeader(init.method ?? "GET", url, creds, challenge) };
-  return fetch(url, { ...init, headers });
+  const basicChallenge = first.headers.get("www-authenticate") ?? "";
+  if (!creds) {
+    authNotes.set(first, `${method} ${url.pathname} -> 401; server challenge: ${redact(basicChallenge)}; no Basic credentials were available to answer it`);
+    return first;
+  }
+
+  let challenge = parseChallenge(basicChallenge);
+  let probeNote = "";
+  if (!challenge) {
+    await first.arrayBuffer().catch(() => undefined);
+    const { Authorization: _a, authorization: _b, ...withoutAuth } = init.headers;
+    const probe = await fetch(url, { ...init, headers: withoutAuth });
+    const probeChallenge = probe.headers.get("www-authenticate") ?? "";
+    challenge = parseChallenge(probeChallenge);
+    if (!challenge) {
+      if (probe.status === 401) authNotes.set(probe, `${method} ${url.pathname} -> 401 with Basic credentials (challenge: ${redact(basicChallenge)}) and 401 without credentials (challenge: ${redact(probeChallenge)}); no Digest challenge to answer`);
+      return probe;
+    }
+    await probe.arrayBuffer().catch(() => undefined);
+    probeNote = " (challenge obtained from a request without credentials)";
+  } else {
+    await first.arrayBuffer().catch(() => undefined);
+  }
+
+  const headers = { ...init.headers, Authorization: buildDigestHeader(method, url, creds, challenge) };
+  const second = await fetch(url, { ...init, headers });
+  if (second.status === 401) authNotes.set(second, `${method} ${url.pathname} -> 401 even after a Digest response${probeNote}; check the username/password and the account's rights on this endpoint`);
+  return second;
 }

@@ -1,4 +1,4 @@
-# Maestro (graph browswer)
+# Maestro (a hyperdata-enabled graph browser)
 
 A web dashboard for exploring RDF data through Virtuoso's Faceted Browser (FCT) API, built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui.
 

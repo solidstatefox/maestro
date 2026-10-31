@@ -22,7 +22,7 @@ function TooltipContent({
 }: ComponentProps<typeof TooltipPrimitive.Popup> & { sideOffset?: number }) {
   return (
     <TooltipPrimitive.Portal>
-      <TooltipPrimitive.Positioner sideOffset={sideOffset}>
+      <TooltipPrimitive.Positioner sideOffset={sideOffset} className="z-50">
         <TooltipPrimitive.Popup
           data-slot="tooltip-content"
           className={`z-50 max-w-xs origin-(--transform-origin) rounded-md bg-foreground px-3 py-1.5 text-xs text-background shadow-md transition duration-150 ease-out data-[starting-style]:translate-y-1 data-[starting-style]:opacity-0 data-[ending-style]:translate-y-1 data-[ending-style]:opacity-0 data-[side=top]:data-[starting-style]:translate-y-1 data-[side=bottom]:data-[starting-style]:-translate-y-1 data-[side=left]:data-[starting-style]:translate-x-1 data-[side=right]:data-[starting-style]:-translate-x-1 ${className}`}

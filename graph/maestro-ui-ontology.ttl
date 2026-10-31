@@ -188,3 +188,11 @@ mui:action
     a owl:AnnotationProperty ;
     rdfs:label "Maestro action"@en ;
     rdfs:comment "Declares a constrained interaction routed through Maestro's approved live-query update API. The initial interpreter accepts only a direct allowlisted fctQueryTreeApi method call with literal or approved data-binding arguments; template content is never evaluated as unrestricted JavaScript or TypeScript."@en .
+
+# Serialized SPARQL form of the FCT query saved with a Bookmark.
+ mui:querySparql
+    a owl:DatatypeProperty ;
+    rdfs:label "Serialized query SPARQL"@en ;
+    rdfs:comment "The SPARQL translation of the saved vfct:historyQueryXML query, stored as text for inspection and reuse."@en ;
+    rdfs:domain rdfs:Resource ;
+    rdfs:range xsd:string .

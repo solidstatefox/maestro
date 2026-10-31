@@ -25,10 +25,18 @@ export type DistinctCountKind = "property" | "class" | "role" | "value";
 const COUNT_QUERY_LIMIT = 1000;
 const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
+const CLONE_EXCLUDED_ATTRIBUTES = ["limit", "offset", "sort", "order", "order-results", "badges"] as const;
+
 function cloneQueryNode(node: FctQueryNode): FctQueryNode {
+  // These are presentation/paging directives, not query constraints. Keep the
+  // filters and bindings, but never inherit source-view pagination or sorting.
+  const attributes = { ...node.attributes };
+  if (node.name === "view") {
+    for (const attribute of CLONE_EXCLUDED_ATTRIBUTES) delete attributes[attribute];
+  }
   return {
     ...node,
-    attributes: { ...node.attributes },
+    attributes,
     children: node.name === "view" ? [] : node.children.map(cloneQueryNode),
   };
 }
@@ -76,11 +84,11 @@ export function createPropertyWidgetQuery(
   selectedNodeId?: string,
   forPersonalFacet = false,
 ): FctQueryTree {
-  const copyNode = (node: FctQueryNode): FctQueryNode => ({
-    ...node,
-    attributes: { ...node.attributes },
-    children: node.name === "view" ? [] : node.children.map(copyNode),
-  });
+  const copyNode = (node: FctQueryNode): FctQueryNode => {
+    const attributes = { ...node.attributes };
+    if (node.name === "view") for (const attribute of CLONE_EXCLUDED_ATTRIBUTES) delete attributes[attribute];
+    return { ...node, attributes, children: node.name === "view" ? [] : node.children.map(copyNode) };
+  };
   const selectedRoleIsAncestor = direction === "reverse" && Boolean(selectedNodeId) &&
     treeNodeContainsId(tree.children, selectedNodeId!, "query-view");
 
@@ -110,7 +118,7 @@ export function createPropertyWidgetQuery(
       return { ...node, attributes: { ...node.attributes }, children: reuseCarrier(node.children) };
     });
     const children = reuseCarrier(tree.children);
-    if (reusedCarrier) return { ...tree, attributes: { ...tree.attributes }, children };
+    if (reusedCarrier) return { ...tree, attributes: Object.fromEntries(Object.entries(tree.attributes).filter(([key]) => !["order", "order-results"].includes(key))), children };
   }
 
   // For an ordinary relationship, delegate insertion/reuse to the shared query
@@ -121,7 +129,7 @@ export function createPropertyWidgetQuery(
     if (!view) return tree;
     let baseTree: FctQueryTree = {
       ...tree,
-      attributes: { ...tree.attributes },
+      attributes: Object.fromEntries(Object.entries(tree.attributes).filter(([key]) => !["order", "order-results"].includes(key))),
       children: tree.children.map(copyNode),
     };
     if (direction === "reverse" && selectedNodeId) {
@@ -158,7 +166,7 @@ export function createPropertyWidgetQuery(
     if (node.id === "query-view") {
       const ephemeralView: FctQueryNode = {
         ...copyNode(node),
-        attributes: { ...node.attributes, type: "list", offset: "0" },
+        attributes: { ...copyNode(node).attributes, type: "list", offset: "0" },
         children: [],
       };
       return [ephemeralView];
@@ -169,7 +177,7 @@ export function createPropertyWidgetQuery(
     if (forPersonalFacet && node.id === selectedNodeId && node.name === "property-of") delete attributes.exclude;
     return [{ ...node, attributes, children: wrapAncestor(node.children) }];
   });
-  return { ...tree, attributes: { ...tree.attributes }, children: wrapAncestor(tree.children) };
+  return { ...tree, attributes: Object.fromEntries(Object.entries(tree.attributes).filter(([key]) => !["order", "order-results"].includes(key))), children: wrapAncestor(tree.children) };
 }
 
 function findQueryView(nodes: FctQueryNode[]): FctQueryNode | null {
@@ -197,7 +205,7 @@ export function createGroupValuesQuery(
 ): FctQueryTree {
   const sourceClone: FctQueryTree = {
     ...sourceTree,
-    attributes: { ...sourceTree.attributes },
+    attributes: Object.fromEntries(Object.entries(sourceTree.attributes).filter(([key]) => !["order", "order-results"].includes(key))),
     children: sourceTree.children.map(cloneQueryNode),
   };
   return createPropertyWidgetQuery(
@@ -218,7 +226,7 @@ export function createGroupMemberQuery(
 ): FctQueryTree {
   let tree: FctQueryTree = {
     ...sourceTree,
-    attributes: { ...sourceTree.attributes },
+    attributes: Object.fromEntries(Object.entries(sourceTree.attributes).filter(([key]) => !["order", "order-results"].includes(key))),
     children: sourceTree.children.map(cloneQueryNode),
   };
   let bindingNodeId = option.nodeId;
@@ -351,7 +359,7 @@ export function createDistinctCountQuery(
 ): FctQueryTree {
   let tree: FctQueryTree = {
     ...sourceTree,
-    attributes: { ...sourceTree.attributes },
+    attributes: Object.fromEntries(Object.entries(sourceTree.attributes).filter(([key]) => !["order", "order-results"].includes(key))),
     children: sourceTree.children.map(cloneQueryNode),
   };
 
@@ -565,6 +573,6 @@ export function createRecordDescriptionQuery(
 }
 
 function cloneQueryTree(tree: FctQueryTree): FctQueryTree {
-  return { ...tree, attributes: { ...tree.attributes }, children: tree.children.map(cloneQueryNode) };
+  return { ...tree, attributes: Object.fromEntries(Object.entries(tree.attributes).filter(([key]) => !["order", "order-results"].includes(key))), children: tree.children.map(cloneQueryNode) };
 }
 

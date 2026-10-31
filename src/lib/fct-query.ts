@@ -15,6 +15,7 @@ export type FctUiResultSummary = {
    */
   uri?: string;
   termType?: "uri" | "literal" | "bnode";
+  zeroClasses?: boolean;
 };
 
 export type FctQueryNode = {
@@ -185,7 +186,10 @@ function serializeNode(node: FctQueryNode): string {
 }
 
 export function serializeFctQuery(tree: FctQueryTree): string {
+  // `addr` is the sole serialized address; graph remains a UI compatibility
+  // field only and must never leak into executable query XML.
   const attributes = Object.entries(tree.attributes)
+    .filter(([name]) => name !== "graph")
     .map(([name, value]) => ` ${name}="${escapeXml(value)}"`)
     .join("");
   return (

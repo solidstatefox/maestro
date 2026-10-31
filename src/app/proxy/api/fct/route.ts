@@ -185,14 +185,18 @@ function fctError(message: string, status: number, details?: string): Response {
   return new Response(body, { status, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
 }
 
-function fctColumn(term: SparqlBindingTerm | undefined, label?: string): string {
+function fctColumn(term: SparqlBindingTerm | undefined, label?: string, extraAttrs?: Record<string, string>): string {
   if (!term) return "<fct:column/>";
   const datatype = term.type === "uri" ? "uri" : term.type === "bnode" ? "bnode" : term.datatype;
   const safeLabel = term.type === "uri" && label && label !== term.value ? label : "";
+  const extraAttrStr = extraAttrs
+    ? Object.entries(extraAttrs).map(([k, v]) => ` ${k}="${xmlText(v)}"`).join("")
+    : "";
   const attrs = [
     datatype ? ` datatype="${xmlText(datatype)}"` : "",
     term["xml:lang"] ? ` xml:lang="${xmlText(term["xml:lang"])}"` : "",
     safeLabel ? ` label="${xmlText(safeLabel)}"` : "",
+    extraAttrStr,
   ].join("");
   return `<fct:column${attrs}>${xmlText(term.value)}</fct:column>`;
 }
@@ -201,11 +205,13 @@ function fctResponseXml(args: {
   query: string; view: string; limit: number; offset: number; bindings?: Record<string, SparqlBindingTerm>[];
   vars?: string[]; elapsedMs: number; complete: boolean; timeoutMs?: number; graphOnly?: boolean; countOnly?: boolean;
   labels?: Map<string, string>; error?: string;
+  badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse" }>;
 }): string {
   const { query, view, limit, offset, elapsedMs, complete } = args;
   if (args.error) return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>no</fct:complete><fct:error>${xmlText(args.error)}</fct:error></fct:facets>`;
   const vars = args.vars ?? [];
   const bindings = args.bindings ?? [];
+  const badgeMap = new Map((args.badgeColumns ?? []).map((b) => [b.colName, b]));
   let resultType = args.graphOnly ? "graphs" : args.countOnly ? "count" : view;
   const labelFor = (term: SparqlBindingTerm | undefined) =>
     term?.type === "uri" ? args.labels?.get(term.value) : undefined;
@@ -214,7 +220,11 @@ function fctResponseXml(args: {
       const count = binding.n ?? Object.values(binding)[0];
       return `<fct:row>${fctColumn(count, labelFor(count))}</fct:row>`;
     }
-    return `<fct:row>${vars.map((name) => fctColumn(binding[name], labelFor(binding[name]))).join("")}</fct:row>`;
+    return `<fct:row>${vars.map((name) => {
+      const badgeInfo = badgeMap.get(name);
+      const extraAttrs = badgeInfo ? { property: badgeInfo.property, direction: badgeInfo.direction } : undefined;
+      return fctColumn(binding[name], labelFor(binding[name]), extraAttrs);
+    }).join("")}</fct:row>`;
   }).join("");
   return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${complete ? "yes" : "no"}</fct:complete><fct:timeout>${args.timeoutMs ?? 0}</fct:timeout><fct:db-activity/><fct:processed>${bindings.length}</fct:processed><fct:view offset="${offset}" limit="${limit}"/><fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;
 }
@@ -288,12 +298,14 @@ export async function GET(request: Request) {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         Accept: "application/sparql-results+json, application/json;q=0.9",
       },
-      body: new URLSearchParams({ query: "SELECT (1 AS ?health) WHERE {}" }).toString(),
+      body: new URLSearchParams({ query: "ASK WHERE { ?s ?p ?o }" }).toString(),
       cache: "no-store",
       signal: AbortSignal.timeout(7000),
     });
     const responseText = await response.text();
-    const validResults = response.ok && parseResults(responseText) !== null;
+    let askSucceeded = false;
+    try { askSucceeded = Boolean(JSON.parse(responseText)?.boolean === true || JSON.parse(responseText)?.boolean === false); } catch { askSucceeded = false; }
+    const validResults = response.ok && askSucceeded;
     const status = validResults ? response.status : response.ok ? 502 : response.status;
     return NextResponse.json({
       check: {
@@ -336,15 +348,58 @@ export async function POST(request: Request) {
       return response;
     }
 
-    const endpoint = selectConfiguredFctEndpoint(request, endpoints);
-    if (!endpoint) return fctError(`No Datasites are configured in the personal SPARQL store graph ${getDataserversGraph()}.`, 503);
-
     let queryXml = typeof body?.queryXml === "string" ? body.queryXml.trim() : "";
     if (!queryXml && typeof body?.text === "string") {
-      queryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="" same-as=""><text>${xmlEscape(body.text.trim())}</text><view type="text" limit="30" offset="0"/></query>`;
+      const fallbackEndpoint = selectConfiguredFctEndpoint(request, endpoints);
+      if (!fallbackEndpoint) return fctError(`No graph servers are configured in the personal SPARQL store graph ${getDataserversGraph()}.`, 503);
+      queryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="" same-as="" addr="@${xmlEscape(fallbackEndpoint.id)}"><text>${xmlEscape(body.text.trim())}</text><view type="text" limit="30" offset="0"/></query>`;
     }
     if (!queryXml) return fctError("An FCT query XML document is required.", 400);
 
+    // Resolve the endpoint from this query's address, not the mutable selection
+    // cookie. Only the first @ separates graphsite from graph-server ID.
+    const rootTag = queryXml.match(/<query\b([^>]*)>/i)?.[1] ?? "";
+    const addrMatch = rootTag.match(/\baddr\s*=\s*(["'])(.*?)\1/i);
+    let address = addrMatch?.[2];
+    if (!address) {
+      const fallbackEndpoint = selectConfiguredFctEndpoint(request, endpoints);
+      if (fallbackEndpoint) {
+        address = `@${fallbackEndpoint.id}`;
+        queryXml = queryXml.replace(/<query\b/i, `<query addr="@${xmlEscape(fallbackEndpoint.id)}" `);
+      }
+    }
+    const delimiter = address?.indexOf("@") ?? -1;
+    if (delimiter < 0 || !address?.slice(delimiter + 1).trim()) {
+      return fctError('Every FCT query must have a valid addr="graphsite@graphserver" attribute; graphsite may be empty.', 400);
+    }
+    if (delimiter > 0) {
+      const graphValue = address.slice(0, delimiter);
+      const hash = graphValue.indexOf("#");
+      const localName = hash >= 0 ? graphValue.slice(hash + 1) : "";
+      if (hash >= 0 && localName !== "history" && localName !== "bookmarks") {
+        const normalizedAddress = `${graphValue.slice(0, hash)}@${address.slice(delimiter + 1)}`;
+        if (addrMatch) {
+          queryXml = queryXml.replace(addrMatch[0], `addr=${addrMatch[1]}${normalizedAddress}${addrMatch[1]}`);
+        }
+      }
+    }
+    const serverAddress = address.slice(delimiter + 1).trim();
+    const endpoint = endpoints.find((item) => item.id === serverAddress || item.url === serverAddress || item.label === serverAddress);
+    if (!endpoint) return fctError(`The graph server in query addr is not configured: ${serverAddress}`, 400);
+
+    // Maestro uses #history and #bookmarks as client-side names for its two
+    // private storage graphs. Other graphsite fragments are local labels only
+    // and must not change the named graph requested by an ordinary FCT query.
+    const graphAttribute = rootTag.match(/\bgraph\s*=\s*(["'])(.*?)\1/i);
+    if (graphAttribute) {
+      const graphValue = graphAttribute[2];
+      const hash = graphValue.indexOf("#");
+      const localName = hash >= 0 ? graphValue.slice(hash + 1) : "";
+      if (hash >= 0 && localName !== "history" && localName !== "bookmarks") {
+        const normalizedGraph = graphValue.slice(0, hash);
+        queryXml = queryXml.replace(graphAttribute[0], `graph=${graphAttribute[1]}${normalizedGraph}${graphAttribute[1]}`);
+      }
+    }
     const view = typeof body?.view === "string" ? body.view : undefined;
     const graphOnly = body?.graphOnly === true;
     const countOnly = body?.countOnly === true;
@@ -405,6 +460,7 @@ export async function POST(request: Request) {
     const xml = fctResponseXml({
       query: compiled.query, view: compiled.view, limit: compiled.limit, offset: compiled.offset,
       bindings, vars, elapsedMs, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly, labels,
+      badgeColumns: compiled.badgeColumns,
     });
     if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS" } });

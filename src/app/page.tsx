@@ -4,6 +4,8 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } f
 import { rememberNamespaceMetadata, rememberShortforms, toLabel } from "@/lib/uri-labels";
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
+import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
+import { buildFctGroupValuesSparql } from "@/lib/fct-results-sparql";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { ReactNode, Dispatch, SetStateAction } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -14,6 +16,10 @@ import {
   DropdownMenuContent,
   DropdownMenuCheckboxItem,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Toggle } from "@/components/ui/toggle";
@@ -22,7 +28,10 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History } from "lucide-react";
+import { Ban, Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck } from "lucide-react";
+import { shortenCount } from "@/lib/utils";
+import { cachedFetchFct, clearClientQueryCache } from "@/lib/client-query-cache";
+import { initializeMaestroStorage, maestroStorageGet, maestroStorageSet, clearMaestroStorage } from "@/lib/maestro-storage";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -128,6 +137,7 @@ type FacetItem = {
   uri: string;
   label: string;
   count: number;
+  example?: { uri: string; label: string; termType?: "uri" | "literal" | "bnode" };
 };
 
 type FacetName = string;
@@ -294,6 +304,36 @@ function parseFctResponse(xmlText: string): ParsedFctResponse {
     const isText = resultType === "text";
     const excerpt = isText ? (second?.value ?? "") : "";
     const title = first.termType === "uri" ? (first.label || (second && !isText ? second.value : toLabel(first.value))) : (!isText && second ? second.value : first.value);
+    const parsedScopeValues: ScopeValue[] = [];
+    const scopeValueMap = new Map<string, ScopeValue>();
+    for (const column of columns) {
+      const propIri = column.attributes?.property;
+      if (!propIri) continue;
+      const direction: RelationshipDirection = column.attributes?.direction === "reverse" ? "reverse" : "forward";
+      const key = `${direction}\u0000${propIri}`;
+      let scopeVal = scopeValueMap.get(key);
+      if (!scopeVal) {
+        scopeVal = {
+          property: propIri,
+          label: toLabel(propIri),
+          direction,
+          values: [],
+        };
+        scopeValueMap.set(key, scopeVal);
+        parsedScopeValues.push(scopeVal);
+      }
+      if (column.value) {
+        const nextTerm: EnrichedTerm = {
+          value: column.value,
+          ...(column.termType ? { type: column.termType } : {}),
+          ...(column.datatype ? { datatype: column.datatype } : {}),
+          ...(column.lang ? { lang: column.lang } : {}),
+        };
+        if (!scopeVal.values.some((v) => v.value === nextTerm.value)) {
+          scopeVal.values.push(nextTerm);
+        }
+      }
+    }
     const item: FctResult = {
       uri: first.value,
       title,
@@ -303,6 +343,7 @@ function parseFctResponse(xmlText: string): ParsedFctResponse {
       ...(first.lang ? { lang: first.lang } : {}),
       columns,
       matches: excerpt ? [{ excerpt, columns: columns.slice(1) }] : [],
+      ...(parsedScopeValues.length > 0 ? { scopeValues: parsedScopeValues } : {}),
     };
     if (resultType === "list-count" && second) item.columns = columns;
     if (third && resultType === "text") item.matches = [{ excerpt: third.value, columns: columns.slice(2) }];
@@ -310,7 +351,14 @@ function parseFctResponse(xmlText: string): ParsedFctResponse {
   });
   const facetItems = rowColumns.flatMap((columns) => {
     if (!columns[0]) return [];
-    return [{ uri: columns[0].value, label: columns[0].label || columns[0].shortform || toLabel(columns[0].value), count: Number(columns[1]?.value ?? 0) }];
+    const labelKind = resultType === "classes" ? "Class" : resultType === "properties-in" ? "Role" : resultType === "properties" ? "Property" : undefined;
+    const exampleColumn = resultType === "properties" || resultType === "properties-in" ? columns[2] : undefined;
+    return [{
+      uri: columns[0].value,
+      label: columns[0].label || columns[0].shortform || toLabel(columns[0].value, labelKind),
+      count: Number(columns[1]?.value ?? 0),
+      ...(exampleColumn?.value ? { example: { uri: exampleColumn.value, label: exampleColumn.label || exampleColumn.shortform || (exampleColumn.termType === "uri" ? toLabel(exampleColumn.value, "Class") : exampleColumn.value), termType: exampleColumn.termType } } : {}),
+    }];
   });
   const describe = rowColumns.flatMap((columns) => columns.length >= 3 ? [{ subject: columns[0], predicate: columns[1], object: columns[2] }] : []);
   const uris = new Map<string, { shortform?: string; label?: string }>();
@@ -547,7 +595,7 @@ function DistinctCount({
           throw new Error("The current FCT query tree contains a condition that cannot be compiled safely to SPARQL.");
         }
         stage = "executing scalar count SPARQL";
-        const sparqlResponse = await fetch("/proxy/api/sparql", {
+        const sparqlResponse = await cachedFetchFct("/proxy/api/sparql", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("distinct-count-sparql", `DistinctCount:${kind}:${propertyUri ?? ""}:${uri}`) },
           body: JSON.stringify({ facetValueCount: { sparql: countSparqlQuery } }),
@@ -626,7 +674,7 @@ function DistinctCount({
         ? "!"
         : count === null
           ? "…"
-          : count.toLocaleString()}
+          : shortenCount(count)}
     </span>} /><TooltipContent>{error
           ? `Could not load distinct count: ${error}`
           : kind === "property"
@@ -724,7 +772,7 @@ function PersonalWidgetQueryListener({
 
     async function refreshWidget() {
       try {
-        const response = await fetch("/proxy/api/fct", {
+        const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
           headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("personal-widget-values", `PersonalWidgetQueryListener:${propertyUri}`) },
@@ -815,6 +863,7 @@ function PersonalRoleWidget({
   isGroupByRole,
   onGroupValueClick,
   setRoleWidgetStatuses,
+  onFirstExampleClick,
 }: {
   tree: FctQueryTree;
   roleNode: FctQueryNode;
@@ -822,6 +871,7 @@ function PersonalRoleWidget({
   isGroupByRole: boolean;
   onGroupValueClick: (value: FctResult) => void;
   setRoleWidgetStatuses: Dispatch<SetStateAction<Record<string, RoleWidgetStatus>>>;
+  onFirstExampleClick: (uri: string) => void;
 }) {
   const { setRoleValue } = useFctQuery();
   const uri = roleNode.attributes.iri ?? "";
@@ -874,7 +924,7 @@ function PersonalRoleWidget({
     setError("");
     async function loadValues() {
       try {
-        const response = await fetch("/proxy/api/fct", {
+        const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
           headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("personal-role-widget-values", `PersonalRoleWidget:${uri}`) },
@@ -925,7 +975,13 @@ function PersonalRoleWidget({
           <button type="button" className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40" disabled={page >= pageCount - 1} onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}>Next</button>
         </div>
       )}
-      <div className="space-y-1">
+      {(() => {
+        const bound = (roleNode.children ?? []).find((child) => child.name === "value" && Boolean(child.text));
+        const first = bound ? { uri: bound.text ?? "", termType: bound.attributes.datatype === "uri" ? "uri" as const : "literal" as const, title: bound.text ?? "" } : values[0];
+        if (!first?.uri) return null;
+        return <button type="button" onClick={() => onFirstExampleClick(first.uri)} disabled={loading} className="mb-2 block max-w-full break-words px-2 text-left text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"><em>{bound ? "i.e." : "e.g."}</em> {first.termType === "uri" ? toLabel(first.uri, "Class") : first.title || first.uri}</button>;
+      })()}
+      <div className={`space-y-1 ${loading ? "opacity-45" : ""}`}>
         {pageValues.map((value, valueIndex) => {
           const binding = groupValueBinding(value);
           const valueKey = fctTermKey(binding.text, binding.datatype, binding.lang);
@@ -933,7 +989,7 @@ function PersonalRoleWidget({
           const isZeroCount = candidateCounts[countQuery] === 0;
           return (
             <div key={`${value.uri}:${value.datatype ?? ""}:${value.lang ?? ""}`} className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 ${isGroupByRole ? "" : "cursor-pointer"}`}>
-              <input id={`personal-role-value-${roleNode.id}-${valueIndex}`} type="checkbox" checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`} />
+              <input id={`personal-role-value-${roleNode.id}-${valueIndex}`} type="checkbox" disabled={loading} checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`} />
               {isGroupByRole ? (
                 <Tooltip><TooltipTrigger render={<button type="button" onClick={() => onGroupValueClick(value)} className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`}>{value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}</button>} /><TooltipContent>{`Scroll to group ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`}</TooltipContent></Tooltip>
               ) : (
@@ -981,6 +1037,12 @@ type EndpointStatus = {
   attempts?: Array<{ url: string; status: number | null; state: string }>;
 };
 type EndpointOption = { id: string; label: string; url: string; group: string };
+
+function EndpointStatusIcon({ status }: { status?: EndpointStatus }) {
+  if (status?.status === 200) return <span className="relative inline-flex size-4 shrink-0" title="200 OK"><Server className="size-4 text-green-600" /><Check className="absolute -right-1 -bottom-1 size-2.5 text-green-600" /></span>;
+  if (status?.status !== undefined && status.status !== null && status.status >= 400) return <span className="relative inline-flex size-4 shrink-0" title={`HTTP ${status.status}`}><Server className="size-4 text-red-600" /><X className="absolute -right-1 -bottom-1 size-2.5 text-red-600" /></span>;
+  return <Server aria-label="Not yet pinged" className="size-4 shrink-0 text-muted-foreground" />;
+}
 
 type FacetAddCounts = {
   property: Record<string, number>;
@@ -1111,7 +1173,6 @@ const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const GROUP_BY_FACET_HIGHLIGHT_CLASSES = "border-sky-300 bg-sky-100/80 dark:border-sky-800 dark:bg-sky-950/50";
 
 type ShareableUiState = {
-  selectedEndpointId?: string;
   selectedFacet?: FacetName;
   propertiesPage?: number;
   classesPage?: number;
@@ -1146,7 +1207,21 @@ type ShareableUiState = {
   selectedNamePropertyUris?: string[];
   /** Backward-compatible single-predicate state from older shared URLs. */
   selectedNamePropertyUri?: string;
+  /** Metadata badge view mode: records (default) or classes. */
+  breadcrumbBadgeMode?: "records" | "classes";
 };
+
+/** Read the configured graph-server identifier from the query's authoritative addr attribute. */
+function readGraphServerFromQueryXml(xml: string | null | undefined): string | null {
+  if (!xml || typeof DOMParser === "undefined") return null;
+  const document = new DOMParser().parseFromString(xml, "application/xml");
+  const root = document.documentElement;
+  if (document.querySelector("parsererror") || root?.localName !== "query") return null;
+  const address = root.getAttribute("addr") ?? "";
+  const delimiter = address.indexOf("@");
+  const graphServer = delimiter >= 0 ? address.slice(delimiter + 1).trim() : "";
+  return graphServer || null;
+}
 
 function readShareableUiState(search?: string): ShareableUiState | null {
   if (typeof window === "undefined" && search === undefined) return null;
@@ -1248,6 +1323,9 @@ export default function Home() {
   const [historyHasOlder, setHistoryHasOlder] = useState(false);
   const [historyHasNewer, setHistoryHasNewer] = useState(false);
   const [historyNavigationPending, setHistoryNavigationPending] = useState<"backward" | "forward" | null>(null);
+  const [historyActionItems, setHistoryActionItems] = useState<Array<{ historyId: string; created: string; action: { operator: "+" | "-"; xpath: string; value?: string } | null }>>([]);
+  const [historyActionMenu, setHistoryActionMenu] = useState<"backward" | "forward" | null>(null);
+  const historyHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isDeletingCurrentHistory, setIsDeletingCurrentHistory] = useState(false);
   const bookmarkTitleInputRef = useRef<HTMLInputElement>(null);
   const historyVisitQueryRef = useRef("");
@@ -1255,7 +1333,7 @@ export default function Home() {
   const historyWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   // While the pointer is over the search input, coalesce rapid query edits into
   // While the root breadcrumb search is expanded, coalesce changes into one in-memory snapshot.
-  const pendingHistoryVisitRef = useRef<{ queryXml: string; stateUrl: string } | null>(null);
+  const pendingHistoryVisitRef = useRef<{ queryXml: string; stateUrl: string; action: { operator: "+" | "-"; xpath: string; value?: string } | null } | null>(null);
   const [fctEndpoints, setFctEndpoints] = useState<EndpointOption[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState("");
   const activeBreadcrumbButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1269,6 +1347,8 @@ export default function Home() {
   const [endpointChecksCompleted, setEndpointChecksCompleted] = useState(0);
   const [endpointChecksTotal, setEndpointChecksTotal] = useState(0);
   const [endpointMenuError, setEndpointMenuError] = useState("");
+  const [endpointHealthToast, setEndpointHealthToast] = useState<{ endpointId: string; message: string } | null>(null);
+  const [isRefreshingFailedEndpoint, setIsRefreshingFailedEndpoint] = useState(false);
   const [selectedFacet, setSelectedFacet] = useState<FacetName>("Properties");
   const [propertiesPage, setPropertiesPage] = useState(0);
   const [classesPage, setClassesPage] = useState(0);
@@ -1291,9 +1371,60 @@ export default function Home() {
   const queryTreeHeightDbRef = useRef<IDBDatabase | null>(null);
   const centralPaneRef = useRef<HTMLElement | null>(null);
   const [showResultBadges, setShowResultBadges] = useState(false);
+  const [orderResults, setOrderResults] = useState(false);
+  const [breadcrumbBadgeMode, setBreadcrumbBadgeMode] = useState<"records" | "classes">("records");
+  const [openBreadcrumbDropdownId, setOpenBreadcrumbDropdownId] = useState<string | null>(null);
+  const [graphsiteSubjectCount, setGraphsiteSubjectCount] = useState<number | null>(null);
+  const [shiftKeyDown, setShiftKeyDown] = useState(false);
+  const [hoveredFacetKey, setHoveredFacetKey] = useState<string | null>(null);
 
-  // Keep the draggable Query Tree pane height in IndexedDB, not localStorage.
+  const toggleBreadcrumbBadgeMode = useCallback(() => {
+    setBreadcrumbBadgeMode((current) => {
+      const next = current === "records" ? "classes" : "records";
+      maestroStorageSet("maestro-breadcrumb-badge-mode", next);
+      return next;
+    });
+  }, []);
+
+// This tracks the Shift key and hovered row
+useEffect(() => {
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Shift") setShiftKeyDown(true);
+  };
+
+  const handleKeyUp = (event: KeyboardEvent) => {
+    if (event.key === "Shift") setShiftKeyDown(false);
+  };
+
+  const handleWindowBlur = () => setShiftKeyDown(false);
+
+  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("keyup", handleKeyUp);
+  window.addEventListener("blur", handleWindowBlur);
+
+  return () => {
+    window.removeEventListener("keydown", handleKeyDown);
+    window.removeEventListener("keyup", handleKeyUp);
+    window.removeEventListener("blur", handleWindowBlur);
+  };
+}, []);
+
+  // Keep the draggable Query Tree pane height and order-results toggle in IndexedDB.
   useEffect(() => {
+    void initializeMaestroStorage().then(() => {
+      const saved = maestroStorageGet("maestro-order-results");
+      if (saved !== null) {
+        setOrderResults(saved === "yes" || saved === "true");
+      }
+      const savedBadgeMode = maestroStorageGet("maestro-breadcrumb-badge-mode");
+      if (savedBadgeMode === "classes" || savedBadgeMode === "records") {
+        setBreadcrumbBadgeMode((current) => {
+          const stateObj = readShareableUiState(typeof window !== "undefined" ? window.location.search : "");
+          if (stateObj?.breadcrumbBadgeMode) return stateObj.breadcrumbBadgeMode;
+          return savedBadgeMode;
+        });
+      }
+    });
     if (typeof window === "undefined" || !window.indexedDB) {
       setQueryTreeHeightLoaded(true);
       setRecordFormatPreferenceLoaded(true);
@@ -1312,12 +1443,18 @@ export default function Home() {
       const preferences = db.transaction("preferences", "readonly").objectStore("preferences");
       const read = preferences.get("query-tree-height-percent");
       const readFormat = preferences.get("record-format-enabled");
+      const readOrder = preferences.get("order-results-enabled");
       read.onsuccess = () => {
         const value = Number(read.result);
         if (!cancelled && Number.isFinite(value) && value >= 15 && value <= 75) setQueryTreeHeightPercent(value);
         if (!cancelled) setQueryTreeHeightLoaded(true);
       };
       read.onerror = () => { if (!cancelled) setQueryTreeHeightLoaded(true); };
+      readOrder.onsuccess = () => {
+        if (!cancelled && typeof readOrder.result === "boolean") {
+          setOrderResults(readOrder.result);
+        }
+      };
       readFormat.onsuccess = () => {
         if (!cancelled) {
           setRecordFormatEnabled(readFormat.result === true);
@@ -1361,6 +1498,9 @@ export default function Home() {
       console.warn("Maestro could not persist the Format toggle in IndexedDB", error);
     }
   }, [recordFormatEnabled, recordFormatPreferenceLoaded]);
+
+
+
   const [querySourceFormat, setQuerySourceFormat] = useState<"xml" | "sparql">("xml");
   const [sparqlQuery, setSparqlQuery] = useState("");
   const [isRdfLoaderOpen, setIsRdfLoaderOpen] = useState(false);
@@ -1519,6 +1659,45 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   useEffect(() => {
     setGraphsPage(0);
   }, [queryTree.attributes.graph]);
+
+  const currentGraphsite = queryTree.attributes.graph?.trim() || (queryTree.attributes.addr?.includes("@") ? queryTree.attributes.addr.split("@")[0].trim() : "");
+
+  useEffect(() => {
+    if (!currentGraphsite || !selectedEndpointId) {
+      setGraphsiteSubjectCount(null);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    const sparql = `SELECT (COUNT(DISTINCT ?s) AS ?ct) WHERE { GRAPH <${currentGraphsite}> { ?s ?p ?o } }`;
+    async function loadGraphsiteSubjectCount() {
+      try {
+        const response = await cachedFetchFct("/proxy/api/sparql", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...proxyDebugHeaders("graphsite-subject-count", "GraphsiteSubjectCount"),
+          },
+          body: JSON.stringify({ facetValueCount: { sparql } }),
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        if (!cancelled && response.ok && typeof data.count === "number") {
+          setGraphsiteSubjectCount(data.count);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn("Could not load graphsite subject count:", err);
+        }
+      }
+    }
+    void loadGraphsiteSubjectCount();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [currentGraphsite, selectedEndpointId]);
+
 
   const searchNode = queryTree.children.find(
     (node) => node.name === "text" && node.id === "query-text",
@@ -1700,11 +1879,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       void (async () => {
         const controller = new AbortController();
         try {
-          const response = await fetch("/proxy/api/fct", {
+          const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+          const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
             cache: "no-store",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("uri-label-lookup", "UriLabelLookup") },
-            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="describe" limit="30" offset="0"/></query>`,
+            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="describe" limit="30" offset="0"/></query>`,
             signal: controller.signal,
           });
           const data = await readFctResponse(response);
@@ -1933,10 +2113,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   useEffect(() => {
     let cancelled = false;
     async function loadEndpointMenu() {
-      // Capture the initial URL selection before awaiting the endpoint-menu
-      // request. The URL-state writer can otherwise replace the initial state
-      // while this request is in flight, losing the requested data server.
-      const requestedUrlSelection = readShareableUiState()?.selectedEndpointId;
+      // Resolve the initial graph server from q's addr attribute. Endpoint
+      // selection is deliberately not duplicated in the URL's UI-state JSON.
+      const initialParams = new URLSearchParams(window.location.search);
+      const requestedUrlSelection = readGraphServerFromQueryXml(initialParams.get("q"));
       setIsCheckingEndpoints(true);
       setEndpointChecksCompleted(0);
       setSelectedEndpointId("");
@@ -1944,7 +2124,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       try {
         // Load the configured server list without probing every server. Only
         // the one candidate that will become active is health-checked on startup.
-        const response = await fetch("/proxy/api/fct", { cache: "no-store", headers: proxyDebugHeaders("endpoint-menu", "EndpointMenu") });
+        const response = await cachedFetchFct("/proxy/api/fct", { cache: "no-store", headers: proxyDebugHeaders("endpoint-menu", "EndpointMenu") });
         const data = await response.json();
         rememberShortforms(data?.shortforms);
         if (!response.ok)
@@ -1954,10 +2134,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
           ? (data.endpoints as EndpointOption[])
           : [];
         const savedSelection = typeof data.selectedId === "string" ? data.selectedId : "";
-        const requestedSelection =
-          typeof requestedUrlSelection === "string" && endpoints.some((endpoint) => endpoint.id === requestedUrlSelection)
-            ? requestedUrlSelection
-            : savedSelection;
+        const requestedEndpoint = typeof requestedUrlSelection === "string"
+          ? endpoints.find((endpoint) => endpoint.id === requestedUrlSelection || endpoint.url === requestedUrlSelection || endpoint.label === requestedUrlSelection)
+          : undefined;
+        const requestedSelection = requestedEndpoint?.id ?? savedSelection;
 
         setFctEndpoints(endpoints);
         setEndpointMenuError("");
@@ -1985,13 +2165,15 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         const isReachable = status?.status != null && status.status < 400 && status.state === "ok";
         if (!isReachable) {
           setSelectedEndpointId("");
-          setEndpointMenuError(`Graph server ${selectedEndpoint.label} did not pass its health check. Choose another server to load it.`);
+          const message = `Graph server ${selectedEndpoint.label} did not pass its health check.`;
+          setEndpointMenuError(`${message} Refresh to retry this server, or choose another server.`);
+          setEndpointHealthToast({ endpointId: effectiveSelection, message });
           return;
         }
 
         // Synchronize the proxy cookie only after the single candidate passes
         // its health check, so the UI and actual query destination cannot diverge.
-        const selectResponse = await fetch("/proxy/api/fct", {
+        const selectResponse = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-initial-select", "EndpointMenu") },
           body: JSON.stringify({ selectEndpointId: effectiveSelection }),
@@ -2074,6 +2256,35 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     return results;
   }
 
+  async function refreshFailedEndpointAndRetry() {
+    if (!endpointHealthToast || isRefreshingFailedEndpoint) return;
+    const endpointId = endpointHealthToast.endpointId;
+    const endpoint = fctEndpoints.find((item) => item.id === endpointId);
+    if (!endpoint) return;
+    setIsRefreshingFailedEndpoint(true);
+    try {
+      const checked = await runEndpointChecks([endpoint]);
+      setIsCheckingEndpoints(false);
+      const status = checked[endpointId];
+      if (!(status?.state === "ok" && status.status != null && status.status < 400)) {
+        setEndpointHealthToast({ endpointId, message: `Graph server ${endpoint.label} is still unreachable. Refresh to try again.` });
+        return;
+      }
+      const response = await cachedFetchFct("/proxy/api/fct", {
+        method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-select", "EndpointHealthToastRefresh") },
+        body: JSON.stringify({ selectEndpointId: endpointId }), cache: "no-store",
+      });
+      const data = await response.json() as { selectedId?: string; error?: string };
+      if (!response.ok || data.selectedId !== endpointId) throw new Error(data.error ?? "Could not select the refreshed graph server.");
+      setSelectedEndpointId(endpointId);
+      setEndpointHealthToast(null);
+      setEndpointMenuError("");
+      refreshQuery();
+    } catch (error) {
+      setEndpointHealthToast({ endpointId, message: error instanceof Error ? error.message : "Could not refresh the graph server." });
+    } finally { setIsRefreshingFailedEndpoint(false); setIsCheckingEndpoints(false); }
+  }
+
   async function checkFctEndpoints() {
     setEndpointMenuError("");
     await runEndpointChecks(fctEndpoints);
@@ -2085,13 +2296,18 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     if (!endpointId) return;
     const endpoint = fctEndpoints.find((item) => item.id === endpointId);
     if (!endpoint) throw new Error(`The saved query refers to an unknown graph server: ${endpointId}`);
-    const checked = await runEndpointChecks([endpoint]);
-    setIsCheckingEndpoints(false);
-    const health = checked[endpointId];
-    if (!(health?.state === "ok" && health.status != null && health.status < 400)) {
-      throw new Error(`Graph server ${endpoint.label} did not pass its health check; the saved query was not switched to it.`);
+    let health = endpointStatuses[endpointId];
+    if (!health) {
+      const checked = await runEndpointChecks([endpoint]);
+      setIsCheckingEndpoints(false);
+      health = checked[endpointId];
     }
-    const response = await fetch("/proxy/api/fct", {
+    if (!(health?.state === "ok" && health.status != null && health.status < 400)) {
+      const message = `Graph server ${endpoint.label} did not pass its health check; the saved query was not switched to it.`;
+      setEndpointHealthToast({ endpointId, message });
+      throw new Error(message);
+    }
+    const response = await cachedFetchFct("/proxy/api/fct", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-state-restore", "EndpointMenu") },
       body: JSON.stringify({ selectEndpointId: endpointId }),
@@ -2115,16 +2331,18 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       // A server must pass a health check before it can become the active
       // selection. Recheck unknown or previously unhealthy servers on demand.
       let status = endpointStatuses[endpointId];
-      if (!(status?.state === "ok" && status.status != null && status.status < 400)) {
+      if (!status) {
         const checked = await runEndpointChecks([endpoint]);
         setIsCheckingEndpoints(false);
         status = checked[endpointId];
       }
       if (!(status?.state === "ok" && status.status != null && status.status < 400)) {
-        throw new Error(`Graph server ${endpoint.label} did not pass its health check; it was not selected.`);
+        const message = `Graph server ${endpoint.label} did not pass its health check; it was not selected.`;
+        setEndpointHealthToast({ endpointId, message });
+        throw new Error(message);
       }
 
-      const response = await fetch("/proxy/api/fct", {
+      const response = await cachedFetchFct("/proxy/api/fct", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-select", "EndpointMenu") },
         body: JSON.stringify({ selectEndpointId: endpointId }),
@@ -2169,7 +2387,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
           .filter((child) => child.name === "value" && Boolean(child.text))
           .map((child) => fctTermKey(child.text ?? "", child.attributes.datatype, child.attributes["xml:lang"]));
         const excluded = node.attributes.exclude?.trim().toLowerCase() === "yes";
-        const baseLabel = toLabel(uri);
+        const baseLabel = toLabel(uri, "Property");
         const label = baseLabel;
         const existing = existingByUri.get(uri);
         if (existing) {
@@ -2384,9 +2602,13 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         // structure exactly, including a URL that intentionally has no <text>.
         // Keep the datasite field tied to the graph attribute in q, rather than
         // allowing a separately saved draft field to override the shared query.
-        const restoredGraph = restoredTree.attributes.graph ?? null;
-        setQueryAttribute("graph", restoredGraph);
-        setGraphText(restoredGraph ?? "");
+        const restoredAddress = restoredTree.attributes.addr ?? "";
+        const addressDelimiter = restoredAddress.indexOf("@");
+        const restoredGraph = addressDelimiter >= 0 ? restoredAddress.slice(0, addressDelimiter) : "";
+        restoredTree.attributes.graph = restoredGraph;
+        restoredTree.attributes.addr = restoredAddress;
+        setQueryAttribute("graph", restoredGraph || null);
+        setGraphText(restoredGraph);
         restoredQueryFromUrl = true;
       }
     }
@@ -2408,6 +2630,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       else if (restored.centralTab === "query-tree") setQueryTreeOpen(true);
       if (typeof restored.showResultBadges === "boolean") setShowResultBadges(restored.showResultBadges);
       if (typeof restored.badgesToggle === "boolean") setShowResultBadges(restored.badgesToggle);
+      if (restored.breadcrumbBadgeMode === "classes" || restored.breadcrumbBadgeMode === "records") {
+        setBreadcrumbBadgeMode(restored.breadcrumbBadgeMode);
+        maestroStorageSet("maestro-breadcrumb-badge-mode", restored.breadcrumbBadgeMode);
+      }
       if (restored.querySourceFormat === "xml" || restored.querySourceFormat === "sparql") setQuerySourceFormat(restored.querySourceFormat);
       if (["facets", "personal", "community"].includes(restored.defaultLeftTab ?? "")) setDefaultLeftTab(restored.defaultLeftTab!);
       if (restored.focusListOrder === "Properties" || restored.focusListOrder === "Roles") setFocusListOrder(restored.focusListOrder);
@@ -2460,7 +2686,6 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     const params = new URLSearchParams(window.location.search);
     params.set("q", queryXml);
     const state: ShareableUiState = {
-      selectedEndpointId,
       selectedFacet,
       propertiesPage,
       classesPage,
@@ -2488,17 +2713,55 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       savedSearchDraft,
       savedUriDraft,
       selectedNamePropertyUris,
+      breadcrumbBadgeMode,
     };
     params.set("state", JSON.stringify(state));
     const nextUrl = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", nextUrl);
-  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris]);
+  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode]);
+
+  /** Describe the first XML-tree delta between two query snapshots for History replay. */
+  function deriveHistoryAction(previousXml: string, nextXml: string): { operator: "+" | "-"; xpath: string; value?: string } | null {
+    if (!previousXml || !nextXml || previousXml === nextXml) return null;
+    type Entry = { signature: string; value: string };
+    const flatten = (xml: string) => {
+      const document = new DOMParser().parseFromString(xml, "application/xml");
+      if (document.querySelector("parsererror")) return new Map<string, Entry>();
+      const entries = new Map<string, Entry>();
+      const walk = (element: Element, path: string) => {
+        const siblings = element.parentElement ? Array.from(element.parentElement.children).filter((item) => item.localName === element.localName) : [element];
+        const index = Math.max(1, siblings.indexOf(element) + 1);
+        const attributes = Array.from(element.attributes).map((attribute) => `${attribute.name}=${attribute.value}`).sort().join(";");
+        const directText = Array.from(element.childNodes).filter((child) => child.nodeType === Node.TEXT_NODE).map((child) => child.textContent ?? "").join("").trim();
+        const xpathLiteral = (value: string) => value.includes("'") && value.includes('"')
+          ? `concat(${value.split("'").map((part, i) => `${i ? `, "'", ` : ""}'${part}'`).join("")})`
+          : value.includes("'") ? `\"${value}\"` : `'${value}'`;
+        const identityPredicates = Array.from(element.attributes)
+          .filter((attribute) => ["iri", "datatype", "op", "id", "type", "exclude", "property"].includes(attribute.name))
+          .map((attribute) => `[@${attribute.name}=${xpathLiteral(attribute.value)}]`).join("");
+        const textPredicate = directText ? `[.=${xpathLiteral(directText)}]` : "";
+        const currentPath = `${path}/${element.localName}${identityPredicates}${textPredicate}[${index}]`;
+        entries.set(currentPath, { signature: `${element.localName}|${attributes}|${directText}`, value: directText || attributes || element.localName });
+        Array.from(element.children).forEach((child) => walk(child, currentPath));
+      };
+      if (document.documentElement) walk(document.documentElement, "");
+      return entries;
+    };
+    const before = flatten(previousXml), after = flatten(nextXml);
+    const added = [...after].find(([path, entry]) => !before.has(path) || before.get(path)?.signature !== entry.signature);
+    const removed = [...before].find(([path, entry]) => !after.has(path) || after.get(path)?.signature !== entry.signature);
+    if (added && (!removed || added[0].split("/").length >= removed[0].split("/").length)) {
+      return { operator: "+", xpath: added[0], value: added[1].value };
+    }
+    if (removed) return { operator: "-", xpath: removed[0] };
+    return null;
+  }
 
   /** Persist one History visit for a query snapshot, preserving queue ordering. */
-  async function writeHistoryVisit(queryXmlSnapshot: string, stateUrlSnapshot: string) {
+  async function writeHistoryVisit(queryXmlSnapshot: string, stateUrlSnapshot: string, action: { operator: "+" | "-"; xpath: string; value?: string } | null) {
     const response = await fetch("/proxy/api/query-favorites", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "visit", queryXml: queryXmlSnapshot, stateUrl: stateUrlSnapshot }), cache: "no-store",
+      body: JSON.stringify({ action: "visit", queryXml: queryXmlSnapshot, stateUrl: stateUrlSnapshot, historyAction: action }), cache: "no-store",
     });
     const payload = await response.json() as { historyId?: string; error?: string };
     if (!response.ok || !payload.historyId) throw new Error(payload.error ?? `HTTP ${response.status}`);
@@ -2527,13 +2790,14 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     const previousQueryXml = historyVisitQueryRef.current;
     const isInitialLoadedHistoryItem = Boolean(historyBookmarkId && !previousQueryXml);
     const isNewQuery = !isInitialLoadedHistoryItem && previousQueryXml !== queryXml;
+    const queryAction = isNewQuery ? deriveHistoryAction(previousQueryXml, queryXml) : null;
     historyVisitQueryRef.current = queryXml;
     if (isInitialLoadedHistoryItem) historyVisitIdRef.current = historyBookmarkId;
 
     const synchronize = async () => {
       try {
         if (isNewQuery) {
-          await writeHistoryVisit(queryXml, stateUrl);
+          await writeHistoryVisit(queryXml, stateUrl, queryAction);
           return;
         }
 
@@ -2558,7 +2822,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       // pending snapshot once a query changes, then replace it with the latest
       // query/state whenever more changes occur.
       if (isNewQuery || pendingHistoryVisitRef.current) {
-        pendingHistoryVisitRef.current = { queryXml, stateUrl };
+        const pendingPreviousXml = pendingHistoryVisitRef.current?.queryXml ?? previousQueryXml;
+        pendingHistoryVisitRef.current = { queryXml, stateUrl, action: deriveHistoryAction(pendingPreviousXml, queryXml) };
       }
       return;
     }
@@ -2569,11 +2834,11 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       // value. Intermediate snapshots are discarded when the ref is cleared.
       const persistLatest = async () => {
         if (rootSearchExpandedRef.current) {
-          pendingHistoryVisitRef.current = { queryXml: pending.queryXml, stateUrl: pending.stateUrl };
+          pendingHistoryVisitRef.current = { queryXml: pending.queryXml, stateUrl: pending.stateUrl, action: pending.action };
           return;
         }
         try {
-          await writeHistoryVisit(pending.queryXml, pending.stateUrl);
+          await writeHistoryVisit(pending.queryXml, pending.stateUrl, pending.action);
         } catch (error) {
           console.warn("Maestro History synchronization failed", error);
         }
@@ -2583,7 +2848,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     }
     const synchronizeWhenCollapsed = async () => {
       if (rootSearchExpandedRef.current) {
-        pendingHistoryVisitRef.current = { queryXml, stateUrl };
+        pendingHistoryVisitRef.current = { queryXml, stateUrl, action: queryAction };
         return;
       }
       await synchronize();
@@ -2610,7 +2875,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     ...activeViewPropertyFilters.flatMap((node) => {
       const uri = node.attributes.iri;
       if (typeof uri !== "string" || !uri || uri === RDF_TYPE_URI || node.attributes.exclude?.trim().toLowerCase() === "yes") return [];
-      return [{ key: `forward:${uri}`, uri, direction: "forward" as const, label: toLabel(uri), nodeId: node.id }];
+      return [{ key: `forward:${uri}`, uri, direction: "forward" as const, label: toLabel(uri, "Property"), nodeId: node.id }];
     }),
     // Only reverse-role nodes explicitly selected in Focus belong in Group By.
     // A <property-of> ancestor that merely contains the active <view> is a
@@ -2618,7 +2883,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     ...getActiveViewRoleFilters(queryTree).flatMap((node) => {
       const uri = node.attributes.iri;
       if (typeof uri !== "string" || !uri || node.attributes.exclude?.trim().toLowerCase() === "yes") return [];
-      return [{ key: `reverse:${uri}`, uri, direction: "reverse" as const, label: `${toLabel(uri)} of`, nodeId: node.id }];
+      return [{ key: `reverse:${uri}`, uri, direction: "reverse" as const, label: `${toLabel(uri, "Role")} of`, nodeId: node.id }];
     }).filter((option, index, all) => all.findIndex((candidate) => candidate.key === option.key) === index),
   ];
   const selectedGroupByOption = groupByOptions.find((option) => option.key !== "" && option.key === groupByPropertyUri) ?? null;
@@ -2876,13 +3141,20 @@ useEffect(() => {
     ? (resultsPageComplete ? results.length : null)
     : Math.max(resultsTotalCount, results.length);
   const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string; direction: "property" | "property-of" }[]>([]);
-  const [recordPolicy, setRecordPolicy] = useState<{ uri: string; recordShape: string; template: string | null } | null>(null);
+  type RecordPolicyOption = { uri: string; label: string; recordShape: string; templates: { uri: string; label: string }[]; template: string | null };
+  const [recordPolicies, setRecordPolicies] = useState<RecordPolicyOption[]>([]);
+  const [recordPolicy, setRecordPolicy] = useState<RecordPolicyOption | null>(null);
+  const [selectedRecordTemplateUri, setSelectedRecordTemplateUri] = useState("");
   const [isLoadingRecordPolicy, setIsLoadingRecordPolicy] = useState(false);
   const [recordPolicyError, setRecordPolicyError] = useState("");
   const [recordValidation, setRecordValidation] = useState<{ conforms: boolean; complete: boolean; violations: { path: string; message: string; value?: string }[]; unsupportedConstraints: string[]; message: string } | null>(null);
   const [isValidatingRecord, setIsValidatingRecord] = useState(false);
   const [formattedRecordHtml, setFormattedRecordHtml] = useState("");
+  const [formattedRecordButtonsHtml, setFormattedRecordButtonsHtml] = useState<Record<string, string>>({});
+  const [recordFormatPreviews, setRecordFormatPreviews] = useState<Record<string, string>>({});
   const [recordFormatError, setRecordFormatError] = useState("");
+  const [bookmarkQueryDebugOpen, setBookmarkQueryDebugOpen] = useState(false);
+  const [bookmarkQueryDebug, setBookmarkQueryDebug] = useState({ xml: "", sparql: "", response: "", countResponse: "" });
   const formattedRecordContainerRef = useRef<HTMLDivElement>(null);
   const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
   const RECORD_DESCRIPTION_PAGE_SIZE = 20;
@@ -2918,7 +3190,11 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
 
   const resultsCountSparql = buildFctCountSparql(queryTree);
   const resultsRequestXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
-    type: "text", limit: String(resultsBatchSize), offset: String(resultsOffset),
+    type: "text",
+    limit: String(resultsBatchSize),
+    offset: String(resultsOffset),
+    badges: showResultBadges ? "yes" : "no",
+    order: orderResults ? "yes" : "no",
   }));
   const resultsCountRequestIdentity = `${selectedEndpointId}\u0000${resultsCountSparql ?? ""}`;
   const latestResultsCountRequestIdentityRef = useRef(resultsCountRequestIdentity);
@@ -2944,7 +3220,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         if (!resultsCountSparql) {
           throw new Error("The current FCT query tree contains a condition that cannot be compiled safely to SPARQL.");
         }
-        const response = await fetch("/proxy/api/sparql", {
+        const response = await cachedFetchFct("/proxy/api/sparql", {
           method: "POST",
           cache: "no-store",
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("results-total-count", "ResultsTotalCount") },
@@ -3089,7 +3365,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           queryFingerprint: proxyDebugFingerprint(resultsRequestXml),
           queryLength: resultsRequestXml.length,
         });
-        const response = await fetch("/proxy/api/fct", {
+        const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
           headers: {
@@ -3184,6 +3460,11 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       return () => controller.abort();
     }
 
+    // If badges are already parsed directly from projected result columns, skip secondary SPARQL enrichment
+    if (results.some((item) => (item.scopeValues?.length ?? 0) > 0)) {
+      return () => controller.abort();
+    }
+
     const resourceUris = [...new Set(results.map((item) => item.uri).filter(Boolean))];
     const relationships: ScopeValue[] = [
       ...selectedForward.map((property) => ({
@@ -3210,7 +3491,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
 
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/sparql", {
+        const response = await cachedFetchFct("/proxy/api/sparql", {
           method: "POST",
           cache: "no-store",
           headers: {
@@ -3306,23 +3587,35 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       try {
         const groupTreeBase = createGroupValuesQuery(queryTree, selectedGroupByOption);
         const groupTree = setQueryViewAttributes(groupTreeBase, {
-          // Group headings enumerate the selected relationship's distinct
-          // values (including RDF literals), not text-search result resources.
-          // Keep the Group By headings in the same server-side item-count order
-          // as the active facet widget. Sorting happens before LIMIT/OFFSET.
-          type: "list", sort: "count", limit: String(groupBatchSize), offset: String(groupBatchOffset),
+          type: "list", limit: String(groupBatchSize), offset: String(groupBatchOffset),
         });
-        const groupValuesXml = serializeFctQuery(groupTree);
-        const response = await fetch("/proxy/api/fct", {
+        const groupSparql = buildFctGroupValuesSparql(groupTree);
+        if (!groupSparql) throw new Error("The selected Group By relationship could not be compiled to SPARQL.");
+        const response = await cachedFetchFct("/proxy/api/sparql", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("group-values-fct", "GroupsValues") },
-          body: groupValuesXml,
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("group-values-sparql", "GroupsValues") },
+          body: JSON.stringify({ resultsQuery: { sparql: groupSparql } }),
           signal: controller.signal,
         });
-        const data = await readFctResponse(response);
+        const data = await response.json() as { head?: { vars?: string[] }; results?: { bindings?: Array<Record<string, { type?: string; value?: string; datatype?: string; "xml:lang"?: string }>> }; error?: string };
+        if (!response.ok) throw new Error(data.error ?? "The SPARQL endpoint could not load Group By values.");
         if (!cancelled) {
-          rememberShortforms(data?.shortforms);
-          const nextGroupValues: FctResult[] = Array.isArray(data.results) ? data.results : [];
+          const nextGroupValues: FctResult[] = (data.results?.bindings ?? []).flatMap((binding) => {
+            const value = binding.c1;
+            if (!value?.value) return [];
+            const count = binding.ct?.value ?? "0";
+            const termType: FctResult["termType"] = value.type === "uri" ? "uri" : value.type === "bnode" ? "bnode" : "literal";
+            const countColumn = { value: count, name: "ct", termType: "literal" as const, attributes: {}, raw: binding.ct ?? {} };
+            return [{
+              uri: value.value, title: value.value, label: value.value,
+              termType, datatype: value.datatype, lang: value["xml:lang"],
+              columns: [
+                { value: value.value, name: "c1", termType, datatype: value.datatype, lang: value["xml:lang"], attributes: {}, raw: value },
+                countColumn,
+              ],
+              matches: [],
+            }];
+          });
           setGroupHasMoreBatches(nextGroupValues.length >= groupBatchSize);
           setGroupValues((current) => {
             if (groupBatchOffset === 0) return nextGroupValues;
@@ -3369,7 +3662,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           const memberXml = serializeFctQuery(setQueryViewAttributes(memberTree, {
             type: "text", limit: String(resultsBatchSize), offset: "0",
           }));
-          const request = (body: string, label: string) => fetch("/proxy/api/fct", {
+          const request = (body: string, label: string) => cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("group-members-fct", label) },
             body,
@@ -3452,7 +3745,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const response = await fetch("/proxy/api/fct", {
+          const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:classes") },
             body: classFacetQueryXml,
@@ -3497,7 +3790,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const response = await fetch("/proxy/api/fct", {
+          const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:properties") },
             body: propertyFacetQueryXml,
@@ -3541,7 +3834,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const response = await fetch("/proxy/api/fct", {
+          const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:roles") },
             body: roleFacetQueryXml,
@@ -3589,7 +3882,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         const graphQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
           type: "graphs", sort: graphSort, limit: String(limit), offset: String(offset),
         }));
-        const response = await fetch("/proxy/api/fct", {
+        const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
           headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("graph-list", "GraphList") },
           body: graphQueryXml,
@@ -3612,7 +3905,7 @@ const graphs: FacetItem[] = Array.isArray(data.graphs)
           .filter((item) => item && typeof item.uri === "string")
           .map((item) => [item.uri, {
             uri: item.uri,
-            label: item.label || toLabel(item.uri),
+            label: item.label || toLabel(item.uri, "Class"),
             count: Number.isFinite(item.count) ? item.count : 0,
           }]),
       ).values(),
@@ -3700,8 +3993,9 @@ setGraphFacets(graphs);
     setIsDescribing(true);
     async function loadDescription() {
       try {
-        const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="30" offset="0"/></query>`;
-        const response = await fetch("/proxy/api/fct", {
+        const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+        const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="30" offset="0"/></query>`;
+        const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
           headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-description-fct", "RecordDescription") },
@@ -3733,12 +4027,14 @@ setGraphFacets(graphs);
     }
     void loadDescription();
     return () => { cancelled = true; controller.abort(); };
-  }, [selectedUri, selectedEndpointId, queryTree.attributes.inference, queryTree.attributes["same-as"]]);
+  }, [selectedUri, selectedEndpointId, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"]]);
 
   // Discover a record's class policy from the personal SPARQL server after its DESCRIBE data identifies rdf:type values.
   useEffect(() => {
     if (!selectedUri || !personalSparqlEndpoint || !describedRecord.length || isDescribing) {
       setRecordPolicy(null);
+      setRecordPolicies([]);
+      setSelectedRecordTemplateUri("");
       setRecordPolicyError("");
       setRecordValidation(null);
       setFormattedRecordHtml("");
@@ -3747,11 +4043,26 @@ setGraphFacets(graphs);
       return;
     }
     const rdfTypeUri = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    const isBookmarkRecord = describedRecord.some((item) => item.direction === "property" && item.property === rdfTypeUri && item.value === "http://www.w3.org/2002/01/bookmark#Bookmark");
+    if (!isBookmarkRecord) {
+      setRecordPolicy(null);
+      setRecordPolicies([]);
+      setSelectedRecordTemplateUri("");
+      setRecordPolicyError("");
+      setRecordValidation(null);
+      setFormattedRecordHtml("");
+      setFormattedRecordButtonsHtml({});
+      setRecordFormatError("");
+      setIsLoadingRecordPolicy(false);
+      return;
+    }
     const recordTypes = Array.from(new Set(describedRecord
       .filter((item) => item.direction === "property" && item.property === rdfTypeUri && /^[a-z][a-z0-9+.-]*:/i.test(item.value))
       .map((item) => item.value)));
     if (!recordTypes.length) {
       setRecordPolicy(null);
+      setRecordPolicies([]);
+      setSelectedRecordTemplateUri("");
       setRecordPolicyError("");
       setIsLoadingRecordPolicy(false);
       return;
@@ -3767,29 +4078,50 @@ setGraphFacets(graphs);
       body: JSON.stringify({ action: "discover", recordTypes }),
       signal: controller.signal,
     }).then(async (response) => {
-      const payload = await response.json() as { policy?: { uri: string; recordShape: string; template?: string | null } | null; error?: string };
+      const payload = await response.json() as { policies?: { uri: string; label: string; recordShape: string; templates: { uri: string; label: string }[] }[]; error?: string };
       if (!response.ok) throw new Error(payload.error || `Policy lookup returned HTTP ${response.status}.`);
-      if (!controller.signal.aborted) setRecordPolicy(payload.policy ? {
-        uri: payload.policy.uri,
-        recordShape: payload.policy.recordShape,
-        template: payload.policy.template ?? null,
-      } : null);
+      if (!controller.signal.aborted) {
+        const hasSavedHistoryQuery = describedRecord.some((item) => item.property === "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyQueryXML" && item.value.trim().length > 0);
+        const policies = (payload.policies ?? []).map((item) => {
+          // The query-results format is meaningful only for records that actually carry a saved FCT query.
+          const templates = (item.templates ?? []).filter((template) =>
+            !template.uri.endsWith("BookmarkQueryResultsTemplate") || hasSavedHistoryQuery,
+          );
+          return { ...item, templates, template: templates[0]?.uri ?? null };
+        }).filter((item) => item.templates.length > 0);
+        setRecordPolicies(policies);
+        let preferredPolicy = policies[0] ?? null;
+        let preferredTemplate = preferredPolicy?.templates[0]?.uri ?? "";
+        try {
+          const db = queryTreeHeightDbRef.current;
+          if (db && selectedUri) {
+            const store = db.transaction("preferences", "readonly").objectStore("preferences");
+            const savedPolicy = await new Promise<string>((resolve) => { const req = store.get(`record-policy:${selectedUri}`); req.onsuccess = () => resolve(typeof req.result === "string" ? req.result : ""); req.onerror = () => resolve(""); });
+            const savedTemplate = await new Promise<string>((resolve) => { const req = store.get(`record-template:${selectedUri}`); req.onsuccess = () => resolve(typeof req.result === "string" ? req.result : ""); req.onerror = () => resolve(""); });
+            preferredPolicy = policies.find((item) => item.uri === savedPolicy) ?? preferredPolicy;
+            preferredTemplate = preferredPolicy?.templates.some((item) => item.uri === savedTemplate) ? savedTemplate : (preferredPolicy?.templates[0]?.uri ?? "");
+          }
+        } catch { /* Use the first available policy/format when no saved preference is available. */ }
+        setRecordPolicy(preferredPolicy);
+        setSelectedRecordTemplateUri(preferredTemplate);
+      }
     }).catch((error: unknown) => {
       if (!controller.signal.aborted && !(error instanceof DOMException && error.name === "AbortError")) {
         setRecordPolicyError(error instanceof Error ? error.message : "Could not look up the record policy.");
       }
     }).finally(() => { if (!controller.signal.aborted) setIsLoadingRecordPolicy(false); });
     return () => controller.abort();
-  }, [selectedUri, personalSparqlEndpoint, describedRecord, isDescribing]);
+  }, [selectedUri, personalSparqlEndpoint, describedRecord, isDescribing, recordFormatPreferenceLoaded]);
 
-  async function validateSelectedRecord() {
-    if (!selectedUri || !recordPolicy) return;
+  async function validateSelectedRecord(policyOverride: RecordPolicyOption | null = recordPolicy) {
+    if (!selectedUri || !policyOverride) return;
     setIsValidatingRecord(true);
     setRecordValidation(null);
     setRecordPolicyError("");
     try {
-      const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="10000" offset="0"/></query>`;
-      const describeResponse = await fetch("/proxy/api/fct", {
+      const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+      const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="10000" offset="0"/></query>`;
+      const describeResponse = await cachedFetchFct("/proxy/api/fct", {
         method: "POST", cache: "no-store", headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-policy-validation-describe", "RecordPolicyValidation") }, body: describeQueryXml,
       });
       const describeData = await readFctResponse(describeResponse);
@@ -3812,7 +4144,7 @@ setGraphFacets(graphs);
       }));
       const response = await fetch("/proxy/api/policies", {
         method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-validate", "RecordPolicyValidation") },
-        body: JSON.stringify({ action: "validate", recordUri: selectedUri, recordShape: recordPolicy.recordShape, triples }),
+        body: JSON.stringify({ action: "validate", recordUri: selectedUri, recordShape: policyOverride.recordShape, triples }),
       });
       const payload = await response.json() as { report?: { conforms: boolean; complete: boolean; violations: { path: string; message: string; value?: string }[]; unsupportedConstraints: string[]; message: string }; error?: string };
       if (!response.ok || !payload.report) throw new Error(payload.error || `SHACL validation returned HTTP ${response.status}.`);
@@ -3824,19 +4156,18 @@ setGraphFacets(graphs);
     }
   }
 
-  async function formatSelectedRecord() {
-    if (!recordPolicy) return;
-    if (!recordPolicy.template) {
-      setRecordFormatError("This policy does not identify an HTML template yet.");
-      setFormattedRecordHtml("");
-      return;
+  async function formatSelectedRecord(templateOverride?: string, preview = false): Promise<string | null> {
+    if (!recordPolicy) return null;
+    const templateUri = templateOverride || selectedRecordTemplateUri || recordPolicy.template;
+    if (!templateUri) {
+      if (!preview) { setRecordFormatError("This policy does not identify an HTML template yet."); setFormattedRecordHtml(""); }
+      return null;
     }
-    setRecordFormatError("");
-    setFormattedRecordHtml("");
+    if (!preview) { setRecordFormatError(""); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); }
     try {
       const templateResponse = await fetch("/proxy/api/policies", {
         method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-template", "RecordPolicyTemplate") },
-        body: JSON.stringify({ action: "template", template: recordPolicy.template }),
+        body: JSON.stringify({ action: "template", template: templateUri }),
       });
       const templatePayload = await templateResponse.json() as { templateHtml?: string; nextName?: string; nextVersion?: string; error?: string };
       if (!templateResponse.ok || typeof templatePayload.templateHtml !== "string") throw new Error(templatePayload.error || `Template reload returned HTTP ${templateResponse.status}.`);
@@ -3886,8 +4217,9 @@ setGraphFacets(graphs);
         const cached = dataCache.get(uri);
         if (cached) return cached;
         const promise = (async () => {
-          const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}"><value datatype="uri">${escapeXmlText(uri)}</value><view type="describe" limit="10000" offset="0"/></query>`;
-          const response = await fetch("/proxy/api/fct", {
+          const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+          const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(uri)}</value><view type="describe" limit="10000" offset="0"/></query>`;
+          const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-binding-describe", "RecordTemplateBinding") },
             body: describeQueryXml,
@@ -3984,6 +4316,18 @@ setGraphFacets(graphs);
         }
       };
 
+      // Templates may declare controls with mui:parent="<id>". Remove those controls
+      // from the record body and render them into the matching application button bar.
+      const templateButtonsByParent: Record<string, string[]> = {};
+      for (const button of Array.from(document.body.querySelectorAll("[mui\\:parent]"))) {
+        const parentId = (button.getAttribute("mui:parent") ?? "").trim();
+        button.removeAttribute("mui:parent");
+        if (!parentId) throw new Error("A template control with mui:parent must name its target element id.");
+        sanitize(button);
+        (templateButtonsByParent[parentId] ??= []).push(button.outerHTML);
+        button.remove();
+      }
+
       const queryComponents = Array.from(document.body.querySelectorAll("[mui\\:query]"))
         .filter((element) => !element.closest("[data-maestro-query-definitions]"));
       const elementDepth = (element: Element) => { let depth = 0; for (let parent = element.parentElement; parent; parent = parent.parentElement) depth += 1; return depth; };
@@ -4018,7 +4362,7 @@ setGraphFacets(graphs);
         if (queryXml.length > 100000 || !/^\s*<query\b/i.test(queryXml) || !/openlinksw\.com\/services\/facets\/1\.0/.test(queryXml)) {
           throw new Error(`Embedded query \"${queryId}\" is not a valid bounded Maestro FCT query.`);
         }
-        const queryResponse = await fetch("/proxy/api/fct", {
+        const queryResponse = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
           headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-query", "RecordTemplateQuery") },
           body: queryXml,
@@ -4043,6 +4387,91 @@ setGraphFacets(graphs);
 
       // Evaluate XPath bindings against the actual fct:facets XML returned by DESCRIBE.
       const currentDocument = await describeDocument(selectedUri);
+      // Run the exact saved FCT query with a five-row window, then clone that XML
+      // and change only the view type to count so the count uses identical filters.
+      const historyQueryXml = xpathValues(currentDocument, "/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyQueryXML']]/fct:column[last()]" )[0];
+      const historyCountElement = document.body.querySelector("[mui\\:history-query-count]");
+      const historyResultsElement = document.body.querySelector("[mui\\:history-query-results]");
+      if ((historyCountElement || historyResultsElement) && historyQueryXml && /^\s*(?:<\?xml[^>]*>\s*)?<query\b/i.test(historyQueryXml)) {
+        const savedQueryDocument = new DOMParser().parseFromString(historyQueryXml, "application/xml");
+        if (savedQueryDocument.querySelector("parsererror")) throw new Error("The Bookmark's saved FCT query XML is malformed.");
+        // addr is authoritative: its first @ separates graphsite from graph
+        // server, and any later @ belongs to the graph-server portion.
+        const savedQueryRoot = savedQueryDocument.documentElement;
+        const existingAddress = savedQueryRoot.getAttribute("addr") ?? "";
+        const addressDelimiter = existingAddress.indexOf("@");
+        const endpointHint = addressDelimiter >= 0 ? existingAddress.slice(addressDelimiter + 1).trim() : "";
+        const savedEndpoint = endpointHint
+          ? fctEndpoints.find((endpoint) => endpoint.id === endpointHint || endpoint.url === endpointHint || endpoint.label === endpointHint)
+          : fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId);
+        if (!savedEndpoint) throw new Error("The Bookmark's query addr does not identify a configured graph server.");
+        const graphsite = addressDelimiter >= 0
+          ? existingAddress.slice(0, addressDelimiter).trim()
+          : (savedQueryRoot.getAttribute("graph")?.trim() ?? "");
+        savedQueryRoot.setAttribute("addr", `${graphsite}@${savedEndpoint.id}`);
+        savedQueryRoot.removeAttribute("graph");
+        //if (savedEndpoint.id !== selectedEndpointId) await synchronizeFctEndpointSelection(savedEndpoint.id);
+		
+		
+        const savedView = Array.from(savedQueryDocument.getElementsByTagName("*")).find((element) => element.localName === "view");
+        if (!savedView) throw new Error("The Bookmark's saved FCT query has no view element.");
+        savedView.setAttribute("limit", "5");
+        savedView.setAttribute("offset", "0");
+        const boundedQuery = new XMLSerializer().serializeToString(savedQueryDocument);
+        const countQueryDocument = savedQueryDocument.cloneNode(true) as XMLDocument;
+        const countView = Array.from(countQueryDocument.getElementsByTagName("*")).find((element) => element.localName === "view");
+        if (!countView) throw new Error("Could not clone the saved FCT query's view for counting.");
+        // The SPARQL translator does not support view type="count". Count via a
+        // text-view clone with a larger bounded window instead, while preserving
+        // the exact saved query filters and bindings.
+        countView.setAttribute("type", "text");
+        countView.setAttribute("limit", "100000");
+        countView.setAttribute("offset", "0");
+        const countQuery = new XMLSerializer().serializeToString(countQueryDocument);
+        const [queryResponse, countResponse] = await Promise.all([
+          cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("bookmark-history-query-results", "BookmarkHistoryQueryResults") }, body: boundedQuery }),
+          cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("bookmark-history-query-count", "BookmarkHistoryQueryCount") }, body: countQuery }),
+        ]);
+        const [queryResponseText, countResponseText] = await Promise.all([queryResponse.clone().text(), countResponse.clone().text()]);
+        const queryData = await readFctResponse(queryResponse);
+        // A count failure must not discard successful result rows. The fallback
+        // count is the number returned by the expanded text query (capped at 100k).
+        let countData: ParsedFctResponse | null = null;
+        try { countData = await readFctResponse(countResponse); } catch { /* show bounded results even if counting fails */ }
+        const sparqlMatch = queryResponseText.match(/<fct:sparql>([\s\S]*?)<\/fct:sparql>/i);
+        setBookmarkQueryDebug({ xml: boundedQuery, sparql: sparqlMatch ? sparqlMatch[1].replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&") : "SPARQL was not included in the FCT response.", response: queryResponseText, countResponse: countResponseText });
+        if (historyCountElement) {
+          historyCountElement.removeAttribute("mui:history-query-count");
+          const total = countData?.results.length;
+          historyCountElement.textContent = typeof total === "number"
+            ? `${shortenCount(total)} matching result${total === 1 ? "" : "s"}${total >= 100000 ? " (count capped at 100k)" : ""}; showing up to five.`
+            : `${shortenCount(queryData.results.length)} result${queryData.results.length === 1 ? "" : "s"} returned; showing up to five (count unavailable).`;
+        }
+        if (historyResultsElement) {
+          historyResultsElement.removeAttribute("mui:history-query-results");
+          const itemTemplate = historyResultsElement.querySelector("li");
+          historyResultsElement.replaceChildren();
+          for (const result of queryData.results.slice(0, 5)) {
+            const item = itemTemplate?.cloneNode(true) as HTMLLIElement | undefined ?? document.createElement("li");
+            item.textContent = result.title || result.uri;
+            item.removeAttribute("id");
+            if (result.uri && result.termType === "uri") {
+              const link = document.createElement("a");
+              link.href = result.uri; link.target = "_blank"; link.rel = "noopener noreferrer";
+              link.textContent = result.title || result.uri; link.className = "underline underline-offset-2";
+              item.replaceChildren(link);
+            }
+            historyResultsElement.appendChild(item);
+          }
+          if (!queryData.results.length) {
+            const item = document.createElement("li"); item.textContent = "No results returned.";
+            historyResultsElement.appendChild(item);
+          }
+        }
+      } else {
+        if (historyCountElement) historyCountElement.textContent = historyQueryXml ? "The saved query could not be run." : "No saved FCT query is stored on this Bookmark.";
+        if (historyResultsElement) historyResultsElement.replaceChildren();
+      }
       for (const element of Array.from(document.body.querySelectorAll("[mui\\:data], [mui\\:href]"))) {
         if (element.closest("[data-maestro-query-instance]")) continue;
         const binding = element.getAttribute("mui:data");
@@ -4071,36 +4500,44 @@ setGraphFacets(graphs);
       sanitize(document.body);
       // Embedded XML query definitions remain present with their IDs in the hidden template area.
       document.querySelectorAll("query").forEach((element) => { element.setAttribute("hidden", ""); element.setAttribute("aria-hidden", "true"); });
+      if (preview) {
+        const previewRoot = document.body.firstElementChild;
+        if (previewRoot) {
+          previewRoot.querySelectorAll("[id]").forEach((element) => element.setAttribute("id", `preview-${templateUri.replace(/[^a-z0-9]/gi, "-")}-${element.id}`));
+          if (previewRoot.id) previewRoot.id = `preview-${templateUri.replace(/[^a-z0-9]/gi, "-")}-${previewRoot.id}`;
+        }
+        return document.body.innerHTML;
+      }
+      if (Object.keys(templateButtonsByParent).length > 0) {
+        setFormattedRecordButtonsHtml(Object.fromEntries(Object.entries(templateButtonsByParent).map(([parentId, buttons]) => [parentId, buttons.join("")])));
+      }
       setFormattedRecordHtml(document.body.innerHTML);
+      return document.body.innerHTML;
     } catch (error) {
-      setRecordFormatError(error instanceof Error ? error.message : "Could not format this record.");
-      setFormattedRecordHtml("");
-    }
-  }
-
-  /** Remove only the Bookmark type and bookmark hash from the selected record using the configured personal SPARQL credentials. */
-  async function deleteSelectedRecord() {
-    if (!selectedUri || !window.confirm(`Remove the Bookmark designation and bookmark hash from this record (${selectedUri})? Its other triples and history will be kept.`)) return;
-    try {
-      const response = await fetch("/proxy/api/query-favorites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-viewer-delete", "DeleteRecord") },
-        body: JSON.stringify({ action: "deleteRecord", historyId: selectedUri }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "The record could not be deleted.");
-      setFormattedRecordHtml("");
-      setRecordFormatError("");
-      toast.add({ title: "Bookmark removed", description: "The Bookmark type and hash were removed. The record's other triples were kept.", type: "success" });
-    } catch (error) {
-      toast.add({ title: "Could not delete record", description: error instanceof Error ? error.message : "The configured graph credentials may be missing or invalid.", type: "error" });
+      if (!preview) { setRecordFormatError(error instanceof Error ? error.message : "Could not format this record."); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); }
+      return null;
     }
   }
 
   useEffect(() => {
+    if (!recordPolicy || !selectedUri || recordPolicy.templates.length < 2) { setRecordFormatPreviews({}); return; }
+    let cancelled = false;
+    void (async () => {
+      const previews: Record<string, string> = {};
+      for (const template of recordPolicy.templates) {
+        const html = await formatSelectedRecord(template.uri, true);
+        if (html) previews[template.uri] = html;
+        if (cancelled) return;
+      }
+      if (!cancelled) setRecordFormatPreviews(previews);
+    })();
+    return () => { cancelled = true; };
+  }, [recordPolicy?.uri, recordPolicy?.templates.map((template) => template.uri).join("|"), selectedUri, personalSparqlEndpoint]);
+
+  useEffect(() => {
     if (!recordFormatPreferenceLoaded || !recordFormatEnabled || !recordPolicy || !selectedUri || formattedRecordHtml) return;
     void formatSelectedRecord();
-  }, [recordFormatPreferenceLoaded, recordFormatEnabled, recordPolicy?.uri, recordPolicy?.template, selectedUri, formattedRecordHtml]);
+  }, [recordFormatPreferenceLoaded, recordFormatEnabled, recordPolicy?.uri, selectedRecordTemplateUri, selectedUri, formattedRecordHtml]);
 
   // Template actions are parsed as a restricted API-call grammar, then dispatched through Maestro's existing query-update API.
   useEffect(() => {
@@ -4166,6 +4603,7 @@ const makeBreadcrumbScopedTree = (
   // <value> on its own node, so the target scope can only return values reached
   // from that exact record (R0 -p1-> R1 -p2-> R2 ...).
   pins: { nodeId: string; uri: string }[] = [],
+  viewType: "text" | "classes" = "text",
 ): FctQueryTree | null => {
   // Metadata queries are clones of the live query. Only the active <view> is
   // moved to the target scope and normalized to one result at offset zero.
@@ -4207,7 +4645,7 @@ const makeBreadcrumbScopedTree = (
   const viewNode: FctQueryNode = {
     id: "query-view",
     name: "view",
-    attributes: { ...(existingView?.attributes ?? {}), type: "text", limit: "1", offset: "0" },
+    attributes: { ...(existingView?.attributes ?? {}), type: viewType, limit: viewType === "classes" ? "30" : "1", offset: "0" },
     children: [],
   };
   const attach = (nodes: FctQueryNode[]): boolean => {
@@ -4267,7 +4705,7 @@ useEffect(() => {
   const centerPaneIsLoading = isSearching || isCountingResults;
   const cachedSummary = (tree: FctQueryTree) => metadataRegistryRef.current.get(metadataRegistryKey(tree));
   const request = async (xml: string, component: string) => {
-    const response = await fetch("/proxy/api/fct", {
+    const response = await cachedFetchFct("/proxy/api/fct", {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("breadcrumb-preview", component) },
@@ -4287,7 +4725,7 @@ useEffect(() => {
       const countSparql = buildFctCountSparql(tree);
       const [textData, countResponse] = await Promise.all([
         request(serializeFctQuery(tree), `BreadcrumbPreview:${crumbId}:text`),
-        countSparql ? fetch("/proxy/api/sparql", {
+        countSparql ? cachedFetchFct("/proxy/api/sparql", {
           method: "POST",
           cache: "no-store",
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-preview-count", `BreadcrumbPreview:${crumbId}:count`) },
@@ -4329,6 +4767,45 @@ useEffect(() => {
   // this only reads caches and never awaits, so it completes synchronously.
   const walkChain = async (fetchMissing: boolean, onStep?: (id: string, summary: FctUiResultSummary) => void) => {
     const resolved: Record<string, FctUiResultSummary> = {};
+    if (breadcrumbBadgeMode === "classes") {
+      for (let index = 0; index < targetCrumbs.length; index += 1) {
+        const crumb = targetCrumbs[index];
+        const scopeTree = makeBreadcrumbScopedTree(crumb.id, [], "classes");
+        if (!scopeTree) continue;
+        let scope = cachedSummary(scopeTree);
+        if (!scope && fetchMissing) {
+          try {
+            const data = await request(serializeFctQuery(scopeTree), `BreadcrumbPreview:${crumb.id}:classes`);
+            if (data.classes && data.classes.length > 0) {
+              const firstClass = data.classes[0];
+              scope = {
+                label: firstClass.label || toLabel(firstClass.uri),
+                count: firstClass.count,
+                zeroClasses: false,
+                uri: firstClass.uri,
+                termType: "uri",
+              };
+            } else {
+              scope = {
+                label: "No category",
+                count: 0,
+                zeroClasses: true,
+              };
+            }
+            metadataRegistryRef.current.set(metadataRegistryKey(scopeTree), scope);
+          } catch (error) {
+            if (!controller.signal.aborted) console.info("Maestro breadcrumb preview classes lookup failed", { crumb: crumb.id, error });
+          }
+        }
+        if (cancelled || controller.signal.aborted) return resolved;
+        if (scope) {
+          resolved[crumb.id] = scope;
+          onStep?.(crumb.id, scope);
+        }
+      }
+      return resolved;
+    }
+
     // undefined = not known yet, null = no usable record (empty set / not a resource).
     const records: Array<FctUiResultSummary | null | undefined> = [];
     for (let index = 0; index < targetCrumbs.length; index += 1) {
@@ -4404,7 +4881,7 @@ useEffect(() => {
     window.clearTimeout(timer);
     controller.abort();
   };
-}, [activeLeafId, breadcrumbPreviewPathKey, effectiveResultsTotalCount, isCountingResults, isSearching, queryRevision, queryTree, results, selectedEndpointId, endpointReadyForQuery]);
+}, [activeLeafId, breadcrumbPreviewPathKey, effectiveResultsTotalCount, isCountingResults, isSearching, queryRevision, queryTree, results, selectedEndpointId, endpointReadyForQuery, breadcrumbBadgeMode]);
 
 // Derive checked state from the authoritative query tree, including path
   // properties left at the root when a breadcrumb moves the view elsewhere.
@@ -4670,7 +5147,7 @@ useEffect(() => {
               ...current,
               {
                 uri,
-                label: toLabel(uri),
+                label: toLabel(uri, "Property"),
                 excluded: false,
                 values: [],
                 selectedValues: [],
@@ -4767,11 +5244,72 @@ useEffect(() => {
     setGraphText(queryTree.attributes.graph ?? "");
   }, [queryTree.attributes.graph]);
 
+  // Keep the serialized query address synchronized with the selected graph
+  // server and graphsite. The proxy treats this address as authoritative.
+  useEffect(() => {
+    if (!selectedEndpointId) return;
+    const graphsite = queryTree.attributes.graph?.trim() ?? "";
+    const addr = `${graphsite}@${selectedEndpointId}`;
+    if (queryTree.attributes.addr !== addr) setQueryAttribute("addr", addr);
+  }, [selectedEndpointId, queryTree.attributes.addr, queryTree.attributes.graph]);
+
   function bindGraph(uri: string) {
     setGraphText(uri);
     recordGraphNavigation(uri);
     setQueryAttribute("graph", uri);
     clearTutorialPreview();
+  }
+
+  function startHistoryActionHover(direction: "backward" | "forward") {
+    if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current);
+    historyHoverTimerRef.current = setTimeout(() => {
+      setHistoryActionMenu(direction);
+      setHistoryActionItems([]);
+      void fetch("/proxy/api/query-favorites", {
+        method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history-actions", "HistoryActionMenu") },
+        body: JSON.stringify({ action: "recentActions" }), cache: "no-store",
+      }).then(async (response) => {
+        const payload = await response.json() as { items?: Array<{ historyId: string; created: string; action: { operator: "+" | "-"; xpath: string; value?: string } | null }> };
+        if (response.ok && Array.isArray(payload.items)) setHistoryActionItems(payload.items);
+      }).catch((error) => console.info("Could not load recent History actions", error));
+    }, 1500);
+  }
+
+  function stopHistoryActionHover() {
+    if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current);
+    historyHoverTimerRef.current = setTimeout(() => setHistoryActionMenu(null), 250);
+  }
+
+  async function restoreHistoryActionItem(historyId: string) {
+    try {
+      const response = await fetch("/proxy/api/query-favorites", { method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history-actions", "RestoreHistoryAction") }, body: JSON.stringify({ action: "getHistoryItem", historyId }), cache: "no-store" });
+      const payload = await response.json() as { found?: boolean; queryXml?: string; stateUrl?: string; error?: string };
+      if (!response.ok || !payload.found || !payload.queryXml) throw new Error(payload.error ?? "Could not load this History item.");
+      const tree = parseFctQueryXml(payload.queryXml);
+      if (!tree) throw new Error("The selected History item contains invalid FCT query XML.");
+      const serverId = readGraphServerFromQueryXml(payload.queryXml);
+      if (!serverId) throw new Error("The History item does not identify a graph server in addr.");
+      // Destination selection must complete before the live query is published.
+      await synchronizeFctEndpointSelection(serverId);
+      const savedUrl = payload.stateUrl ? new URL(payload.stateUrl, window.location.href) : null;
+      const restoredUiState = savedUrl ? readShareableUiState(savedUrl.search) : null;
+      historyVisitQueryRef.current = serializeFctQuery(tree);
+      historyVisitIdRef.current = historyId;
+      restoreQueryAndUiState(payload.queryXml, restoredUiState, historyId);
+      setHistoryBookmarkId(historyId);
+      const params = new URLSearchParams(window.location.search);
+      params.set("q", payload.queryXml); params.set("history", historyId);
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
+      setHistoryActionMenu(null);
+    } catch (error) {
+      toast.add({ title: "Could not restore History item", description: error instanceof Error ? error.message : "The History item could not be restored.", type: "error" });
+    }
+  }
+
+  function formatHistoryAction(action: { operator: "+" | "-"; xpath: string; value?: string } | null, direction: "backward" | "forward") {
+    if (!action) return "Query state changed";
+    const operator = direction === "backward" ? (action.operator === "+" ? "−" : "+") : action.operator;
+    return `${operator} ${action.xpath}${operator === "+" && action.value ? ` = ${action.value}` : ""}`;
   }
 
   async function navigateQueryHistory(direction: "backward" | "forward") {
@@ -4804,12 +5342,12 @@ useEffect(() => {
       const restoredUiState = savedUrl ? readShareableUiState(savedUrl.search) : null;
       const restoredTree = parseFctQueryXml(payload.queryXml);
       if (!restoredTree) throw new Error("The selected History item contains invalid FCT query XML.");
+      const graphServerId = readGraphServerFromQueryXml(payload.queryXml);
+      if (!graphServerId) throw new Error("The History item does not identify a graph server in addr.");
+      await synchronizeFctEndpointSelection(graphServerId);
 
       historyVisitQueryRef.current = serializeFctQuery(restoredTree);
       historyVisitIdRef.current = payload.historyId;
-      if (typeof restoredUiState?.selectedEndpointId === "string") {
-        await synchronizeFctEndpointSelection(restoredUiState.selectedEndpointId);
-      }
       restoreQueryAndUiState(payload.queryXml, restoredUiState, payload.historyId);
 
       // Keep the current browser URL synchronized without navigating. The URL
@@ -4839,9 +5377,9 @@ useEffect(() => {
         throw new Error(payload.error ?? `HTTP ${response.status}`);
       }
 
-      // History is a personal-store view: select the endpoint configured by
-      // PERSONAL_SPARQL_ENDPOINT in .env.local before restoring the query.
-      // The personal endpoint is expected to also exist in the Graphsites graph.
+      // History is read from the personal SPARQL store, but opening the History
+      // or Bookmarks view must not change the graph server selected in the toolbar.
+      // The query's addr routes its requests to the personal endpoint independently.
       const normalizeEndpointUrl = (value: string) => {
         const url = new URL(value);
         url.hash = "";
@@ -4858,17 +5396,27 @@ useEffect(() => {
       if (!personalEndpoint) {
         throw new Error(`The personal SPARQL endpoint (${payload.personalEndpointUrl}) is not present in the Graphsites graph.`);
       }
-      await synchronizeFctEndpointSelection(personalEndpoint.id);
-
       // Build the History query as a complete FCT query, then pass it through
       // the same restore path used by URL state. That path updates the live
       // query store through its API, notifying the query tree, breadcrumbs,
       // facets, results, and URL-state listeners together.
+      const baseHistoryGraph = payload.historyGraph.replace(/#.*$/, "");
+      const graphIri = `${baseHistoryGraph}#${includeFavorites ? "bookmarks" : "history"}`;
+      const addrAttr = `${graphIri}@${personalEndpoint.id}`;
+      const classIri = includeFavorites
+        ? "http://www.w3.org/2002/01/bookmark#Bookmark"
+        : "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#QueryHistoryVisit";
+
       const historyTree: FctQueryTree = {
         ...queryTree,
-        attributes: { ...queryTree.attributes, graph: payload.historyGraph },
+        attributes: {
+          ...queryTree.attributes,
+          graph: graphIri,
+          addr: addrAttr,
+          ...(orderResults ? { order: "yes" } : {}),
+        },
         children: [
-          { id: "history-bookmark-class", name: "class", attributes: { iri: "http://www.w3.org/2002/01/bookmark#Bookmark" }, children: [] },
+          { id: "history-bookmark-class", name: "class", attributes: { iri: classIri }, children: [] },
           ...(includeFavorites ? [{
             id: "favorites-hash-property",
             name: "property",
@@ -4897,8 +5445,8 @@ useEffect(() => {
       toast.add({
         title: includeFavorites ? "Favorites loaded" : "History loaded",
         description: includeFavorites
-          ? "Showing bookmarked records with a hash identifier from your personal data server."
-          : "Showing Bookmark records from your personal data server.",
+          ? "Showing bookmarked records with a hash identifier from your personal graph server."
+          : "Showing Query History Visit records from your personal graph server.",
         type: "success",
       });
     } catch (error) {
@@ -4932,9 +5480,6 @@ useEffect(() => {
         historyVisitQueryRef.current = serializeFctQuery(restoredTree);
         historyVisitIdRef.current = payload.nextHistoryId;
         const restoredUiState = savedUrl ? readShareableUiState(savedUrl.search) : null;
-        if (typeof restoredUiState?.selectedEndpointId === "string") {
-          await synchronizeFctEndpointSelection(restoredUiState.selectedEndpointId);
-        }
         restoreQueryAndUiState(payload.queryXml, restoredUiState, payload.nextHistoryId);
         const params = new URLSearchParams(window.location.search);
         params.set("q", payload.queryXml);
@@ -4952,6 +5497,23 @@ useEffect(() => {
     } finally {
       setIsDeletingCurrentHistory(false);
     }
+  }
+
+  async function deleteBookmarks() {
+    if (isDeletingHistory) return;
+    setIsDeletingHistory(true);
+    try {
+      const response = await fetch("/proxy/api/query-favorites", {
+        method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-bookmark", "DeleteBookmarks") },
+        body: JSON.stringify({ action: "deleteBookmarks" }), cache: "no-store",
+      });
+      const payload = await response.json() as { deleted?: boolean; error?: string };
+      if (!response.ok || !payload.deleted) throw new Error(payload.error ?? `HTTP ${response.status}`);
+      setBookmarkCheckRevision((revision) => revision + 1);
+      toast.add({ title: "Bookmarks deleted", description: "Bookmark records were deleted. Ordinary History visits were preserved.", type: "success" });
+    } catch (error) {
+      toast.add({ title: "Could not delete Bookmarks", description: error instanceof Error ? error.message : "The Bookmark records could not be deleted.", type: "error" });
+    } finally { setIsDeletingHistory(false); }
   }
 
   async function deleteQueryHistory() {
@@ -5101,9 +5663,7 @@ useEffect(() => {
   }
 
   function classBreadcrumbLabels(parentId: string | null): string[] {
-    return getClassesAtNode(parentId).map((iri) => {
-      return toLabel(iri);
-    });
+    return getClassesAtNode(parentId).map((iri) => toLabel(iri, "Class"));
   }
 
   function getBreadcrumbSiblings(targetId: string): FctQueryNode[] {
@@ -5195,6 +5755,73 @@ useEffect(() => {
     return lang ? `${base} @${lang}` : base;
   }
 
+  function renderBreadcrumbNodeMenuItem(
+    node: FctQueryNode,
+    onSelectNode: (nodeId: string) => void,
+  ): ReactNode {
+    const childRelationshipNodes = (node.children ?? []).filter(
+      (c) => c.name === "property" || c.name === "property-of"
+    );
+    const isChildBearing = childRelationshipNodes.length > 0;
+    const iri = node.attributes?.iri || "";
+    const directionSuffix = (node.name === "property-of" || node.id.startsWith("role-filter-")) ? " of" : "";
+    const baseLabel = toLabel(iri, directionSuffix ? "Role" : "Property") + directionSuffix;
+    const isExcluded = node.attributes?.exclude?.trim().toLowerCase() === "yes";
+    const boundValues = boundValueNodes(node);
+    const summary = breadcrumbPreviewSummaries[node.id] ?? node.uiResultSummary;
+
+    const nodeContent = (
+      <span className="flex items-center gap-1.5 flex-1 min-w-0">
+        {isExcluded && <CircleSlash className="size-3.5 shrink-0 text-destructive" aria-label="Excluded" />}
+        <span className="truncate">{baseLabel}</span>
+        {boundValues.map((v) => (
+  <span key={v.id} className="ml-1 inline-flex items-baseline gap-0.5 text-xs text-muted-foreground">
+    <Equal className="size-3 shrink-0" aria-label="equals" />
+    <span>
+      <em>i.e.</em> {boundValueLabel(v)}
+    </span>
+  </span>
+))}
+      </span>
+    );
+
+    if (isChildBearing) {
+      return (
+        <DropdownMenuSub key={node.id}>
+          <DropdownMenuSubTrigger
+            onClick={() => onSelectNode(node.id)}
+            className="whitespace-normal break-words flex items-center justify-between"
+          >
+            {nodeContent}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
+            <DropdownMenuLabel className="font-normal text-xs text-muted-foreground border-b pb-1.5 mb-1">
+              <button type="button" aria-label={`Move view to ${baseLabel}`} onClick={() => onSelectNode(node.id)} className="flex w-full items-center justify-between gap-2 text-left hover:text-foreground">
+                <span className="truncate max-w-40 font-medium text-foreground">
+                  {summary?.label || baseLabel}
+                </span>
+                <span className="shrink-0 tabular-nums">
+                  {summary?.count !== undefined && summary?.count !== null ? shortenCount(summary.count) : "…"}
+                </span>
+              </button>
+            </DropdownMenuLabel>
+            {childRelationshipNodes.map((child) => renderBreadcrumbNodeMenuItem(child, onSelectNode))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      );
+    }
+
+    return (
+      <DropdownMenuItem
+        key={node.id}
+        onClick={() => onSelectNode(node.id)}
+        className="whitespace-normal break-words"
+      >
+        {nodeContent}
+      </DropdownMenuItem>
+    );
+  }
+
   /**
    * A relationship's bound values sit on the stack just above it: the first
    * pop removes the most recent binding, and only when none remain does the
@@ -5225,20 +5852,20 @@ useEffect(() => {
       // label, but never fall back to the generic XML tag name.
       const roleIri = iri ?? node.attributes.property ?? node.attributes.role;
       const roleText = typeof node.text === "string" ? node.text.trim() : "";
-      return (roleIri ? toLabel(roleIri) : "") || roleText || "Role";
+      return (roleIri ? toLabel(roleIri, "Role") : "") || roleText || "Role";
     }
     if (node.name === "property") {
       // Keep the full IRI in the query tree; use a concise label only for display.
       // Literal bindings are not wired into the UI yet, but display them if present
       // in the query model/XML (e.g. iri="...date" literal="5/23/92").
-      const propertyLabel = iri ? toLabel(iri) : "Property";
+      const propertyLabel = iri ? toLabel(iri, "Property") : "Property";
       const literal = node.attributes.literal ?? node.attributes.value;
       return literal !== undefined && literal !== ""
         ? `${propertyLabel} = ${literal}`
         : propertyLabel;
     }
     if (node.name === "class" && iri) {
-      return `Class: ${toLabel(iri)}`;
+      return `Class: ${toLabel(iri, "Class")}`;
     }
     return node.name;
   }
@@ -5255,7 +5882,7 @@ useEffect(() => {
     const rootStack = node.id === rootClassCarrierId
       ? rootClassNodes.map((classNode) => classNode.attributes.iri).filter((iri): iri is string => Boolean(iri))
       : [];
-    return Array.from(new Set([...nested, ...rootStack])).map(toLabel);
+    return Array.from(new Set([...nested, ...rootStack])).map((uri) => toLabel(uri, "Class"));
   };
 
   const rootPreviewNodeId = queryTree.children.find((node) => node.name === "value" && node.attributes.datatype === "uri")?.id
@@ -5480,8 +6107,8 @@ useEffect(() => {
                   >
                     {isGroupByFacet && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                     {widget.excluded && <CircleSlash className="mr-1 inline size-3.5 shrink-0" aria-label="Excluded" />}
-                    {toLabel(widget.uri)}
-                  </button>} /><TooltipContent>{`Navigate to ${widget.excluded ? `Excluded: ${toLabel(widget.uri)}` : toLabel(widget.uri)} scope`}</TooltipContent></Tooltip>
+                    {toLabel(widget.uri, "Property")}
+                  </button>} /><TooltipContent>{`Navigate to ${widget.excluded ? `Excluded: ${toLabel(widget.uri, "Property")}` : toLabel(widget.uri)} scope`}</TooltipContent></Tooltip>
                   {autoConfiguredFacetKeys.has(`property::${widget.uri}`) && (
                     <Bot className="size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                   )}
@@ -5507,10 +6134,10 @@ useEffect(() => {
                           }
                         }}
                         className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:pointer-events-none disabled:opacity-30 ${isGroupByFacet ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
-                        aria-label={isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri)}` : `Group results by ${toLabel(widget.uri)}`}
+                        aria-label={isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri, "Property")}` : `Group results by ${toLabel(widget.uri, "Property")}`}
                       >
                         <UsersRound className="size-4" aria-hidden="true" />
-                      </button>} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri)}` : canGroupByFacet ? `Group results by ${toLabel(widget.uri)}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip>
+                      </button>} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri, "Property")}` : canGroupByFacet ? `Group results by ${toLabel(widget.uri, "Property")}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip>
                     )}
                     <Tooltip><TooltipTrigger render={<button
                       type="button"
@@ -5521,17 +6148,20 @@ useEffect(() => {
                         setPersonalWidgets((current) => current.filter((item) => item.uri !== widget.uri));
                       }}
                       className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
-                      aria-label={`Remove ${widget.excluded ? `Excluded: ${toLabel(widget.uri)}` : toLabel(widget.uri)} widget`}
+                      aria-label={`Remove ${widget.excluded ? `Excluded: ${toLabel(widget.uri, "Property")}` : toLabel(widget.uri)} widget`}
                     >
                       <Trash2 className="size-4" aria-hidden="true" />
-                    </button>} /><TooltipContent>{`Remove ${toLabel(widget.uri)} facet`}</TooltipContent></Tooltip>
+                    </button>} /><TooltipContent>{`Remove ${toLabel(widget.uri, "Property")} facet`}</TooltipContent></Tooltip>
                   </div>
                 </div>
-                <Tooltip><TooltipTrigger render={<p
-                  className="mt-1 break-all text-xs text-muted-foreground"
-                >
-                  {widget.uri}
-                </p>} /><TooltipContent>{widget.uri}</TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger render={<p className="mt-1 break-all text-xs text-muted-foreground">{widget.uri}</p>} /><TooltipContent>{widget.uri}</TooltipContent></Tooltip>
+                {(() => {
+                  const boundValue = activePropertyFilters.find((node) => node.attributes.iri === widget.uri)?.children.find((child) => child.name === "value" && Boolean(child.text));
+                  const example = boundValue ? { uri: boundValue.text ?? "", termType: boundValue.attributes.datatype === "uri" ? "uri" as const : "literal" as const, title: boundValue.text ?? "" } : widget.values[0];
+                  if (!example?.uri) return null;
+                  const prefix = boundValue ? "i.e." : "e.g.";
+                  return <button type="button" onClick={() => showClassResults(example.uri, activeLeafId)} disabled={widget.loading} className="mt-1 block max-w-full break-words text-left text-xs text-muted-foreground hover:text-foreground hover:underline disabled:cursor-not-allowed disabled:opacity-50"><em>{prefix}</em> {example.termType === "uri" ? toLabel(example.uri, "Class") : example.title || example.uri}</button>;
+                })()}
               </div>
               <Tooltip><TooltipTrigger render={<span
                 className={`shrink-0 text-xs ${widget.error ? "text-destructive" : "text-muted-foreground"}`}
@@ -5548,8 +6178,7 @@ useEffect(() => {
                     No values found for this property.
                   </p>
                 )}
-              {!widget.loading &&
-                !widget.error &&
+              {!widget.error &&
                 widget.values.length > 0 &&
                 (() => {
                   // Query XML is the source of truth for checked values. Read
@@ -5672,7 +6301,8 @@ useEffect(() => {
                           return (
                           <div
                             key={`${facetValueKey(value)}-${valueIndex}`}
-                            className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 ${isGroupByFacet ? "" : "cursor-pointer"}`}
+                            aria-disabled={widget.loading || undefined}
+                            className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 ${isGroupByFacet ? "" : "cursor-pointer"} ${widget.loading ? "opacity-45" : ""}`}
                           >
                             <input
                               id={valueInputId}
@@ -5680,6 +6310,7 @@ useEffect(() => {
                               name={`property-value-${widget.uri}`}
                               value={value.uri}
                               checked={checkedValueKeys.has(facetValueKey(value))}
+                              disabled={widget.loading}
                               onChange={(event) => {
                                 const binding = groupValueBinding(value);
                                 setPropertyValue(
@@ -5689,7 +6320,7 @@ useEffect(() => {
                                   event.currentTarget.checked,
                                 );
                               }}
-                              aria-label={`Bind ${toLabel(widget.uri)} to ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`}
+                              aria-label={`Bind ${toLabel(widget.uri, "Property")} to ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`}
                               className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
                               aria-invalid={isZeroCount ? true : undefined}
                             />
@@ -5886,6 +6517,11 @@ useEffect(() => {
   return (
     <main className="flex h-dvh min-h-[500px] flex-col bg-background text-foreground">
       <Toaster />
+      {endpointHealthToast && <div role="alert" className="fixed bottom-5 right-5 z-[200] flex max-w-md items-center gap-3 rounded-lg border border-destructive/40 bg-popover p-4 text-popover-foreground shadow-xl">
+        <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-destructive">Graph server health check failed</div><div className="mt-1 text-sm">{endpointHealthToast.message}</div></div>
+        <button type="button" className="shrink-0 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:opacity-50" disabled={isRefreshingFailedEndpoint} onClick={() => void refreshFailedEndpointAndRetry()}>{isRefreshingFailedEndpoint ? "Refreshing…" : "Refresh"}</button>
+        <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" aria-label="Dismiss health check error" onClick={() => setEndpointHealthToast(null)}>×</button>
+      </div>}
       <AlertDialog open={clearCacheDialogOpen} onOpenChange={setClearCacheDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -5894,12 +6530,14 @@ useEffect(() => {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => {
+            <AlertDialogAction variant="destructive" onClick={async () => {
               try {
+                await clearClientQueryCache();
+                await clearMaestroStorage();
                 window.localStorage.clear();
                 window.location.reload();
               } catch {
-                toast.add({ title: "Could not clear localStorage", description: "Check your browser's site storage permissions.", type: "error" });
+                toast.add({ title: "Could not clear cache", description: "Check your browser's site storage permissions.", type: "error" });
                 setClearCacheDialogOpen(false);
               }
             }}>Clear Cache</AlertDialogAction>
@@ -5939,10 +6577,11 @@ useEffect(() => {
       <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-2">
           <ButtonGroup aria-label="Graphsite navigation" className="shrink-0 border-0 shadow-none">
-            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent>{historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
+            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("backward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent className={historyActionMenu === "backward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "backward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Previous query in History · Last ten changes (inverse actions)</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "backward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
+            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("forward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent className={historyActionMenu === "forward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "forward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Next query in History · Last ten changes</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "forward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<button type="button" onClick={refreshCurrentBreadcrumb} aria-label="Refresh current query scope" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25"><RotateCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Refresh current query scope using the active breadcrumb</TooltipContent></Tooltip>
           </ButtonGroup>
+
           {/* One address: [graphsite]@[graph server], with no gap around the at-sign. */}
           <div className="flex min-w-0 flex-1 items-center">
             <div className="group/graphsite-input flex min-w-0 max-w-3xl flex-1 items-stretch overflow-hidden rounded-md border border-input bg-background">
@@ -5973,35 +6612,36 @@ useEffect(() => {
             </Label>
             <div className="flex min-w-0 items-center gap-2">
               <ButtonGroup aria-label="Graph server selection, discovery, and refresh" className="group/graph-server-input max-w-full [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
-                    <Tooltip><TooltipTrigger render={<select
-                      id="fct-endpoint"
-                      value={selectedEndpointId}
-                      disabled={isCheckingEndpoints || fctEndpoints.length === 0}
-                      onChange={(event) => void chooseFctEndpoint(event.currentTarget.value)}
-                      className="w-80 min-w-0 max-w-full"
-                    >
-                      {fctEndpoints.length === 0 && (
-                        <option value="">
-                          {isCheckingEndpoints ? "Loading endpoints and checking servers…" : "No endpoints configured"}
-                        </option>
-                      )}
-                      {[...new Set(fctEndpoints.map((endpoint) => endpoint.group || "Endpoints"))].map((group) => (
-                        <optgroup key={group} label={group}>
-                          {fctEndpoints.filter((endpoint) => (endpoint.group || "Endpoints") === group).map((endpoint) => {
-                            const status = endpointStatuses[endpoint.id];
-                            const mark =
-                              status?.status === 200 ? "🟢 " :
-                              status?.state === "server-error" ? "🔴 " :
-                              status && ["unreachable", "timeout"].includes(status.state) ? "🟠 " :
-                              status ? "" : "⚪ ";
-                            const statusText = status?.status != null
-                              ? ` (${new URL(endpoint.url).protocol.replace(":", "").toUpperCase()} ${status.status})`
-                              : status ? ` (${status.state})` : "";
-                            return <option key={endpoint.id} value={endpoint.id}>{mark}{endpoint.label}{statusText}</option>;
-                          })}
-                        </optgroup>
-                      ))}
-                    </select>} /><TooltipContent>{"Choose which FCT endpoint receives queries"}</TooltipContent></Tooltip>
+                    <DropdownMenu>
+                      <Tooltip><TooltipTrigger render={<DropdownMenuTrigger asChild><button
+                        id="fct-endpoint"
+                        type="button"
+                        disabled={isCheckingEndpoints || fctEndpoints.length === 0}
+                        aria-label="Choose graph server"
+                        className="flex w-80 min-w-0 max-w-full items-center gap-2 rounded-md bg-background px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <EndpointStatusIcon status={selectedEndpointStatus} />
+                        <span className="min-w-0 flex-1 truncate">{fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.label ?? (isCheckingEndpoints ? "Loading graph servers…" : "No endpoints configured")}</span>
+                        <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+                      </button></DropdownMenuTrigger>} /><TooltipContent>{"Choose which FCT endpoint receives queries"}</TooltipContent></Tooltip>
+                      <DropdownMenuContent align="start" className="z-50 w-80 max-w-[calc(100vw-2rem)]">
+                        {fctEndpoints.length === 0 ? <DropdownMenuLabel>{isCheckingEndpoints ? "Loading endpoints…" : "No endpoints configured"}</DropdownMenuLabel> : [...new Set(fctEndpoints.map((endpoint) => endpoint.group || "Endpoints"))].map((group) => (
+                          <Fragment key={group}>
+                            <DropdownMenuLabel>{group}</DropdownMenuLabel>
+                            {fctEndpoints.filter((endpoint) => (endpoint.group || "Endpoints") === group).map((endpoint) => {
+                              const status = endpointStatuses[endpoint.id];
+                              const statusText = status?.status != null ? `HTTP ${status.status}` : status ? status.state : "Not yet pinged";
+                              return <DropdownMenuItem key={endpoint.id} onSelect={() => void chooseFctEndpoint(endpoint.id)} className="flex min-w-0 items-center gap-2">
+                                <EndpointStatusIcon status={status} />
+                                <span className="min-w-0 flex-1 truncate">{endpoint.label}</span>
+                                <span className="shrink-0 text-xs text-muted-foreground">{statusText}</span>
+                                {endpoint.id === selectedEndpointId ? <Check className="size-3.5 shrink-0" aria-label="Selected" /> : null}
+                              </DropdownMenuItem>;
+                            })}
+                          </Fragment>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                 <Tooltip>
                   <TooltipTrigger render={
                     <Toggle
@@ -6213,7 +6853,7 @@ useEffect(() => {
           <SheetContent side="right" className="w-[min(92vw,28rem)] overflow-y-auto sm:max-w-md">
             <SheetHeader>
               <SheetTitle>Maestro controls</SheetTitle>
-              <SheetDescription>Query behavior, appearance, and data server settings.</SheetDescription>
+              <SheetDescription>Query behavior, appearance, and graph server settings.</SheetDescription>
               <p className="mt-1 break-all text-xs text-muted-foreground">Using personal: <span className="font-medium text-foreground">{personalSparqlEndpoint || "Not configured"}</span></p>
             </SheetHeader>
             <div className="flex flex-col gap-4 px-4 pb-4">
@@ -6223,13 +6863,14 @@ useEffect(() => {
                 <div className="flex items-center gap-2">
                   <Tooltip>
                     <TooltipTrigger render={<Button type="button" variant="outline" disabled={isLoadingHistoryQuery} onClick={() => void loadHistoryQuery()}>{isLoadingHistoryQuery ? "Loading…" : "Show"}</Button>} />
-                    <TooltipContent className="z-[100]">History — show Bookmark records</TooltipContent>
+                    <TooltipContent className="z-[100]">History — show Query History Visit records</TooltipContent>
                   </Tooltip>
                   <Tooltip>
                     <TooltipTrigger render={<Button type="button" variant="outline" disabled={isLoadingHistoryQuery} onClick={() => void loadHistoryQuery(true)}>{isLoadingHistoryQuery ? "Loading…" : "Show Favorites"}</Button>} />
                     <TooltipContent className="z-[100]">Favorites — show Bookmark records with a schema:identifier hash</TooltipContent>
                   </Tooltip>
                   <Button type="button" variant="outline" disabled={!historyBookmarkId || isDeletingCurrentHistory || isDeletingHistory} onClick={() => void deleteCurrentQueryHistory()}>{isDeletingCurrentHistory ? "Deleting…" : "Delete"}</Button>
+                  <Button type="button" variant="outline" disabled={isDeletingHistory} onClick={() => void deleteBookmarks()}>{isDeletingHistory ? "Deleting…" : "Delete Bookmarks"}</Button>
                   <Button type="button" variant="destructive" disabled={isDeletingCurrentHistory || isDeletingHistory} onClick={() => setDeleteHistoryDialogOpen(true)}>Delete All</Button>
                 </div>
               </div>
@@ -6325,6 +6966,28 @@ useEffect(() => {
                   checked={queryTree.attributes["same-as"] === "yes"}
                   onCheckedChange={(checked) => setQueryAttribute("same-as", checked ? "yes" : "no")}
                   aria-label="Include owl:sameAs relationships"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                <div className="min-w-0">
+                  <Label htmlFor="fct-query-order-results">Order results</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">Add ORDER clause to queries. Note: Turning this on will increase query time.</p>
+                </div>
+                <Switch
+                  id="fct-query-order-results"
+                  checked={orderResults}
+                  onCheckedChange={(checked) => {
+                    setOrderResults(checked);
+                    maestroStorageSet("maestro-order-results", checked ? "yes" : "no");
+                    if (queryTreeHeightDbRef.current) {
+                      try {
+                        const tx = queryTreeHeightDbRef.current.transaction("preferences", "readwrite");
+                        tx.objectStore("preferences").put(checked, "order-results-enabled");
+                      } catch { /* non-fatal */ }
+                    }
+                    setQueryAttribute("order", checked ? "yes" : "no");
+                  }}
+                  aria-label="Order results"
                 />
               </div>
               <button
@@ -6463,7 +7126,7 @@ useEffect(() => {
 
       {endpointMenuError && (
         <p role="alert" className="border-b px-4 py-1.5 text-xs text-destructive">
-          {endpointMenuError}
+          <>{endpointMenuError}{endpointMenuError.includes("Could not load Datasites from the personal SPARQL store") && <> Check that your <a href={personalSparqlEndpoint || undefined} target="_blank" rel="noreferrer" className="underline underline-offset-2">personal graph server</a> is online.</>}</>
         </p>
       )}
 
@@ -6493,7 +7156,9 @@ useEffect(() => {
                 {facetHoverPreview?.kind === "record"
                   ? facetHoverPreview.label
                   : !search.trim()
-                    ? "Everything"
+                    ? (currentGraphsite && graphsiteSubjectCount !== null
+                        ? `${shortenCount(graphsiteSubjectCount)} Records`
+                        : "Everything")
                     : textSearchMode === "uri"
                       ? search
                       : `"${search}"`}
@@ -6523,13 +7188,27 @@ useEffect(() => {
           </ButtonGroup>
           {(breadcrumbPreviewSummaries["query-root"] || breadcrumbPreviewPendingIds.has("query-root")) && (
             /* 15px centers this compact metadata badge beneath the next slash. */
-            <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
+            <span className="absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
               {breadcrumbPreviewSummaries["query-root"] ? (
-                <Badge variant="outline" className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3">
-                  <span className="max-w-32 truncate">{breadcrumbPreviewSummaries["query-root"].label || "—"}</span>
+                <Tooltip><TooltipTrigger render={<Badge
+                  variant="outline"
+                  onClick={toggleBreadcrumbBadgeMode}
+                  className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3 cursor-pointer hover:bg-accent select-none"
+                  title="Click to toggle category/record metadata"
+                >
+                  <span className="max-w-32 truncate">
+  <em>
+  {rootUriValues.length > 0 || textSearchMode === "name" ? "i.e." : "e.g."}{" "}
+  {breadcrumbPreviewSummaries["query-root"].label || "—"}
+</em>
+</span>
                   <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
-                  <span>{breadcrumbPreviewSummaries["query-root"].count ?? "…"}</span>
-                </Badge>
+                  {breadcrumbPreviewSummaries["query-root"].zeroClasses ? (
+                    <Ban className="size-3 text-muted-foreground shrink-0" aria-label="0" />
+                  ) : (
+                    <span>{shortenCount(breadcrumbPreviewSummaries["query-root"].count)}</span>
+                  )}
+                </Badge>} /><TooltipContent>{`${breadcrumbPreviewSummaries["query-root"].label} · ${breadcrumbPreviewSummaries["query-root"].zeroClasses ? "0" : shortenCount(breadcrumbPreviewSummaries["query-root"].count)} (Click to toggle)`}</TooltipContent></Tooltip>
               ) : (
                 <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" aria-label="Loading root result metadata">
                   <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
@@ -6543,7 +7222,8 @@ useEffect(() => {
   const isInactiveSuffix = index > activeBreadcrumbIndex;
           const breadcrumbClasses = classBreadcrumbLabels(crumb.id);
           const breadcrumbNode = findQueryNode(queryTree.children, crumb.id);
-          const breadcrumbBaseLabel = toLabel(crumb.uri) + ((crumb.name === "property-of" || crumb.id.startsWith("role-filter-")) ? " of" : "");
+          const breadcrumbIsRole = crumb.name === "property-of" || crumb.id.startsWith("role-filter-");
+          const breadcrumbBaseLabel = toLabel(crumb.uri, breadcrumbIsRole ? "Role" : "Property") + (breadcrumbIsRole ? " of" : "");
           const breadcrumbExcluded = breadcrumbNode?.attributes.exclude?.trim().toLowerCase() === "yes";
           const breadcrumbLabel = breadcrumbExcluded ? `Excluded: ${breadcrumbBaseLabel}` : breadcrumbBaseLabel;
           const breadcrumbSiblings = getBreadcrumbSiblings(crumb.id);
@@ -6565,15 +7245,29 @@ useEffect(() => {
                     <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap border-purple-400/70 text-[10px] font-normal leading-3 text-purple-700 dark:text-purple-300">Preview · …</Badge>
                   </span>
                 );
+                if (openBreadcrumbDropdownId === crumb.id) return null;
                 return summary || isPending ? (
                   /* Match the next slash center: 8px nav gap + 7px half of the 14px icon. */
-                  <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
+                  <span className="absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
                     {summary ? (
-                      <Tooltip><TooltipTrigger render={<Badge variant="outline" className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3">
-                        <span className="max-w-32 truncate">{summary.label || "—"}</span>
+                      <Tooltip><TooltipTrigger render={<Badge
+                        variant="outline"
+                        onClick={toggleBreadcrumbBadgeMode}
+                        className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3 cursor-pointer hover:bg-accent select-none"
+                        title="Click to toggle category/record metadata"
+                      >
+                        <span className="max-w-32 truncate">
+  <em>
+  {breadcrumbBoundValues.length > 0 ? "i.e." : "e.g."} {summary.label || "—"}
+</em>
+</span>
                         <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
-                        <span>{summary.count ?? "…"}</span>
-                      </Badge>} /><TooltipContent>{`${summary.label} · ${summary.count ?? "…"}`}</TooltipContent></Tooltip>
+                        {summary.zeroClasses ? (
+                          <Ban className="size-3 text-muted-foreground shrink-0" aria-label="0" />
+                        ) : (
+                          <span>{shortenCount(summary.count)}</span>
+                        )}
+                      </Badge>} /><TooltipContent>{`${summary.label} · ${summary.zeroClasses ? "0" : shortenCount(summary.count)} (Click to toggle)`}</TooltipContent></Tooltip>
                     ) : (
                       <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" aria-label={`Loading metadata for ${breadcrumbBaseLabel}`}>
                         <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
@@ -6611,9 +7305,9 @@ useEffect(() => {
                   {breadcrumbBaseLabel}
                   {breadcrumbBoundValues.map((value) => (
                     <span key={value.id} className="ml-1.5 inline-flex items-baseline gap-1">
-                      <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
-                      <span>{boundValueLabel(value)}</span>
-                    </span>
+  <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
+  <span>{boundValueLabel(value)}</span>
+</span>
                   ))}
                 </button>} /><TooltipContent>{`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}</TooltipContent></Tooltip>
                 <Tooltip><TooltipTrigger render={<button
@@ -6628,41 +7322,52 @@ useEffect(() => {
                 </button>} /><TooltipContent>{topBoundValue
                     ? "Remove the bound value; click again to pop this relationship"
                     : "Pop this relationship and its descendants; preserve a sibling when available"}</TooltipContent></Tooltip>
-                {breadcrumbSiblings.length > 0 && (
-                  <>
-                    <DropdownMenu>
+                {(() => {
+					 const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
+                  const hasChildren = Boolean(breadcrumbNode?.children?.some((n) => n.name === "property" || n.name === "property-of"));
+                  const hasMenu = breadcrumbSiblings.length > 0 || hasChildren;
+                  if (!hasMenu) return null;
+                  return (
+                    <DropdownMenu open={openBreadcrumbDropdownId === crumb.id} onOpenChange={(open) => setOpenBreadcrumbDropdownId(open ? crumb.id : null)}>
                       <Tooltip>
                         <TooltipTrigger render={<DropdownMenuTrigger asChild><button
                           type="button"
-                          aria-label={`Choose a sibling for ${compactIri(crumb.uri)}`}
+                          aria-label={`Choose a relationship for ${compactIri(crumb.uri)}`}
                           className={`flex h-auto min-h-10 w-8 shrink-0 self-stretch items-center justify-center rounded-none border-0 p-0 ${tutorialBreadcrumbTargetId === crumb.id ? "bg-transparent text-purple-800 dark:text-purple-200" : `bg-background ${isInactiveSuffix ? "text-muted-foreground" : "text-foreground"}`} outline-none hover:bg-accent focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=open]:bg-accent`}
                         >
                           <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m4 6 4 4 4-4" /></svg>
                         </button></DropdownMenuTrigger>} />
-                        <TooltipContent>{"Choose a sibling relationship"}</TooltipContent>
+                        <TooltipContent>{"Choose a relationship"}</TooltipContent>
                       </Tooltip>
-                      {/* The shared menu is sized to its trigger by default; w-max lets it show every full "prop = value" item. */}
-                      <DropdownMenuContent align="end" className="w-max min-w-40 max-w-[calc(100vw-2rem)]">
-                        {breadcrumbSiblings.map((sibling) => (
-                          <DropdownMenuItem
-                            key={sibling.id}
-                            onClick={() => { clearTutorialPreview(); moveViewToSibling(crumb.id, sibling.id); }}
-                            className="whitespace-normal break-words"
-                          >
-                            {sibling.attributes.exclude?.trim().toLowerCase() === "yes" && <CircleSlash className="mr-2 inline size-3.5" aria-label="Excluded" />}
-                            {breadcrumbSiblingLabel(sibling)}
-                            {boundValueNodes(sibling).map((value) => (
-                              <span key={value.id} className="ml-1.5 inline-flex items-baseline gap-1">
-                                <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
-                                <Tooltip><TooltipTrigger render={<span>{boundValueLabel(value)}</span>} /><TooltipContent>{value.text ?? ""}</TooltipContent></Tooltip>
-                              </span>
-                            ))}
-                          </DropdownMenuItem>
-                        ))}
+                      <DropdownMenuContent align="end" className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
+                        <DropdownMenuLabel className="font-normal text-xs text-muted-foreground border-b pb-1.5 mb-1">
+                          <span className="flex items-center justify-between gap-2">
+                            <span className="truncate max-w-40 font-medium text-foreground">
+                              <><em>e.g.</em> {summary?.label || breadcrumbBaseLabel}</>
+                            </span>
+                            <span className="shrink-0 tabular-nums">
+                              {summary?.count !== undefined && summary?.count !== null ? summary.count : "…"}
+                            </span>
+                          </span>
+                        </DropdownMenuLabel>
+                        {breadcrumbSiblings.map((sibling) =>
+                          renderBreadcrumbNodeMenuItem(sibling, (targetId) => {
+                            clearTutorialPreview();
+                            moveViewToSibling(crumb.id, targetId);
+                          })
+                        )}
+                        {breadcrumbNode?.children
+                          .filter((child) => (child.name === "property" || child.name === "property-of") && !breadcrumbSiblings.some((s) => s.id === child.id))
+                          .map((child) =>
+                            renderBreadcrumbNodeMenuItem(child, (targetId) => {
+                              clearTutorialPreview();
+                              navigateToPropertyPath(targetId);
+                            })
+                          )}
                       </DropdownMenuContent>
                     </DropdownMenu>
-                  </>
-                )}
+                  );
+                })()}
               </ButtonGroup>
             </span>
           );
@@ -6710,7 +7415,7 @@ useEffect(() => {
                     ) : null}
                     {propertyFacets.length > 0 && (
                       <ButtonGroup aria-label="Configure properties">
-                        <button type="button" onClick={() => { setFocusListOrder("Properties"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="px-2 text-xs font-medium hover:bg-accent">Configure Properties</button>
+                        <button type="button" onClick={() => { setFocusListOrder("Properties"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="inline-flex items-center gap-1 px-2 text-xs font-medium hover:bg-accent" title="Configure Properties" aria-label="Configure Properties"><MousePointerClick className="size-3.5" aria-hidden="true" /> Properties</button>
                         <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
                         <Tooltip><TooltipTrigger render={<button
                           type="button"
@@ -6726,7 +7431,7 @@ useEffect(() => {
                     )}
                     {roleFacets.length > 0 && (
                       <ButtonGroup aria-label="Configure roles">
-                        <button type="button" onClick={() => { setFocusListOrder("Roles"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="px-2 text-xs font-medium hover:bg-accent">Configure Roles</button>
+                        <button type="button" onClick={() => { setFocusListOrder("Roles"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="inline-flex items-center gap-1 px-2 text-xs font-medium hover:bg-accent" title="Configure Roles" aria-label="Configure Roles"><MousePointerClick className="size-3.5" aria-hidden="true" /> Roles</button>
                         <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
                         <Tooltip><TooltipTrigger render={<button
                           type="button"
@@ -6769,32 +7474,42 @@ useEffect(() => {
                       const order = focusListOrder === "Properties" ? ["Properties", "Roles", "Graphs"] : ["Roles", "Properties", "Graphs"];
                       return order.indexOf(a) - order.indexOf(b);
                     }).map((group) => {
-                      let items: { key: string; label: string; count: number | null }[] =
+                      let items: { key: string; label: string; count: number | null; example?: FacetItem["example"] }[] =
                         group === "Properties"
                           ? propertyFacets.map((item) => ({
                               key: item.uri,
-                              label: toLabel(item.uri),
+                              label: toLabel(item.uri, "Property"),
                               count: item.count,
+                              example: item.example,
                             }))
                           : group === "Classes"
                             ? classFacets.map((item) => ({
                                 key: item.uri,
-                                label: `${toLabel(item.uri)}s`,
+                                label: `${toLabel(item.uri, "Class")}s`,
                                 count: item.count,
                               }))
                             : group === "Roles"
                               ? roleFacets.map((item) => ({
                                   key: item.uri,
-                                  label: toLabel(item.uri),
+                                  label: toLabel(item.uri, "Role"),
                                   count: item.count,
+                                  example: item.example,
                                 }))
                               : group === "Graphs"
-                                ? graphFacets.map((item) => ({ key: item.uri, label: toLabel(item.uri), count: item.count }))
+                                ? graphFacets.map((item) => ({ key: item.uri, label: toLabel(item.uri, "Class"), count: item.count }))
                                 : [];
 
                       // Keep checked Properties/Roles in a separate pane above
                       // pagination. Only unchecked items participate in paging;
                       // preserve query order for selected items and FCT order below.
+                      const exampleForFacetItem = (key: string, fallback?: FacetItem["example"]) => {
+                        if (group !== "Properties" && group !== "Roles") return fallback;
+                        const selectedNode = (group === "Properties" ? activePropertyFilters : activeRoleFilters).find((node) => node.attributes.iri === key);
+                        const bound = selectedNode?.children.find((child) => child.name === "value" && Boolean(child.text));
+                        if (!bound?.text) return fallback;
+                        const isUri = bound.attributes.datatype === "uri";
+                        return { uri: bound.text, termType: isUri ? "uri" as const : "literal" as const, label: isUri ? toLabel(bound.text, "Class") : bound.text };
+                      };
                       const selectedItems =
                         group === "Properties" || group === "Roles"
                           ? Array.from(
@@ -6804,13 +7519,15 @@ useEffect(() => {
                                 const countQuery = distinctCountQueryFor(queryTree, countKind, key);
                                 return {
                                   key,
-                                  label: items.find((item) => item.key === key)?.label ?? toLabel(key),
+                                  label: items.find((item) => item.key === key)?.label ?? toLabel(key, group === "Properties" ? "Property" : "Role"),
                                   count: facetCandidateCounts[countQuery] ?? null,
+                                  example: exampleForFacetItem(key, items.find((item) => item.key === key)?.example),
                                 };
                               },
                             )
                           : [];
                       const selectedKeys = new Set(selectedItems.map((item) => item.key));
+                      const facetListStale = group === "Properties" ? isLoadingProperties : group === "Roles" ? isLoadingRoles : group === "Classes" ? isLoadingClasses : false;
                       const unselectedItems = items.filter((item) => {
                         if (selectedKeys.has(item.key)) return false;
                         if (group !== "Properties" && group !== "Roles") return true;
@@ -6908,42 +7625,46 @@ useEffect(() => {
 
                           {(group === "Properties" || group === "Roles") &&
                             selectedItems.length > 0 && (
-                              <div className="mb-2 rounded-md border border-border/70 bg-background/80 p-2">
+                              <div className={`mb-2 rounded-md border border-border/70 bg-background/80 p-2 ${facetListStale ? "opacity-45" : ""}`} aria-disabled={facetListStale || undefined}>
                                 <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">Selected</div>
                                 <div className="space-y-1">
                                   {selectedItems.map((item) => (
                                     <div
                                       key={item.key}
-                                      className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-sm ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && ((group === "Properties" && facetHoverPreview.direction === "forward") || (group === "Roles" && facetHoverPreview.direction === "reverse")) ? "!border-purple-500" : "border-transparent"}`}
+                                      className={`flex w-full min-w-0 items-start gap-2 ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && ((group === "Properties" && facetHoverPreview.direction === "forward") || (group === "Roles" && facetHoverPreview.direction === "reverse")) ? "!border-purple-500" : "border-transparent"}`}
                                     >
-                                      <input
-                                        type="checkbox"
-                                        checked
-                                        data-excluded={isFacetExcluded(group, item.key) ? "true" : undefined}
-                                        aria-invalid={item.count === 0 ? true : undefined}
-                                        onClick={(event) => {
-                                          if (event.shiftKey) {
-                                            event.preventDefault();
-                                            handleFacetShiftClick(group, item.key, true);
-                                          }
-                                        }}
-                                        onChange={(event) => {
-                                          clearTutorialPreview();
-                                          if (group === "Properties") {
-                                            handlePropertyCheckboxChange(item.key, event.currentTarget.checked);
-                                          } else {
-                                            handleRoleCheckboxChange(item.key, event.currentTarget.checked);
-                                          }
-                                        }}
-                                        aria-label={`Unselect ${item.label}`}
-                                        className={isFacetExcluded(group, item.key)
-                                          ? "relative size-4 shrink-0 appearance-none rounded-[3px] border border-black bg-white checked:border-black checked:bg-black checked:after:absolute checked:after:inset-0 checked:after:flex checked:after:items-center checked:after:justify-center checked:after:text-[14px] checked:after:font-bold checked:after:leading-none checked:after:text-white checked:after:content-['×'] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-invalid:!border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:!border-destructive/50 dark:aria-invalid:ring-destructive/40"
-                                          : "size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"}
-                                      />
+                                      <button
+  type="button"
+  disabled={facetListStale}
+  data-excluded={isFacetExcluded(group, item.key) ? "true" : undefined}
+  aria-invalid={item.count === 0 ? true : undefined}
+  aria-label={`Unselect ${item.label}`}
+  title={`Unselect ${item.label}`}
+  onClick={(event) => {
+    clearTutorialPreview();
+
+    if (event.shiftKey) {
+      handleFacetShiftClick(group, item.key, true);
+    } else if (group === "Properties") {
+      handlePropertyCheckboxChange(item.key, false);
+    } else {
+      handleRoleCheckboxChange(item.key, false);
+    }
+  }}
+  //className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded bg-black text-white hover:bg-gray-800 disabled:cursor-not-allowed"
+  className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded disabled:cursor-not-allowed"
+>
+  {isFacetExcluded(group, item.key) ? (
+    <SquareX className="size-4 rounded-[3px] bg-black text-white overflow-hidden" aria-hidden="true" />
+  ) : (
+    <SquareCheck className="size-4 rounded-[3px] bg-black text-white overflow-hidden" aria-hidden="true" />
+  )}
+</button>
+									  <div className="min-w-0 flex-1 flex flex-col items-start gap-0">
                                       {group === "Properties" ? (
                                         <Tooltip><TooltipTrigger render={<button
                                           type="button"
-                                          className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : item.count === 0 ? "text-destructive" : ""}`}
+                                          className={`min-w-0 flex-1 break-all text-sm text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : item.count === 0 ? "text-destructive" : ""}`}
                                           onMouseEnter={() => beginFacetHoverPreview(item.key, "forward", item.label, "configure")}
                                           onMouseLeave={clearTutorialPreview}
                                           onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "forward"); }}
@@ -6956,7 +7677,7 @@ useEffect(() => {
                                       ) : (
                                         <Tooltip><TooltipTrigger render={<button
                                           type="button"
-                                          className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : item.count === 0 ? "text-destructive" : ""}`}
+                                          className={`min-w-0 flex-1 break-all text-sm text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : item.count === 0 ? "text-destructive" : ""}`}
                                           onMouseEnter={() => beginFacetHoverPreview(item.key, "reverse", item.label, "configure")}
                                           onMouseLeave={clearTutorialPreview}
                                           onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "reverse"); }}
@@ -6967,6 +7688,8 @@ useEffect(() => {
                                           )}
                                         </button>} /><TooltipContent>{`Filter by role ${item.label}`}</TooltipContent></Tooltip>
                                       )}
+                                      {item.example && <button type="button" disabled={facetListStale || item.example.termType !== "uri"} onClick={() => showClassResults(item.example!.uri, activeLeafId)} className="block break-words text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>{(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) ? "i.e." : "e.g."}</em> {item.example.label}</button>}
+									  </div>
                                       <DistinctCount
                                         tree={queryTree}
                                         kind={group === "Properties" ? "property" : "role"}
@@ -7019,6 +7742,7 @@ useEffect(() => {
 
                           <div className="space-y-1">
                             {pageItems.map((item) => {
+                              const itemExample = exampleForFacetItem(item.key, item.example);
                               const countKind: DistinctCountKind | null =
                                 group === "Properties" ? "property" : group === "Roles" ? "role" : group === "Classes" ? "class" : null;
                               const countQuery = countKind ? distinctCountQueryFor(queryTree, countKind, item.key) : null;
@@ -7029,7 +7753,18 @@ useEffect(() => {
                               return (
                               <div
                                 key={item.key}
-                                className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-sm hover:bg-accent/50 ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && ((group === "Properties" && facetHoverPreview.direction === "forward") || (group === "Roles" && facetHoverPreview.direction === "reverse")) ? "!border-purple-500" : "border-transparent"}`}
+                                aria-disabled={facetListStale || undefined}
+								onMouseEnter={() => {
+  if (group === "Properties" || group === "Roles") {
+    setHoveredFacetKey(item.key);
+  }
+}}
+onMouseLeave={() => {
+  if (group === "Properties" || group === "Roles") {
+    setHoveredFacetKey(null);
+  }
+}}
+                                className={`flex w-full items-start gap-2 rounded-md border px-2 py-0 text-sm hover:bg-accent/50 ${facetListStale ? "opacity-45" : ""} ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && ((group === "Properties" && facetHoverPreview.direction === "forward") || (group === "Roles" && facetHoverPreview.direction === "reverse")) ? "!border-purple-500" : "border-transparent"}`}
                               >
                                 {group === "Graphs" ? (
                                   <input
@@ -7040,48 +7775,56 @@ useEffect(() => {
                                     aria-label={`Bind graph ${item.label}`}
                                     className="size-4 shrink-0 accent-current"
                                   />
-                                ) : group === "Properties" ||
-                                group === "Classes" ||
-                                group === "Roles" ? (
-                                  <input
-                                    type="checkbox"
-                                    aria-invalid={isZeroCount ? true : undefined}
-                                    checked={
-                                      group === "Properties"
-                                        ? selectedProperties.has(item.key)
-                                        : group === "Classes"
-                                          ? selectedClasses.has(item.key)
-                                          : selectedRoles.has(item.key)
-                                    }
-                                    data-excluded={isFacetExcluded(group as "Properties" | "Classes" | "Roles", item.key) ? "true" : undefined}
-                                    onClick={(event) => {
-                                      if (event.shiftKey) {
-                                        event.preventDefault();
-                                        const currentlySelected = group === "Properties"
-                                          ? selectedProperties.has(item.key)
-                                          : group === "Classes"
-                                            ? selectedClasses.has(item.key)
-                                            : selectedRoles.has(item.key);
-                                        handleFacetShiftClick(group as "Properties" | "Classes" | "Roles", item.key, currentlySelected);
-                                      }
-                                    }}
-                                    onChange={(event) =>
-                                      group === "Properties"
-                                        ? handlePropertyCheckboxChange(item.key, event.currentTarget.checked)
-                                        : group === "Classes"
-                                          ? toggleClass(item.key, event.currentTarget.checked)
-                                          : handleRoleCheckboxChange(item.key, event.currentTarget.checked)
-                                    }
-                                    aria-label={`Filter by ${item.label}`}
-                                    className={isExcluded
-                                      ? "relative size-4 shrink-0 appearance-none rounded-[3px] border border-black bg-white checked:border-black checked:bg-black checked:after:absolute checked:after:inset-0 checked:after:flex checked:after:items-center checked:after:justify-center checked:after:text-[14px] checked:after:font-bold checked:after:leading-none checked:after:text-white checked:after:content-['×'] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-invalid:!border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:!border-destructive/50 dark:aria-invalid:ring-destructive/40"
-                                      : "size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"}
-                                  />
+                                ) : group === "Properties" || group === "Roles" ? (
+  <button
+    type="button"
+    disabled={facetListStale}
+    aria-invalid={isZeroCount ? true : undefined}
+    aria-label={`Filter by ${item.label}`}
+    title={`Filter by ${item.label}`}
+    onClick={(event) => {
+      clearTutorialPreview();
+
+      if (event.shiftKey) {
+        handleFacetShiftClick(group, item.key, false);
+      } else if (group === "Properties") {
+        handlePropertyCheckboxChange(item.key, true);
+      } else {
+        handleRoleCheckboxChange(item.key, true);
+      }
+    }}
+    //className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded text-black hover:bg-black hover:text-white disabled:cursor-not-allowed"
+	className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded disabled:cursor-not-allowed"
+  >
+    {shiftKeyDown && hoveredFacetKey === item.key ? (
+      <SquareX className="size-4 rounded bg-black text-white" aria-hidden="true" />
+    ) : (
+      <SquarePlus className="size-4 rounded text-black hover:bg-black hover:text-white" aria-hidden="true" />
+    )}
+  </button>
+) : group === "Classes" ? (
+  <input
+    type="checkbox"
+    disabled={facetListStale}
+    aria-invalid={isZeroCount ? true : undefined}
+    checked={selectedClasses.has(item.key)}
+    data-excluded={isFacetExcluded("Classes", item.key) ? "true" : undefined}
+    onClick={(event) => {
+      if (event.shiftKey) {
+        event.preventDefault();
+        handleFacetShiftClick("Classes", item.key, selectedClasses.has(item.key));
+      }
+    }}
+    onChange={(event) => toggleClass(item.key, event.currentTarget.checked)}
+    aria-label={`Filter by ${item.label}`}
+    className="size-4 shrink-0 accent-current"
+  />
                                 ) : null}
+								<div className="min-w-0 flex-1 flex flex-col items-start gap-0">
                                 {group === "Properties" ? (
                                   <Tooltip><TooltipTrigger render={<button
                                     type="button"
-                                    className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : isZeroCount ? "text-destructive" : ""}`}
+                                    className={`min-w-0 w-full break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : isZeroCount ? "text-destructive" : ""}`}
                                     onMouseEnter={() => beginFacetHoverPreview(item.key, "forward", item.label, "configure")}
                                     onMouseLeave={clearTutorialPreview}
                                     onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "forward"); }}
@@ -7091,7 +7834,7 @@ useEffect(() => {
                                 ) : group === "Roles" ? (
                                   <Tooltip><TooltipTrigger render={<button
                                     type="button"
-                                    className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : isZeroCount ? "text-destructive" : ""}`}
+                                    className={`min-w-0 w-full break-all text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : isZeroCount ? "text-destructive" : ""}`}
                                     onMouseEnter={() => beginFacetHoverPreview(item.key, "reverse", item.label, "configure")}
                                     onMouseLeave={clearTutorialPreview}
                                     onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "reverse"); }}
@@ -7120,6 +7863,8 @@ useEffect(() => {
                                 ) : (
                                   <span className="min-w-0 flex-1 break-all">{item.label}</span>
                                 )}
+                                {(group === "Properties" || group === "Roles") && itemExample && <button type="button" disabled={facetListStale || itemExample.termType !== "uri"} onClick={() => showClassResults(itemExample.uri, activeLeafId)} className="w-full max-w-full break-words text-left text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>{(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) ? "i.e." : "e.g."}</em> {itemExample.label}</button>}
+								</div>
                                 {(group === "Properties" ||
                                   group === "Roles") && (
                                   <DistinctCount
@@ -7220,7 +7965,7 @@ useEffect(() => {
                                           }
                                         }}
                                         onChange={(event) => toggleClass(item.uri, event.currentTarget.checked)}
-                                        aria-label={`Unselect category ${toLabel(item.uri)}`}
+                                        aria-label={`Unselect category ${toLabel(item.uri, "Class")}`}
                                         className={isFacetExcluded("Classes", item.uri)
                                           ? "relative size-4 shrink-0 appearance-none rounded-[3px] border border-black bg-white checked:border-black checked:bg-black checked:after:absolute checked:after:inset-0 checked:after:flex checked:after:items-center checked:after:justify-center checked:after:text-[14px] checked:after:font-bold checked:after:leading-none checked:after:text-white checked:after:content-['×'] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-invalid:!border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:!border-destructive/50 dark:aria-invalid:ring-destructive/40"
                                           : "size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"}
@@ -7228,11 +7973,11 @@ useEffect(() => {
                                       <Tooltip><TooltipTrigger render={<button
                                         type="button"
                                         className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${count === 0 ? "text-destructive" : ""}`}
-                                        onClick={() => isGroupByCategory ? scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri), matches: [], termType: "uri" }) : showClassResults(item.uri, activeLeafId)}
+                                        onClick={() => isGroupByCategory ? scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri, "Class"), matches: [], termType: "uri" }) : showClassResults(item.uri, activeLeafId)}
                                       >
                                         {isFacetExcluded("Classes", item.uri) && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
-                                        {toLabel(item.uri)}
-                                      </button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}</TooltipContent></Tooltip>
+                                        {toLabel(item.uri, "Class")}
+                                      </button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri, "Class")}` : `Show results for class ${toLabel(item.uri, "Class")}`}</TooltipContent></Tooltip>
                                       <DistinctCount
                                         tree={queryTree}
                                         kind="class"
@@ -7283,8 +8028,8 @@ useEffect(() => {
                                       return <div key={item.uri} className="min-w-0">
                                         <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50" style={{ paddingLeft: `${8 + depth * 14}px` }}>
                                           {node.children.length > 0 ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" /> : <span className="size-3.5 shrink-0" aria-hidden="true" />}
-                                          <input type="checkbox" checked={selectedClasses.has(item.uri)} onChange={(event) => toggleClass(item.uri, event.target.checked)} aria-label={`Filter by class ${toLabel(item.uri)}`} className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} />
-                                          <Tooltip><TooltipTrigger render={<button type="button" className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`} onClick={() => { if (isGroupByCategory) scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri), matches: [], termType: "uri" }); else { if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true); showClassResults(item.uri, activeLeafId); } }}>{toLabel(item.uri)}</button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}</TooltipContent></Tooltip>
+                                          <input type="checkbox" checked={selectedClasses.has(item.uri)} onChange={(event) => toggleClass(item.uri, event.target.checked)} aria-label={`Filter by class ${toLabel(item.uri, "Class")}`} className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} />
+                                          <Tooltip><TooltipTrigger render={<button type="button" className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`} onClick={() => { if (isGroupByCategory) scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri, "Class"), matches: [], termType: "uri" }); else { if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true); showClassResults(item.uri, activeLeafId); } }}>{toLabel(item.uri, "Class")}</button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri, "Class")}` : `Show results for class ${toLabel(item.uri, "Class")}`}</TooltipContent></Tooltip>
                                           <DistinctCount tree={queryTree} kind="class" uri={item.uri} onCountChange={(query, count) => setClassCandidateCounts((current) => current[query] === count ? current : { ...current, [query]: count })} />
                                         </div>
                                         {node.children.length > 0 && <div className="ml-2 border-l border-border/60">{node.children.map((child) => renderTreeNode(child, depth + 1))}</div>}
@@ -7302,7 +8047,7 @@ useEffect(() => {
                                     type="checkbox"
                                     checked={selectedClasses.has(item.uri)}
                                     onChange={(event) => toggleClass(item.uri, event.target.checked)}
-                                    aria-label={`Filter by class ${toLabel(item.uri)}`}
+                                    aria-label={`Filter by class ${toLabel(item.uri, "Class")}`}
                                     className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
                                     aria-invalid={isZeroCount ? true : undefined}
                                   />
@@ -7311,15 +8056,15 @@ useEffect(() => {
                                     className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
                                     onClick={() => {
                                       if (isGroupByCategory) {
-                                        scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri), matches: [], termType: "uri" });
+                                        scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri, "Class"), matches: [], termType: "uri" });
                                       } else {
                                         if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true);
                                         showClassResults(item.uri, activeLeafId);
                                       }
                                     }}
                                   >
-                                    {toLabel(item.uri)}
-                                  </button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri)}` : `Show results for class ${toLabel(item.uri)}`}</TooltipContent></Tooltip>
+                                    {toLabel(item.uri, "Class")}
+                                  </button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri, "Class")}` : `Show results for class ${toLabel(item.uri, "Class")}`}</TooltipContent></Tooltip>
                                   <DistinctCount
                                     tree={queryTree}
                                     kind="class"
@@ -7339,7 +8084,7 @@ useEffect(() => {
                     </article>
                     {!focusWidgetsSuppressed && activeRoleFilters.map((roleNode) => {
                       const uri = roleNode.attributes.iri ?? "";
-                      const roleLabel = `${toLabel(uri)} of`;
+                      const roleLabel = `${toLabel(uri, "Role")} of`;
                       const excluded = roleNode.attributes.exclude?.trim().toLowerCase() === "yes";
                       const label = `${roleLabel} `;
                       const isGroupByRole = groupByPropertyUri === `reverse:${uri}`;
@@ -7411,10 +8156,10 @@ useEffect(() => {
                                 ? "Updating…"
                                 : roleWidgetStatuses[roleNode.id]?.error
                                   ? "Update failed"
-                                  : roleWidgetStatuses[roleNode.id]?.count ?? 0}
+                                  : shortenCount(roleWidgetStatuses[roleNode.id]?.count ?? 0)}
                             </span>} /><TooltipContent>{roleWidgetStatuses[roleNode.id]?.error || undefined}</TooltipContent></Tooltip>
                           </header>
-                          <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} />
+                          <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} onFirstExampleClick={(valueUri) => showClassResults(valueUri, activeLeafId)} />
                         </article>
                       );
                     })}
@@ -7473,7 +8218,7 @@ useEffect(() => {
                             </ButtonGroup>
                           </div>
                           <span className="ml-auto shrink-0 text-xs text-muted-foreground" aria-live="polite">
-                            {isLoadingGraphs ? "Updating…" : graphFacets.length}
+                            {isLoadingGraphs ? "Updating…" : shortenCount(graphFacets.length)}
                           </span>
                         </div>
                       </header>
@@ -7498,7 +8243,7 @@ useEffect(() => {
                                   <span className="block break-words">{item.label}</span>
                                   <Tooltip><TooltipTrigger render={<span className="block break-all text-xs text-muted-foreground">{item.uri}</span>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
                                 </span>
-                                <Tooltip><TooltipTrigger render={<span className="shrink-0 text-xs text-muted-foreground">{item.count}</span>} /><TooltipContent>{`${item.count} matching resources`}</TooltipContent></Tooltip>
+                                <Tooltip><TooltipTrigger render={<span className="shrink-0 text-xs text-muted-foreground">{shortenCount(item.count)}</span>} /><TooltipContent>{`${item.count} matching resources`}</TooltipContent></Tooltip>
                               </label>
                             ))}
                           </div>
@@ -7527,7 +8272,7 @@ useEffect(() => {
               <div className="group/header shrink-0 border-b px-3 pb-3 pt-0">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm">
                   <span className="shrink-0 text-muted-foreground">
-                    Group <strong className="font-semibold text-foreground">{isCountingResults || effectiveResultsTotalCount === null ? "…" : effectiveResultsTotalCount.toLocaleString()}</strong> results by:
+                    Group <strong className="font-semibold text-foreground">{isCountingResults || effectiveResultsTotalCount === null ? "…" : shortenCount(effectiveResultsTotalCount)}</strong> results by:
                   </span>
                   <select
                     id="groups-property-select"
@@ -7663,7 +8408,7 @@ useEffect(() => {
                           className="min-w-0 flex-1 text-left cursor-pointer"
                         >
                           <span className="block text-sm font-medium cursor-pointer">
-                            {item.termType === "uri" ? toLabel(item.uri) : item.title || item.uri}
+                            {item.termType === "uri" ? toLabel(item.uri, "Class") : item.title || item.uri}
                           </span>
                           <span className="mt-1 block break-all text-xs text-muted-foreground">
                             {item.uri}
@@ -7770,7 +8515,7 @@ useEffect(() => {
                       <div className="min-w-0 flex-1 overflow-y-auto p-3">
                         <div className="flex flex-col gap-3">
                         {visibleGroupValues.map((groupValue) => {
-                          const groupValueLabel = groupValue.termType === "uri" ? toLabel(groupValue.uri) : groupValue.title || groupValue.uri;
+                          const groupValueLabel = groupValue.termType === "uri" ? toLabel(groupValue.uri, selectedGroupByOption?.direction === "reverse" ? "Role" : "Property") : groupValue.title || groupValue.uri;
                           const memberKey = `${selectedGroupByOption!.key}::${groupValueKey(groupValue)}`;
                           const members = groupMembers[memberKey] ?? { results: [], loading: true, error: "" };
                           const selectedRelationshipNode = findQueryNode(queryTree.children, selectedGroupByOption!.nodeId);
@@ -7786,11 +8531,11 @@ useEffect(() => {
                                 <Tooltip><TooltipTrigger render={<button type="button" onClick={() => setSelectedUri(groupValue.uri)} className="block max-w-full cursor-pointer break-words text-left text-sm font-semibold hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{groupValueLabel}</button>} /><TooltipContent>{"Load this group value in the Record viewer"}</TooltipContent></Tooltip>
                                 <p className="mt-0.5 break-all text-xs text-muted-foreground">{groupValue.uri}</p>
                               </div>
-                              <span className="shrink-0 text-xs text-muted-foreground">{members.loading ? "…" : `${members.count ?? members.results.length} ${(members.count ?? members.results.length) === 1 ? "item" : "items"}`}</span>
+                              <span className="shrink-0 text-xs text-muted-foreground">{shortenCount(Number(groupValue.columns?.[1]?.value ?? 0))} in group</span>
                               <QueryInspectorButton query={serializeFctQuery(createGroupMemberQuery(queryTree, selectedGroupByOption!, groupValue))} filename={`group-${groupValueLabel.replace(/[^a-z0-9_-]+/gi, "-")}.xml`} />
                             </header>
                             <div className="flex flex-col gap-1 p-2">
-                              {members.error ? <p className="px-2 py-2 text-xs text-destructive">{members.error}</p> : members.loading ? <p className="px-2 py-2 text-xs text-muted-foreground">Loading matching Results items…</p> : members.results.length > 0 ? members.results.map((item) => <button key={item.uri} type="button" onClick={() => setSelectedUri(item.uri)} className={`flex min-w-0 flex-col rounded-md px-2 py-2 text-left hover:bg-accent/50 ${selectedUri === item.uri ? "bg-accent/40" : ""}`}><span className="break-words text-sm font-medium cursor-pointer">{item.termType === "uri" ? toLabel(item.uri) : item.title || item.uri}</span><span className="mt-0.5 break-all text-xs text-muted-foreground">{item.uri}</span></button>) : <p className="px-2 py-2 text-xs text-muted-foreground">No Results items match this value.</p>}
+                              {members.error ? <p className="px-2 py-2 text-xs text-destructive">{members.error}</p> : members.loading ? <p className="px-2 py-2 text-xs text-muted-foreground">Loading matching Results items…</p> : members.results.length > 0 ? members.results.map((item) => <button key={item.uri} type="button" onClick={() => setSelectedUri(item.uri)} className={`flex min-w-0 flex-col rounded-md px-2 py-2 text-left hover:bg-accent/50 ${selectedUri === item.uri ? "bg-accent/40" : ""}`}><span className="break-words text-sm font-medium cursor-pointer">{item.termType === "uri" ? toLabel(item.uri, "Class") : item.title || item.uri}</span><span className="mt-0.5 break-all text-xs text-muted-foreground">{item.uri}</span></button>) : <p className="px-2 py-2 text-xs text-muted-foreground">No Results items match this value.</p>}
                             </div>
                           </article>;
                         })}
@@ -7960,7 +8705,7 @@ useEffect(() => {
                     </Tooltip>
                   </ButtonGroup>
                 </div>
-                {searchError && <p className="mt-2 text-sm text-destructive">{searchError}</p>}
+                {searchError && <p className="mt-2 text-sm text-destructive">{searchError}{searchError.includes("Could not load Datasites from the personal SPARQL store") && <> Check that your <a href={personalSparqlEndpoint || undefined} target="_blank" rel="noreferrer" className="underline underline-offset-2">personal graph server</a> is online.</>}</p>}
               </div>
             </section>
             </ResizablePanel>
@@ -7982,31 +8727,27 @@ useEffect(() => {
                 <p className="mt-1 break-all text-xs text-muted-foreground">
                   {selectedUri}
                 </p>
-                {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div className="mt-3 flex flex-wrap items-center gap-2">
+                {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div id="record_button_bar" className="mt-3 flex flex-wrap items-center gap-2">
                   {recordPolicy && <>
-                    <button type="button" onClick={() => void validateSelectedRecord()} disabled={isValidatingRecord} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50">
-                      {isValidatingRecord ? "Validating…" : "Validate"}
-                    </button>
-                    <button
-                      type="button"
-                      aria-pressed={recordFormatEnabled}
-                      disabled={!recordFormatPreferenceLoaded}
-                      onClick={() => {
-                        const enabled = !recordFormatEnabled;
-                        setRecordFormatEnabled(enabled);
-                        setRecordFormatError("");
-                        if (!enabled) setFormattedRecordHtml("");
-                      }}
-                      className={`rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
-                    >
-                      Format
-                    </button>
-                    <button type="button" onClick={() => void deleteSelectedRecord()} disabled={!selectedUri} className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">
-                      <Trash2 className="size-4" aria-hidden="true" /> Delete Bookmark
-                    </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild><button type="button" disabled={isValidatingRecord} className="inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50">{isValidatingRecord ? "Validating…" : "Validate"}{recordPolicies.length > 1 && <ChevronDown className="size-3.5" />}</button></DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-72">
+                        {recordPolicies.map((policy) => <DropdownMenuItem key={policy.uri} onSelect={() => { const templateUri = policy.templates[0]?.uri ?? ""; setRecordPolicy(policy); setSelectedRecordTemplateUri(templateUri); setRecordValidation(null); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); store?.put(policy.uri, `record-policy:${selectedUri}`); store?.put(templateUri, `record-template:${selectedUri}`); } catch (error) { console.warn("Maestro could not persist the selected record policy in IndexedDB", error); } void validateSelectedRecord(policy); }}>{policy.label}</DropdownMenuItem>)}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild><button type="button" aria-pressed={recordFormatEnabled} disabled={!recordFormatPreferenceLoaded} className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}>Format{recordPolicy.templates.length > 1 && <ChevronDown className="size-3.5" />}</button></DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-80">
+                        {recordPolicy.templates.map((template) => <DropdownMenuItem key={template.uri} onSelect={() => { setSelectedRecordTemplateUri(template.uri); setFormattedRecordHtml(""); setRecordFormatError(""); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); store?.put(recordPolicy.uri, `record-policy:${selectedUri}`); store?.put(template.uri, `record-template:${selectedUri}`); } catch (error) { console.warn("Maestro could not persist the selected record format in IndexedDB", error); } if (!recordFormatEnabled) setRecordFormatEnabled(true); }} className="flex items-start gap-3 py-3">
+                          <span className="mt-0.5 block h-24 w-24 shrink-0 overflow-hidden rounded border bg-background"><span className="pointer-events-none block h-24 w-44 origin-top-left scale-[0.5] overflow-hidden" dangerouslySetInnerHTML={{ __html: recordFormatPreviews[template.uri] ?? "<div class=\"p-2 text-xs text-muted-foreground\">Preparing preview…</div>" }} /></span>
+                          <span className="min-w-0"><span className="block font-medium">{template.label}</span><span className="block break-all text-xs text-muted-foreground">{template.uri}</span></span>
+                        </DropdownMenuItem>)}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </>}
                   {isLoadingRecordPolicy && <span className="text-xs text-muted-foreground">Looking for a record policy…</span>}
                   {recordPolicyError && <span className="text-xs text-destructive">{recordPolicyError}</span>}
+                  {formattedRecordButtonsHtml.record_button_bar && <div className="contents" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_button_bar }} />}
                 </div>}
                 {recordValidation && <div className={`mt-3 rounded-md border p-3 text-sm ${recordValidation.conforms ? "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200" : "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"}`}>
                   <p className="font-semibold">{recordValidation.complete ? (recordValidation.conforms ? "SHACL validation passed" : "SHACL validation failed") : "Partial SHACL validation"}</p>
@@ -8020,9 +8761,9 @@ useEffect(() => {
                 {describedRecord.length > 0 ? (
                   <span className="text-xs text-muted-foreground">
                     {[
-                      describedPropertyCount > 0 ? `${describedPropertyCount} properties` : null,
-                      describedRoleCount > 0 ? `${describedRoleCount} roles` : null,
-                      describedRecord.length > 0 ? `${describedRecord.length} values` : null,
+                      describedPropertyCount > 0 ? `${shortenCount(describedPropertyCount)} properties` : null,
+                      describedRoleCount > 0 ? `${shortenCount(describedRoleCount)} roles` : null,
+                      describedRecord.length > 0 ? `${shortenCount(describedRecord.length)} values` : null,
                     ].filter((part): part is string => part !== null).join(" · ")}
                   </span>
                 ) : <span />}
@@ -8057,10 +8798,8 @@ useEffect(() => {
   </div>
 )}
               </div>
-              {!recordFormatPreferenceLoaded || (recordFormatEnabled && !formattedRecordHtml && !recordFormatError) ? (
-                <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status">
-                  {!recordFormatPreferenceLoaded ? "Loading record viewer preference…" : "Loading formatted record…"}
-                </div>
+              {recordFormatPreferenceLoaded && recordFormatEnabled && Boolean(recordPolicy) && !formattedRecordHtml && !recordFormatError ? (
+                <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status">Loading formatted record…</div>
               ) : formattedRecordHtml ? (
                 <div ref={formattedRecordContainerRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: formattedRecordHtml }} />
               ) : (
@@ -8115,6 +8854,17 @@ useEffect(() => {
           </ResizablePanelGroup>
 
       </div>
+      <Dialog open={bookmarkQueryDebugOpen} onOpenChange={setBookmarkQueryDebugOpen}>
+        <DialogContent className="flex max-h-[85vh] max-w-5xl flex-col overflow-hidden">
+          <DialogHeader><DialogTitle>Bookmark query Code Block</DialogTitle><DialogDescription>Inspect the bounded FCT query, the SPARQL returned by Virtuoso FCT, and both raw responses.</DialogDescription></DialogHeader>
+          <div className="min-h-0 flex-1 space-y-4 overflow-auto">
+            <section><h3 className="mb-2 text-sm font-semibold">FCT query XML</h3><CodeBlock code={bookmarkQueryDebug.xml || "No saved query has run yet."} language="xml" filename="bookmark-history-query.xml" /></section>
+            <section><h3 className="mb-2 text-sm font-semibold">Translated SPARQL</h3><CodeBlock code={bookmarkQueryDebug.sparql} language="sparql" filename="bookmark-history-query.sparql" /></section>
+            <section><h3 className="mb-2 text-sm font-semibold">FCT results response</h3><CodeBlock code={bookmarkQueryDebug.response} language="xml" filename="bookmark-history-query-response.xml" /></section>
+            <section><h3 className="mb-2 text-sm font-semibold">Count response</h3><CodeBlock code={bookmarkQueryDebug.countResponse} language="xml" filename="bookmark-history-query-count-response.xml" /></section>
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

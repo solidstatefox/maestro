@@ -127,10 +127,13 @@ export function buildFctResultsSparql(tree: FctQueryTree): string | null {
   compileNodes(tree.children, "?s1", state);
   if (state.errors.length) return null;
 
-  const limitValue = Number(tree.children.find((node) => node.name === "view")?.attributes.limit ?? 30);
-  const offsetValue = Number(tree.children.find((node) => node.name === "view")?.attributes.offset ?? 0);
+  const viewNode = tree.children.find((node) => node.name === "view");
+  const limitValue = Number(viewNode?.attributes.limit ?? 30);
+  const offsetValue = Number(viewNode?.attributes.offset ?? 0);
   const limit = Number.isSafeInteger(limitValue) && limitValue > 0 ? Math.min(limitValue, 1000) : 30;
   const offset = Number.isSafeInteger(offsetValue) && offsetValue >= 0 ? offsetValue : 0;
+  const orderAttr = (tree.attributes.order ?? tree.attributes["order-results"] ?? viewNode?.attributes.order ?? viewNode?.attributes["order-results"] ?? "").trim().toLowerCase();
+  const shouldOrder = ["yes", "true", "1", "on"].includes(orderAttr);
   const defines: string[] = [];
   const inference = tree.attributes.inference?.trim();
   if (inference) defines.push(`DEFINE input:inference "${escapeSparqlString(inference)}"`);
@@ -149,7 +152,8 @@ export function buildFctResultsSparql(tree: FctQueryTree): string | null {
     if (state.textProperty && state.textProperty.toLowerCase() !== "none" && !textPropertyFilter) return null;
     // The full-text match must be in the Virtuoso quad-map pattern; selected values
     // are equality FILTERs over their related variables, not merely triples.
-    innerSelect = `SELECT ?s1, (?sc * 3e-1) AS ?sc, ?o1, (sql:rnk_scale (<LONG::IRI_RANK> (?s1))) AS ?rank, ?g WHERE { ${textPattern} ${textPropertyFilter} ${patterns.join(" ")} } ORDER BY DESC (?sc * 3e-1 + sql:rnk_scale (<LONG::IRI_RANK> (?s1))) LIMIT ${limit} OFFSET ${offset}`;
+    const orderClause = shouldOrder ? " ORDER BY DESC (?sc * 3e-1 + sql:rnk_scale (<LONG::IRI_RANK> (?s1)))" : "";
+    innerSelect = `SELECT ?s1, (?sc * 3e-1) AS ?sc, ?o1, (sql:rnk_scale (<LONG::IRI_RANK> (?s1))) AS ?rank, ?g WHERE { ${textPattern} ${textPropertyFilter} ${patterns.join(" ")} }${orderClause} LIMIT ${limit} OFFSET ${offset}`;
     outerSelect = `SELECT ?s1 AS ?c1, (bif:search_excerpt (bif:vector (${vector}), ?o1)) AS ?c2, ?sc, ?rank, ?g WHERE {{{ ${innerSelect} }}}`;
   } else {
     if (!patterns.length) patterns.push("?s1 ?p1 ?o2 .");
@@ -157,16 +161,17 @@ export function buildFctResultsSparql(tree: FctQueryTree): string | null {
     const graphTerm = graph ? iriTerm(graph) : null;
     if (graph && !graphTerm) return null;
     const body = graphTerm ? `GRAPH ${graphTerm} { ${patterns.join(" ")} }` : patterns.join(" ");
-    innerSelect = `SELECT DISTINCT ?s1 WHERE { ${body} } ORDER BY STR(?s1) LIMIT ${limit} OFFSET ${offset}`;
+    const orderClause = shouldOrder ? " ORDER BY STR(?s1)" : "";
+    innerSelect = `SELECT DISTINCT ?s1 WHERE { ${body} }${orderClause} LIMIT ${limit} OFFSET ${offset}`;
     outerSelect = `SELECT ?s1 AS ?c1 WHERE { ${innerSelect} }`;
   }
   return [...defines, outerSelect].join("\n");
 }
 
 
-/** Compile a Group By value clone to a distinct-value SELECT query. The view
- * nested under the selected relationship identifies the value variable to
- * return; full-text and every other source-query constraint remain in scope. */
+/** Compile a Group By clone to one aggregate row per value. The selected
+ * relationship value is projected as ?c1 and the number of source focus
+ * resources in that group is projected as ?ct. */
 export function buildFctGroupValuesSparql(tree: FctQueryTree): string | null {
   const state: CompilerState = { nextVariable: 2, patterns: [], errors: [], text: "", textValue: null, textPredicate: null, textProperty: "", viewSubject: null };
   compileNodes(tree.children, "?s1", state);
@@ -208,6 +213,8 @@ export function buildFctGroupValuesSparql(tree: FctQueryTree): string | null {
     if (graphTerm) body = `GRAPH ${graphTerm} { ${body} }`;
     if (!body.trim()) body = `?s1 ?p1 ${target} .`;
   }
-  const query = `SELECT DISTINCT ${target} AS ?c1 WHERE { ${body} } ORDER BY STR(${target}) LIMIT ${limit} OFFSET ${offset}`;
+  // Group By is an aggregate query: return one row per selected value and
+  // count the source focus resources represented by that value.
+  const query = `SELECT (${target} AS ?c1) (COUNT(?s1) AS ?ct) WHERE { ${body} } GROUP BY ${target} LIMIT ${limit} OFFSET ${offset}`;
   return [...defines, query].join("\n");
 }

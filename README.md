@@ -1,4 +1,4 @@
-# Maestro (Dashboard for Virtuoso's facets API)
+# Maestro (graph browswer)
 
 A web dashboard for exploring RDF data through Virtuoso's Faceted Browser (FCT) API, built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui.
 
@@ -6,9 +6,9 @@ A web dashboard for exploring RDF data through Virtuoso's Faceted Browser (FCT) 
 
 - [Node.js](https://nodejs.org/) LTS and npm
 - A reachable Maestro proxy server exposing [Virtuoso's FCT API](https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs)
-- A writable personal SPARQL endpoint for Maestro's Datasites registry, History, ontology data, etc.
+- A writable personal graph server for Maestro's graphsite registry, history, ontology data, etc.
 
-The FCT endpoint and personal SPARQL endpoint may be different servers. The permission setup below is for Virtuoso Community Edition.
+The permission setup below is for Virtuoso Community Edition.
 
 ## Getting Started
 
@@ -25,10 +25,11 @@ cd maestro
 npm ci
 ```
 
-### 3. Configure the personal SPARQL store and Datasites
+### 3. Configure the personal graph server and graphsite
 
 Copy `.env.example` to `.env.local` and fill in the required values, following the comments:
 
+```env
 ```env
 PERSONAL_SPARQL_ENDPOINT
 RDF_LOADER_USERNAME

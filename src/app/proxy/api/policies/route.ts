@@ -42,15 +42,19 @@ export async function POST(request: Request) {
       if (types.length === 0) return NextResponse.json({ policy: null });
       const values = types.map(sparqlIri).join(" ");
       const shapesGraph = sparqlIri(getShapesGraph());
-      const query = `PREFIX rdf: <${RDF}>\nPREFIX mui: <${MUI}>\nPREFIX sh: <${SH}>\nSELECT DISTINCT ?policy ?recordShape ?template WHERE { GRAPH ${shapesGraph} { VALUES ?class { ${values} } ?policy a mui:ClassPolicy ; mui:forClass ?class ; mui:recordShape ?recordShape . OPTIONAL { ?policy mui:htmlTemplate ?template } } } LIMIT 20`;
+      const query = `PREFIX rdf: <${RDF}>\nPREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?policy ?policyLabel ?recordShape ?template ?templateLabel WHERE { GRAPH ${shapesGraph} { VALUES ?class { ${values} } ?policy a mui:ClassPolicy ; mui:forClass ?class ; mui:recordShape ?recordShape ; rdfs:label ?policyLabel . OPTIONAL { ?policy mui:htmlTemplate ?template . OPTIONAL { ?template rdfs:label ?templateLabel } } } } ORDER BY LCASE(STR(?policyLabel)) LCASE(STR(?templateLabel)) LIMIT 100`;
       const payload = await queryPersonalSparql(query);
-      const rows = payload.results?.bindings ?? [];
-      const policy = rows.map((row: BindingRow) => ({
-        uri: get(row, "policy"),
-        recordShape: get(row, "recordShape"),
-        template: get(row, "template") || null,
-      })).find((item) => item.uri && item.recordShape) ?? null;
-      return NextResponse.json({ policy });
+      const grouped = new Map<string, { uri: string; label: string; recordShape: string; templates: { uri: string; label: string }[] }>();
+      for (const row of (payload.results?.bindings ?? []) as BindingRow[]) {
+        const uri = get(row, "policy");
+        const recordShape = get(row, "recordShape");
+        if (!uri || !recordShape) continue;
+        const item = grouped.get(uri) ?? { uri, label: get(row, "policyLabel") || uri, recordShape, templates: [] };
+        const template = get(row, "template");
+        if (template && !item.templates.some((entry) => entry.uri === template)) item.templates.push({ uri: template, label: get(row, "templateLabel") || template.split(/[\/#]/).filter(Boolean).pop() || template });
+        grouped.set(uri, item);
+      }
+      return NextResponse.json({ policies: [...grouped.values()] });
     }
 
     if (body.action === "template") {

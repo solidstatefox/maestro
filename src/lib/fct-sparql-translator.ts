@@ -18,6 +18,7 @@ export type CompiledFctQuery = {
   target: string;
   graphOnly: boolean;
   countOnly: boolean;
+  badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse" }>;
 };
 
 /*
@@ -36,7 +37,7 @@ type SparqlExpression =
   | { kind: "term"; term: SparqlTerm }
   | { kind: "binary"; operator: string; left: SparqlExpression; right: SparqlExpression }
   | { kind: "function"; name: string; args: SparqlExpression[] }
-  | { kind: "aggregate"; name: "COUNT"; distinct: boolean; expression: SparqlExpression }
+  | { kind: "aggregate"; name: "COUNT" | "SAMPLE"; distinct: boolean; expression: SparqlExpression }
   | { kind: "in"; value: SparqlExpression; options: SparqlTerm[] };
 
 type SparqlPattern =
@@ -244,11 +245,18 @@ function fullTextPatterns(searchText: string, textProperty?: string): SparqlPatt
   return patterns;
 }
 
-function compileConstraints(nodes: XmlNode[], subject: SparqlTerm, patterns: SparqlPattern[], errors: string[], state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null }): void {
+function compileConstraints(
+  nodes: XmlNode[],
+  subject: SparqlTerm,
+  patterns: SparqlPattern[],
+  errors: string[],
+  state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null; badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }> },
+  isViewScope = true,
+): void {
   for (const node of nodes) {
     if (node.name === "view") {
       state.target = subject;
-      compileConstraints(node.children, subject, patterns, errors, state);
+      compileConstraints(node.children, subject, patterns, errors, state, false);
     } else if (node.name === "text") {
       continue;
     } else if (node.name === "property" || node.name === "property-of") {
@@ -276,16 +284,24 @@ function compileConstraints(nodes: XmlNode[], subject: SparqlTerm, patterns: Spa
         // merely negating the value comparison after a positive triple match.
         const excludedPatterns: SparqlPattern[] = [relationshipPattern];
         const nestedState = { ...state };
-        compileConstraints(node.children, related, excludedPatterns, errors, nestedState);
+        compileConstraints(node.children, related, excludedPatterns, errors, nestedState, false);
         state.next = nestedState.next;
         patterns.push({ kind: "not-exists", patterns: excludedPatterns });
       } else {
         patterns.push(relationshipPattern);
+        if (isViewScope && state.badgeColumns && node.attributes.iri) {
+          state.badgeColumns.push({
+            colName: `badge_${state.badgeColumns.length + 1}`,
+            property: node.attributes.iri,
+            direction: node.name === "property" ? "forward" : "reverse",
+            variable: related,
+          });
+        }
         // A facet widget's list view is nested directly under its relationship.
         // Retain the outer focus so COUNT(DISTINCT outer focus) measures how
         // many records have each facet value.
         if (node.children.some((child) => child.name === "view")) state.targetParent = subject;
-        compileConstraints(node.children, related, patterns, errors, state);
+        compileConstraints(node.children, related, patterns, errors, state, false);
       }
     } else if (node.name === "class") {
       const classIri = iri(node.attributes.iri ?? "");
@@ -375,11 +391,25 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   const offset = parsePage(viewNode?.attributes.offset, 0, Number.MAX_SAFE_INTEGER);
   const timeoutRaw = Number(root.attributes.timeout ?? 0);
   const timeoutMs = Number.isSafeInteger(timeoutRaw) && timeoutRaw >= 0 ? timeoutRaw : 0;
+  const orderAttr = (root.attributes.order ?? root.attributes["order-results"] ?? viewNode?.attributes.order ?? "").trim().toLowerCase();
+  const shouldOrder = ["yes", "true", "1", "on"].includes(orderAttr);
+  const badgesAttr = (viewNode?.attributes.badges ?? root.attributes.badges ?? "").trim().toLowerCase();
+  const badgesEnabled = ["yes", "true", "1", "on"].includes(badgesAttr);
   const textNode = root.children.find((node) => node.name === "text");
   const searchText = textNode?.text.trim() ?? "";
   const constraints: SparqlPattern[] = [];
   const errors: string[] = [];
-  const state = { next: 2, target: null as SparqlTerm | null, targetParent: null as SparqlTerm | null };
+  const state: {
+    next: number;
+    target: SparqlTerm | null;
+    targetParent: SparqlTerm | null;
+    badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }>;
+  } = {
+    next: 2,
+    target: null,
+    targetParent: null,
+    badgeColumns: badgesEnabled ? [] : undefined,
+  };
   compileConstraints(root.children, variable("s1"), constraints, errors, state);
   if (errors.length) throw new Error(errors.join(" "));
   const target = state.target ?? variable("s1");
@@ -391,9 +421,14 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   // pattern to bind it, particularly for list/text/DESCRIBE views.
   const hasBindingPattern = where.some((pattern) => pattern.kind === "triple" || pattern.kind === "full-text" || pattern.kind === "graph" || pattern.kind === "quad-map");
   if (!hasBindingPattern) where.unshift({ kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") });
-  const graph = root.attributes.graph?.trim();
+  const address = root.attributes.addr ?? "";
+  const delimiter = address.indexOf("@");
+  if (delimiter < 0 || !address.slice(delimiter + 1).trim()) {
+    throw new Error('The query addr attribute must use "graphsite@graphserver" syntax (graphsite may be empty).');
+  }
+  const graph = address.slice(0, delimiter).trim();
   const graphTerm = graph ? iri(graph) : null;
-  if (graph && !graphTerm) throw new Error("The query graph attribute is not a valid IRI.");
+  if (graph && !graphTerm) throw new Error("The graphsite portion of query addr is not a valid IRI.");
   const scopedWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: where } satisfies SparqlPattern] : where;
   const directives = queryDirectives(root);
   const countProjection = (term: SparqlTerm): SparqlProjection => ({ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(term) }, as: variable("n") });
@@ -438,12 +473,12 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
         { kind: "optional", patterns: [{ kind: "triple", subject: variable("g"), predicate: iriTerm("http://www.w3.org/2000/01/rdf-schema#label"), object: graphLabel }] },
       ],
       groupBy: [termExpr(variable("g")), graphLabelKey],
-      orderBy: graphSort.startsWith("count-")
+      orderBy: shouldOrder ? (graphSort.startsWith("count-")
         ? [
             { expression: termExpr(variable("n")), direction: graphSort === "count-asc" ? "ASC" : "DESC" },
             { expression: graphLabelKey, direction: "ASC" },
           ]
-        : [{ expression: graphLabelKey, direction: graphSort === "label-desc" ? "DESC" : "ASC" }],
+        : [{ expression: graphLabelKey, direction: graphSort === "label-desc" ? "DESC" : "ASC" }]) : undefined,
       limit,
       offset,
     });
@@ -460,7 +495,7 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       counted = variable("p");
       countWhere = [...scopedWhere, { kind: "triple", subject: variable("related"), predicate: variable("p"), object: target }];
     } else counted = target;
-    query = buildSelectQuery({ directives, projections: [countProjection(counted)], where: countWhere });
+    query = buildSelectQuery({ directives, projections: [countProjection(counted)], where: countWhere, groupBy: undefined, orderBy: undefined, limit: undefined, offset: undefined });
   } else if (view === "properties" || view === "classes" || view === "properties-in") {
     const facet = variable(view === "classes" ? "c" : "p");
     const subject = view === "properties-in" ? variable("related") : target;
@@ -472,12 +507,15 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       projections: [
         { expression: termExpr(facet), as: variable("c1") },
         countProjection(view === "properties-in" ? variable("related") : target),
+        ...(view === "properties" || view === "properties-in"
+          ? [{ expression: { kind: "aggregate" as const, name: "SAMPLE" as const, distinct: false, expression: termExpr(view === "properties-in" ? variable("related") : variable("o")) }, as: variable("example") }]
+          : []),
       ],
       where: facetWhere,
       groupBy: [termExpr(facet)],
       // Count ordering is opt-in: only the active Group By facet requests it.
       // ORDER BY runs before LIMIT/OFFSET, so pages are globally count-sorted.
-      ...(viewNode?.attributes.sort === "count"
+      ...(shouldOrder && viewNode?.attributes.sort === "count"
         ? { orderBy: [{ expression: termExpr(variable("n")), direction: "DESC" as const }] }
         : {}),
       limit,
@@ -487,20 +525,20 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     query = buildSelectQuery({ directives, projections: [
       { expression: termExpr(target), as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
-    ], where: scopedWhere, groupBy: [termExpr(target)], orderBy: [{ expression: termExpr(variable("n")), direction: "DESC" }], limit, offset });
+    ], where: scopedWhere, groupBy: [termExpr(target)], orderBy: shouldOrder ? [{ expression: termExpr(variable("n")), direction: "DESC" }] : undefined, limit, offset });
   } else if (view === "alphabet") {
     const firstLetter: SparqlExpression = { kind: "function", name: "sql:subseq", args: [termExpr(target), termExpr({ kind: "raw-term", value: "0" }), termExpr({ kind: "raw-term", value: "1" })] };
     query = buildSelectQuery({ directives, projections: [
       { expression: firstLetter, as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
-    ], where: scopedWhere, groupBy: [firstLetter], orderBy: [{ expression: firstLetter, direction: "ASC" }], limit, offset });
+    ], where: scopedWhere, groupBy: [firstLetter], orderBy: shouldOrder ? [{ expression: firstLetter, direction: "ASC" }] : undefined, limit, offset });
   } else if (view === "years" || view === "months" || view === "weeks") {
     const functionName = view === "years" ? "sql::year" : view === "months" ? "sql::round_month" : "sql::round_week";
     const bucket: SparqlExpression = { kind: "function", name: functionName, args: [termExpr(target)] };
     query = buildSelectQuery({ directives, projections: [
       { expression: bucket, as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
-    ], where: scopedWhere, groupBy: [bucket], orderBy: [{ expression: bucket, direction: "ASC" }], limit, offset });
+    ], where: scopedWhere, groupBy: [bucket], orderBy: shouldOrder ? [{ expression: bucket, direction: "ASC" }] : undefined, limit, offset });
   } else if (view === "geo") {
     const lat = variable("lat"); const long = variable("long");
     const geoWhere: SparqlPattern[] = [...scopedWhere,
@@ -522,7 +560,15 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       const vector: SparqlExpression = { kind: "function", name: "bif:vector", args: tokens.map((token) => termExpr(literalTerm(token.toUpperCase()))) };
       projections.push({ expression: { kind: "function", name: "bif:search_excerpt", args: [vector, termExpr(variable("txt1"))] }, as: variable("c2") });
     }
-    query = buildSelectQuery({ directives, distinct: true, projections, where: scopedWhere, orderBy: searchText ? [] : [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" }], limit, offset });
+    if (badgesEnabled && state.badgeColumns?.length) {
+      for (const badgeCol of state.badgeColumns) {
+        projections.push({ expression: termExpr(badgeCol.variable), as: variable(badgeCol.colName) });
+      }
+    }
+    const orderByList: SparqlOrder[] | undefined = shouldOrder
+      ? (searchText ? [] : [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }])
+      : undefined;
+    query = buildSelectQuery({ directives, distinct: true, projections, where: scopedWhere, orderBy: orderByList, limit, offset });
   } else if (view === "list") {
     // Virtuoso FCT list view selects the RDF term. Its SQL/XML response
     // wrapper resolves the human-readable label; do not call the SQL-only
@@ -533,22 +579,34 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       distinct: viewNode?.attributes.sort !== "count",
       projections: [{ expression: termExpr(target), as: variable("c1") }],
       where: scopedWhere,
-      ...(viewNode?.attributes.sort === "count"
-        ? {
-            groupBy: [termExpr(target)],
-            orderBy: [
-              { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(state.targetParent ?? target) }, direction: "DESC" as const },
-              { expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const },
-            ],
-          }
-        : { orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }] }),
+      ...(shouldOrder
+        ? (viewNode?.attributes.sort === "count"
+            ? {
+                groupBy: [termExpr(target)],
+                orderBy: [
+                  { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(state.targetParent ?? target) }, direction: "DESC" as const },
+                  { expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const },
+                ],
+              }
+            : { orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }] })
+        : (viewNode?.attributes.sort === "count" ? { groupBy: [termExpr(target)] } : {})),
       limit,
       offset,
     });
   } else {
-    query = buildSelectQuery({ directives, distinct: true, projections: [{ expression: termExpr(target), as: variable("c1") }], where: scopedWhere, orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" }], limit, offset });
+    query = buildSelectQuery({ directives, distinct: true, projections: [{ expression: termExpr(target), as: variable("c1") }], where: scopedWhere, orderBy: shouldOrder ? [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" }] : undefined, limit, offset });
   }
-  return { query, view, limit, offset, timeoutMs, target: serializeTerm(target), graphOnly, countOnly };
+  return {
+    query,
+    view,
+    limit,
+    offset,
+    timeoutMs,
+    target: serializeTerm(target),
+    graphOnly,
+    countOnly,
+    badgeColumns: state.badgeColumns?.map(({ colName, property, direction }) => ({ colName, property, direction })),
+  };
 }
 
 export type SparqlBindingTerm = { type: string; value: string; datatype?: string; "xml:lang"?: string };

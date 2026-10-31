@@ -159,16 +159,28 @@ function splitNamespace(uri: string): { namespace: string; local: string } {
   return { namespace: "", local: uri };
 }
 
-export function toLabel(value: string): string {
+export type LabelKind = "Class" | "Property" | "Role";
+
+function formatLabelKind(label: string, kind?: LabelKind): string {
+  if (!kind) return label;
+  const words = label.split(/([\s_-]+)/);
+  return words.map((word) => {
+    if (!word || /^[\s_-]+$/.test(word)) return word;
+    if (kind === "Class") return word.charAt(0).toLocaleUpperCase("en-US") + word.slice(1).toLocaleLowerCase("en-US");
+    return word.toLocaleLowerCase("en-US");
+  }).join("");
+}
+
+export function toLabel(value: string, kind?: LabelKind): string {
   const uri = value.trim();
   if (!uri) return value;
   hydrate();
   const realLabel = uriToLabel.get(uri);
-  if (realLabel && realLabel !== uri) return realLabel;
+  if (realLabel && realLabel !== uri) return formatLabelKind(realLabel, kind);
   const known = uriToShortform.get(uri);
-  if (known && known !== uri) return known;
+  if (known && known !== uri) return formatLabelKind(known, kind);
   if (known === uri) uriToShortform.delete(uri);
-  if (!/^[a-z][a-z0-9+.-]*:/i.test(uri) || !/^https?:\/\//i.test(uri) && !uri.includes("/")) return value;
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(uri) || !/^https?:\/\//i.test(uri) && !uri.includes("/")) return formatLabelKind(value, kind);
   const { namespace, local } = splitNamespace(uri);
   if (!namespace || !local) return value;
   let prefix = namespaceToPrefix.get(namespace);
@@ -180,7 +192,8 @@ export function toLabel(value: string): string {
   let decodedLocal: string;
   try { decodedLocal = decodeURIComponent(local); }
   catch { decodedLocal = local; }
-  const generatedLabel = `${prefix}:${decodedLocal}`;
+  const capitalizedLocal = decodedLocal.charAt(0).toLocaleUpperCase("en-US") + decodedLocal.slice(1);
+const generatedLabel = formatLabelKind(`${prefix}:${capitalizedLocal}`, kind);
   uriToShortform.set(uri, generatedLabel);
   persist();
   return generatedLabel;

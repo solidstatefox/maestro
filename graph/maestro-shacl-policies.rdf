@@ -1,15 +1,5 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rdf:RDF
-   xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#"
-   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-   xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
-   xmlns:bookmark="http://www.w3.org/2002/01/bookmark#"
-   xmlns:schema="https://schema.org/"
-   xmlns:dcterms="http://purl.org/dc/terms/"
-   xmlns:vfct="http://openlinksw.com/services/facets/1.0/"
-   xmlns:xsd="http://www.w3.org/2001/XMLSchema#"
-   xmlns:sh="http://www.w3.org/ns/shacl#"
->
+<?xml version='1.0' encoding='UTF-8'?>
+<rdf:RDF xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#" xmlns:bookmark="http://www.w3.org/2002/01/bookmark#" xmlns:schema="https://schema.org/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:vfct="http://openlinksw.com/services/facets/1.0/" xmlns:xsd="http://www.w3.org/2001/XMLSchema#" xmlns:sh="http://www.w3.org/ns/shacl#">
   <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb5">
     <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
     <sh:path rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#type"/>
@@ -22,7 +12,7 @@
     <mui:forClass rdf:resource="http://www.w3.org/2002/01/bookmark#Bookmark"/>
     <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape"/>
     <mui:htmlTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate"/>
-  </rdf:Description>
+  <mui:htmlTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate"/></rdf:Description>
   <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb1">
     <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
     <sh:path rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#type"/>
@@ -36,7 +26,7 @@
     <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb2"/>
     <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb3"/>
     <sh:property rdf:nodeID="nd46a697f8739430685391bf740ede73fb4"/>
-  </rdf:Description>
+  <rdfs:label xml:lang="en">Bookmark record shape</rdfs:label></rdf:Description>
   <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb7">
     <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
     <sh:path rdf:resource="https://schema.org/identifier"/>
@@ -83,7 +73,7 @@
     <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:order>
   </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate">
-    <rdf:value>&lt;article id="history-record"&gt;&lt;h2 id="history-title" mui:data="http://www.w3.org/2000/01/rdf-schema#label"&gt;&lt;/h2&gt;&lt;p id="history-type-label"&gt;Query history bookmark&lt;/p&gt;&lt;p id="history-hash" mui:data="https://schema.org/identifier"&gt;&lt;/p&gt;&lt;p id="history-created" mui:data="http://purl.org/dc/terms/created"&gt;&lt;/p&gt;&lt;/article&gt;</rdf:value>
+    <rdf:value>&lt;section id="maestro-record-viewer" class="mx-auto flex w-full max-w-2xl flex-col gap-4 p-1" mui:framework="next@^16.4.0"&gt;&lt;article id="history-record"&gt;&lt;h2 id="history-title" mui:data="http://www.w3.org/2000/01/rdf-schema#label"&gt;&lt;/h2&gt;&lt;p id="history-type-label"&gt;Query history bookmark&lt;/p&gt;&lt;p id="history-hash" mui:data="https://schema.org/identifier"&gt;&lt;/p&gt;&lt;p id="history-created" mui:data="http://purl.org/dc/terms/created"&gt;&lt;/p&gt;&lt;/article&gt;&lt;/section&gt;</rdf:value>
   </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/query-history-visit">
     <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
@@ -143,5 +133,5 @@
   </div>
 </section>
 ]]></rdf:value>
-  </rdf:Description>
-</rdf:RDF>
+  <rdfs:label xml:lang="en">Bookmark card</rdfs:label></rdf:Description>
+<rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate"><rdfs:label xml:lang="en">Bookmark with query results</rdfs:label><rdf:value><![CDATA[<section id="maestro-record-viewer" class="mx-auto flex w-full max-w-2xl flex-col gap-4 p-1" mui:framework="next@^16.4.0"><article id="bookmark-query-results-card" class="rounded-xl border p-5"><p id="bookmark-query-results-kicker" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Saved query</p><h2 id="bookmark-query-results-title" class="mt-2 text-xl font-semibold" mui:data="http://www.w3.org/2000/01/rdf-schema#label"></h2><p id="bookmark-query-results-description" class="mt-2 text-sm text-muted-foreground" mui:data="http://purl.org/dc/terms/description"></p><section id="bookmark-query-results-section" class="mt-5 rounded-lg bg-muted/40 p-4"><h3 id="bookmark-query-results-heading" class="font-semibold">Results from the saved query</h3><p id="bookmark-query-results-count" class="mt-1 text-sm text-muted-foreground" mui:history-query-count="true">Loading count…</p><ol id="bookmark-query-results-list" class="mt-3 list-decimal space-y-2 pl-5" mui:history-query-results="true"><li id="bookmark-query-result-item" class="break-words text-sm"></li></ol></section><p id="bookmark-query-results-created" class="mt-4 text-xs text-muted-foreground" mui:data="http://purl.org/dc/terms/created"></p></article><button id="bookmark-template-delete-button" type="button" mui:parent="record_button_bar" class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent"><svg id="bookmark-template-delete-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><path id="bookmark-template-delete-can" d="M3 6h18"/><path id="bookmark-template-delete-lid" d="M8 6V4h8v2"/><path id="bookmark-template-delete-body" d="m19 6-1 14H6L5 6"/><path id="bookmark-template-delete-lines" d="M10 11v5m4-5v5"/></svg> Delete Bookmark</button><button id="bookmark-template-code-button" type="button" mui:parent="record_button_bar" class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent"><svg id="bookmark-template-code-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><path id="bookmark-template-code-left" d="m16 18 6-6-6-6"/><path id="bookmark-template-code-right" d="m8 6-6 6 6 6"/><path id="bookmark-template-code-slash" d="m14 4-4 16"/></svg> Code Block</button></section>]]></rdf:value></rdf:Description></rdf:RDF>

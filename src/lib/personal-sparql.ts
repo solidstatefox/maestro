@@ -12,7 +12,7 @@ const SCHEMA_NS = "https://schema.org/";
 /** The manifest maps each RDF filename in /graph to its destination Graphsite graph IRI. */
 const GRAPH_DIRECTORY = resolve(process.cwd(), "graph");
 const GRAPH_MANIFEST_PATH = resolve(GRAPH_DIRECTORY, "manifest.json");
-const DEFAULT_HISTORY_GRAPH = "gttp://ggg.maestro.ecosys/query/history";
+const DEFAULT_HISTORY_GRAPH = "gttp://ggg.maestro.ecosys/query";
 
 type GraphManifest = Record<string, string>;
 
@@ -50,7 +50,7 @@ function graphForFile(filename: string): string {
 }
 
 export const getDataserversGraph = (): string => graphForFile("dataserver-seed.ttl");
-export const getHistoryGraph = (): string => DEFAULT_HISTORY_GRAPH;
+export const getHistoryGraph = (): string => (process.env.SITE_HISTORY || DEFAULT_HISTORY_GRAPH).trim();
 export const getOntologyGraph = (): string => graphForFile("maestro-ui-ontology.ttl");
 export const getShapesGraph = (): string => graphForFile("maestro-shacl-policies.rdf");
 export const VFCT_NS = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#";

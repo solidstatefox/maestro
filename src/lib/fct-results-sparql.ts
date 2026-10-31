@@ -169,9 +169,9 @@ export function buildFctResultsSparql(tree: FctQueryTree): string | null {
 }
 
 
-/** Compile a Group By clone to one aggregate row per value. The selected
- * relationship value is projected as ?c1 and the number of source focus
- * resources in that group is projected as ?ct. */
+/** Compile a Group By value clone to a grouped SELECT query with counts. The view
+ * nested under the selected relationship identifies the value variable to
+ * return; full-text and every other source-query constraint remain in scope. */
 export function buildFctGroupValuesSparql(tree: FctQueryTree): string | null {
   const state: CompilerState = { nextVariable: 2, patterns: [], errors: [], text: "", textValue: null, textPredicate: null, textProperty: "", viewSubject: null };
   compileNodes(tree.children, "?s1", state);
@@ -213,8 +213,7 @@ export function buildFctGroupValuesSparql(tree: FctQueryTree): string | null {
     if (graphTerm) body = `GRAPH ${graphTerm} { ${body} }`;
     if (!body.trim()) body = `?s1 ?p1 ${target} .`;
   }
-  // Group By is an aggregate query: return one row per selected value and
-  // count the source focus resources represented by that value.
   const query = `SELECT (${target} AS ?c1) (COUNT(?s1) AS ?ct) WHERE { ${body} } GROUP BY ${target} LIMIT ${limit} OFFSET ${offset}`;
   return [...defines, query].join("\n");
 }
+

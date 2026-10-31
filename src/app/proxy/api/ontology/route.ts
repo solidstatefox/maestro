@@ -1,4 +1,4 @@
-import { ensureGraphDirectorySeeded, getOntologyGraph } from "@/lib/personal-sparql";
+import { ensureGraphDirectorySeeded, getOntologyGraph, personalSparqlUrl, personalSparqlHeaders } from "@/lib/personal-sparql";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 300;
@@ -118,25 +118,19 @@ async function dereferenceClass(uri: string): Promise<ClassMetadata> {
 
 const RDFS_NS = "http://www.w3.org/2000/01/rdf-schema#";
 const OWL_NS = "http://www.w3.org/2002/07/owl#";
-function personalSparqlEndpoint(): string {
-  return (process.env.PERSONAL_SPARQL_ENDPOINT || process.env.RDF_LOADER_ENDPOINT || "http://localhost:8890/sparql").trim();
-}
 function sparqlTerm(value: unknown): string | undefined {
   if (!value || typeof value !== "object") return undefined;
   const term = value as { type?: unknown; value?: unknown };
   return typeof term.value === "string" ? term.value : undefined;
 }
-async function queryPersonalStore(uris: string[]): Promise<ClassMetadata[]> {
-  const endpoint = personalSparqlEndpoint();
+async function queryPersonalStore(uris: string[], request?: Request): Promise<ClassMetadata[]> {
+  const endpoint = personalSparqlUrl(request);
   const values = uris.map((uri) => `<${uri.replace(/[<>\\"{}|^`\s]/g, "")}>`).join(" ");
-  const graph = getOntologyGraph().replace(/[<>\\"{}|^`\s]/g, "");
+  const graph = getOntologyGraph(request).replace(/[<>\\"{}|^`\s]/g, "");
   const graphIri = `<${graph}>`;
   const either = (triple: string) => `{ ${triple} } UNION { GRAPH ${graphIri} { ${triple} } }`;
   const query = `PREFIX rdfs: <${RDFS_NS}>\nPREFIX owl: <${OWL_NS}>\nSELECT DISTINCT ?class ?parent ?ontology ?ontologyLabel WHERE { VALUES ?class { ${values} } OPTIONAL { ${either("?class rdfs:subClassOf ?parent . FILTER(isIRI(?parent))")} } OPTIONAL { ${either("?class rdfs:isDefinedBy ?ontology . FILTER(isIRI(?ontology))")} } OPTIONAL { ${either("?ontology a owl:Ontology . OPTIONAL { ?ontology rdfs:label ?ontologyLabel }")} } }`;
-  const headers: Record<string, string> = { "Content-Type": "application/sparql-query; charset=utf-8", Accept: "application/sparql-results+json" };
-  const username = process.env.RDF_LOADER_USERNAME;
-  const password = process.env.RDF_LOADER_PASSWORD;
-  if (username && password) headers.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+  const headers = personalSparqlHeaders(request, "application/sparql-query; charset=utf-8", "application/sparql-results+json");
   const response = await fetch(endpoint, {
     method: "POST",
     headers,
@@ -159,19 +153,16 @@ async function queryPersonalStore(uris: string[]): Promise<ClassMetadata[]> {
   return uris.map((uri) => byUri.get(uri) ?? { uri, ontology: namespaceFallback(uri) });
 }
 
-async function queryNearestListedParents(uris: string[]): Promise<Map<string, string>> {
+async function queryNearestListedParents(uris: string[], request?: Request): Promise<Map<string, string>> {
   const parents = new Map<string, string>();
   if (uris.length < 2) return parents;
-  const endpoint = personalSparqlEndpoint();
+  const endpoint = personalSparqlUrl(request);
   const values = uris.map((uri) => `<${uri.replace(/[<>\\"{}|^`\s]/g, "")}>`).join(" ");
-  const graph = getOntologyGraph().replace(/[<>\\"{}|^`\s]/g, "");
+  const graph = getOntologyGraph(request).replace(/[<>\\"{}|^`\s]/g, "");
   const graphIri = `<${graph}>`;
   const path = (start: string, end: string) => `{{ ${start} rdfs:subClassOf+ ${end} } UNION { GRAPH ${graphIri} { ${start} rdfs:subClassOf+ ${end} } }}`;
   const query = `PREFIX rdfs: <${RDFS_NS}>\nSELECT DISTINCT ?class ?candidateParent WHERE { VALUES ?class { ${values} } VALUES ?candidateParent { ${values} } FILTER(?class != ?candidateParent) ${path("?class", "?candidateParent")} FILTER NOT EXISTS { VALUES ?middle { ${values} } FILTER(?middle != ?class && ?middle != ?candidateParent) ${path("?class", "?middle")} ${path("?middle", "?candidateParent")} } }`;
-  const headers: Record<string, string> = { "Content-Type": "application/sparql-query; charset=utf-8", Accept: "application/sparql-results+json" };
-  const username = process.env.RDF_LOADER_USERNAME;
-  const password = process.env.RDF_LOADER_PASSWORD;
-  if (username && password) headers.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+  const headers = personalSparqlHeaders(request, "application/sparql-query; charset=utf-8", "application/sparql-results+json");
   const response = await fetch(endpoint, { method: "POST", headers, body: query, cache: "no-store", signal: AbortSignal.timeout(25000) });
   if (!response.ok) throw new Error(`Personal SPARQL hierarchy query returned HTTP ${response.status}.`);
   const payload = await response.json() as { results?: { bindings?: Record<string, unknown>[] } };
@@ -189,8 +180,8 @@ async function queryNearestListedParents(uris: string[]): Promise<Map<string, st
   return parents;
 }
 
-export async function GET() {
-  return NextResponse.json({ endpoint: personalSparqlEndpoint(), graph: getOntologyGraph() });
+export async function GET(request: Request) {
+  return NextResponse.json({ endpoint: personalSparqlUrl(request).toString(), graph: getOntologyGraph(request) });
 }
 
 export async function POST(request: Request) {
@@ -198,12 +189,11 @@ export async function POST(request: Request) {
   const uris = Array.isArray(body?.uris) ? [...new Set(body.uris.filter((uri): uri is string => typeof uri === "string" && uri.length <= 4096 && /^https?:\/\//i.test(uri)).slice(0, 100))] : [];
   try {
     // Load the manifest-mapped RDF files before querying the configured ontology graph.
-    // Missing files, manifest entries, and endpoint/load failures surface here at time of use.
-    await ensureGraphDirectorySeeded();
-    let output = await queryPersonalStore(uris);
+    await ensureGraphDirectorySeeded(request);
+    let output = await queryPersonalStore(uris, request);
     // Collapse superclass paths through classes that are not in the visible list, so a listed
     // class nests beneath its nearest listed ancestor instead of becoming an unrelated root.
-    const listedParents = await queryNearestListedParents(uris);
+    const listedParents = await queryNearestListedParents(uris, request);
     output = output.map((item) => ({ ...item, parent: listedParents.get(item.uri) ?? item.parent }));
     // A dereferenced class response is a useful fallback for endpoints that do not expose a
     // subclass triple in the store yet; the loaded personal-store result takes precedence.
@@ -215,7 +205,7 @@ export async function POST(request: Request) {
         return fallback ? { ...fallback, ...item, parent: item.parent ?? fallback.parent, ontologyLabel: item.ontologyLabel ?? fallback.ontologyLabel, ontology: item.ontology !== namespaceFallback(item.uri) ? item.ontology : fallback.ontology } : item;
       });
     }
-    return NextResponse.json({ items: output, graph: getOntologyGraph() });
+    return NextResponse.json({ items: output, graph: getOntologyGraph(request) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Ontology discovery failed." }, { status: 502 });
   }

@@ -159,30 +159,33 @@ function splitNamespace(uri: string): { namespace: string; local: string } {
   return { namespace: "", local: uri };
 }
 
-export type LabelKind = "Class" | "Property" | "Role";
+export type EntityType = "Class" | "Property" | "Role";
 
-function formatLabelKind(label: string, kind?: LabelKind): string {
-  if (!kind) return label;
-  const words = label.split(/([\s_-]+)/);
-  return words.map((word) => {
-    if (!word || /^[\s_-]+$/.test(word)) return word;
-    if (kind === "Class") return word.charAt(0).toLocaleUpperCase("en-US") + word.slice(1).toLocaleLowerCase("en-US");
-    return word.toLocaleLowerCase("en-US");
-  }).join("");
+function formatEntityLabel(label: string, entityType?: EntityType): string {
+  if (!entityType) return label;
+  if (entityType === "Class") {
+    // Capitalize each word in the class label (preserving prefix like 'schema:')
+    return label.replace(/\b[a-zA-Z]/g, (match) => match.toUpperCase());
+  }
+  if (entityType === "Property" || entityType === "Role") {
+    // Lowercase each word
+    return label.replace(/\b[a-zA-Z]+/g, (match) => match.toLowerCase());
+  }
+  return label;
 }
 
-export function toLabel(value: string, kind?: LabelKind): string {
+export function toLabel(value: string, entityType?: EntityType): string {
   const uri = value.trim();
-  if (!uri) return value;
+  if (!uri) return formatEntityLabel(value, entityType);
   hydrate();
   const realLabel = uriToLabel.get(uri);
-  if (realLabel && realLabel !== uri) return formatLabelKind(realLabel, kind);
+  if (realLabel && realLabel !== uri) return formatEntityLabel(realLabel, entityType);
   const known = uriToShortform.get(uri);
-  if (known && known !== uri) return formatLabelKind(known, kind);
+  if (known && known !== uri) return formatEntityLabel(known, entityType);
   if (known === uri) uriToShortform.delete(uri);
-  if (!/^[a-z][a-z0-9+.-]*:/i.test(uri) || !/^https?:\/\//i.test(uri) && !uri.includes("/")) return formatLabelKind(value, kind);
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(uri) || !/^https?:\/\//i.test(uri) && !uri.includes("/")) return formatEntityLabel(value, entityType);
   const { namespace, local } = splitNamespace(uri);
-  if (!namespace || !local) return value;
+  if (!namespace || !local) return formatEntityLabel(value, entityType);
   let prefix = namespaceToPrefix.get(namespace);
   if (!prefix) {
     prefix = `ns${nextNamespaceNumber++}`;
@@ -192,9 +195,9 @@ export function toLabel(value: string, kind?: LabelKind): string {
   let decodedLocal: string;
   try { decodedLocal = decodeURIComponent(local); }
   catch { decodedLocal = local; }
-  const capitalizedLocal = decodedLocal.charAt(0).toLocaleUpperCase("en-US") + decodedLocal.slice(1);
-const generatedLabel = formatLabelKind(`${prefix}:${capitalizedLocal}`, kind);
+  const generatedLabel = `${prefix}:${decodedLocal}`;
   uriToShortform.set(uri, generatedLabel);
   persist();
-  return generatedLabel;
+  return formatEntityLabel(generatedLabel, entityType);
 }
+

@@ -303,9 +303,13 @@ export async function GET(request: Request) {
       signal: AbortSignal.timeout(7000),
     });
     const responseText = await response.text();
-    let askSucceeded = false;
-    try { askSucceeded = Boolean(JSON.parse(responseText)?.boolean === true || JSON.parse(responseText)?.boolean === false); } catch { askSucceeded = false; }
-    const validResults = response.ok && askSucceeded;
+    let validResults = false;
+    try {
+      const parsed = JSON.parse(responseText);
+      validResults = response.ok && (typeof parsed?.boolean === "boolean" || parseResults(responseText) !== null);
+    } catch {
+      validResults = false;
+    }
     const status = validResults ? response.status : response.ok ? 502 : response.status;
     return NextResponse.json({
       check: {
@@ -315,6 +319,7 @@ export async function GET(request: Request) {
         testedUrl,
       },
     });
+
   } catch (error) {
     return NextResponse.json({ check: {
       id: endpoint.id,

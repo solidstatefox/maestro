@@ -10,26 +10,29 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import type { ReactNode, Dispatch, SetStateAction } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { Toggle } from "@/components/ui/toggle";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Ban, Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck } from "lucide-react";
+import { Ban, Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
+import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, buildAuthHeader } from "@/lib/personal-auth";
 import { cachedFetchFct, clearClientQueryCache } from "@/lib/client-query-cache";
 import { initializeMaestroStorage, maestroStorageGet, maestroStorageSet, clearMaestroStorage } from "@/lib/maestro-storage";
 import { Progress } from "@/components/ui/progress";
@@ -1320,6 +1323,22 @@ export default function Home() {
   const [matchingBookmarkId, setMatchingBookmarkId] = useState("");
   const [bookmarkCheckRevision, setBookmarkCheckRevision] = useState(0);
   const [historyBookmarkId, setHistoryBookmarkId] = useState("");
+  const [authSession, setAuthSession] = useState<PersonalAuthSession | null>(null);
+  const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+  const [loginTab, setLoginTab] = useState<AuthType>("sparql-auth");
+  const [loginGraphStore, setLoginGraphStore] = useState("http://localhost:8890/sparql-auth");
+  const [loginGraphsitePrefix, setLoginGraphsitePrefix] = useState("http://localhost:8890/DAV/home/dba");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginOauthToken, setLoginOauthToken] = useState("");
+  const [loginOauthProfileUrl, setLoginOauthProfileUrl] = useState("");
+  const [loginOauthUserName, setLoginOauthUserName] = useState("");
+  const [loginWebIdUri, setLoginWebIdUri] = useState("");
+  const [loginRememberMe, setLoginRememberMe] = useState(true);
+  const [loginTesting, setLoginTesting] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  const [isFetchingAvatar, setIsFetchingAvatar] = useState(false);
+  const [fetchedAvatarUrl, setFetchedAvatarUrl] = useState<string | null>(null);
   const [historyHasOlder, setHistoryHasOlder] = useState(false);
   const [historyHasNewer, setHistoryHasNewer] = useState(false);
   const [historyNavigationPending, setHistoryNavigationPending] = useState<"backward" | "forward" | null>(null);
@@ -1489,6 +1508,181 @@ useEffect(() => {
     return () => window.clearTimeout(timer);
   }, [queryTreeHeightPercent, queryTreeHeightLoaded]);
 
+  // Restore personal authentication session on load.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const session = await loadPersonalAuthSession();
+        if (session) {
+          setAuthSession(session);
+          if (session.graphStore) {
+            setLoginGraphStore(session.graphStore);
+            setPersonalSparqlEndpoint(session.graphStore);
+          }
+          if (session.graphsitePrefix) setLoginGraphsitePrefix(session.graphsitePrefix);
+          setLoginTab(session.authType);
+          if (session.authType === "sparql-auth") {
+            if (session.userName) setLoginUsername(session.userName);
+            if (session.password) setLoginPassword(session.password);
+          } else if (session.authType === "sparql-oauth") {
+            if (session.oauthToken) setLoginOauthToken(session.oauthToken);
+            if (session.oauthProfileUrl) setLoginOauthProfileUrl(session.oauthProfileUrl);
+            if (session.userName) setLoginOauthUserName(session.userName);
+          } else if (session.authType === "sparql-webid") {
+            if (session.webIdUri) setLoginWebIdUri(session.webIdUri);
+            if (session.oauthToken) setLoginOauthToken(session.oauthToken);
+          }
+          if (session.avatarUrl) setFetchedAvatarUrl(session.avatarUrl);
+        }
+      } catch (err) {
+        console.warn("Could not load personal graph auth session", err);
+      }
+    })();
+  }, []);
+
+  const handleFetchProfile = async () => {
+    const targetUrl = loginTab === "sparql-oauth" ? loginOauthProfileUrl.trim() : loginWebIdUri.trim();
+    if (!targetUrl) return;
+    setIsFetchingAvatar(true);
+    try {
+      const response = await fetch("/proxy/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "profile", profileUrl: targetUrl }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to fetch profile");
+      if (data.avatarUrl) {
+        setFetchedAvatarUrl(data.avatarUrl);
+        toast.add({ title: "Avatar detected", description: "Successfully retrieved avatar image from profile.", type: "success" });
+      }
+      if (data.displayName && loginTab === "sparql-oauth" && !loginOauthUserName) {
+        setLoginOauthUserName(data.displayName);
+      }
+    } catch (err) {
+      toast.add({ title: "Could not fetch profile", description: err instanceof Error ? err.message : "Profile lookup failed", type: "error" });
+    } finally {
+      setIsFetchingAvatar(false);
+    }
+  };
+
+  const buildCurrentSession = (): PersonalAuthSession => {
+    let userName = "";
+    let authHeader = "";
+    let avatarUrl: string | undefined = undefined;
+
+    if (loginTab === "sparql-auth") {
+      userName = loginUsername.trim() || "dba";
+      const user = loginUsername.trim();
+      const pass = loginPassword;
+      if (user || pass) {
+        authHeader = buildAuthHeader("sparql-auth", user, pass);
+      }
+      avatarUrl = undefined;
+    } else if (loginTab === "sparql-oauth") {
+      userName = loginOauthUserName.trim() || "OAuth User";
+      const token = loginOauthToken.trim();
+      if (token) {
+        authHeader = buildAuthHeader("sparql-oauth", undefined, undefined, token);
+      }
+      avatarUrl = fetchedAvatarUrl || undefined;
+    } else if (loginTab === "sparql-webid") {
+      const uri = loginWebIdUri.trim();
+      userName = uri.split("#").pop() || uri.split("/").filter(Boolean).pop() || "WebID User";
+      const token = loginOauthToken.trim();
+      authHeader = buildAuthHeader("sparql-webid", undefined, undefined, token, undefined, uri);
+      avatarUrl = fetchedAvatarUrl || undefined;
+    }
+
+    return {
+      authType: loginTab,
+      graphStore: loginGraphStore.trim() || "http://localhost:8890/sparql-auth",
+      graphsitePrefix: loginGraphsitePrefix.trim() || "http://localhost:8890/DAV/home/dba",
+      userName,
+      password: loginTab === "sparql-auth" ? loginPassword : undefined,
+      authHeader,
+      oauthToken: loginTab === "sparql-oauth" ? loginOauthToken.trim() : (loginTab === "sparql-webid" ? loginOauthToken.trim() : undefined),
+      oauthProfileUrl: loginTab === "sparql-oauth" ? loginOauthProfileUrl.trim() : undefined,
+      webIdUri: loginTab === "sparql-webid" ? loginWebIdUri.trim() : undefined,
+      avatarUrl,
+      rememberMe: loginRememberMe,
+    };
+  };
+
+  const handleTestConnection = async () => {
+    const session = buildCurrentSession();
+    setLoginTesting(true);
+    setLoginError("");
+    try {
+      const response = await fetch("/proxy/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "test",
+          graphStore: session.graphStore,
+          authHeader: session.authHeader,
+          graphsitePrefix: session.graphsitePrefix,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.connected) {
+        throw new Error(data.error || "Connection test failed");
+      }
+      toast.add({
+        title: "Connection test succeeded",
+        description: `Connected to personal graph server (HTTP ${data.status}). History graph: ${session.graphsitePrefix}#query`,
+        type: "success",
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Connection failed";
+      setLoginError(msg);
+      toast.add({ title: "Connection failed", description: msg, type: "error" });
+    } finally {
+      setLoginTesting(false);
+    }
+  };
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const session = buildCurrentSession();
+    setLoginTesting(true);
+    setLoginError("");
+    try {
+      const response = await fetch("/proxy/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "test",
+          graphStore: session.graphStore,
+          authHeader: session.authHeader,
+          graphsitePrefix: session.graphsitePrefix,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok && !data.connected) {
+        if (data.status === 401) {
+          throw new Error("Authentication failed: Invalid credentials or unauthorized.");
+        }
+      }
+      await savePersonalAuthSession(session, loginRememberMe);
+      setAuthSession(session);
+      setPersonalSparqlEndpoint(session.graphStore);
+      setLoginDialogOpen(false);
+      toast.add({
+        title: "Connected",
+        description: `Logged in as ${session.userName}. History set to ${session.graphsitePrefix}#query`,
+        type: "success",
+      });
+      setBookmarkCheckRevision((r) => r + 1);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Login failed";
+      setLoginError(msg);
+      toast.add({ title: "Login failed", description: msg, type: "error" });
+    } finally {
+      setLoginTesting(false);
+    }
+  };
+
   useEffect(() => {
     if (!recordFormatPreferenceLoaded || !queryTreeHeightDbRef.current) return;
     try {
@@ -1548,26 +1742,6 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const beginRecordHoverPreview = (uri: string, label: string) => {
     if (!tutorialMode || !uri.trim()) return;
     setFacetHoverPreview({ kind: "record", uri, label, direction: "forward", source: "record" });
-  };
-  const applyRecordAsRootValue = (uri: string) => {
-    if (!uri.trim()) return;
-    const nonTextTree = {
-      ...queryTree,
-      children: queryTree.children
-        .filter((node) => node.name !== "text")
-        .map((node) => setMainViewType(node, "properties")),
-    };
-    replaceQueryTree(fctQueryTreeApi.setValue(nonTextTree, null, [{ text: uri, datatype: "uri" }], {
-      replaceExisting: true,
-      idPrefix: "query-uri-value",
-    }));
-    selectedSignalModeRef.current = "uri";
-    setSelectedSignalMode("uri");
-    setSavedUriDraft(uri);
-    searchDraftRef.current = uri;
-    setSearchDraft(uri);
-    clearTutorialPreview();
-    setSearchPipelineRun((current) => current + 1);
   };
   const [breadcrumbTrail, setBreadcrumbTrail] = useState<
   { id: string; uri: string; name: string }[]
@@ -1792,6 +1966,27 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       children: node.children.map((child) => setMainViewType(child, type)),
     };
   }
+
+  const applyRecordAsRootValue = (uri: string) => {
+    if (!uri.trim()) return;
+    const nonTextTree = {
+      ...queryTree,
+      children: queryTree.children
+        .filter((node) => node.name !== "text")
+        .map((node) => setMainViewType(node, "properties")),
+    };
+    replaceQueryTree(fctQueryTreeApi.setValue(nonTextTree, null, [{ text: uri, datatype: "uri" }], {
+      replaceExisting: true,
+      idPrefix: "query-uri-value",
+    }));
+    selectedSignalModeRef.current = "uri";
+    setSelectedSignalMode("uri");
+    setSavedUriDraft(uri);
+    searchDraftRef.current = uri;
+    setSearchDraft(uri);
+    clearTutorialPreview();
+    setSearchPipelineRun((current) => current + 1);
+  };
 
 
   function setTextSearchMode(mode: "uri" | "name" | "all" | "clear", propertyUris = selectedNamePropertyUris) {
@@ -4826,13 +5021,26 @@ useEffect(() => {
       }
       const previous = records[index - 1];
       if (previous === undefined) { records[index] = undefined; continue; }
+	  /*
       if (previous === null || previous.termType !== "uri" || !previous.uri) {
         // A literal or empty set has no properties to follow.
         records[index] = null;
         resolved[crumb.id] = { label: "—", count: scope?.count ?? null };
         onStep?.(crumb.id, resolved[crumb.id]);
         continue;
-      }
+      }*/
+	  if (previous === null || previous.termType !== "uri" || !previous.uri) {
+  // The previous result cannot be used to follow this path.
+  // Still display the first result from this crumb's own result set.
+  records[index] = null;
+
+  resolved[crumb.id] = scope?.uri
+    ? scope
+    : { label: "—", count: scope?.count ?? null };
+
+  onStep?.(crumb.id, resolved[crumb.id]);
+  continue;
+}
       const pins: { nodeId: string; uri: string }[] = [];
       for (let earlier = 0; earlier < index; earlier += 1) {
         const record = records[earlier];
@@ -6155,13 +6363,6 @@ useEffect(() => {
                   </div>
                 </div>
                 <Tooltip><TooltipTrigger render={<p className="mt-1 break-all text-xs text-muted-foreground">{widget.uri}</p>} /><TooltipContent>{widget.uri}</TooltipContent></Tooltip>
-                {(() => {
-                  const boundValue = activePropertyFilters.find((node) => node.attributes.iri === widget.uri)?.children.find((child) => child.name === "value" && Boolean(child.text));
-                  const example = boundValue ? { uri: boundValue.text ?? "", termType: boundValue.attributes.datatype === "uri" ? "uri" as const : "literal" as const, title: boundValue.text ?? "" } : widget.values[0];
-                  if (!example?.uri) return null;
-                  const prefix = boundValue ? "i.e." : "e.g.";
-                  return <button type="button" onClick={() => showClassResults(example.uri, activeLeafId)} disabled={widget.loading} className="mt-1 block max-w-full break-words text-left text-xs text-muted-foreground hover:text-foreground hover:underline disabled:cursor-not-allowed disabled:opacity-50"><em>{prefix}</em> {example.termType === "uri" ? toLabel(example.uri, "Class") : example.title || example.uri}</button>;
-                })()}
               </div>
               <Tooltip><TooltipTrigger render={<span
                 className={`shrink-0 text-xs ${widget.error ? "text-destructive" : "text-muted-foreground"}`}
@@ -6842,6 +7043,317 @@ useEffect(() => {
           } />
           <TooltipContent>{shareLinkCopied ? "Share link copied" : "Copy share link"}</TooltipContent>
         </Tooltip>
+        {authSession ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label={`Logged in as ${authSession.userName || "User"}`}
+                className="relative size-9 rounded-full p-0 overflow-hidden ring-1 ring-border hover:ring-primary focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {authSession.avatarUrl ? (
+                  <img
+                    src={authSession.avatarUrl}
+                    alt={authSession.userName || "User avatar"}
+                    className="size-full rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="flex size-full items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground text-xs uppercase">
+                    {(authSession.userName || "U")[0]}
+                  </span>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64 p-2">
+              <DropdownMenuLabel className="font-normal">
+                <div className="flex flex-col space-y-1">
+                  <div className="flex items-center gap-2">
+                    {authSession.avatarUrl ? (
+                      <img src={authSession.avatarUrl} alt="" className="size-6 rounded-full object-cover" />
+                    ) : (
+                      <span className="flex size-6 items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground text-[10px] uppercase">
+                        {(authSession.userName || "U")[0]}
+                      </span>
+                    )}
+                    <p className="text-sm font-medium leading-none">{authSession.userName || "Personal Account"}</p>
+                  </div>
+                  <p className="text-xs leading-none text-muted-foreground truncate pt-1" title={authSession.graphsitePrefix}>
+                    {authSession.graphsitePrefix}
+                  </p>
+                  <span className="inline-block mt-1 text-[10px] font-mono uppercase bg-muted px-1.5 py-0.5 rounded w-fit text-muted-foreground">
+                    {authSession.authType}
+                  </span>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => setLoginDialogOpen(true)}
+                className="cursor-pointer gap-2"
+              >
+                <KeyRound className="size-4" />
+                <span>Connection settings</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={async () => {
+                  await clearPersonalAuthSession();
+                  setAuthSession(null);
+                  toast.add({
+                    title: "Logged out",
+                    description: "Personal graph server session cleared.",
+                    type: "info",
+                  });
+                  setBookmarkCheckRevision((r) => r + 1);
+                }}
+                className="cursor-pointer text-destructive focus:text-destructive gap-2"
+              >
+                <LogOut className="size-4" />
+                <span>Log out</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger render={
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label="Log in to personal graph server"
+                onClick={() => setLoginDialogOpen(true)}
+              >
+                <User aria-hidden="true" className="size-4" />
+              </Button>
+            } />
+            <TooltipContent>Log in to personal graph server</TooltipContent>
+          </Tooltip>
+        )}
+
+        <Dialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen}>
+          <DialogContent className="max-w-lg p-5">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <DialogHeader>
+                <DialogTitle id="personal-server-login-title">Personal Graph Server</DialogTitle>
+                <DialogDescription>
+                  Authenticate to your personal Virtuoso SPARQL server for bookmarks, history, and queries.
+                </DialogDescription>
+              </DialogHeader>
+              <Button type="button" variant="ghost" size="icon" aria-label="Close dialog" onClick={() => setLoginDialogOpen(false)}>
+                <X className="size-4" />
+              </Button>
+            </div>
+
+            <form onSubmit={handleLoginSubmit} autoComplete="on" className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="personal-graph-store">Personal Graph Store (SPARQL endpoint)</Label>
+                <Input
+                  id="personal-graph-store"
+                  name="graph_store"
+                  type="url"
+                  required
+                  value={loginGraphStore}
+                  onChange={(e) => setLoginGraphStore(e.target.value)}
+                  placeholder="http://localhost:8890/sparql-auth"
+                  className="font-mono text-xs"
+                />
+                <p className="text-xs text-muted-foreground">Use /sparql-auth for authenticated access or /sparql for shared access.</p>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="personal-graphsite-prefix">Personal Graphsite Prefix</Label>
+                <Input
+                  id="personal-graphsite-prefix"
+                  name="graphsite_prefix"
+                  type="url"
+                  required
+                  value={loginGraphsitePrefix}
+                  onChange={(e) => setLoginGraphsitePrefix(e.target.value)}
+                  placeholder="http://localhost:8890/DAV/home/dba"
+                  className="font-mono text-xs"
+                />
+                <p className="text-xs text-muted-foreground">
+                  History graph: <span className="font-mono">{loginGraphsitePrefix ? `${loginGraphsitePrefix}#query` : "USER_SITE#query"}</span>
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-1.5 pt-1">
+                <Label>Authentication Method</Label>
+                <Tabs value={loginTab} onValueChange={(val) => setLoginTab(val as AuthType)} className="w-full">
+                  <TabsList className="grid grid-cols-3 w-full">
+                    <TabsTrigger value="sparql-auth">sparql-auth</TabsTrigger>
+                    <TabsTrigger value="sparql-oauth">sparql-oauth</TabsTrigger>
+                    <TabsTrigger value="sparql-webid">sparql-webid</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="sparql-auth" className="flex flex-col gap-3 mt-3">
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="personal-username">Username</Label>
+                      <Input
+                        id="personal-username"
+                        name="username"
+                        type="text"
+                        autoComplete="username"
+                        value={loginUsername}
+                        onChange={(e) => setLoginUsername(e.target.value)}
+                        placeholder="dba"
+                        required={loginTab === "sparql-auth"}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="personal-password">Password</Label>
+                      <Input
+                        id="personal-password"
+                        name="password"
+                        type="password"
+                        autoComplete="current-password"
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        placeholder="••••••••"
+                        required={loginTab === "sparql-auth"}
+                      />
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="sparql-oauth" className="flex flex-col gap-3 mt-3">
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="oauth-token">Bearer / OAuth Access Token</Label>
+                      <Input
+                        id="oauth-token"
+                        name="oauth_token"
+                        type="password"
+                        autoComplete="off"
+                        value={loginOauthToken}
+                        onChange={(e) => setLoginOauthToken(e.target.value)}
+                        placeholder="Bearer token"
+                        required={loginTab === "sparql-oauth"}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="oauth-profile-url">OpenID Profile / UserInfo URL (optional)</Label>
+                        <button
+                          type="button"
+                          onClick={handleFetchProfile}
+                          disabled={isFetchingAvatar || !loginOauthProfileUrl}
+                          className="text-xs text-primary hover:underline disabled:opacity-50"
+                        >
+                          {isFetchingAvatar ? "Fetching…" : "Grab Avatar & Name"}
+                        </button>
+                      </div>
+                      <Input
+                        id="oauth-profile-url"
+                        name="oauth_profile_url"
+                        type="url"
+                        autoComplete="url"
+                        value={loginOauthProfileUrl}
+                        onChange={(e) => setLoginOauthProfileUrl(e.target.value)}
+                        placeholder="https://openid.example.com/userinfo"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="oauth-username">User / Display Name</Label>
+                      <Input
+                        id="oauth-username"
+                        name="oauth_username"
+                        type="text"
+                        autoComplete="name"
+                        value={loginOauthUserName}
+                        onChange={(e) => setLoginOauthUserName(e.target.value)}
+                        placeholder="e.g. John Doe"
+                      />
+                    </div>
+                    {fetchedAvatarUrl && (
+                      <div className="flex items-center gap-3 p-2 rounded-md border bg-muted/40">
+                        <img src={fetchedAvatarUrl} alt="Avatar" className="size-8 rounded-full object-cover" />
+                        <span className="text-xs text-muted-foreground">Grabbed OpenID avatar</span>
+                      </div>
+                    )}
+                  </TabsContent>
+
+                  <TabsContent value="sparql-webid" className="flex flex-col gap-3 mt-3">
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="webid-uri">WebID URI</Label>
+                        <button
+                          type="button"
+                          onClick={handleFetchProfile}
+                          disabled={isFetchingAvatar || !loginWebIdUri}
+                          className="text-xs text-primary hover:underline disabled:opacity-50"
+                        >
+                          {isFetchingAvatar ? "Fetching…" : "Grab Avatar & Name"}
+                        </button>
+                      </div>
+                      <Input
+                        id="webid-uri"
+                        name="webid_uri"
+                        type="url"
+                        autoComplete="url"
+                        value={loginWebIdUri}
+                        onChange={(e) => setLoginWebIdUri(e.target.value)}
+                        placeholder="http://id.myopenlink.net/dataspace/person/dba#this"
+                        required={loginTab === "sparql-webid"}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="webid-token">WebID Bearer Token (optional)</Label>
+                      <Input
+                        id="webid-token"
+                        name="webid_token"
+                        type="password"
+                        autoComplete="off"
+                        value={loginOauthToken}
+                        onChange={(e) => setLoginOauthToken(e.target.value)}
+                        placeholder="Optional bearer token if required by endpoint"
+                      />
+                    </div>
+                    {fetchedAvatarUrl && (
+                      <div className="flex items-center gap-3 p-2 rounded-md border bg-muted/40">
+                        <img src={fetchedAvatarUrl} alt="WebID Avatar" className="size-8 rounded-full object-cover" />
+                        <span className="text-xs text-muted-foreground">Grabbed WebID avatar</span>
+                      </div>
+                    )}
+                  </TabsContent>
+                </Tabs>
+              </div>
+
+              <div className="flex items-center space-x-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="personal-remember-me"
+                  name="remember"
+                  checked={loginRememberMe}
+                  onChange={(e) => setLoginRememberMe(e.target.checked)}
+                  className="size-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+                />
+                <Label htmlFor="personal-remember-me" className="text-sm font-normal cursor-pointer">
+                  Remember me (store encrypted credentials locally)
+                </Label>
+              </div>
+
+              {loginError && (
+                <div className="rounded-md border border-destructive/20 bg-destructive/10 p-2 text-xs text-destructive">
+                  {loginError}
+                </div>
+              )}
+
+              <div className="flex justify-between items-center pt-2">
+                <Button type="button" variant="outline" disabled={loginTesting} onClick={() => setLoginDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <div className="flex gap-2">
+                  <Button type="button" variant="secondary" disabled={loginTesting} onClick={handleTestConnection}>
+                    {loginTesting ? "Testing…" : "Test Connection"}
+                  </Button>
+                  <Button type="submit" disabled={loginTesting}>
+                    {loginTesting ? "Connecting…" : "Connect"}
+                  </Button>
+                </div>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
         <Sheet open={controlsSheetOpen} onOpenChange={setControlsSheetOpen}>
           <SheetTrigger
             render={

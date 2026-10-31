@@ -9,60 +9,105 @@ const DCTERMS_NS = "http://purl.org/dc/terms/";
 const SKOS_NS = "http://www.w3.org/2004/02/skos/core#";
 const SCHEMA_NS = "https://schema.org/";
 
-/** The manifest maps each RDF filename in /graph to its destination Graphsite graph IRI. */
-const GRAPH_DIRECTORY = resolve(process.cwd(), "graph");
-const GRAPH_MANIFEST_PATH = resolve(GRAPH_DIRECTORY, "manifest.json");
-const DEFAULT_HISTORY_GRAPH = "gttp://ggg.maestro.ecosys/query";
+/** The manifest maps each RDF filename in /graph to its destination Graphsite graph IRI or local path. */
+const getGraphDirectory = () => {
+  const cwd = typeof process !== "undefined" && typeof process.cwd === "function" ? process.cwd() : ".";
+  return resolve(cwd, "graph");
+};
+const getGraphManifestPath = () => resolve(getGraphDirectory(), "manifest.json");
+
+export const DEFAULT_USER_GRAPHSITE = "http://localhost:8890/DAV/home/dba";
+export const DEFAULT_GRAPH_STORE = "http://localhost:8890/sparql";
 
 type GraphManifest = Record<string, string>;
+
+export type PersonalSession = {
+  graphStore: string;
+  graphsitePrefix: string;
+  authHeader?: string;
+  authType?: string;
+  userName?: string;
+  userAvatar?: string;
+};
+
+/** Extract the authenticated personal graph server session from request cookies or headers. */
+export function getPersonalSession(request?: Request): PersonalSession | null {
+  if (!request) return null;
+  const cookie = request.headers.get("cookie") ?? "";
+  const match = cookie.match(/(?:^|;\s*)maestro_session=([^;]+)/);
+  if (match) {
+    try {
+      return JSON.parse(decodeURIComponent(match[1])) as PersonalSession;
+    } catch {
+      return null;
+    }
+  }
+  const headerStore = request.headers.get("x-personal-graph-store");
+  const headerPrefix = request.headers.get("x-personal-graphsite");
+  const authHeader = request.headers.get("authorization") || request.headers.get("x-personal-auth") || undefined;
+  if (headerStore && headerPrefix) {
+    return {
+      graphStore: headerStore,
+      graphsitePrefix: headerPrefix,
+      authHeader,
+    };
+  }
+  return null;
+}
 
 /** Read and validate the file-to-Graphsite mapping. */
 function getGraphManifest(): GraphManifest {
   let manifest: unknown;
   try {
-    manifest = JSON.parse(readFileSync(GRAPH_MANIFEST_PATH, "utf8"));
+    manifest = JSON.parse(readFileSync(getGraphManifestPath(), "utf8"));
   } catch (error) {
-    throw new Error(`Could not read ${GRAPH_MANIFEST_PATH}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Could not read ${getGraphManifestPath()}: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    throw new Error(`${GRAPH_MANIFEST_PATH} must contain a JSON object mapping RDF filenames to Graphsite graph IRIs.`);
+    throw new Error(`${getGraphManifestPath()} must contain a JSON object mapping RDF filenames to Graphsite graph local paths or IRIs.`);
   }
   const result: GraphManifest = {};
   for (const [filename, rawGraph] of Object.entries(manifest as Record<string, unknown>)) {
     if (!filename || filename === "manifest.json" || filename.includes("/") || filename.includes("\\") || filename.startsWith(".")) {
-      throw new Error(`Invalid RDF filename in ${GRAPH_MANIFEST_PATH}: ${filename}`);
+      throw new Error(`Invalid RDF filename in ${getGraphManifestPath()}: ${filename}`);
     }
-    if (typeof rawGraph !== "string") throw new Error(`Graphsite for ${filename} must be a string in ${GRAPH_MANIFEST_PATH}.`);
-    const graph = rawGraph.trim().replace(/\\:/g, ":");
-    if (!/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(graph)) {
-      throw new Error(`Graphsite for ${filename} is not a valid absolute graph IRI: ${graph}`);
-    }
-    result[filename] = graph;
+    if (typeof rawGraph !== "string") throw new Error(`Graphsite for ${filename} must be a string in ${getGraphManifestPath()}.`);
+    result[filename] = rawGraph.trim().replace(/\\:/g, ":");
   }
   return result;
 }
 
-/** Resolve the target graph for an RDF file listed in /graph/manifest.json. */
-function graphForFile(filename: string): string {
-  const graph = getGraphManifest()[filename];
-  if (!graph) throw new Error(`No Graphsite mapping for ${filename} in ${GRAPH_MANIFEST_PATH}.`);
-  return graph;
+/** Resolve the target graph for an RDF file listed in /graph/manifest.json. Appends the user's personal graphsite. */
+export function graphForFile(filename: string, request?: Request): string {
+  const rawPath = getGraphManifest()[filename];
+  if (!rawPath) throw new Error(`No Graphsite mapping for ${filename} in ${getGraphManifestPath()}.`);
+  if (/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(rawPath)) {
+    return rawPath;
+  }
+  const session = getPersonalSession(request);
+  const prefix = (session?.graphsitePrefix || DEFAULT_USER_GRAPHSITE).replace(/\/+$/, "");
+  const local = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+  return `${prefix}${local}`;
 }
 
-export const getDataserversGraph = (): string => graphForFile("dataserver-seed.ttl");
-export const getHistoryGraph = (): string => (process.env.SITE_HISTORY || DEFAULT_HISTORY_GRAPH).trim();
-export const getOntologyGraph = (): string => graphForFile("maestro-ui-ontology.ttl");
-export const getShapesGraph = (): string => graphForFile("maestro-shacl-policies.rdf");
+export const getDataserversGraph = (request?: Request): string => graphForFile("dataserver-seed.ttl", request);
+export const getHistoryGraph = (request?: Request): string => {
+  const session = getPersonalSession(request);
+  const prefix = (session?.graphsitePrefix || DEFAULT_USER_GRAPHSITE).replace(/\/+$/, "");
+  return `${prefix}#query`;
+};
+export const getOntologyGraph = (request?: Request): string => graphForFile("maestro-ui-ontology.ttl", request);
+export const getShapesGraph = (request?: Request): string => graphForFile("maestro-shacl-policies.rdf", request);
 export const VFCT_NS = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#";
 export const MAESTRO_IDS_NS = "gttp://ggg.maestro.ecosys/ids/";
 
 let graphDirectorySeedPromise: Promise<void> | null = null;
 
 /** Upload each RDF document in /graph to the Graphsite assigned by manifest.json. */
-export async function ensureGraphDirectorySeeded(): Promise<void> {
+export async function ensureGraphDirectorySeeded(request?: Request): Promise<void> {
   if (graphDirectorySeedPromise) return graphDirectorySeedPromise;
   graphDirectorySeedPromise = (async () => {
-    const entries = await readdir(GRAPH_DIRECTORY, { withFileTypes: true });
+    const entries = await readdir(getGraphDirectory(), { withFileTypes: true });
     const mediaTypes: Record<string, string> = {
       ".rdf": "application/rdf+xml; charset=utf-8",
       ".rdfs": "application/rdf+xml; charset=utf-8",
@@ -80,16 +125,16 @@ export async function ensureGraphDirectorySeeded(): Promise<void> {
     };
     const manifest = getGraphManifest();
     const files = entries.filter((entry) => entry.isFile() && mediaTypes[extname(entry.name).toLowerCase()]);
-    if (files.length === 0) throw new Error(`No supported RDF documents were found in ${GRAPH_DIRECTORY}.`);
+    if (files.length === 0) throw new Error(`No supported RDF documents were found in ${getGraphDirectory()}.`);
     const listedFiles = new Set(files.map((file) => file.name));
     for (const filename of Object.keys(manifest)) {
-      if (!listedFiles.has(filename)) throw new Error(`Manifest entry ${filename} has no matching supported RDF file in ${GRAPH_DIRECTORY}.`);
+      if (!listedFiles.has(filename)) throw new Error(`Manifest entry ${filename} has no matching supported RDF file in ${getGraphDirectory()}.`);
     }
     for (const file of files) {
-      if (!manifest[file.name]) throw new Error(`No Graphsite mapping for ${file.name} in ${GRAPH_MANIFEST_PATH}.`);
+      if (!manifest[file.name]) throw new Error(`No Graphsite mapping for ${file.name} in ${getGraphManifestPath()}.`);
     }
 
-    const endpoint = personalSparqlUrl();
+    const endpoint = personalSparqlUrl(request);
     const graphStoreUrl = new URL(endpoint);
     graphStoreUrl.pathname = /\/sparql-auth\/?$/i.test(graphStoreUrl.pathname)
       ? graphStoreUrl.pathname.replace(/\/sparql-auth\/?$/i, "/sparql-graph-crud-auth")
@@ -98,21 +143,17 @@ export async function ensureGraphDirectorySeeded(): Promise<void> {
     graphStoreUrl.hash = "";
 
     // Clear every distinct manifest destination before loading any documents.
-    // Multiple RDF files may intentionally map to the same graph, so clear each graph
-    // exactly once and do all clears up front; otherwise later clears could erase
-    // triples loaded from earlier files.
-    const destinationGraphs = [...new Set(files.map((file) => manifest[file.name]))].sort();
+    const destinationGraphs = [...new Set(files.map((file) => graphForFile(file.name, request)))].sort();
     for (const destinationGraph of destinationGraphs) {
       const clearGraphUrl = new URL(graphStoreUrl.toString());
       clearGraphUrl.searchParams.set("graph", destinationGraph);
       const clearResponse = await fetch(clearGraphUrl, {
         method: "DELETE",
-        headers: personalSparqlHeaders("text/plain; charset=utf-8", "text/plain, text/html, application/json, */*"),
+        headers: personalSparqlHeaders(request, "text/plain; charset=utf-8", "text/plain, text/html, application/json, */*"),
         cache: "no-store",
         signal: AbortSignal.timeout(30000),
       });
       const clearResponseText = (await clearResponse.text()).slice(0, 3000);
-      // A missing graph is already empty; all other unsuccessful responses are errors.
       if (!clearResponse.ok && clearResponse.status !== 404) {
         throw new Error(`Could not clear manifest graph ${destinationGraph} before loading (HTTP ${clearResponse.status}): ${clearResponseText || "no response details"}`);
       }
@@ -120,17 +161,15 @@ export async function ensureGraphDirectorySeeded(): Promise<void> {
     }
 
     for (const file of files.sort((a, b) => a.name.localeCompare(b.name))) {
-      const destinationGraph = manifest[file.name];
+      const destinationGraph = graphForFile(file.name, request);
       const fileGraphStoreUrl = new URL(graphStoreUrl.toString());
       fileGraphStoreUrl.searchParams.set("graph", destinationGraph);
-      const path = resolve(GRAPH_DIRECTORY, file.name);
+      const path = resolve(getGraphDirectory(), file.name);
       let content = await readFile(path, "utf8");
       if (!content.trim()) {
         console.warn(`Maestro skipped empty RDF document ${path}.`);
         continue;
       }
-      // Preserve the previous convenience behavior: make the active personal SPARQL endpoint
-      // selectable even when the static registry seed does not list it explicitly.
       if (file.name.toLowerCase() === "dataserver-seed.ttl") {
         const normalizeEndpointUrl = (value: string): string => {
           const url = new URL(value);
@@ -148,9 +187,8 @@ export async function ensureGraphDirectorySeeded(): Promise<void> {
         }
       }
       const response = await fetch(fileGraphStoreUrl, {
-        // POST merges RDF into the graph; PUT would replace everything loaded by earlier files.
         method: "POST",
-        headers: personalSparqlHeaders(mediaTypes[extname(file.name).toLowerCase()], "text/plain, text/html, application/json, */*"),
+        headers: personalSparqlHeaders(request, mediaTypes[extname(file.name).toLowerCase()], "text/plain, text/html, application/json, */*"),
         body: content,
         cache: "no-store",
         signal: AbortSignal.timeout(30000),
@@ -169,37 +207,38 @@ export async function ensureGraphDirectorySeeded(): Promise<void> {
 }
 
 /** Compatibility wrapper: policy discovery loads the manifest-mapped RDF files from /graph. */
-export async function ensureShapesGraphSeeded(): Promise<void> {
-  await ensureGraphDirectorySeeded();
+export async function ensureShapesGraphSeeded(request?: Request): Promise<void> {
+  await ensureGraphDirectorySeeded(request);
 }
 
 export type FctEndpoint = { id: string; label: string; url: string; group: string };
 type SparqlJson = { results?: { bindings?: Record<string, { type?: string; value?: string }>[] } };
 
 /** Return the configured personal endpoint without embedding credentials in its URL. */
-export function personalSparqlUrl(): URL {
-  const raw = (process.env.PERSONAL_SPARQL_ENDPOINT || process.env.RDF_LOADER_ENDPOINT || "http://localhost:8890/sparql").trim();
+export function personalSparqlUrl(request?: Request): URL {
+  const session = getPersonalSession(request);
+  const raw = (session?.graphStore || DEFAULT_GRAPH_STORE).trim();
   const url = new URL(raw);
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("PERSONAL_SPARQL_ENDPOINT must use HTTP or HTTPS.");
-  if (url.username || url.password) throw new Error("PERSONAL_SPARQL_ENDPOINT must not contain embedded credentials; use RDF_LOADER_USERNAME and RDF_LOADER_PASSWORD.");
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Personal graph store must use HTTP or HTTPS.");
   return url;
 }
 
 /** Build authenticated request headers for the personal SPARQL endpoint. */
-export function personalSparqlHeaders(contentType: string, accept = "application/sparql-results+json, application/json;q=0.9"): Record<string, string> {
+export function personalSparqlHeaders(request?: Request, contentType = "application/x-www-form-urlencoded; charset=UTF-8", accept = "application/sparql-results+json, application/json;q=0.9"): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": contentType, Accept: accept };
-  const username = process.env.RDF_LOADER_USERNAME;
-  const password = process.env.RDF_LOADER_PASSWORD;
-  if (username && password) headers.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+  const session = getPersonalSession(request);
+  if (session?.authHeader) {
+    headers.Authorization = session.authHeader;
+  }
   return headers;
 }
 
 /** Execute a read-only SPARQL query against the personal endpoint. */
-export async function queryPersonalSparql(query: string, timeoutMs = 20000): Promise<SparqlJson> {
-  const endpoint = personalSparqlUrl();
+export async function queryPersonalSparql(query: string, timeoutMs = 20000, request?: Request): Promise<SparqlJson> {
+  const endpoint = personalSparqlUrl(request);
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: personalSparqlHeaders("application/x-www-form-urlencoded; charset=UTF-8"),
+    headers: personalSparqlHeaders(request, "application/x-www-form-urlencoded; charset=UTF-8"),
     body: new URLSearchParams({ query }).toString(),
     cache: "no-store",
     signal: AbortSignal.timeout(timeoutMs),
@@ -216,11 +255,11 @@ export async function queryPersonalSparql(query: string, timeoutMs = 20000): Pro
 }
 
 /** Execute a SPARQL ASK against the personal endpoint and return its boolean result. */
-export async function askPersonalSparql(query: string, timeoutMs = 20000): Promise<boolean> {
-  const endpoint = personalSparqlUrl();
+export async function askPersonalSparql(query: string, timeoutMs = 20000, request?: Request): Promise<boolean> {
+  const endpoint = personalSparqlUrl(request);
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: personalSparqlHeaders("application/x-www-form-urlencoded; charset=UTF-8"),
+    headers: personalSparqlHeaders(request, "application/x-www-form-urlencoded; charset=UTF-8"),
     body: new URLSearchParams({ query }).toString(),
     cache: "no-store",
     signal: AbortSignal.timeout(timeoutMs),
@@ -237,11 +276,11 @@ export async function askPersonalSparql(query: string, timeoutMs = 20000): Promi
 }
 
 /** Execute a SPARQL Update against the personal endpoint. */
-export async function updatePersonalSparql(update: string, timeoutMs = 30000): Promise<string> {
-  const endpoint = personalSparqlUrl();
+export async function updatePersonalSparql(update: string, timeoutMs = 30000, request?: Request): Promise<string> {
+  const endpoint = personalSparqlUrl(request);
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: personalSparqlHeaders("application/sparql-update; charset=UTF-8", "text/plain, text/html, application/json, */*"),
+    headers: personalSparqlHeaders(request, "application/sparql-update; charset=UTF-8", "text/plain, text/html, application/json, */*"),
     body: update,
     cache: "no-store",
     signal: AbortSignal.timeout(timeoutMs),
@@ -258,13 +297,13 @@ function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-/** Seed the registry once, then load endpoint records and groups from its configured RDF graph. No env-list fallback is intentional. */
-export async function getConfiguredFctEndpoints(): Promise<FctEndpoint[]> {
-  await ensureGraphDirectorySeeded();
-  const dataserversGraph = getDataserversGraph();
+/** Seed the registry once, then load endpoint records and groups from its configured RDF graph. */
+export async function getConfiguredFctEndpoints(request?: Request): Promise<FctEndpoint[]> {
+  await ensureGraphDirectorySeeded(request);
+  const dataserversGraph = getDataserversGraph(request);
   const legacyNs = `${dataserversGraph}#`;
   const query = `PREFIX rdf: <${RDF_NS}>\nPREFIX rdfs: <${RDFS_NS}>\nPREFIX dcterms: <${DCTERMS_NS}>\nPREFIX skos: <${SKOS_NS}>\nPREFIX schema: <${SCHEMA_NS}>\nSELECT DISTINCT ?server ?name ?url ?groupName ?groupOrder ?serverOrder WHERE { GRAPH <${dataserversGraph}> { { ?server rdf:type schema:EntryPoint ; rdfs:label ?name ; schema:url ?url . OPTIONAL { ?server schema:position ?serverOrder } OPTIONAL { ?server dcterms:isPartOf ?group . ?group rdf:type skos:Collection ; rdfs:label ?groupName . OPTIONAL { ?group schema:position ?groupOrder } } } UNION { ?server rdf:type <${legacyNs}Dataserver> ; <${legacyNs}serverName> ?name ; <${legacyNs}serverURL> ?url . OPTIONAL { ?server <${legacyNs}serverOrder> ?serverOrder } OPTIONAL { ?server <${legacyNs}inGroup> ?group . ?group <${legacyNs}groupName> ?groupName . OPTIONAL { ?group <${legacyNs}groupOrder> ?groupOrder } } } } } ORDER BY COALESCE(?groupOrder, 9999) COALESCE(?serverOrder, 9999) STR(?name)`;
-  const payload = await queryPersonalSparql(query);
+  const payload = await queryPersonalSparql(query, 20000, request);
   const endpoints: FctEndpoint[] = [];
   for (const binding of payload.results?.bindings ?? []) {
     const label = binding.name?.value?.trim() ?? "";
@@ -282,7 +321,6 @@ export async function getConfiguredFctEndpoints(): Promise<FctEndpoint[]> {
   });
 }
 
-
 /** Resolve the endpoint selected by the shared fct_endpoint cookie, falling back to the first Datasite. */
 export function selectConfiguredFctEndpoint(request: Request, endpoints: FctEndpoint[]): FctEndpoint | null {
   const cookie = request.headers.get("cookie") ?? "";
@@ -294,5 +332,5 @@ export function selectConfiguredFctEndpoint(request: Request, endpoints: FctEndp
 
 /** Load the shared RDF-backed endpoint list and resolve the selected endpoint for routes that do not need the full list. */
 export async function getSelectedFctEndpoint(request: Request): Promise<FctEndpoint | null> {
-  return selectConfiguredFctEndpoint(request, await getConfiguredFctEndpoints());
+  return selectConfiguredFctEndpoint(request, await getConfiguredFctEndpoints(request));
 }

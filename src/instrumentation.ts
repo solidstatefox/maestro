@@ -1,7 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { getDataserversGraph, updatePersonalSparql } from "./lib/personal-sparql";
-
 export const runtime = "nodejs";
 
 type RdfTerm = { kind: "iri"; value: string } | { kind: "literal"; value: string; language?: string; datatype?: string };
@@ -130,13 +126,16 @@ function parseSeedTurtle(source: string): string[] {
 
 /** Rebuild the configured Datasites graph from the local SPARQL_ENDPOINTS Turtle file at server startup. */
 export async function register() {
-  if (process.env.NEXT_RUNTIME === "edge") return;
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
   const seedPath = process.env.SPARQL_ENDPOINTS?.trim();
   if (!seedPath) {
     console.warn("Maestro startup: SPARQL_ENDPOINTS is unset; leaving the Datasites graph unchanged.");
     return;
   }
   try {
+    const { readFile } = await import("node:fs/promises");
+    const { resolve } = await import("node:path");
+    const { getDataserversGraph, updatePersonalSparql } = await import("./lib/personal-sparql");
     const source = await readFile(resolve(process.cwd(), seedPath), "utf8");
     // This seed format uses standalone Turtle comments; strip those lines
     // before statement splitting so a comment cannot swallow the next triple.

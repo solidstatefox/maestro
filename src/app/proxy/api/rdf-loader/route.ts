@@ -1,6 +1,7 @@
 import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 import { clearQueryCache } from "@/lib/query-cache";
+import { personalSparqlUrl, personalSparqlHeaders } from "@/lib/personal-sparql";
 
 function validateIri(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -36,22 +37,8 @@ export async function POST(request: Request) {
     const sourceUrl = validateIri(body?.sourceUrl, "RDF source URL");
     const targetGraph = validateIri(body?.targetGraph, "Target graph IRI");
 
-    const endpoint = process.env.PERSONAL_SPARQL_ENDPOINT || process.env.RDF_LOADER_ENDPOINT || "http://localhost:8890/sparql";
-    const endpointUrl = new URL(endpoint);
-    if (endpointUrl.protocol !== "http:" && endpointUrl.protocol !== "https:") {
-      return NextResponse.json({ error: "PERSONAL_SPARQL_ENDPOINT (or RDF_LOADER_ENDPOINT) must use HTTP or HTTPS." }, { status: 500 });
-    }
-
-    const headers: Record<string, string> = {
-      "Content-Type": "application/sparql-update; charset=utf-8",
-      Accept: "text/plain, text/html, application/json, */*",
-    };
-
-    const username = process.env.RDF_LOADER_USERNAME;
-    const password = process.env.RDF_LOADER_PASSWORD;
-    if (username && password) {
-      headers.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
-    }
+    const endpointUrl = personalSparqlUrl(request);
+    const headers = personalSparqlHeaders(request, "application/sparql-update; charset=utf-8", "text/plain, text/html, application/json, */*");
 
     const update = `LOAD <${sourceUrl}> INTO GRAPH <${targetGraph}>`;
     const response = await fetch(endpointUrl, {

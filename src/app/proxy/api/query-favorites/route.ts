@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     };
     const action = typeof body.action === "string" ? body.action : "";
     const historyId = typeof body.historyId === "string" ? body.historyId.trim() : "";
-    const baseGraph = getHistoryGraph().split("#", 1)[0];
+    const baseGraph = getHistoryGraph(request).split("#", 1)[0];
     const graph = iri(`${baseGraph}#history`);
     const bookmarkGraph = iri(`${baseGraph}#bookmarks`);
     const historyNs = `${MAESTRO_IDS_NS}history#`;
@@ -54,12 +54,16 @@ export async function POST(request: Request) {
     const historyAction = `${VFCT_NS}historyAction`;
     const historyType = `${VFCT_NS}QueryHistoryVisit`;
 
+    const queryPersonal = (q: string) => queryPersonalSparql(q, 20000, request);
+    const updatePersonal = (u: string) => updatePersonalSparql(u, 30000, request);
+    const askPersonal = (q: string) => askPersonalSparql(q, 20000, request);
+
     // History requests have their own validation; only actions that actually
     // carry a query require serialized FCT XML.
     if (action === "getHistoryItem") {
       if (!historyId) return NextResponse.json({ error: "A History item ID is required." }, { status: 400 });
       const query = `PREFIX rdf: <${RDF_NS}> PREFIX vfct: <${VFCT_NS}> SELECT ?queryXML ?stateUrl ?action WHERE { GRAPH ${graph} { ${iri(historyId)} rdf:type vfct:QueryHistoryVisit ; vfct:historyQueryXML ?queryXML . OPTIONAL { ${iri(historyId)} vfct:historyStateUrl ?stateUrl } OPTIONAL { ${iri(historyId)} vfct:historyAction ?action } } } LIMIT 1`;
-      const result = await queryPersonalSparql(query);
+      const result = await queryPersonal(query);
       const row = result.results?.bindings?.[0];
       if (!row) return NextResponse.json({ error: "The History item was not found." }, { status: 404 });
       let parsedAction: unknown = null;
@@ -69,7 +73,7 @@ export async function POST(request: Request) {
 
     if (action === "recentActions") {
       const query = `PREFIX rdf: <${RDF_NS}> PREFIX vfct: <${VFCT_NS}> SELECT ?visit ?created ?action WHERE { GRAPH ${graph} { ?visit rdf:type vfct:QueryHistoryVisit ; vfct:historyCreated ?created . OPTIONAL { ?visit vfct:historyAction ?action } } } ORDER BY DESC(?created) LIMIT 10`;
-      const result = await queryPersonalSparql(query);
+      const result = await queryPersonal(query);
       const items = (result.results?.bindings ?? []).map((row: any) => {
         let parsedAction: unknown = null;
         try { parsedAction = row.action?.value ? JSON.parse(row.action.value) : null; } catch { parsedAction = null; }
@@ -85,14 +89,14 @@ export async function POST(request: Request) {
         const comparison = direction === "backward" ? "<" : ">";
         const order = direction === "backward" ? "DESC" : "ASC";
         const query = `PREFIX vfct: <${VFCT_NS}> SELECT ?created WHERE { GRAPH ${graph} { ${iri(historyId)} vfct:historyCreated ?cursorCreated . ?visit vfct:historyCreated ?created . FILTER(?created ${comparison} ?cursorCreated) } } ORDER BY ${order}(?created) LIMIT 1`;
-        const result = await queryPersonalSparql(query);
+        const result = await queryPersonal(query);
         return NextResponse.json(direction === "backward" ? { older: Boolean(result.results?.bindings?.length) } : { newer: Boolean(result.results?.bindings?.length) });
       }
       const direction = body.direction === "forward" ? "forward" : "backward";
       const comparison = direction === "backward" ? "<" : ">";
       const order = direction === "backward" ? "DESC" : "ASC";
       const query = `PREFIX rdf: <${RDF_NS}> PREFIX vfct: <${VFCT_NS}> PREFIX schema: <${SCHEMA_NS}> SELECT ?visit ?created ?stateUrl ?queryXML ?action WHERE { GRAPH ${graph} { ${iri(historyId)} vfct:historyCreated ?cursorCreated . ?visit rdf:type vfct:QueryHistoryVisit ; vfct:historyCreated ?created ; vfct:historyQueryXML ?queryXML . OPTIONAL { ?visit vfct:historyStateUrl ?stateUrl } OPTIONAL { ?visit vfct:historyAction ?action } FILTER(?created ${comparison} ?cursorCreated) } } ORDER BY ${order}(?created) LIMIT 1`;
-      const result = await queryPersonalSparql(query);
+      const result = await queryPersonal(query);
       const row = result.results?.bindings?.[0];
       let parsedAction: unknown = null;
       try { parsedAction = row?.action?.value ? JSON.parse(row.action.value) : null; } catch { parsedAction = null; }
@@ -103,7 +107,7 @@ export async function POST(request: Request) {
       if (!historyId || typeof body.stateUrl !== "string") return NextResponse.json({ error: "A History item ID and state URL are required." }, { status: 400 });
       const stateUrl = body.stateUrl.trim();
       if (stateUrl && !/^https?:\/\//i.test(stateUrl)) return NextResponse.json({ error: "The History state URL must use HTTP or HTTPS." }, { status: 400 });
-      await updatePersonalSparql(`DELETE { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ?old } } INSERT { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ${sparqlString(stateUrl)} } } WHERE { OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ?old } } }`);
+      await updatePersonal(`DELETE { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ?old } } INSERT { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ${sparqlString(stateUrl)} } } WHERE { OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ?old } } }`);
       return NextResponse.json({ updated: true, historyId });
     }
 
@@ -111,13 +115,13 @@ export async function POST(request: Request) {
       if (!historyId) return NextResponse.json({ error: "A record URI is required." }, { status: 400 });
       // Unbookmark this record without deleting its history or descriptive data:
       // remove only the Bookmark class assertion and the bookmark hash identifier.
-      await updatePersonalSparql(`DELETE { GRAPH ${bookmarkGraph} { ?linkedSubject ?predicate ?object } } WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} (<${BOOKMARK_NS}recalls>|<${DCTERMS_NS}references>|<${VFCT_NS}savedQuery>|<${VFCT_NS}child>|<${VFCT_NS}attribute>)* ?linkedSubject . ?linkedSubject ?predicate ?object } }`);
+      await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ?linkedSubject ?predicate ?object } } WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} (<${BOOKMARK_NS}recalls>|<${DCTERMS_NS}references>|<${VFCT_NS}savedQuery>|<${VFCT_NS}child>|<${VFCT_NS}attribute>)* ?linkedSubject . ?linkedSubject ?predicate ?object } }`);
       return NextResponse.json({ deleted: true, unbookmarked: true, historyId });
     }
 
     if (action === "read") {
       if (!historyId) return NextResponse.json({ error: "A bookmark ID is required." }, { status: 400 });
-      const result = await queryPersonalSparql(`PREFIX rdf: <${RDF_NS}> PREFIX dcterms: <${DCTERMS_NS}> PREFIX rdfs: <${RDFS_NS}> PREFIX schema: <${SCHEMA_NS}> PREFIX vfct: <${VFCT_NS}> SELECT ?type ?title ?description ?stateUrl ?shareUrl WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} rdf:type ?type . OPTIONAL { ${iri(historyId)} dcterms:title ?title } OPTIONAL { ${iri(historyId)} dcterms:description ?description } OPTIONAL { ${iri(historyId)} vfct:historyStateUrl ?stateUrl } OPTIONAL { ${iri(historyId)} schema:url ?shareUrl } } } LIMIT 1`);
+      const result = await queryPersonal(`PREFIX rdf: <${RDF_NS}> PREFIX dcterms: <${DCTERMS_NS}> PREFIX rdfs: <${RDFS_NS}> PREFIX schema: <${SCHEMA_NS}> PREFIX vfct: <${VFCT_NS}> SELECT ?type ?title ?description ?stateUrl ?shareUrl WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} rdf:type ?type . OPTIONAL { ${iri(historyId)} dcterms:title ?title } OPTIONAL { ${iri(historyId)} dcterms:description ?description } OPTIONAL { ${iri(historyId)} vfct:historyStateUrl ?stateUrl } OPTIONAL { ${iri(historyId)} schema:url ?shareUrl } } } LIMIT 1`);
       const row = result.results?.bindings?.[0];
       return NextResponse.json({ found: Boolean(row), historyId, title: row?.title?.value ?? "", description: row?.description?.value ?? "", stateUrl: row?.stateUrl?.value ?? row?.shareUrl?.value ?? "" });
     }
@@ -125,24 +129,24 @@ export async function POST(request: Request) {
     if (action === "deleteBookmarks") {
       // Bookmark data and all linked instance data live in their dedicated named graph.
       // CLEAR removes the entire graph, including query resources and serialized FCT-tree nodes.
-      await updatePersonalSparql(`CLEAR GRAPH ${bookmarkGraph}`);
+      await updatePersonal(`CLEAR GRAPH ${bookmarkGraph}`);
       return NextResponse.json({ deleted: true });
     }
 
     if (action === "deleteHistory") {
       // History visits and their linked instance data live in their own named graph.
-      await updatePersonalSparql(`CLEAR GRAPH ${graph}`);
+      await updatePersonal(`CLEAR GRAPH ${graph}`);
       return NextResponse.json({ deleted: true });
     }
 
     if (action === "deleteCurrentHistory") {
       if (!historyId) return NextResponse.json({ error: "A current History item ID is required." }, { status: 400 });
-      const isHistoryVisit = await askPersonalSparql(`PREFIX rdf: <${RDF_NS}> ASK WHERE { GRAPH ${graph} { ${iri(historyId)} rdf:type <${historyType}> } }`);
+      const isHistoryVisit = await askPersonal(`PREFIX rdf: <${RDF_NS}> ASK WHERE { GRAPH ${graph} { ${iri(historyId)} rdf:type <${historyType}> } }`);
       if (!isHistoryVisit) return NextResponse.json({ error: "The current item is not a query History visit; it was not deleted." }, { status: 409 });
       const nextQuery = `PREFIX rdf: <${RDF_NS}> PREFIX vfct: <${VFCT_NS}> SELECT ?visit ?created ?queryXML ?stateUrl WHERE { GRAPH ${graph} { ${iri(historyId)} vfct:historyCreated ?cursorCreated . ?visit rdf:type vfct:QueryHistoryVisit ; vfct:historyCreated ?created ; vfct:historyQueryXML ?queryXML . OPTIONAL { ?visit vfct:historyStateUrl ?stateUrl } FILTER(?created < ?cursorCreated) } } ORDER BY DESC(?created) LIMIT 1`;
       const nextResult = await queryPersonalSparql(nextQuery);
       const next = nextResult.results?.bindings?.[0];
-      await updatePersonalSparql(`DELETE { GRAPH ${graph} { ${iri(historyId)} ?predicate ?object } } WHERE { GRAPH ${graph} { ${iri(historyId)} ?predicate ?object } }`);
+      await updatePersonal(`DELETE { GRAPH ${graph} { ${iri(historyId)} ?predicate ?object } } WHERE { GRAPH ${graph} { ${iri(historyId)} ?predicate ?object } }`);
       return NextResponse.json({ deleted: true, nextHistoryId: next?.visit?.value, queryXml: next?.queryXML?.value, stateUrl: next?.stateUrl?.value ?? "" });
     }
 
@@ -172,8 +176,8 @@ export async function POST(request: Request) {
         const escapeXml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
         let personalServerId = "personal-sparql";
         try {
-          const endpoints = await getConfiguredFctEndpoints();
-          const endpointUrl = personalSparqlUrl();
+          const endpoints = await getConfiguredFctEndpoints(request);
+          const endpointUrl = personalSparqlUrl(request);
           const normalizeEndpointUrl = (value: string) => {
             const u = new URL(value);
             u.hash = "";
@@ -253,10 +257,10 @@ export async function POST(request: Request) {
       };
       walk(parsed);
 
-      await updatePersonalSparql(`DELETE { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}title> ?oldTitle ; <${RDFS_NS}label> ?oldLabel ; <${DCTERMS_NS}description> ?oldDescription ; <${SCHEMA_NS}url> ?oldUrl ; <${SCHEMA_NS}identifier> ?oldHash ; <${historyQuery}> ?oldQuery ; <${MAESTRO_UI_NS}querySparql> ?oldQuerySparql ; <${DCTERMS_NS}created> ?oldCreated ; <${DCTERMS_NS}subject> ?oldSubject ; <${SCOT_NS}has_tag> ?oldScotTag } } INSERT { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${RDF_NS}type> <${BOOKMARK_NS}Bookmark> ; <${DCTERMS_NS}title> ${sparqlString(title || historyId)} ; <${RDFS_NS}label> ${sparqlString(title || historyId)} ; <${DCTERMS_NS}created> ${sparqlString(bookmarkCreated)}^^<${XSD_NS}dateTime>${description ? ` ; <${DCTERMS_NS}description> ${sparqlString(description)}` : ""} ; <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} ; <${historyQuery}> ${sparqlString(queryXml)} ; <${MAESTRO_UI_NS}querySparql> ${sparqlString(querySparql)}${shareUrl ? ` ; <${SCHEMA_NS}url> ${iri(shareUrl)}` : ""} } } WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}title> ?oldTitle } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${RDFS_NS}label> ?oldLabel } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}description> ?oldDescription } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${SCHEMA_NS}url> ?oldUrl } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${SCHEMA_NS}identifier> ?oldHash } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${historyQuery}> ?oldQuery } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${MAESTRO_UI_NS}querySparql> ?oldQuerySparql } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}created> ?oldCreated } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}subject> ?oldSubject } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${SCOT_NS}has_tag> ?oldScotTag } } }`);
+      await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}title> ?oldTitle ; <${RDFS_NS}label> ?oldLabel ; <${DCTERMS_NS}description> ?oldDescription ; <${SCHEMA_NS}url> ?oldUrl ; <${SCHEMA_NS}identifier> ?oldHash ; <${historyQuery}> ?oldQuery ; <${MAESTRO_UI_NS}querySparql> ?oldQuerySparql ; <${DCTERMS_NS}created> ?oldCreated ; <${DCTERMS_NS}subject> ?oldSubject ; <${SCOT_NS}has_tag> ?oldScotTag } } INSERT { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${RDF_NS}type> <${BOOKMARK_NS}Bookmark> ; <${DCTERMS_NS}title> ${sparqlString(title || historyId)} ; <${RDFS_NS}label> ${sparqlString(title || historyId)} ; <${DCTERMS_NS}created> ${sparqlString(bookmarkCreated)}^^<${XSD_NS}dateTime>${description ? ` ; <${DCTERMS_NS}description> ${sparqlString(description)}` : ""} ; <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} ; <${historyQuery}> ${sparqlString(queryXml)} ; <${MAESTRO_UI_NS}querySparql> ${sparqlString(querySparql)}${shareUrl ? ` ; <${SCHEMA_NS}url> ${iri(shareUrl)}` : ""} } } WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}title> ?oldTitle } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${RDFS_NS}label> ?oldLabel } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}description> ?oldDescription } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${SCHEMA_NS}url> ?oldUrl } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${SCHEMA_NS}identifier> ?oldHash } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${historyQuery}> ?oldQuery } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${MAESTRO_UI_NS}querySparql> ?oldQuerySparql } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}created> ?oldCreated } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}subject> ?oldSubject } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${SCOT_NS}has_tag> ?oldScotTag } } }`);
       // Replace the bookmark's query-resource link with a DELETE/INSERT update,
       // rather than accumulating duplicate recalls links on repeated edits.
-      await updatePersonalSparql(`DELETE { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${BOOKMARK_NS}recalls> ?oldQueryResource . ?oldQueryResource ?oldLinkedPredicate ?oldLinkedObject } } INSERT { GRAPH ${bookmarkGraph} { ${triples.map((triple) => `${triple} .`).join("\n")} } } WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${BOOKMARK_NS}recalls> ?oldQueryResource . OPTIONAL { ?oldQueryResource ?oldLinkedPredicate ?oldLinkedObject } } } }`);
+      await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${BOOKMARK_NS}recalls> ?oldQueryResource . ?oldQueryResource ?oldLinkedPredicate ?oldLinkedObject } } INSERT { GRAPH ${bookmarkGraph} { ${triples.map((triple) => `${triple} .`).join("\n")} } } WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${BOOKMARK_NS}recalls> ?oldQueryResource . OPTIONAL { ?oldQueryResource ?oldLinkedPredicate ?oldLinkedObject } } } }`);
       return NextResponse.json({ saved: true, historyId, shareUrl });
     }
 
@@ -282,7 +286,7 @@ export async function POST(request: Request) {
       ];
       if (stateUrl) triples.push(`${iri(id)} <${historyState}> ${sparqlString(stateUrl)}`);
       if (actionValue) triples.push(`${iri(id)} <${historyAction}> ${sparqlString(actionValue)}`);
-      await updatePersonalSparql(`DELETE { GRAPH ${graph} { ${iri(id)} ?oldPredicate ?oldObject } } INSERT { GRAPH ${graph} { ${triples.map((triple) => `${triple} .`).join("\n")} } } WHERE { OPTIONAL { GRAPH ${graph} { ${iri(id)} ?oldPredicate ?oldObject } } }`);
+      await updatePersonal(`DELETE { GRAPH ${graph} { ${iri(id)} ?oldPredicate ?oldObject } } INSERT { GRAPH ${graph} { ${triples.map((triple) => `${triple} .`).join("\n")} } } WHERE { OPTIONAL { GRAPH ${graph} { ${iri(id)} ?oldPredicate ?oldObject } } }`);
       return NextResponse.json({ historyId: id });
     }
     if (action === "check") {
@@ -291,10 +295,10 @@ export async function POST(request: Request) {
       let bookmarkId: string | null = null;
       if (historyId) {
         const currentAsk = `PREFIX rdf: <${RDF_NS}> PREFIX schema: <${SCHEMA_NS}> PREFIX bookmark: <${BOOKMARK_NS}> ASK WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} rdf:type bookmark:Bookmark ; schema:identifier ?hash . } }`;
-        if (await askPersonalSparql(currentAsk)) bookmarkId = historyId;
+        if (await askPersonal(currentAsk)) bookmarkId = historyId;
       }
       if (!bookmarkId) {
-        const lookup = await queryPersonalSparql(`PREFIX schema: <${SCHEMA_NS}> SELECT ?bookmark WHERE { GRAPH ${bookmarkGraph} { ?bookmark schema:identifier ${sparqlString(queryHash)} . } } LIMIT 1`);
+        const lookup = await queryPersonal(`PREFIX schema: <${SCHEMA_NS}> SELECT ?bookmark WHERE { GRAPH ${bookmarkGraph} { ?bookmark schema:identifier ${sparqlString(queryHash)} . } } LIMIT 1`);
         bookmarkId = lookup.results?.bindings?.[0]?.bookmark?.value ?? null;
       }
       return NextResponse.json({ bookmarked: Boolean(bookmarkId), hash: queryHash, historyId: bookmarkId });
@@ -302,15 +306,15 @@ export async function POST(request: Request) {
     if (action === "unbookmark") {
       if (historyId) {
         const currentAsk = `PREFIX rdf: <${RDF_NS}> PREFIX schema: <${SCHEMA_NS}> PREFIX bookmark: <${BOOKMARK_NS}> ASK WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} rdf:type bookmark:Bookmark ; schema:identifier ?hash . } }`;
-        if (await askPersonalSparql(currentAsk)) {
-          await updatePersonalSparql(`DELETE { GRAPH ${bookmarkGraph} { ?linkedSubject ?predicate ?object } } WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} (<${BOOKMARK_NS}recalls>|<${DCTERMS_NS}references>|<${VFCT_NS}savedQuery>|<${VFCT_NS}child>|<${VFCT_NS}attribute>)* ?linkedSubject . ?linkedSubject ?predicate ?object } }`);
+        if (await askPersonal(currentAsk)) {
+          await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ?linkedSubject ?predicate ?object } } WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} (<${BOOKMARK_NS}recalls>|<${DCTERMS_NS}references>|<${VFCT_NS}savedQuery>|<${VFCT_NS}child>|<${VFCT_NS}attribute>)* ?linkedSubject . ?linkedSubject ?predicate ?object } }`);
           return NextResponse.json({ removed: true, hash: queryHash, historyId });
         }
       }
       const ask = `PREFIX schema: <${SCHEMA_NS}> ASK WHERE { GRAPH ${bookmarkGraph} { ?bookmark schema:identifier ${sparqlString(queryHash)} . } }`;
-      const bookmarked = await askPersonalSparql(ask);
+      const bookmarked = await askPersonal(ask);
       if (!bookmarked) return NextResponse.json({ removed: false, error: "No bookmark hash matches this query." }, { status: 404 });
-      await updatePersonalSparql(`DELETE { GRAPH ${bookmarkGraph} { ?linkedSubject ?predicate ?object } } WHERE { GRAPH ${bookmarkGraph} { ?bookmark <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} . ?bookmark (<${BOOKMARK_NS}recalls>|<${DCTERMS_NS}references>|<${VFCT_NS}savedQuery>|<${VFCT_NS}child>|<${VFCT_NS}attribute>)* ?linkedSubject . ?linkedSubject ?predicate ?object } }`);
+      await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ?linkedSubject ?predicate ?object } } WHERE { GRAPH ${bookmarkGraph} { ?bookmark <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} . ?bookmark (<${BOOKMARK_NS}recalls>|<${DCTERMS_NS}references>|<${VFCT_NS}savedQuery>|<${VFCT_NS}child>|<${VFCT_NS}attribute>)* ?linkedSubject . ?linkedSubject ?predicate ?object } }`);
       return NextResponse.json({ removed: true, hash: queryHash });
     }
 
@@ -407,9 +411,9 @@ export async function POST(request: Request) {
       }
     };
     walk(parsed);
-    await updatePersonalSparql(`DELETE { GRAPH ${bookmarkGraph} { ${iri(savedQueriesTopic)} <${RDF_NS}type> ?oldTopicType } } INSERT { GRAPH ${bookmarkGraph} { ${iri(savedQueriesTopic)} <${RDF_NS}type> <${BOOKMARK_NS}Topic> ; <${DCTERMS_NS}title> ${sparqlString("Saved queries")} ; <${RDFS_NS}label> ${sparqlString("Saved queries")} } } WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(savedQueriesTopic)} <${RDF_NS}type> ?oldTopicType } } FILTER(!BOUND(?oldTopicType)) }`);
+    await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ${iri(savedQueriesTopic)} <${RDF_NS}type> ?oldTopicType } } INSERT { GRAPH ${bookmarkGraph} { ${iri(savedQueriesTopic)} <${RDF_NS}type> <${BOOKMARK_NS}Topic> ; <${DCTERMS_NS}title> ${sparqlString("Saved queries")} ; <${RDFS_NS}label> ${sparqlString("Saved queries")} } } WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(savedQueriesTopic)} <${RDF_NS}type> ?oldTopicType } } FILTER(!BOUND(?oldTopicType)) }`);
     const update = `DELETE { GRAPH ${bookmarkGraph} { ${iri(bookmark)} <${SCHEMA_NS}identifier> ?oldHash } } INSERT { GRAPH ${bookmarkGraph} { ${triples.map((triple) => `${triple} .`).join("\n")} } } WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(bookmark)} <${SCHEMA_NS}identifier> ?oldHash } } }`;
-    await updatePersonalSparql(update);
+    await updatePersonal(update);
     return NextResponse.json({ saved: true, bookmark, title, hash: queryHash });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Could not save query favorite." }, { status: 502 });
@@ -417,10 +421,11 @@ export async function POST(request: Request) {
 }
 
 /** Read Annotea bookmarks and older favorites written by previous Maestro versions. */
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const query = `PREFIX rdf: <${RDF_NS}> PREFIX rdfs: <${RDFS_NS}> PREFIX dcterms: <${DCTERMS_NS}> PREFIX a: <${ANNOTATION_NS}> PREFIX b: <${BOOKMARK_NS}> PREFIX vfct: <${VFCT_NS}> PREFIX sioc: <${SIOC_NS}> PREFIX schema: <${SCHEMA_NS}> SELECT DISTINCT ?bookmark ?title ?description ?created ?queryXML ?shareUrl WHERE { GRAPH <${getHistoryGraph().split("#", 1)[0]}#bookmarks> { { ?bookmark rdf:type b:Bookmark } UNION { ?bookmark rdf:type sioc:Item } UNION { ?bookmark rdf:type vfct:QueryBookmark } OPTIONAL { ?bookmark dcterms:title ?dcTitle } OPTIONAL { ?bookmark rdfs:label ?standardTitle } OPTIONAL { ?bookmark vfct:label ?legacyTitle } BIND(COALESCE(?dcTitle, ?standardTitle, ?legacyTitle, STR(?bookmark)) AS ?title) OPTIONAL { ?bookmark dcterms:description ?description } OPTIONAL { ?bookmark a:created ?annoteaCreated } OPTIONAL { ?bookmark dcterms:created ?dctermsCreated } OPTIONAL { ?bookmark dcterms:date ?dctermsDate } OPTIONAL { ?bookmark vfct:created ?legacyCreated } BIND(COALESCE(?annoteaCreated, ?dctermsCreated, ?dctermsDate, ?legacyCreated) AS ?created) OPTIONAL { ?bookmark schema:url ?bookmarkUrl } { ?bookmark b:recalls ?query . ?query rdf:value ?queryXML . OPTIONAL { ?query schema:url ?queryUrl } } UNION { ?bookmark dcterms:references ?query . ?query rdf:value ?queryXML . OPTIONAL { ?query schema:url ?queryUrl } } UNION { ?bookmark vfct:savedQuery ?legacyQuery . ?legacyQuery vfct:queryXML ?queryXML . } BIND(COALESCE(?bookmarkUrl, ?queryUrl) AS ?shareUrl) } } ORDER BY DESC(?created) ?title`;
-    const result = await queryPersonalSparql(query);
+    const baseGraph = getHistoryGraph(request).split("#", 1)[0];
+    const query = `PREFIX rdf: <${RDF_NS}> PREFIX rdfs: <${RDFS_NS}> PREFIX dcterms: <${DCTERMS_NS}> PREFIX a: <${ANNOTATION_NS}> PREFIX b: <${BOOKMARK_NS}> PREFIX vfct: <${VFCT_NS}> PREFIX sioc: <${SIOC_NS}> PREFIX schema: <${SCHEMA_NS}> SELECT DISTINCT ?bookmark ?title ?description ?created ?queryXML ?shareUrl WHERE { GRAPH <${baseGraph}#bookmarks> { { ?bookmark rdf:type b:Bookmark } UNION { ?bookmark rdf:type sioc:Item } UNION { ?bookmark rdf:type vfct:QueryBookmark } OPTIONAL { ?bookmark dcterms:title ?dcTitle } OPTIONAL { ?bookmark rdfs:label ?standardTitle } OPTIONAL { ?bookmark vfct:label ?legacyTitle } BIND(COALESCE(?dcTitle, ?standardTitle, ?legacyTitle, STR(?bookmark)) AS ?title) OPTIONAL { ?bookmark dcterms:description ?description } OPTIONAL { ?bookmark a:created ?annoteaCreated } OPTIONAL { ?bookmark dcterms:created ?dctermsCreated } OPTIONAL { ?bookmark dcterms:date ?dctermsDate } OPTIONAL { ?bookmark vfct:created ?legacyCreated } BIND(COALESCE(?annoteaCreated, ?dctermsCreated, ?dctermsDate, ?legacyCreated) AS ?created) OPTIONAL { ?bookmark schema:url ?bookmarkUrl } { ?bookmark b:recalls ?query . ?query rdf:value ?queryXML . OPTIONAL { ?query schema:url ?queryUrl } } UNION { ?bookmark dcterms:references ?query . ?query rdf:value ?queryXML . OPTIONAL { ?query schema:url ?queryUrl } } UNION { ?bookmark vfct:savedQuery ?legacyQuery . ?legacyQuery vfct:queryXML ?queryXML . } BIND(COALESCE(?bookmarkUrl, ?queryUrl) AS ?shareUrl) } } ORDER BY DESC(?created) ?title`;
+    const result = await queryPersonalSparql(query, 20000, request);
     const favorites = (result.results?.bindings ?? []).map((row: Record<string, { value?: string }>) => ({
       uri: row.bookmark?.value ?? "",
       title: row.title?.value ?? row.bookmark?.value ?? "Saved query",

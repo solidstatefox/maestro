@@ -495,22 +495,31 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       counted = variable("p");
       countWhere = [...scopedWhere, { kind: "triple", subject: variable("related"), predicate: variable("p"), object: target }];
     } else counted = target;
-    query = buildSelectQuery({ directives, projections: [countProjection(counted)], where: countWhere, groupBy: undefined, orderBy: undefined, limit: undefined, offset: undefined });
+    query = buildSelectQuery({ directives, projections: [countProjection(counted)], where: countWhere });
   } else if (view === "properties" || view === "classes" || view === "properties-in") {
     const facet = variable(view === "classes" ? "c" : "p");
     const subject = view === "properties-in" ? variable("related") : target;
     const predicate = view === "classes" ? iriTerm(RDF_TYPE) : view === "properties-in" ? facet : facet;
     const object = view === "properties-in" ? target : view === "classes" ? facet : variable("o");
     const facetWhere = [...scopedWhere, { kind: "triple", subject, predicate, object } satisfies SparqlPattern];
+    const projections: SparqlProjection[] = [
+      { expression: termExpr(facet), as: variable("c1") },
+      countProjection(view === "properties-in" ? variable("related") : target),
+    ];
+    if (view === "properties") {
+      projections.push({
+        expression: { kind: "aggregate", name: "SAMPLE", distinct: false, expression: termExpr(variable("o")) },
+        as: variable("sampleVal"),
+      });
+    } else if (view === "properties-in") {
+      projections.push({
+        expression: { kind: "aggregate", name: "SAMPLE", distinct: false, expression: termExpr(variable("related")) },
+        as: variable("sampleVal"),
+      });
+    }
     query = buildSelectQuery({
       directives,
-      projections: [
-        { expression: termExpr(facet), as: variable("c1") },
-        countProjection(view === "properties-in" ? variable("related") : target),
-        ...(view === "properties" || view === "properties-in"
-          ? [{ expression: { kind: "aggregate" as const, name: "SAMPLE" as const, distinct: false, expression: termExpr(view === "properties-in" ? variable("related") : variable("o")) }, as: variable("example") }]
-          : []),
-      ],
+      projections,
       where: facetWhere,
       groupBy: [termExpr(facet)],
       // Count ordering is opt-in: only the active Group By facet requests it.
@@ -573,23 +582,31 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     // Virtuoso FCT list view selects the RDF term. Its SQL/XML response
     // wrapper resolves the human-readable label; do not call the SQL-only
     // fct_label procedure from inside SPARQL. For an explicitly count-sorted
-    // facet widget, aggregate outer focus records per value.
+    const isCountSorted = viewNode?.attributes.sort === "count";
+    const subjectTerm = state.targetParent ?? variable("s1");
     query = buildSelectQuery({
       directives,
-      distinct: viewNode?.attributes.sort !== "count",
-      projections: [{ expression: termExpr(target), as: variable("c1") }],
+      distinct: !isCountSorted,
+      projections: [
+        { expression: termExpr(target), as: variable("c1") },
+        ...(isCountSorted ? [{ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(subjectTerm) }, as: variable("ct") } as SparqlProjection] : []),
+      ],
       where: scopedWhere,
-      ...(shouldOrder
-        ? (viewNode?.attributes.sort === "count"
-            ? {
-                groupBy: [termExpr(target)],
-                orderBy: [
-                  { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(state.targetParent ?? target) }, direction: "DESC" as const },
-                  { expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const },
-                ],
-              }
-            : { orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }] })
-        : (viewNode?.attributes.sort === "count" ? { groupBy: [termExpr(target)] } : {})),
+      ...(isCountSorted
+        ? {
+            groupBy: [termExpr(target)],
+            ...(shouldOrder
+              ? {
+                  orderBy: [
+                    { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(subjectTerm) }, direction: "DESC" as const },
+                    { expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const },
+                  ],
+                }
+              : {}),
+          }
+        : shouldOrder
+          ? { orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }] }
+          : {}),
       limit,
       offset,
     });

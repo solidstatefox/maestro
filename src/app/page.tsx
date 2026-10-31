@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Avatar, AvatarImage, AvatarFallback, AvatarBadge } from "@/components/ui/avatar";
 import { Toggle } from "@/components/ui/toggle";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -7046,43 +7047,53 @@ useEffect(() => {
         {authSession ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button
+              <button
                 type="button"
-                variant="outline"
-                size="icon"
                 aria-label={`Logged in as ${authSession.userName || "User"}`}
-                className="relative size-9 rounded-full p-0 overflow-hidden ring-1 ring-border hover:ring-primary focus-visible:ring-2 focus-visible:ring-ring"
+                className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                {authSession.avatarUrl ? (
-                  <img
-                    src={authSession.avatarUrl}
-                    alt={authSession.userName || "User avatar"}
-                    className="size-full rounded-full object-cover"
-                  />
-                ) : (
-                  <span className="flex size-full items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground text-xs uppercase">
+                <Avatar className="size-9 ring-1 ring-border hover:ring-primary transition-all">
+                  {authSession.avatarUrl && (
+                    <AvatarImage src={authSession.avatarUrl} alt={authSession.userName || "User avatar"} />
+                  )}
+                  <AvatarFallback className="bg-primary text-primary-foreground font-semibold text-xs uppercase">
                     {(authSession.userName || "U")[0]}
-                  </span>
-                )}
-              </Button>
+                  </AvatarFallback>
+                  <AvatarBadge className="bg-emerald-500 ring-2 ring-background">
+                    <span className="sr-only">Logged in</span>
+                  </AvatarBadge>
+                </Avatar>
+              </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64 p-2">
               <DropdownMenuLabel className="font-normal">
-                <div className="flex flex-col space-y-1">
-                  <div className="flex items-center gap-2">
-                    {authSession.avatarUrl ? (
-                      <img src={authSession.avatarUrl} alt="" className="size-6 rounded-full object-cover" />
-                    ) : (
-                      <span className="flex size-6 items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground text-[10px] uppercase">
+                <div className="flex flex-col space-y-2">
+                  <div className="flex items-center gap-2.5">
+                    <Avatar className="size-8">
+                      {authSession.avatarUrl && (
+                        <AvatarImage src={authSession.avatarUrl} alt={authSession.userName || "User"} />
+                      )}
+                      <AvatarFallback className="bg-primary text-primary-foreground font-semibold text-xs uppercase">
                         {(authSession.userName || "U")[0]}
-                      </span>
-                    )}
-                    <p className="text-sm font-medium leading-none">{authSession.userName || "Personal Account"}</p>
+                      </AvatarFallback>
+                      <AvatarBadge className="bg-emerald-500 ring-2 ring-background">
+                        <span className="sr-only">Logged in</span>
+                      </AvatarBadge>
+                    </Avatar>
+                    <div className="flex flex-col min-w-0">
+                      <p className="text-sm font-medium leading-tight truncate">{authSession.userName || "Personal Account"}</p>
+                      <div className="flex items-center gap-1.5 pt-0.5">
+                        <span className="size-1.5 rounded-full bg-emerald-500" />
+                        <span className="text-[10px] text-muted-foreground uppercase font-mono font-medium tracking-wide">
+                          Connected
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <p className="text-xs leading-none text-muted-foreground truncate pt-1" title={authSession.graphsitePrefix}>
+                  <p className="text-xs leading-none text-muted-foreground truncate" title={authSession.graphsitePrefix}>
                     {authSession.graphsitePrefix}
                   </p>
-                  <span className="inline-block mt-1 text-[10px] font-mono uppercase bg-muted px-1.5 py-0.5 rounded w-fit text-muted-foreground">
+                  <span className="inline-block text-[10px] font-mono uppercase bg-muted px-1.5 py-0.5 rounded w-fit text-muted-foreground">
                     {authSession.authType}
                   </span>
                 </div>
@@ -7117,15 +7128,18 @@ useEffect(() => {
         ) : (
           <Tooltip>
             <TooltipTrigger render={
-              <Button
+              <button
                 type="button"
-                variant="outline"
-                size="icon"
                 aria-label="Log in to personal graph server"
                 onClick={() => setLoginDialogOpen(true)}
+                className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <User aria-hidden="true" className="size-4" />
-              </Button>
+                <Avatar className="size-9 ring-1 ring-border hover:ring-primary transition-all">
+                  <AvatarFallback className="bg-muted text-muted-foreground hover:text-foreground">
+                    <User className="size-4" aria-hidden="true" />
+                  </AvatarFallback>
+                </Avatar>
+              </button>
             } />
             <TooltipContent>Log in to personal graph server</TooltipContent>
           </Tooltip>
@@ -7266,7 +7280,13 @@ useEffect(() => {
                     </div>
                     {fetchedAvatarUrl && (
                       <div className="flex items-center gap-3 p-2 rounded-md border bg-muted/40">
-                        <img src={fetchedAvatarUrl} alt="Avatar" className="size-8 rounded-full object-cover" />
+                        <Avatar size="sm">
+                          <AvatarImage src={fetchedAvatarUrl} alt="Avatar" />
+                          <AvatarFallback className="text-xs uppercase">
+                            {(loginOauthUserName || "U")[0]}
+                          </AvatarFallback>
+                          <AvatarBadge className="bg-emerald-500 ring-2 ring-background" />
+                        </Avatar>
                         <span className="text-xs text-muted-foreground">Grabbed OpenID avatar</span>
                       </div>
                     )}
@@ -7310,7 +7330,13 @@ useEffect(() => {
                     </div>
                     {fetchedAvatarUrl && (
                       <div className="flex items-center gap-3 p-2 rounded-md border bg-muted/40">
-                        <img src={fetchedAvatarUrl} alt="WebID Avatar" className="size-8 rounded-full object-cover" />
+                        <Avatar size="sm">
+                          <AvatarImage src={fetchedAvatarUrl} alt="WebID Avatar" />
+                          <AvatarFallback className="text-xs uppercase">
+                            {(loginWebIdUri.split("#").pop() || "U")[0]}
+                          </AvatarFallback>
+                          <AvatarBadge className="bg-emerald-500 ring-2 ring-background" />
+                        </Avatar>
                         <span className="text-xs text-muted-foreground">Grabbed WebID avatar</span>
                       </div>
                     )}

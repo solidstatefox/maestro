@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { graphSiteForPrefix } from "./personal-auth";
 import { authNote, fetchWithDigestFallback } from "./digest-auth";
+import { buildInsertData, canParseRdfExtension, parseRdfDocument } from "./rdf-to-sparql";
 
 /** Shared server-side access to Maestro's personal SPARQL store and RDF-backed Graphsite registry. */
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -200,16 +201,37 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
           content += `\n\n# Automatically added personal SPARQL endpoint (not explicitly listed in the seed).\n<${MAESTRO_IDS_NS}dataservers/endpoints#personal-sparql> a schema:EntryPoint ;\n    rdfs:label "Personal SPARQL" ;\n    schema:url <${endpoint.toString()}> ;\n    dcterms:isPartOf <${MAESTRO_IDS_NS}dataservers/endpoints> ;\n    schema:position "-1"^^xsd:integer .\n`;
         }
       }
-      const response = await fetchWithDigestFallback(fileGraphStoreUrl, {
-        method: "POST",
-        headers: personalSparqlHeaders(request, mediaTypes[extname(file.name).toLowerCase()], "text/plain, text/html, application/json, */*"),
-        body: content,
-        cache: "no-store",
-        signal: AbortSignal.timeout(30000),
-      });
-      const responseText = (await response.text()).slice(0, 3000);
-      if (!response.ok || /(?:Virtuoso\s+Exception|Error\s+SR|SPARQL\s+.*Error|failed)/i.test(responseText) && !/0 errors/i.test(responseText)) {
-        throw new Error(`Could not load RDF document ${path} into graph ${destinationGraph} (HTTP ${response.status}): ${responseText || "no response details"}${authNote(response) ? ` [${authNote(response)}]` : ""}`);
+      const extension = extname(file.name).toLowerCase();
+      if (canParseRdfExtension(extension)) {
+        // Preferred path: parse the document here and load it with SPARQL INSERT DATA through the write endpoint
+        // (/sparql-auth). The graph-store endpoint runs DB.DBA.TTLP_RL_NEW_GRAPH, which ordinary accounts such as
+        // OpenLink's demo "acme" user are not permitted to execute (SR575), whereas SPARQL updates are allowed.
+        let update: string;
+        try {
+          const triples = await parseRdfDocument(content, extension, destinationGraph);
+          update = buildInsertData(destinationGraph, triples);
+        } catch (error) {
+          throw new Error(`Could not parse RDF document ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        try {
+          await updatePersonalSparql(update, 60000, request);
+        } catch (error) {
+          throw new Error(`Could not load RDF document ${path} into graph ${destinationGraph} via ${writeEndpoint.toString()}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      } else {
+        // Formats Maestro cannot parse itself (JSON-LD, RDFa, ...) still go through the graph-store endpoint,
+        // which requires the account to be allowed to run Virtuoso's RDF loader procedures.
+        const response = await fetchWithDigestFallback(fileGraphStoreUrl, {
+          method: "POST",
+          headers: personalSparqlHeaders(request, mediaTypes[extension], "text/plain, text/html, application/json, */*"),
+          body: content,
+          cache: "no-store",
+          signal: AbortSignal.timeout(30000),
+        });
+        const responseText = (await response.text()).slice(0, 3000);
+        if (!response.ok || /(?:Virtuoso\s+Exception|Error\s+SR|SPARQL\s+.*Error|failed)/i.test(responseText) && !/0 errors/i.test(responseText)) {
+          throw new Error(`Could not load RDF document ${path} into graph ${destinationGraph} (HTTP ${response.status}): ${responseText || "no response details"}${authNote(response) ? ` [${authNote(response)}]` : ""}`);
+        }
       }
       console.info(`Maestro loaded ${file.name} into ${destinationGraph}.`);
       loaded.push({ file: file.name, graph: destinationGraph });

@@ -27,16 +27,7 @@ npm ci
 
 ### 3. Configure the personal graph server and graphsite
 
-Copy `.env.example` to `.env.local` and fill in the required values, following the comments:
-
-```env
-```env
-PERSONAL_SPARQL_ENDPOINT
-RDF_LOADER_USERNAME
-RDF_LOADER_PASSWORD
-```
-
-For `/sparql`, Virtuoso uses its built-in `SPARQL` account. For `/sparql-auth`, it uses `RDF_LOADER_USERNAME` and `RDF_LOADER_PASSWORD`. Set these optional credentials if using `/sparql-auth`, then restart Maestro after editing `.env.local`.
+For `/sparql`, Virtuoso uses its built-in `SPARQL` account. For `/sparql-auth`, it uses `username` and `password` collected from user at sign-in.
 
 #### Virtuoso permissions
 

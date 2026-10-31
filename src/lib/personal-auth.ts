@@ -33,6 +33,14 @@ export interface PublicSessionPayload {
   userAvatar?: string;
 }
 
+/** Path appended to the user's graphsite prefix to form the Maestro graphsite (history, bookmarks, /graph files). */
+export const MAESTRO_GRAPHSITE_PATH = "/query";
+
+/** e.g. http://host/DAV/home/acme -> http://host/DAV/home/acme/query */
+export function graphSiteForPrefix(prefix: string): string {
+  return `${(prefix || "").trim().replace(/\/+$/, "")}${MAESTRO_GRAPHSITE_PATH}`;
+}
+
 const STORAGE_KEY = "maestro_personal_auth_v1";
 const DEVICE_KEY_NAME = "maestro_device_salt";
 const COOKIE_NAME = "maestro_session";

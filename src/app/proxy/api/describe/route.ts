@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     if (!isSafeIri(body?.iri)) {
       return NextResponse.json({ error: "A valid resource IRI is required for DESCRIBE." }, { status: 400 });
     }
-    const endpoints = await getConfiguredFctEndpoints();
+    const endpoints = await getConfiguredFctEndpoints(request);
     const endpoint = selectConfiguredFctEndpoint(request, endpoints);
     if (!endpoint) return NextResponse.json({ error: "No Datasites are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
 

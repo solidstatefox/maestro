@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
+import { graphSiteForPrefix } from "./personal-auth";
 
 /** Shared server-side access to Maestro's personal SPARQL store and RDF-backed Graphsite registry. */
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -77,36 +78,51 @@ function getGraphManifest(): GraphManifest {
   return result;
 }
 
-/** Resolve the target graph for an RDF file listed in /graph/manifest.json. Appends the user's personal graphsite. */
+/** Resolve the target graph for an RDF file listed in /graph/manifest.json: <graphsite>/query + manifest fragment. */
 export function graphForFile(filename: string, request?: Request): string {
   const rawPath = getGraphManifest()[filename];
   if (!rawPath) throw new Error(`No Graphsite mapping for ${filename} in ${getGraphManifestPath()}.`);
   if (/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(rawPath)) {
     return rawPath;
   }
-  const session = getPersonalSession(request);
-  const prefix = (session?.graphsitePrefix || DEFAULT_USER_GRAPHSITE).replace(/\/+$/, "");
+  const graphSite = getUserGraphSite(request);
   const local = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
-  return `${prefix}${local}`;
+  return `${graphSite}${local}`;
+}
+
+/** The user's Maestro graphsite: <graphsitePrefix>/query (no fragment). */
+export function getUserGraphSite(request?: Request): string {
+  const session = getPersonalSession(request);
+  return graphSiteForPrefix(session?.graphsitePrefix || DEFAULT_USER_GRAPHSITE);
 }
 
 export const getDataserversGraph = (request?: Request): string => graphForFile("dataserver-seed.ttl", request);
-export const getHistoryGraph = (request?: Request): string => {
-  const session = getPersonalSession(request);
-  const prefix = (session?.graphsitePrefix || DEFAULT_USER_GRAPHSITE).replace(/\/+$/, "");
-  return `${prefix}#query`;
-};
+/** History graph base IRI (<graphsite>/query). Callers append #history / #bookmarks. */
+export const getHistoryGraph = (request?: Request): string => getUserGraphSite(request);
 export const getOntologyGraph = (request?: Request): string => graphForFile("maestro-ui-ontology.ttl", request);
 export const getShapesGraph = (request?: Request): string => graphForFile("maestro-shacl-policies.rdf", request);
 export const VFCT_NS = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#";
 export const MAESTRO_IDS_NS = "gttp://ggg.maestro.ecosys/ids/";
 
-let graphDirectorySeedPromise: Promise<void> | null = null;
+export type GraphSeedResult = { file: string; graph: string }[];
 
-/** Upload each RDF document in /graph to the Graphsite assigned by manifest.json. */
-export async function ensureGraphDirectorySeeded(request?: Request): Promise<void> {
-  if (graphDirectorySeedPromise) return graphDirectorySeedPromise;
-  graphDirectorySeedPromise = (async () => {
+/** One seed per personal session (store + graphsite + credentials), not one per server process. */
+const graphDirectorySeedPromises = new Map<string, Promise<GraphSeedResult>>();
+
+function seedSessionKey(request?: Request): string {
+  const session = getPersonalSession(request);
+  return [session?.graphStore ?? "", session?.graphsitePrefix ?? "", session?.authHeader ?? ""].join("|");
+}
+
+/** Upload each RDF document in /graph to <graphsitePrefix>/query + manifest fragment on the user's graph server. Pass force to reload (used right after login). */
+export async function ensureGraphDirectorySeeded(request?: Request, options: { force?: boolean } = {}): Promise<GraphSeedResult> {
+  const sessionKey = seedSessionKey(request);
+  if (!options.force) {
+    const existing = graphDirectorySeedPromises.get(sessionKey);
+    if (existing) return existing;
+  }
+  const promise = (async (): Promise<GraphSeedResult> => {
+    const loaded: GraphSeedResult = [];
     const entries = await readdir(getGraphDirectory(), { withFileTypes: true });
     const mediaTypes: Record<string, string> = {
       ".rdf": "application/rdf+xml; charset=utf-8",
@@ -134,8 +150,9 @@ export async function ensureGraphDirectorySeeded(request?: Request): Promise<voi
       if (!manifest[file.name]) throw new Error(`No Graphsite mapping for ${file.name} in ${getGraphManifestPath()}.`);
     }
 
-    const endpoint = personalSparqlUrl(request);
-    const graphStoreUrl = new URL(endpoint);
+    const endpoint = personalSparqlUrl(request); // read endpoint (/sparql), advertised in the Datasites seed
+    const writeEndpoint = personalSparqlWriteUrl(request); // /sparql-auth for sparql-auth logins
+    const graphStoreUrl = new URL(writeEndpoint);
     graphStoreUrl.pathname = /\/sparql-auth\/?$/i.test(graphStoreUrl.pathname)
       ? graphStoreUrl.pathname.replace(/\/sparql-auth\/?$/i, "/sparql-graph-crud-auth")
       : graphStoreUrl.pathname.replace(/\/sparql\/?$/i, "/sparql-graph-crud");
@@ -198,12 +215,15 @@ export async function ensureGraphDirectorySeeded(request?: Request): Promise<voi
         throw new Error(`Could not load RDF document ${path} into graph ${destinationGraph} (HTTP ${response.status}): ${responseText || "no response details"}`);
       }
       console.info(`Maestro loaded ${file.name} into ${destinationGraph}.`);
+      loaded.push({ file: file.name, graph: destinationGraph });
     }
-  })().catch((error) => {
-    graphDirectorySeedPromise = null;
-    throw error;
+    return loaded;
+  })();
+  graphDirectorySeedPromises.set(sessionKey, promise);
+  promise.catch(() => {
+    if (graphDirectorySeedPromises.get(sessionKey) === promise) graphDirectorySeedPromises.delete(sessionKey);
   });
-  return graphDirectorySeedPromise;
+  return promise;
 }
 
 /** Compatibility wrapper: policy discovery loads the manifest-mapped RDF files from /graph. */
@@ -214,12 +234,23 @@ export async function ensureShapesGraphSeeded(request?: Request): Promise<void> 
 export type FctEndpoint = { id: string; label: string; url: string; group: string };
 type SparqlJson = { results?: { bindings?: Record<string, { type?: string; value?: string }>[] } };
 
-/** Return the configured personal endpoint without embedding credentials in its URL. */
+/** Return the personal READ endpoint (/sparql) without embedding credentials in its URL. A pasted /sparql-auth is normalised to /sparql. */
 export function personalSparqlUrl(request?: Request): URL {
   const session = getPersonalSession(request);
   const raw = (session?.graphStore || DEFAULT_GRAPH_STORE).trim();
   const url = new URL(raw);
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Personal graph store must use HTTP or HTTPS.");
+  url.pathname = url.pathname.replace(/\/sparql-auth\/?$/i, "/sparql");
+  return url;
+}
+
+/** Return the personal WRITE endpoint: the user's /sparql endpoint switched to /sparql-auth for sparql-auth logins. */
+export function personalSparqlWriteUrl(request?: Request): URL {
+  const url = personalSparqlUrl(request);
+  const session = getPersonalSession(request);
+  if (session?.authType === "sparql-auth") {
+    url.pathname = url.pathname.replace(/\/sparql\/?$/i, "/sparql-auth");
+  }
   return url;
 }
 
@@ -275,9 +306,9 @@ export async function askPersonalSparql(query: string, timeoutMs = 20000, reques
   }
 }
 
-/** Execute a SPARQL Update against the personal endpoint. */
+/** Execute a SPARQL Update against the personal WRITE endpoint (/sparql-auth for sparql-auth logins). */
 export async function updatePersonalSparql(update: string, timeoutMs = 30000, request?: Request): Promise<string> {
-  const endpoint = personalSparqlUrl(request);
+  const endpoint = personalSparqlWriteUrl(request);
   const response = await fetch(endpoint, {
     method: "POST",
     headers: personalSparqlHeaders(request, "application/sparql-update; charset=UTF-8", "text/plain, text/html, application/json, */*"),

@@ -33,7 +33,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Label } from "@/components/ui/label";
 import { Ban, Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
-import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, buildAuthHeader } from "@/lib/personal-auth";
+import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, buildAuthHeader, graphSiteForPrefix } from "@/lib/personal-auth";
 import { cachedFetchFct, clearClientQueryCache } from "@/lib/client-query-cache";
 import { initializeMaestroStorage, maestroStorageGet, maestroStorageSet, clearMaestroStorage } from "@/lib/maestro-storage";
 import { Progress } from "@/components/ui/progress";
@@ -1326,8 +1326,9 @@ export default function Home() {
   const [historyBookmarkId, setHistoryBookmarkId] = useState("");
   const [authSession, setAuthSession] = useState<PersonalAuthSession | null>(null);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+  const [endpointReloadRevision, setEndpointReloadRevision] = useState(0);
   const [loginTab, setLoginTab] = useState<AuthType>("sparql-auth");
-  const [loginGraphStore, setLoginGraphStore] = useState("http://localhost:8890/sparql-auth");
+  const [loginGraphStore, setLoginGraphStore] = useState("http://localhost:8890/sparql");
   const [loginGraphsitePrefix, setLoginGraphsitePrefix] = useState("http://localhost:8890/DAV/home/dba");
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -1534,6 +1535,8 @@ useEffect(() => {
             if (session.oauthToken) setLoginOauthToken(session.oauthToken);
           }
           if (session.avatarUrl) setFetchedAvatarUrl(session.avatarUrl);
+          // The restored session just (re)set the maestro_session cookie; reload Datasites with it.
+          setEndpointReloadRevision((r) => r + 1);
         }
       } catch (err) {
         console.warn("Could not load personal graph auth session", err);
@@ -1597,7 +1600,7 @@ useEffect(() => {
 
     return {
       authType: loginTab,
-      graphStore: loginGraphStore.trim() || "http://localhost:8890/sparql-auth",
+      graphStore: loginGraphStore.trim() || "http://localhost:8890/sparql",
       graphsitePrefix: loginGraphsitePrefix.trim() || "http://localhost:8890/DAV/home/dba",
       userName,
       password: loginTab === "sparql-auth" ? loginPassword : undefined,
@@ -1620,6 +1623,7 @@ useEffect(() => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "test",
+          authType: session.authType,
           graphStore: session.graphStore,
           authHeader: session.authHeader,
           graphsitePrefix: session.graphsitePrefix,
@@ -1631,7 +1635,7 @@ useEffect(() => {
       }
       toast.add({
         title: "Connection test succeeded",
-        description: `Connected to personal graph server (HTTP ${data.status}). History graph: ${session.graphsitePrefix}#query`,
+        description: `Connected to personal graph server (HTTP ${data.status}). History graph: ${graphSiteForPrefix(session.graphsitePrefix)}`,
         type: "success",
       });
     } catch (err) {
@@ -1654,26 +1658,44 @@ useEffect(() => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "test",
+          authType: session.authType,
           graphStore: session.graphStore,
           authHeader: session.authHeader,
           graphsitePrefix: session.graphsitePrefix,
         }),
       });
       const data = await response.json();
-      if (!response.ok && !data.connected) {
-        if (data.status === 401) {
-          throw new Error("Authentication failed: Invalid credentials or unauthorized.");
-        }
+      if (!response.ok || !data.connected) {
+        throw new Error(data.error || (data.status === 401 ? "Authentication failed: Invalid credentials or unauthorized." : "Could not connect to the personal graph server."));
       }
+      // Persist the session first: this also sets the maestro_session cookie the proxy routes read.
       await savePersonalAuthSession(session, loginRememberMe);
       setAuthSession(session);
       setPersonalSparqlEndpoint(session.graphStore);
       setLoginDialogOpen(false);
       toast.add({
         title: "Connected",
-        description: `Logged in as ${session.userName}. History set to ${session.graphsitePrefix}#query`,
+        description: `Logged in as ${session.userName}. History set to ${graphSiteForPrefix(session.graphsitePrefix)}`,
         type: "success",
       });
+
+      // As soon as login succeeds, load every ./graph document into <graphsite>/query + manifest fragment.
+      try {
+        const seedResponse = await fetch("/proxy/api/graph-seed", { method: "POST", cache: "no-store", headers: proxyDebugHeaders("login-graph-seed", "Login") });
+        const seedData = await seedResponse.json().catch(() => ({}));
+        if (!seedResponse.ok || !seedData.ok) throw new Error(seedData.error || `Graph load failed (HTTP ${seedResponse.status})`);
+        toast.add({
+          title: "Graphs loaded",
+          description: `Loaded ${Array.isArray(seedData.loaded) ? seedData.loaded.length : 0} RDF documents into ${graphSiteForPrefix(session.graphsitePrefix)}.`,
+          type: "success",
+        });
+      } catch (seedError) {
+        toast.add({ title: "Could not load ./graph into your graph server", description: seedError instanceof Error ? seedError.message : "Graph load failed", type: "error" });
+      }
+
+      // Drop cached Datasite lists from before login and reload them from the personal store.
+      await clearClientQueryCache();
+      setEndpointReloadRevision((r) => r + 1);
       setBookmarkCheckRevision((r) => r + 1);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Login failed";
@@ -2401,7 +2423,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     return () => {
       cancelled = true;
     };
-  }, []);
+    // endpointReloadRevision re-runs the Datasite load after login.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endpointReloadRevision]);
 
   async function runEndpointChecks(
     endpoints: EndpointOption[],
@@ -7169,10 +7193,10 @@ useEffect(() => {
                   required
                   value={loginGraphStore}
                   onChange={(e) => setLoginGraphStore(e.target.value)}
-                  placeholder="http://localhost:8890/sparql-auth"
+                  placeholder="http://localhost:8890/sparql"
                   className="font-mono text-xs"
                 />
-                <p className="text-xs text-muted-foreground">Use /sparql-auth for authenticated access or /sparql for shared access.</p>
+                <p className="text-xs text-muted-foreground">Enter your /sparql endpoint. Maestro reads from it and switches to /sparql-auth automatically for writes.</p>
               </div>
 
               <div className="flex flex-col gap-1.5">
@@ -7188,7 +7212,7 @@ useEffect(() => {
                   className="font-mono text-xs"
                 />
                 <p className="text-xs text-muted-foreground">
-                  History graph: <span className="font-mono">{loginGraphsitePrefix ? `${loginGraphsitePrefix}#query` : "USER_SITE#query"}</span>
+                  History graph: <span className="font-mono">{loginGraphsitePrefix ? graphSiteForPrefix(loginGraphsitePrefix) : "USER_SITE/query"}</span>
                 </p>
               </div>
 

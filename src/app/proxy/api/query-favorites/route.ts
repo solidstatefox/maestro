@@ -144,7 +144,7 @@ export async function POST(request: Request) {
       const isHistoryVisit = await askPersonal(`PREFIX rdf: <${RDF_NS}> ASK WHERE { GRAPH ${graph} { ${iri(historyId)} rdf:type <${historyType}> } }`);
       if (!isHistoryVisit) return NextResponse.json({ error: "The current item is not a query History visit; it was not deleted." }, { status: 409 });
       const nextQuery = `PREFIX rdf: <${RDF_NS}> PREFIX vfct: <${VFCT_NS}> SELECT ?visit ?created ?queryXML ?stateUrl WHERE { GRAPH ${graph} { ${iri(historyId)} vfct:historyCreated ?cursorCreated . ?visit rdf:type vfct:QueryHistoryVisit ; vfct:historyCreated ?created ; vfct:historyQueryXML ?queryXML . OPTIONAL { ?visit vfct:historyStateUrl ?stateUrl } FILTER(?created < ?cursorCreated) } } ORDER BY DESC(?created) LIMIT 1`;
-      const nextResult = await queryPersonalSparql(nextQuery);
+      const nextResult = await queryPersonalSparql(nextQuery, 20000, request);
       const next = nextResult.results?.bindings?.[0];
       await updatePersonal(`DELETE { GRAPH ${graph} { ${iri(historyId)} ?predicate ?object } } WHERE { GRAPH ${graph} { ${iri(historyId)} ?predicate ?object } }`);
       return NextResponse.json({ deleted: true, nextHistoryId: next?.visit?.value, queryXml: next?.queryXML?.value, stateUrl: next?.stateUrl?.value ?? "" });

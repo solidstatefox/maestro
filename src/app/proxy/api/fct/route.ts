@@ -276,7 +276,7 @@ function parseDescribeRdfXml(source: string): Record<string, SparqlBindingTerm>[
 export async function GET(request: Request) {
   logProxyCaller(request, "fct.GET");
   let endpoints: Awaited<ReturnType<typeof getConfiguredFctEndpoints>>;
-  try { endpoints = await getConfiguredFctEndpoints(); }
+  try { endpoints = await getConfiguredFctEndpoints(request); }
   catch (error) {
     return NextResponse.json({ error: `Could not load Datasites from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}` }, { status: 503 });
   }
@@ -340,7 +340,7 @@ export async function POST(request: Request) {
       ? { queryXml: requestBodyText }
       : (() => { try { return JSON.parse(requestBodyText) as Record<string, unknown>; } catch { return null; } })();
     let endpoints: Awaited<ReturnType<typeof getConfiguredFctEndpoints>>;
-    try { endpoints = await getConfiguredFctEndpoints(); }
+    try { endpoints = await getConfiguredFctEndpoints(request); }
     catch (error) {
       return fctError(`Could not load Datasites from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}`, 503);
     }
@@ -356,7 +356,7 @@ export async function POST(request: Request) {
     let queryXml = typeof body?.queryXml === "string" ? body.queryXml.trim() : "";
     if (!queryXml && typeof body?.text === "string") {
       const fallbackEndpoint = selectConfiguredFctEndpoint(request, endpoints);
-      if (!fallbackEndpoint) return fctError(`No graph servers are configured in the personal SPARQL store graph ${getDataserversGraph()}.`, 503);
+      if (!fallbackEndpoint) return fctError(`No graph servers are configured in the personal SPARQL store graph ${getDataserversGraph(request)}.`, 503);
       queryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="" same-as="" addr="@${xmlEscape(fallbackEndpoint.id)}"><text>${xmlEscape(body.text.trim())}</text><view type="text" limit="30" offset="0"/></query>`;
     }
     if (!queryXml) return fctError("An FCT query XML document is required.", 400);

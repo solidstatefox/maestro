@@ -1,7 +1,7 @@
 import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 import { clearQueryCache } from "@/lib/query-cache";
-import { personalSparqlUrl, personalSparqlHeaders } from "@/lib/personal-sparql";
+import { personalSparqlWriteUrl, personalSparqlHeaders } from "@/lib/personal-sparql";
 
 function validateIri(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
     const sourceUrl = validateIri(body?.sourceUrl, "RDF source URL");
     const targetGraph = validateIri(body?.targetGraph, "Target graph IRI");
 
-    const endpointUrl = personalSparqlUrl(request);
+    const endpointUrl = personalSparqlWriteUrl(request);
     const headers = personalSparqlHeaders(request, "application/sparql-update; charset=utf-8", "text/plain, text/html, application/json, */*");
 
     const update = `LOAD <${sourceUrl}> INTO GRAPH <${targetGraph}>`;

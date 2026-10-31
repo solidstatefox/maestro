@@ -219,7 +219,7 @@ export async function POST(request: Request) {
   let diagnosticQuery = "";
   try {
     const body = await request.json().catch(() => null);
-    const endpointList = await getConfiguredFctEndpoints();
+    const endpointList = await getConfiguredFctEndpoints(request);
     const selectedEndpoint = selectConfiguredFctEndpoint(request, endpointList);
     const fctEndpoint = selectedEndpoint?.url;
     diagnosticEndpoint = fctEndpoint ?? "";

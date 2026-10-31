@@ -1,7 +1,7 @@
 {
-  "dataserver-seed.ttl": "http://demo.openlinksw.com/DAV/home/graph",
-  "maestro-shacl-policies.ttl": "http://demo.openlinksw.com/DAV/home/shacl/policies",
-  "maestro-shacl-policies.rdf": "http://demo.openlinksw.com/DAV/home/shacl/policies",
-  "maestro-ui-ontology.ttl": "http://demo.openlinksw.com/DAV/home/ontology-cache",
-  "maestro-history-bookmark-schema.ttl": "http://demo.openlinksw.com/DAV/home/ontology-cache"
+  "dataserver-seed.ttl": "/graph",
+  "maestro-shacl-policies.ttl": "/shacl/policies",
+  "maestro-shacl-policies.rdf": "/shacl/policies",
+  "maestro-ui-ontology.ttl": "/ontology-cache",
+  "maestro-history-bookmark-schema.ttl": "/ontology-cache"
 }

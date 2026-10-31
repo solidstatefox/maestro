@@ -37,13 +37,13 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "discover") {
-      await ensureShapesGraphSeeded();
+      await ensureShapesGraphSeeded(request);
       const types = Array.isArray(body.recordTypes) ? [...new Set(body.recordTypes.filter(safeIri))] : [];
       if (types.length === 0) return NextResponse.json({ policy: null });
       const values = types.map(sparqlIri).join(" ");
-      const shapesGraph = sparqlIri(getShapesGraph());
+      const shapesGraph = sparqlIri(getShapesGraph(request));
       const query = `PREFIX rdf: <${RDF}>\nPREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?policy ?policyLabel ?recordShape ?template ?templateLabel WHERE { GRAPH ${shapesGraph} { VALUES ?class { ${values} } ?policy a mui:ClassPolicy ; mui:forClass ?class ; mui:recordShape ?recordShape ; rdfs:label ?policyLabel . OPTIONAL { ?policy mui:htmlTemplate ?template . OPTIONAL { ?template rdfs:label ?templateLabel } } } } ORDER BY LCASE(STR(?policyLabel)) LCASE(STR(?templateLabel)) LIMIT 100`;
-      const payload = await queryPersonalSparql(query);
+      const payload = await queryPersonalSparql(query, 20000, request);
       const grouped = new Map<string, { uri: string; label: string; recordShape: string; templates: { uri: string; label: string }[] }>();
       for (const row of (payload.results?.bindings ?? []) as BindingRow[]) {
         const uri = get(row, "policy");
@@ -61,10 +61,10 @@ export async function POST(request: Request) {
       if (!safeIri(body.template)) return NextResponse.json({ error: "A valid HTML template URI is required." }, { status: 400 });
       // Read from the manifest-mapped policy graph, and ignore stale template literals
       // that cannot satisfy Format's required record-viewer root.
-      const query = `PREFIX rdf: <${RDF}>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?templateHtml WHERE { GRAPH ${sparqlIri(getShapesGraph())} { ${sparqlIri(body.template)} (rdf:value|mui:templateContent) ?templateHtml . FILTER(CONTAINS(STR(?templateHtml), 'id="maestro-record-viewer"')) } } LIMIT 1`;
-      const payload = await queryPersonalSparql(query);
+      const query = `PREFIX rdf: <${RDF}>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?templateHtml WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} { ${sparqlIri(body.template)} (rdf:value|mui:templateContent) ?templateHtml . FILTER(CONTAINS(STR(?templateHtml), 'id="maestro-record-viewer"')) } } LIMIT 1`;
+      const payload = await queryPersonalSparql(query, 20000, request);
       const templateHtml = get((payload.results?.bindings?.[0] ?? {}) as BindingRow, "templateHtml");
-      if (!templateHtml) return NextResponse.json({ error: `Template ${body.template} has no HTML literal in ${getShapesGraph()} containing the required maestro-record-viewer root.` }, { status: 404 });
+      if (!templateHtml) return NextResponse.json({ error: `Template ${body.template} has no HTML literal in ${getShapesGraph(request)} containing the required maestro-record-viewer root.` }, { status: 404 });
       // Resolve the actual installed runtime version instead of trusting a version copied into the template.
       const nextPackage = JSON.parse(await readFile(resolve(process.cwd(), "node_modules/next/package.json"), "utf8")) as { name?: unknown; version?: unknown };
       if (nextPackage.name !== "next" || typeof nextPackage.version !== "string") throw new Error("Could not determine the installed Next.js package name and version.");
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
         triple && typeof triple.subject === "string" && safeIri(triple.predicate) && typeof triple.object === "string" && triple.subject.length <= 4096 && triple.object.length <= 100000,
       );
       const shapeQuery = `PREFIX sh: <${SH}>\nSELECT ?propertyShape ?constraint ?value WHERE { { { ${sparqlIri(body.recordShape)} ?constraint ?value . BIND(${sparqlIri(body.recordShape)} AS ?propertyShape) } UNION { ${sparqlIri(body.recordShape)} sh:property ?propertyShape . ?propertyShape ?constraint ?value } } UNION { GRAPH ?shapeGraph { { ${sparqlIri(body.recordShape)} ?constraint ?value . BIND(${sparqlIri(body.recordShape)} AS ?propertyShape) } UNION { ${sparqlIri(body.recordShape)} sh:property ?propertyShape . ?propertyShape ?constraint ?value } } } }`;
-      const shapePayload = await queryPersonalSparql(shapeQuery);
+      const shapePayload = await queryPersonalSparql(shapeQuery, 20000, request);
       const shapeRows = (shapePayload.results?.bindings ?? []) as BindingRow[];
       const properties = new Map<string, Record<string, string[]>>();
       const topLevel: Record<string, string[]> = {};

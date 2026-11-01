@@ -186,28 +186,51 @@ function findQueryView(nodes: FctQueryNode[]): FctQueryNode | null {
  * query must return values of that paper's publisher property. Move the active
  * view out of the <property-of> breadcrumb and onto its matching <property>.
  */
-/** Build the distinct-value query for Group By. Clone the complete source
- * query without dropping any selected <value> bindings: if Creator is bound to
- * Alex Tabarrok, the Group By headings must remain scoped to Alex rather than
- * silently broadening back out to every Creator. The derived widget query adds
- * the list view while preserving all source filters and the active path. */
+/** Build the value-list query for Group By. It is the SAME query the matching
+ * Personal facet widget runs to list its values (count-sorted), so every group
+ * heading carries exactly the count shown next to that value in the facet:
+ *  - Category (rdf:type): the Categories facet's `classes` view;
+ *  - forward property: createPropertyWidgetQuery(..., forPersonalFacet = true);
+ *  - reverse role: the Roles widget's query (selected role values removed so
+ *    every candidate value is listed, as in that widget).
+ * Counts are COUNT(DISTINCT focus resource) per value, not raw join rows.
+ * Each group's members are then built by createGroupMemberQuery, which clones
+ * the source query, binds the heading value to the property and keeps the view
+ * on the result resources. */
 export function createGroupValuesQuery(
   sourceTree: FctQueryTree,
   option: GroupByOption,
+  paging: { limit: number; offset: number } = { limit: 30, offset: 0 },
 ): FctQueryTree {
   const sourceClone: FctQueryTree = {
     ...sourceTree,
     attributes: { ...sourceTree.attributes },
     children: sourceTree.children.map(cloneQueryNode),
   };
-  return createPropertyWidgetQuery(
-    sourceClone,
-    option.uri,
-    option.direction,
-    // For reverse roles, passing nodeId tells the personal-facet helper to
-    // remove that role before enumeration. Group By must instead retain the
-    // role and every value binding already attached to it.
-    option.direction === "reverse" ? undefined : option.nodeId,
+  const viewAttributes = (type: string) => ({ type, sort: "count", limit: String(paging.limit), offset: String(paging.offset) });
+
+  if (option.direction === "forward" && option.uri === RDF_TYPE_URI) {
+    return setQueryViewAttributes(sourceClone, viewAttributes("classes"));
+  }
+
+  if (option.direction === "reverse") {
+    const stripRoleValues = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => ({
+      ...node,
+      attributes: { ...node.attributes },
+      children: node.id === option.nodeId
+        ? node.children.filter((child) => child.name !== "value").map(cloneQueryNode)
+        : stripRoleValues(node.children),
+    }));
+    const unconstrained: FctQueryTree = { ...sourceClone, children: stripRoleValues(sourceClone.children) };
+    return setQueryViewAttributes(
+      createPropertyWidgetQuery(unconstrained, option.uri, "reverse", option.nodeId, true),
+      viewAttributes("list"),
+    );
+  }
+
+  return setQueryViewAttributes(
+    createPropertyWidgetQuery(sourceClone, option.uri, "forward", undefined, true),
+    viewAttributes("list"),
   );
 }
 

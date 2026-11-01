@@ -161,7 +161,7 @@ export function buildFctResultsSparql(tree: FctQueryTree): string | null {
     const graphTerm = graph ? iriTerm(graph) : null;
     if (graph && !graphTerm) return null;
     const body = graphTerm ? `GRAPH ${graphTerm} { ${patterns.join(" ")} }` : patterns.join(" ");
-    const orderClause = shouldOrder ? " ORDER BY STR(?s1)" : "";
+    const orderClause = shouldOrder ? " ORDER BY DESC (<LONG::IRI_RANK> (?s1))" : "";
     innerSelect = `SELECT DISTINCT ?s1 WHERE { ${body} }${orderClause} LIMIT ${limit} OFFSET ${offset}`;
     outerSelect = `SELECT ?s1 AS ?c1 WHERE { ${innerSelect} }`;
   }
@@ -190,6 +190,8 @@ export function buildFctGroupValuesSparql(tree: FctQueryTree): string | null {
   const offsetValue = Number(view?.attributes.offset ?? 0);
   const limit = Number.isSafeInteger(limitValue) && limitValue > 0 ? Math.min(limitValue, 1000) : 30;
   const offset = Number.isSafeInteger(offsetValue) && offsetValue >= 0 ? offsetValue : 0;
+  const groupOrderAttr = (tree.attributes.order ?? tree.attributes["order-results"] ?? view?.attributes.order ?? view?.attributes["order-results"] ?? "").trim().toLowerCase();
+  const shouldOrderGroups = ["yes", "true", "1", "on"].includes(groupOrderAttr);
   const defines: string[] = [];
   const inference = tree.attributes.inference?.trim();
   if (inference) defines.push(`DEFINE input:inference "${escapeSparqlString(inference)}"`);
@@ -213,7 +215,7 @@ export function buildFctGroupValuesSparql(tree: FctQueryTree): string | null {
     if (graphTerm) body = `GRAPH ${graphTerm} { ${body} }`;
     if (!body.trim()) body = `?s1 ?p1 ${target} .`;
   }
-  const query = `SELECT (${target} AS ?c1) (COUNT(?s1) AS ?ct) WHERE { ${body} } GROUP BY ${target} LIMIT ${limit} OFFSET ${offset}`;
+  const query = `SELECT (${target} AS ?c1) (COUNT(?s1) AS ?ct) WHERE { ${body} } GROUP BY ${target}${shouldOrderGroups ? ` ORDER BY DESC (?ct) STR(${target})` : ""} LIMIT ${limit} OFFSET ${offset}`;
   return [...defines, query].join("\n");
 }
 

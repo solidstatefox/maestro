@@ -225,6 +225,11 @@ function searchTerms(searchText: string): SparqlTerm | null {
   return literalTerm(`(${terms.map((term) => term.toUpperCase()).join(" AND ")})`);
 }
 
+/** Entity-rank ordering from the Virtuoso faceted-views documentation: ORDER BY DESC ( <LONG::IRI_RANK> (?s) ). Requires the Facet (fct) VAD. */
+function entityRankOrder(term: SparqlTerm): SparqlOrder {
+  return { expression: { kind: "function", name: "<LONG::IRI_RANK>", args: [termExpr(term)] }, direction: "DESC" };
+}
+
 function fullTextPatterns(searchText: string, textProperty?: string): SparqlPattern[] | null {
   const search = searchTerms(searchText);
   if (!search) return null;
@@ -522,10 +527,15 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       projections,
       where: facetWhere,
       groupBy: [termExpr(facet)],
-      // Count ordering is opt-in: only the active Group By facet requests it.
-      // ORDER BY runs before LIMIT/OFFSET, so pages are globally count-sorted.
-      ...(shouldOrder && viewNode?.attributes.sort === "count"
-        ? { orderBy: [{ expression: termExpr(variable("n")), direction: "DESC" as const }] }
+      // With "Order results" on, every non-count query carries an ORDER BY. Count ordering is
+      // used when the active Group By facet requests it; otherwise order by the facet IRI so
+      // pages are deterministic. ORDER BY runs before LIMIT/OFFSET, so pages are globally sorted.
+      ...(shouldOrder
+        ? {
+            orderBy: viewNode?.attributes.sort === "count"
+              ? [{ expression: termExpr(variable("n")), direction: "DESC" as const }, { expression: { kind: "function", name: "STR", args: [termExpr(facet)] } as SparqlExpression, direction: "ASC" as const }]
+              : [{ expression: { kind: "function", name: "STR", args: [termExpr(facet)] } as SparqlExpression, direction: "ASC" as const }],
+          }
         : {}),
       limit,
       offset,
@@ -558,7 +568,7 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       { expression: termExpr(lat), as: variable("c1") },
       { expression: termExpr(long), as: variable("c2") },
       { expression: termExpr(target), as: variable("c3") },
-    ], where: geoWhere, limit, offset });
+    ], where: geoWhere, orderBy: shouldOrder ? [entityRankOrder(target)] : undefined, limit, offset });
   } else if (view === "describe") {
     const document = new SparqlQueryDocument({ kind: "describe", describe: target, directives, projections: [], where: scopedWhere, limit, offset });
     query = document.toString();
@@ -575,7 +585,7 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
       }
     }
     const orderByList: SparqlOrder[] | undefined = shouldOrder
-      ? (searchText ? [] : [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }])
+      ? (searchText ? [entityRankOrder(target)] : [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }])
       : undefined;
     query = buildSelectQuery({ directives, distinct: true, projections, where: scopedWhere, orderBy: orderByList, limit, offset });
   } else if (view === "list") {
@@ -605,7 +615,7 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
               : {}),
           }
         : shouldOrder
-          ? { orderBy: [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }] }
+          ? { orderBy: [entityRankOrder(target)] }
           : {}),
       limit,
       offset,

@@ -5,7 +5,6 @@ import { rememberNamespaceMetadata, rememberShortforms, toLabel } from "@/lib/ur
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
-import { buildFctGroupValuesSparql } from "@/lib/fct-results-sparql";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { ReactNode, Dispatch, SetStateAction } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -307,7 +306,16 @@ function parseFctResponse(xmlText: string): ParsedFctResponse {
     const third = columns[2];
     const isText = resultType === "text";
     const excerpt = isText ? (second?.value ?? "") : "";
-    const title = first.termType === "uri" ? (first.label || (second && !isText ? second.value : toLabel(first.value))) : (!isText && second ? second.value : first.value);
+    // A label column is any later column that is not a count. Count-sorted list
+    // views (Group By) put the integer COUNT in column 2 and the label, if any,
+    // after it; reading column 2 as the label made some titles show the count.
+    const isCountColumn = (column: FctResponseColumn) =>
+      column.attributes?.var === "ct" || column.attributes?.var === "n"
+      || /#(?:integer|int|long|short|nonNegativeInteger|positiveInteger|unsignedInt|unsignedLong)$/.test(column.datatype ?? "");
+    const labelColumn = isText ? undefined : columns.slice(1).find((column) => column.attributes?.var === "c2" || !isCountColumn(column));
+    const title = first.termType === "uri"
+      ? (first.label || labelColumn?.value || toLabel(first.value))
+      : (labelColumn?.value || first.value);
     const parsedScopeValues: ScopeValue[] = [];
     const scopeValueMap = new Map<string, ScopeValue>();
     for (const column of columns) {
@@ -983,16 +991,16 @@ function PersonalRoleWidget({
         const bound = (roleNode.children ?? []).find((child) => child.name === "value" && Boolean(child.text));
         const first = bound ? { uri: bound.text ?? "", termType: bound.attributes.datatype === "uri" ? "uri" as const : "literal" as const, title: bound.text ?? "" } : values[0];
         if (!first?.uri) return null;
-        return <button type="button" onClick={() => onFirstExampleClick(first.uri)} disabled={loading} className="mb-2 block max-w-full break-words px-2 text-left text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"><em>{bound ? "i.e." : "e.g."}</em> {first.termType === "uri" ? toLabel(first.uri, "Class") : first.title || first.uri}</button>;
+        return <button type="button" onClick={() => onFirstExampleClick(first.uri)} disabled={loading} className="mb-2 block max-w-full break-words px-2 text-left text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"><em>{bound ? "i.e." : "e.g."}</em> {ellipsize(first.termType === "uri" ? toLabel(first.uri, "Class") : first.title || first.uri)}</button>;
       })()}
-      <div className={`space-y-1 ${loading ? "opacity-45" : ""}`}>
+      <div className={`space-y-0 ${loading ? "opacity-45" : ""}`}>
         {pageValues.map((value, valueIndex) => {
           const binding = groupValueBinding(value);
           const valueKey = fctTermKey(binding.text, binding.datatype, binding.lang);
           const countQuery = distinctCountQueryFor(tree, "value", value.uri, uri, value);
           const isZeroCount = candidateCounts[countQuery] === 0;
           return (
-            <div key={`${value.uri}:${value.datatype ?? ""}:${value.lang ?? ""}`} className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 ${isGroupByRole ? "" : "cursor-pointer"}`}>
+            <div key={`${value.uri}:${value.datatype ?? ""}:${value.lang ?? ""}`} className={`flex w-full items-start gap-2 rounded-md px-2 py-1 text-sm hover:bg-accent/50 ${isGroupByRole ? "" : "cursor-pointer"}`}>
               <input id={`personal-role-value-${roleNode.id}-${valueIndex}`} type="checkbox" disabled={loading} checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`} />
               {isGroupByRole ? (
                 <Tooltip><TooltipTrigger render={<button type="button" onClick={() => onGroupValueClick(value)} className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`}>{value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}</button>} /><TooltipContent>{`Scroll to group ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`}</TooltipContent></Tooltip>
@@ -1174,6 +1182,12 @@ function replaceFacetAutofillCandidates(kind: "property" | "property-in", uris: 
 }
 
 const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+/** Cap example ("e.g.") text at a character limit so one long value cannot stretch a row or badge. */
+function ellipsize(text: string, limit = 40): string {
+  const characters = Array.from(text.replace(/\s+/g, " ").trim());
+  return characters.length > limit ? `${characters.slice(0, limit - 1).join("").trimEnd()}…` : characters.join("");
+}
 const GROUP_BY_FACET_HIGHLIGHT_CLASSES = "border-sky-300 bg-sky-100/80 dark:border-sky-800 dark:bg-sky-950/50";
 
 type ShareableUiState = {
@@ -1968,6 +1982,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const ActiveSignalIcon = signalOptions.find(({ mode }) => mode === textSearchMode)?.Icon ?? SignalHigh;
   const [rootSearchExpanded, setRootSearchExpanded] = useState(false);
   const rootSearchExpandedRef = useRef(rootSearchExpanded);
+  // Last record label seen for each root URI, so the root crumb label stays stable when the badge toggles to Classes.
+  const rootUriLabelCacheRef = useRef<Map<string, string>>(new Map());
   // Keep queued History work aware of the breadcrumb's current visibility,
   // including work enqueued just before the search field opened.
   rootSearchExpandedRef.current = rootSearchExpanded;
@@ -3131,12 +3147,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // Keep the index and cards in the same descending-count order.
   const pageGroupValues = groupValues.slice(groupUiPage * resultsPageSize, (groupUiPage + 1) * resultsPageSize);
   const visibleGroupValues = pageGroupValues.slice().sort((a, b) => {
-      const aKey = `${selectedGroupByOption?.key ?? ""}::${groupValueKey(a)}`;
-      const bKey = `${selectedGroupByOption?.key ?? ""}::${groupValueKey(b)}`;
-      const aMembers = groupMembers[aKey];
-      const bMembers = groupMembers[bKey];
-      const aCount = aMembers && !aMembers.loading && !aMembers.error ? (aMembers.count ?? aMembers.results.length) : -1;
-      const bCount = bMembers && !bMembers.loading && !bMembers.error ? (bMembers.count ?? bMembers.results.length) : -1;
+      // Order by the facet-equivalent count carried by each group heading.
+      const aCount = Number(a.columns?.[1]?.value ?? 0);
+      const bCount = Number(b.columns?.[1]?.value ?? 0);
       return bCount - aCount || (a.title || a.uri).localeCompare(b.title || b.uri);
     });
   const groupedPersonalFacetUri = selectedGroupByOption?.direction === "forward"
@@ -3805,37 +3818,22 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     setGroupValuesError("");
     (async () => {
       try {
-        const groupTreeBase = createGroupValuesQuery(queryTree, selectedGroupByOption);
-        const groupTree = setQueryViewAttributes(groupTreeBase, {
-          type: "list", limit: String(groupBatchSize), offset: String(groupBatchOffset),
+        // Same query the Personal facet runs for this property/role/category (count-sorted),
+        // so each group heading count equals the count shown in that facet.
+        const groupTree = createGroupValuesQuery(queryTree, selectedGroupByOption, {
+          limit: groupBatchSize, offset: groupBatchOffset,
         });
-        const groupSparql = buildFctGroupValuesSparql(groupTree);
-        if (!groupSparql) throw new Error("The selected Group By relationship could not be compiled to SPARQL.");
-        const response = await cachedFetchFct("/proxy/api/sparql", {
+        const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("group-values-sparql", "GroupsValues") },
-          body: JSON.stringify({ resultsQuery: { sparql: groupSparql } }),
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("group-values-fct", "GroupsValues") },
+          body: serializeFctQuery(groupTree),
           signal: controller.signal,
         });
-        const data = await response.json() as { head?: { vars?: string[] }; results?: { bindings?: Array<Record<string, { type?: string; value?: string; datatype?: string; "xml:lang"?: string }>> }; error?: string };
-        if (!response.ok) throw new Error(data.error ?? "The SPARQL endpoint could not load Group By values.");
+        const data = await readFctResponse(response);
+        rememberShortforms(data?.shortforms);
         if (!cancelled) {
-          const nextGroupValues: FctResult[] = (data.results?.bindings ?? []).flatMap((binding) => {
-            const value = binding.c1;
-            if (!value?.value) return [];
-            const count = binding.ct?.value ?? "0";
-            const termType: FctResult["termType"] = value.type === "uri" ? "uri" : value.type === "bnode" ? "bnode" : "literal";
-            const countColumn = { value: count, name: "ct", termType: "literal" as const, attributes: {}, raw: binding.ct ?? {} };
-            return [{
-              uri: value.value, title: value.value, label: value.value,
-              termType, datatype: value.datatype, lang: value["xml:lang"],
-              columns: [
-                { value: value.value, name: "c1", termType, datatype: value.datatype, lang: value["xml:lang"], attributes: {}, raw: value },
-                countColumn,
-              ],
-              matches: [],
-            }];
-          });
+          // Column 1 is the value, column 2 the facet's own distinct count (ct / n).
+          const nextGroupValues: FctResult[] = (Array.isArray(data.results) ? data.results : []).filter((item) => Boolean(item.uri) && (item.columns?.length ?? 0) >= 2);
           setGroupHasMoreBatches(nextGroupValues.length >= groupBatchSize);
           setGroupValues((current) => {
             if (groupBatchOffset === 0) return nextGroupValues;
@@ -5610,9 +5608,10 @@ useEffect(() => {
         throw new Error(payload.error ?? `HTTP ${response.status}`);
       }
 
-      // History is read from the personal SPARQL store, but opening the History
-      // or Bookmarks view must not change the graph server selected in the toolbar.
-      // The query's addr routes its requests to the personal endpoint independently.
+      // History and Bookmarks live in the personal SPARQL store, so opening either
+      // view selects the personal graph server in the toolbar (and the proxy cookie).
+      // The addr-sync effect rewrites the query's addr from the selected server, so
+      // leaving the previous server selected would silently redirect this query.
       const normalizeEndpointUrl = (value: string) => {
         const url = new URL(value);
         url.hash = "";
@@ -5633,6 +5632,8 @@ useEffect(() => {
       // the same restore path used by URL state. That path updates the live
       // query store through its API, notifying the query tree, breadcrumbs,
       // facets, results, and URL-state listeners together.
+      // Health-checks the personal server, selects it, and throws if it is offline.
+      await synchronizeFctEndpointSelection(personalEndpoint.id);
       const baseHistoryGraph = payload.historyGraph.replace(/#.*$/, "");
       const graphIri = `${baseHistoryGraph}#${includeFavorites ? "bookmarks" : "history"}`;
       const addrAttr = `${graphIri}@${personalEndpoint.id}`;
@@ -5654,13 +5655,7 @@ useEffect(() => {
             id: "favorites-hash-property",
             name: "property",
             attributes: { iri: "https://schema.org/identifier" },
-            children: [{
-              id: "favorites-hash-prefix",
-              name: "value",
-              attributes: { op: "starts-with" },
-              text: "sha256:",
-              children: [],
-            }],
+            children: [],
           }] : []),
           { id: "query-view", name: "view", attributes: { type: "text", limit: "30", offset: "0" }, children: [] },
         ],
@@ -6518,7 +6513,7 @@ useEffect(() => {
                           </button>
                         </div>
                       )}
-                      <div className="space-y-1">
+                      <div className="space-y-0">
                         {pageValues.map((value, valueIndex) => {
                           const countQuery = distinctCountQueryFor(queryTree, "value", value.uri, widget.uri, value);
                           const isZeroCount = facetCandidateCounts[countQuery] === 0;
@@ -6528,7 +6523,7 @@ useEffect(() => {
                           <div
                             key={`${facetValueKey(value)}-${valueIndex}`}
                             aria-disabled={widget.loading || undefined}
-                            className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 ${isGroupByFacet ? "" : "cursor-pointer"} ${widget.loading ? "opacity-45" : ""}`}
+                            className={`flex w-full items-start gap-2 rounded-md px-2 py-1 text-sm hover:bg-accent/50 ${isGroupByFacet ? "" : "cursor-pointer"} ${widget.loading ? "opacity-45" : ""}`}
                           >
                             <input
                               id={valueInputId}
@@ -6640,6 +6635,23 @@ useEffect(() => {
       attachToViewCarrier(queryTree.children);
     }
   }
+
+  // Root crumb text. In URI mode (signal-none) the readonly crumb shows the URI's label while the
+  // search field keeps the URI itself. Possessive "’s" marks a node that has a successor crumb; the
+  // root takes it only for the URI (signal-none) and Name (signal-low) signals.
+  const rootSearchText = search.trim();
+  const rootSummaryForLabel = breadcrumbPreviewSummaries["query-root"];
+  if (textSearchMode === "uri" && rootSearchText && rootSummaryForLabel && !rootSummaryForLabel.zeroClasses
+    && rootSummaryForLabel.uri === rootSearchText && rootSummaryForLabel.label && rootSummaryForLabel.label !== "—") {
+    rootUriLabelCacheRef.current.set(rootSearchText, rootSummaryForLabel.label);
+  }
+  const rootUriLabel = textSearchMode === "uri" && rootSearchText
+    ? (rootUriLabelCacheRef.current.get(rootSearchText) ?? toLabel(rootSearchText))
+    : "";
+  const rootPossessiveEligible = (textSearchMode === "uri" || textSearchMode === "name") && tutorialBreadcrumbPath.length > 0;
+  const rootLabelPossessive = rootPossessiveEligible && rootSearchText ? "’s" : "";
+  const rootBadgeLabelOk = Boolean(rootSummaryForLabel && !rootSummaryForLabel.zeroClasses && rootSummaryForLabel.label && rootSummaryForLabel.label !== "—");
+  const rootBadgePossessive = rootPossessiveEligible && rootBadgeLabelOk ? "’s" : "";
 
   const searchInputGroup = (
                   <ButtonGroup
@@ -7722,9 +7734,9 @@ useEffect(() => {
                         ? `${shortenCount(graphsiteSubjectCount)} Records`
                         : "Everything")
                     : textSearchMode === "uri"
-                      ? search
-                      : `"${search}"`}
-              </button>} /><TooltipContent>{`Return to the top-level query view${classBreadcrumbLabels(null).length ? ` · Classes: ${classBreadcrumbLabels(null).join(", ")}` : ""}`}</TooltipContent></Tooltip>
+                      ? `${rootUriLabel}${rootLabelPossessive}`
+                      : `"${search}"${rootLabelPossessive}`}
+              </button>} /><TooltipContent>{`Return to the top-level query view${textSearchMode === "uri" && rootSearchText ? ` · ${rootSearchText}` : ""}${classBreadcrumbLabels(null).length ? ` · Classes: ${classBreadcrumbLabels(null).join(", ")}` : ""}`}</TooltipContent></Tooltip>
             )}
             {!rootSearchExpanded && queryTree.children.some((node) => node.name === "class") && (
               <Tooltip><TooltipTrigger render={<button
@@ -7760,8 +7772,8 @@ useEffect(() => {
                 >
                   <span className="max-w-32 truncate">
   <em>
-  {rootUriValues.length > 0 || textSearchMode === "name" ? "i.e." : "e.g."}{" "}
-  {breadcrumbPreviewSummaries["query-root"].label || "—"}
+  {rootUriValues.length > 0 ? "i.e." : "e.g."}{" "}
+  {ellipsize(breadcrumbPreviewSummaries["query-root"].label || "—", 28)}{rootBadgePossessive}
 </em>
 </span>
                   <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
@@ -7791,6 +7803,9 @@ useEffect(() => {
           const breadcrumbSiblings = getBreadcrumbSiblings(crumb.id);
           const breadcrumbBoundValues = boundValueNodes(breadcrumbNode);
           const topBoundValue = breadcrumbBoundValues[breadcrumbBoundValues.length - 1];
+          // A crumb followed by another displayed crumb is possessive ("Alice’s friend’s name"): its
+          // badge example takes "’s", and so does its label unless it is a role (property-of) crumb.
+          const breadcrumbHasSuccessor = index < tutorialBreadcrumbPath.length - 1;
           return (
             <span key={crumb.id} className="relative flex max-w-full items-center gap-1">
               <span className="flex size-3.5 shrink-0 items-center justify-center">
@@ -7820,7 +7835,7 @@ useEffect(() => {
                       >
                         <span className="max-w-32 truncate">
   <em>
-  {breadcrumbBoundValues.length > 0 ? "i.e." : "e.g."} {summary.label || "—"}
+  {breadcrumbBoundValues.length > 0 ? "i.e." : "e.g."} {ellipsize(summary.label || "—", 28)}{breadcrumbHasSuccessor && !summary.zeroClasses && summary.label && summary.label !== "—" ? "’s" : ""}
 </em>
 </span>
                         <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
@@ -7871,6 +7886,7 @@ useEffect(() => {
   <span>{boundValueLabel(value)}</span>
 </span>
                   ))}
+                  {breadcrumbHasSuccessor && !breadcrumbIsRole ? "’s" : ""}
                 </button>} /><TooltipContent>{`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}</TooltipContent></Tooltip>
                 <Tooltip><TooltipTrigger render={<button
                   type="button"
@@ -7905,7 +7921,7 @@ useEffect(() => {
                         <DropdownMenuLabel className="font-normal text-xs text-muted-foreground border-b pb-1.5 mb-1">
                           <span className="flex items-center justify-between gap-2">
                             <span className="truncate max-w-40 font-medium text-foreground">
-                              <><em>e.g.</em> {summary?.label || breadcrumbBaseLabel}</>
+                              <><em>e.g.</em> {ellipsize(summary?.label || breadcrumbBaseLabel, 32)}</>
                             </span>
                             <span className="shrink-0 tabular-nums">
                               {summary?.count !== undefined && summary?.count !== null ? summary.count : "…"}
@@ -8189,7 +8205,7 @@ useEffect(() => {
                             selectedItems.length > 0 && (
                               <div className={`mb-2 rounded-md border border-border/70 bg-background/80 p-2 ${facetListStale ? "opacity-45" : ""}`} aria-disabled={facetListStale || undefined}>
                                 <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">Selected</div>
-                                <div className="space-y-1">
+                                <div className="space-y-0">
                                   {selectedItems.map((item) => (
                                     <div
                                       key={item.key}
@@ -8250,7 +8266,7 @@ useEffect(() => {
                                           )}
                                         </button>} /><TooltipContent>{`Filter by role ${item.label}`}</TooltipContent></Tooltip>
                                       )}
-                                      {item.example && <button type="button" disabled={facetListStale || item.example.termType !== "uri"} onClick={() => showClassResults(item.example!.uri, activeLeafId)} className="block break-words text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>{(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) ? "i.e." : "e.g."}</em> {item.example.label}</button>}
+                                      {item.example && <button type="button" title={item.example.label} disabled={facetListStale || item.example.termType !== "uri"} onClick={() => showClassResults(item.example!.uri, activeLeafId)} className="block break-words text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>{(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) ? "i.e." : "e.g."}</em> {ellipsize(item.example.label)}</button>}
 									  </div>
                                       <DistinctCount
                                         tree={queryTree}
@@ -8302,7 +8318,7 @@ useEffect(() => {
                               </div>
                             )}
 
-                          <div className="space-y-1">
+                          <div className="space-y-0">
                             {pageItems.map((item) => {
                               const itemExample = exampleForFacetItem(item.key, item.example);
                               const countKind: DistinctCountKind | null =
@@ -8425,7 +8441,7 @@ onMouseLeave={() => {
                                 ) : (
                                   <span className="min-w-0 flex-1 break-all">{item.label}</span>
                                 )}
-                                {(group === "Properties" || group === "Roles") && itemExample && <button type="button" disabled={facetListStale || itemExample.termType !== "uri"} onClick={() => showClassResults(itemExample.uri, activeLeafId)} className="w-full max-w-full break-words text-left text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>{(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) ? "i.e." : "e.g."}</em> {itemExample.label}</button>}
+                                {(group === "Properties" || group === "Roles") && itemExample && <button type="button" title={itemExample.label} disabled={facetListStale || itemExample.termType !== "uri"} onClick={() => showClassResults(itemExample.uri, activeLeafId)} className="w-full max-w-full break-words text-left text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>{(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) ? "i.e." : "e.g."}</em> {ellipsize(itemExample.label)}</button>}
 								</div>
                                 {(group === "Properties" ||
                                   group === "Roles") && (
@@ -8509,12 +8525,12 @@ onMouseLeave={() => {
                           {selectedClassDisplayFacets.length > 0 && (
                             <div className="mt-2 mb-2 rounded-md border border-border/70 bg-background/80 p-2">
                               <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">Selected</div>
-                              <div className="space-y-1">
+                              <div className="space-y-0">
                                 {selectedClassDisplayFacets.map((item) => {
                                   const countQuery = distinctCountQueryFor(queryTree, "class", item.uri);
                                   const count = classCandidateCounts[countQuery] ?? null;
                                   return (
-                                    <div key={item.uri} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm">
+                                    <div key={item.uri} className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-sm">
                                       <input
                                         type="checkbox"
                                         checked
@@ -8581,14 +8597,14 @@ onMouseLeave={() => {
                           )}
                           <div className="space-y-2">
                             {categoriesTreeMode ? (
-                              <div className="space-y-1">
+                              <div className="space-y-0">
                                   {(() => {
                                     const renderTreeNode = (node: CategoryTreeNode, depth: number): ReactNode => {
                                       const item = node.item;
                                       const countQuery = distinctCountQueryFor(queryTree, "class", item.uri);
                                       const isZeroCount = classCandidateCounts[countQuery] === 0;
                                       return <div key={item.uri} className="min-w-0">
-                                        <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50" style={{ paddingLeft: `${8 + depth * 14}px` }}>
+                                        <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-accent/50" style={{ paddingLeft: `${8 + depth * 14}px` }}>
                                           {node.children.length > 0 ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" /> : <span className="size-3.5 shrink-0" aria-hidden="true" />}
                                           <input type="checkbox" checked={selectedClasses.has(item.uri)} onChange={(event) => toggleClass(item.uri, event.target.checked)} aria-label={`Filter by class ${toLabel(item.uri, "Class")}`} className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} />
                                           <Tooltip><TooltipTrigger render={<button type="button" className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`} onClick={() => { if (isGroupByCategory) scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri, "Class"), matches: [], termType: "uri" }); else { if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true); showClassResults(item.uri, activeLeafId); } }}>{toLabel(item.uri, "Class")}</button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri, "Class")}` : `Show results for class ${toLabel(item.uri, "Class")}`}</TooltipContent></Tooltip>
@@ -8604,7 +8620,7 @@ onMouseLeave={() => {
                                 const countQuery = distinctCountQueryFor(queryTree, "class", item.uri);
                                 const isZeroCount = classCandidateCounts[countQuery] === 0;
                                 return (
-                                <div key={item.uri} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50">
+                                <div key={item.uri} className="flex items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-accent/50">
                                   <input
                                     type="checkbox"
                                     checked={selectedClasses.has(item.uri)}
@@ -8797,9 +8813,9 @@ onMouseLeave={() => {
                               <button type="button" className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setGraphsPage((page) => page + 1)} disabled={!graphHasMore || isLoadingGraphs}>Next</button>
                             </div>
                           )}
-                          <div className="space-y-1">
+                          <div className="space-y-0">
                             {graphFacets.map((item) => (
-                              <label key={item.uri} className="flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 cursor-pointer">
+                              <label key={item.uri} className="flex min-w-0 items-start gap-2 rounded-md px-2 py-1 text-sm hover:bg-accent/50 cursor-pointer">
                                 <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri} onChange={() => bindGraph(item.uri)} aria-label={`Bind graphsite ${item.label}`} className="mt-0.5 size-4 shrink-0 accent-current" />
                                 <span className="min-w-0 flex-1">
                                   <span className="block break-words">{item.label}</span>
@@ -8975,9 +8991,22 @@ onMouseLeave={() => {
                           <span className="mt-1 block break-all text-xs text-muted-foreground">
                             {item.uri}
                           </span>
-                          {(item.scopeValues?.length ?? 0) > 0 && (
+                          {showResultBadges && (() => {
+                            // Permanent type slot: always the same place on the card, filled from rdf:type.
+                            const typeValues = item.scopeValues?.find((scopeValue) => scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward")?.values ?? [];
+                            return (
+                              <span className="mt-1 flex min-h-5 flex-wrap items-center gap-1" aria-label="Types">
+                                {typeValues.length > 0 ? typeValues.map((term, typeIndex) => (
+                                  <span key={`${term.value}:${typeIndex}`} title={term.value} className="inline-flex max-w-full items-center rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-foreground">
+                                    <span className="max-w-[240px] truncate">{term.type === "uri" || /^https?:\/\//i.test(term.value) ? toLabel(term.value, "Class") : term.value}</span>
+                                  </span>
+                                )) : <span className="text-[11px] italic text-muted-foreground/70">no type</span>}
+                              </span>
+                            );
+                          })()}
+                          {(item.scopeValues?.some((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward")) ?? false) && (
                             <span className="mt-2 flex flex-wrap gap-1.5" aria-label="Selected property values">
-                              {item.scopeValues!.map((scopeValue) => scopeValue.values.map((term, termIndex) => {
+                              {item.scopeValues!.filter((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward")).map((scopeValue) => scopeValue.values.map((term, termIndex) => {
                                 const propertyLabel = toLabel(scopeValue.property);
                                 const visiblePropertyLabel = scopeValue.direction === "reverse" ? `${propertyLabel} of` : propertyLabel;
                                 const displayValue = term.type === "uri" ? toLabel(term.value) : term.value;
@@ -9215,7 +9244,13 @@ onMouseLeave={() => {
                       <TooltipTrigger render={
                         <Toggle
                           pressed={showResultBadges}
-                          onPressedChange={setShowResultBadges}
+                          onPressedChange={(pressed) => {
+                            setShowResultBadges(pressed);
+                            // Badges start with the record's types, so make sure rdf:type is in the query.
+                            if (pressed && !activeViewPropertyFilters.some((node) => node.attributes.iri === RDF_TYPE_URI)) {
+                              handlePropertyCheckboxChange(RDF_TYPE_URI, true, false);
+                            }
+                          }}
                           className="size-9 shrink-0 border-0 p-0 text-sm data-[state=on]:bg-black data-[state=on]:text-white dark:data-[state=on]:bg-black dark:data-[state=on]:text-white"
                           aria-label={showResultBadges ? "Badges On" : "Badges Off"}
                         >

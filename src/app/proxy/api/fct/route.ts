@@ -223,7 +223,7 @@ function fctResponseXml(args: {
     return `<fct:row>${vars.map((name) => {
       const badgeInfo = badgeMap.get(name);
       const extraAttrs = badgeInfo ? { property: badgeInfo.property, direction: badgeInfo.direction } : undefined;
-      return fctColumn(binding[name], labelFor(binding[name]), extraAttrs);
+      return fctColumn(binding[name], labelFor(binding[name]), { ...(extraAttrs ?? {}), var: name });
     }).join("")}</fct:row>`;
   }).join("");
   return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${complete ? "yes" : "no"}</fct:complete><fct:timeout>${args.timeoutMs ?? 0}</fct:timeout><fct:db-activity/><fct:processed>${bindings.length}</fct:processed><fct:view offset="${offset}" limit="${limit}"/><fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;

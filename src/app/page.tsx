@@ -30,7 +30,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Ban, Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, Eye, EyeOff } from "lucide-react";
+import { Ban, Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, Eye, EyeOff, Info } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, buildAuthHeader, graphSiteForPrefix } from "@/lib/personal-auth";
 import { cachedFetchFct, clearClientQueryCache } from "@/lib/client-query-cache";
@@ -98,6 +98,9 @@ const DEFAULT_RESULTS_PAGE_SIZE = 30;
 const RESULTS_PAGE_SIZE_STORAGE_KEY = "maestro-results-page-size";
 const RESULTS_PAGE_SIZE_OPTIONS = [10, 20, 30, 50] as const;
 const RESULTS_BATCH_SIZE_OPTIONS = [30, 100, 250, 500, 1000] as const;
+/** LIMIT applied to every left-panel widget: Categories, Personal facets, Graphsites, and Configure Properties/Roles. */
+const LEFT_PANEL_LIMIT_STORAGE_KEY = "maestro-left-panel-limit";
+const DEFAULT_LEFT_PANEL_LIMIT = 100;
 const RDFS_LABEL_URI = "http://www.w3.org/2000/01/rdf-schema#label";
 
 /** Common RDF vocabulary properties used as human-readable names or labels. */
@@ -765,15 +768,17 @@ function treeHasPropertyFilter(
 function PersonalWidgetQueryListener({
   propertyUri,
   sortByCount,
+  limit,
   setPersonalWidgets,
 }: {
   propertyUri: string;
   sortByCount: boolean;
+  limit: number;
   setPersonalWidgets: Dispatch<SetStateAction<PersonalWidget[]>>;
 }) {
   const { tree } = useFctQuery();
   const widgetTree = createPropertyWidgetQuery(tree, propertyUri, "forward", undefined, true);
-  const widgetQueryXml = serializeFctQuery(setQueryViewAttributes(widgetTree, sortByCount ? { sort: "count" } : { sort: "" }));
+  const widgetQueryXml = serializeFctQuery(setQueryViewAttributes(widgetTree, { sort: sortByCount ? "count" : "", limit: String(limit) }));
 
   useEffect(() => {
     // Reconcile every mounted widget against the active <view> scope. A widget
@@ -1352,6 +1357,14 @@ export default function Home() {
   const [bookmarkCheckRevision, setBookmarkCheckRevision] = useState(0);
   const [historyBookmarkId, setHistoryBookmarkId] = useState("");
   const [authSession, setAuthSession] = useState<PersonalAuthSession | null>(null);
+  // Graphsite info card (opened from the info icon in the graphsite input group).
+  const [graphInfoOpen, setGraphInfoOpen] = useState(false);
+  const [graphInfo, setGraphInfo] = useState<{
+    graphsite: string;
+    subjectCount: number | null; subjectCountLoading: boolean; subjectCountError: string;
+    access: boolean | null; accessLoading: boolean; accessError: string;
+  }>({ graphsite: "", subjectCount: null, subjectCountLoading: false, subjectCountError: "", access: null, accessLoading: false, accessError: "" });
+  const graphInfoRequestRef = useRef(0);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [endpointReloadRevision, setEndpointReloadRevision] = useState(0);
   const [loginTab, setLoginTab] = useState<AuthType>("sparql-auth");
@@ -2689,6 +2702,23 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     }
   }, []);
 
+  const [leftPanelLimit, setLeftPanelLimitState] = useState<number>(DEFAULT_LEFT_PANEL_LIMIT);
+  useEffect(() => {
+    try {
+      const stored = Number(window.localStorage.getItem(LEFT_PANEL_LIMIT_STORAGE_KEY));
+      const valid = RESULTS_BATCH_SIZE_OPTIONS.find((size) => size === stored);
+      if (valid !== undefined) setLeftPanelLimitState(valid);
+    } catch {
+      // Storage can be disabled by browser privacy settings; the default limit still applies.
+    }
+  }, []);
+  const setLeftPanelLimit = useCallback((size: number) => {
+    if (!RESULTS_BATCH_SIZE_OPTIONS.some((option) => option === size)) return;
+    setLeftPanelLimitState(size);
+    setGraphsPage(0);
+    try { window.localStorage.setItem(LEFT_PANEL_LIMIT_STORAGE_KEY, String(size)); } catch { /* non-fatal */ }
+  }, []);
+
   const queryXml = serializeFctQuery(queryTree);
 
   // Load vocabulary namespace labels from the app's LOD metadata route. Known
@@ -3200,10 +3230,11 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       setQueryViewAttributes(queryTree, {
         ...(viewType ? { type: viewType } : {}),
         sort: sortByCount ? "count" : "",
+        limit: String(leftPanelLimit),
         offset: "0",
       }),
     ),
-  [queryTree],
+  [queryTree, leftPanelLimit],
 );
   // Snapshot the semantic facet requests. Effects depend on their serialized XML,
   // not queryWithoutPagingXml's callback identity (which changes on every tree edit).
@@ -4092,7 +4123,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     setGraphListSparql("");
     async function loadGraphPage() {
       try {
-        const limit = FACET_PAGE_SIZE;
+        const limit = leftPanelLimit;
         const offset = graphsPage * limit;
         const graphQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
           type: "graphs", sort: graphSort, limit: String(limit), offset: String(offset),
@@ -4142,7 +4173,7 @@ setGraphFacets(graphs);
     }
     void loadGraphPage();
     return () => { cancelled = true; controller.abort(); };
-  }, [graphsPage, graphSort, queryWithoutPagingXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [graphsPage, graphSort, leftPanelLimit, queryWithoutPagingXml, selectedEndpointId, endpointReadyForQuery]);
 
 
   // Defensively merge duplicate resource rows by URI. The API normally groups
@@ -5792,6 +5823,50 @@ useEffect(() => {
     setGraphNavigationIndex(next.length - 1);
   }
 
+  async function openGraphsiteInfo() {
+    const graphsite = graphText.trim();
+    const requestId = ++graphInfoRequestRef.current;
+    const isCurrent = () => graphInfoRequestRef.current === requestId;
+    setGraphInfoOpen(true);
+    const validIri = /^https?:\/\/[^\s<>"{}|\\^`]+$/i.test(graphsite);
+    if (!validIri) {
+      setGraphInfo({ graphsite, subjectCount: null, subjectCountLoading: false, subjectCountError: graphsite ? "Not a valid graphsite IRI." : "Enter a graphsite URI first.", access: null, accessLoading: false, accessError: "" });
+      return;
+    }
+    setGraphInfo({ graphsite, subjectCount: null, subjectCountLoading: true, subjectCountError: "", access: null, accessLoading: true, accessError: "" });
+
+    const loadCount = async () => {
+      try {
+        const sparql = `SELECT (COUNT(DISTINCT ?s) AS ?ct) WHERE { GRAPH <${graphsite}> { ?s ?p ?o } }`;
+        const response = await fetch("/proxy/api/sparql", {
+          method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graphsite-info-count", "GraphsiteInfo:count") },
+          body: JSON.stringify({ facetValueCount: { sparql } }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || typeof data.count !== "number") throw new Error(data.error ?? `Subject count failed (HTTP ${response.status}).`);
+        if (isCurrent()) setGraphInfo((current) => ({ ...current, subjectCount: data.count, subjectCountLoading: false }));
+      } catch (error) {
+        if (isCurrent()) setGraphInfo((current) => ({ ...current, subjectCountLoading: false, subjectCountError: facetLoadErrorMessage(error, "Subject count failed.") }));
+      }
+    };
+    const loadAccess = async () => {
+      try {
+        const response = await fetch("/proxy/api/graphsite-access", {
+          method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graphsite-info-access", "GraphsiteInfo:access") },
+          body: JSON.stringify({ graphsite }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (typeof data.access !== "boolean") throw new Error(data.error ?? `Access test failed (HTTP ${response.status}).`);
+        if (isCurrent()) setGraphInfo((current) => ({ ...current, access: data.access, accessLoading: false, accessError: data.access ? "" : String(data.error ?? "") }));
+      } catch (error) {
+        if (isCurrent()) setGraphInfo((current) => ({ ...current, access: false, accessLoading: false, accessError: facetLoadErrorMessage(error, "Access test failed.") }));
+      }
+    };
+    await Promise.all([loadCount(), loadAccess()]);
+  }
+
   function applyGraphText() {
     const graph = graphText.trim();
     recordGraphNavigation(graph);
@@ -5928,21 +6003,6 @@ useEffect(() => {
 
   }
 
-  /** The crumb's parent-level relationship nodes in query order, INCLUDING the crumb itself, so the dropdown mirrors the tree. */
-  function getBreadcrumbPeers(targetId: string): FctQueryNode[] {
-    const isRelationship = (node: FctQueryNode) => node.name === "property" || node.name === "property-of";
-    const findScope = (nodes: FctQueryNode[]): FctQueryNode[] | null => {
-      if (nodes.some((node) => node.id === targetId)) return nodes;
-      for (const node of nodes) {
-        const found = findScope(node.children);
-        if (found) return found;
-      }
-      return null;
-    };
-    const scope = findScope(queryTree.children) ?? [];
-    return scope.filter((node, index, all) => isRelationship(node) && all.findIndex((candidate) => candidate.id === node.id) === index);
-  }
-
   function breadcrumbSiblingLabel(node: FctQueryNode): string {
     const iri = node.attributes.iri ?? node.attributes.property ?? node.attributes.role;
     const baseLabel = (iri ? toLabel(iri) : queryNodeLabel(node)) +
@@ -6029,7 +6089,6 @@ useEffect(() => {
   function renderBreadcrumbNodeMenuItem(
     node: FctQueryNode,
     onSelectNode: (nodeId: string) => void,
-    currentNodeId?: string,
   ): ReactNode {
     const childRelationshipNodes = (node.children ?? []).filter(
       (c) => c.name === "property" || c.name === "property-of"
@@ -6039,15 +6098,13 @@ useEffect(() => {
     const directionSuffix = (node.name === "property-of" || node.id.startsWith("role-filter-")) ? " of" : "";
     const baseLabel = toLabel(iri, directionSuffix ? "Role" : "Property") + directionSuffix;
     const isExcluded = node.attributes?.exclude?.trim().toLowerCase() === "yes";
-    const isCurrent = node.id === currentNodeId;
     const boundValues = boundValueNodes(node);
     const summary = breadcrumbPreviewSummaries[node.id] ?? node.uiResultSummary;
 
     const nodeContent = (
       <span className="flex items-center gap-1.5 flex-1 min-w-0">
-        {isCurrent && <Check className="size-3.5 shrink-0" aria-label="Current" />}
         {isExcluded && <CircleSlash className="size-3.5 shrink-0 text-destructive" aria-label="Excluded" />}
-        <span className={`truncate ${isCurrent ? "font-medium" : ""}`}>{baseLabel}</span>
+        <span className="truncate">{baseLabel}</span>
         {boundValues.map((v) => (
           <span key={v.id} className="ml-1 inline-flex items-baseline gap-0.5 text-xs text-muted-foreground">
             <Equal className="size-3 shrink-0" aria-label="equals" />
@@ -6070,7 +6127,7 @@ useEffect(() => {
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
             {renderBreadcrumbMenuHeader(baseLabel, summary, `Move view to ${baseLabel}`, () => onSelectNode(node.id), boundValues.length > 0)}
-            {childRelationshipNodes.map((child) => renderBreadcrumbNodeMenuItem(child, onSelectNode, currentNodeId))}
+            {childRelationshipNodes.map((child) => renderBreadcrumbNodeMenuItem(child, onSelectNode))}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
       );
@@ -6845,6 +6902,7 @@ useEffect(() => {
           key={widget.uri}
           propertyUri={widget.uri}
           sortByCount={centralTab === "groups" && groupByPropertyUri === `forward:${widget.uri}`}
+          limit={leftPanelLimit}
           setPersonalWidgets={setPersonalWidgets}
         />
       ))}
@@ -6860,6 +6918,12 @@ useEffect(() => {
           {/* One address: [graphsite]@[graph server], with no gap around the at-sign. */}
           <div className="flex min-w-0 flex-1 items-center">
             <div className="group/graphsite-input flex min-w-0 max-w-3xl flex-1 items-stretch overflow-hidden rounded-md border border-input bg-background">
+              <Tooltip><TooltipTrigger render={<button
+                type="button"
+                onClick={() => void openGraphsiteInfo()}
+                aria-label="Graphsite info"
+                className="inline-flex shrink-0 items-center justify-center px-2.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              ><Info aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Graphsite info"}</TooltipContent></Tooltip>
               <input
                 id="maestro-graph-input"
                 value={graphText}
@@ -6882,6 +6946,38 @@ useEffect(() => {
                 className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-hover/graphsite-input:max-w-10 group-hover/graphsite-input:px-2.5 group-hover/graphsite-input:opacity-100 group-focus-within/graphsite-input:max-w-10 group-focus-within/graphsite-input:px-2.5 group-focus-within/graphsite-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
               ><CirclePlay aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Go"}</TooltipContent></Tooltip>
             </div>
+            <Dialog open={graphInfoOpen} onOpenChange={setGraphInfoOpen}>
+              <DialogContent className="max-w-md p-5">
+                <DialogHeader>
+                  <DialogTitle>Graphsite info</DialogTitle>
+                  <DialogDescription className="break-all font-mono text-xs">{graphInfo.graphsite || "No graphsite URI entered"}</DialogDescription>
+                </DialogHeader>
+                <dl className="mt-3 flex flex-col gap-2 text-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="text-muted-foreground">Subjects: </dt>
+                    <dd className="text-right tabular-nums">
+                      {graphInfo.subjectCountLoading ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading" />
+                        : graphInfo.subjectCountError ? <span role="alert" className="break-words text-xs text-destructive">{graphInfo.subjectCountError}</span>
+                        : graphInfo.subjectCount !== null ? graphInfo.subjectCount.toLocaleString() : "—"}
+                    </dd>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="text-muted-foreground">Graph server(s): </dt>
+                    <dd className="text-right tabular-nums">1</dd>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="text-muted-foreground">{authSession?.userName ? `${authSession.userName}’s Access: ` : "Access: "}</dt>
+                    <dd className="text-right">
+                      {graphInfo.accessLoading ? <LoaderCircle className="size-4 animate-spin" aria-label="Testing write access" />
+                        : graphInfo.access === null ? "—"
+                        : <span className="font-mono">{String(graphInfo.access)}</span>}
+                      {!graphInfo.accessLoading && graphInfo.accessError ? <span role="alert" className="mt-1 block break-words text-xs text-destructive">{graphInfo.accessError}</span> : null}
+                    </dd>
+                  </div>
+                </dl>
+                <p className="mt-2 text-xs text-muted-foreground">Access is true when a test triple of ephemeral URIs could be inserted into, then deleted from, this graph.</p>
+              </DialogContent>
+            </Dialog>
             <Label htmlFor="fct-endpoint" aria-label="Graph server" className="shrink-0 px-2 text-muted-foreground">
               <AtSign aria-hidden="true" className="size-4" />
             </Label>
@@ -7581,6 +7677,21 @@ useEffect(() => {
               </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
+                  <Label htmlFor="left-panel-limit">Left panel limit</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">LIMIT for Categories, Personal facets, Graphsites, and the Properties and Roles configure lists.</p>
+                </div>
+                <select
+                  id="left-panel-limit"
+                  aria-label="Left panel widget limit"
+                  value={leftPanelLimit}
+                  onChange={(event) => setLeftPanelLimit(Number(event.currentTarget.value))}
+                  className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
+                >
+                  {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                <div className="min-w-0">
                   <Label htmlFor="fct-query-same-as">Aliases</Label>
                   <p className="mt-1 text-xs text-muted-foreground">Include owl:sameAs relationships.</p>
                 </div>
@@ -7848,7 +7959,6 @@ useEffect(() => {
           const breadcrumbExcluded = breadcrumbNode?.attributes.exclude?.trim().toLowerCase() === "yes";
           const breadcrumbLabel = breadcrumbExcluded ? `Excluded: ${breadcrumbBaseLabel}` : breadcrumbBaseLabel;
           const breadcrumbSiblings = getBreadcrumbSiblings(crumb.id);
-          const breadcrumbPeers = getBreadcrumbPeers(crumb.id);
           const breadcrumbBoundValues = boundValueNodes(breadcrumbNode);
           const topBoundValue = breadcrumbBoundValues[breadcrumbBoundValues.length - 1];
           // A crumb followed by another displayed crumb is possessive ("Alice’s friend’s name"): its
@@ -7950,8 +8060,7 @@ useEffect(() => {
                     : "Pop this relationship and its descendants; preserve a sibling when available"}</TooltipContent></Tooltip>
                 {(() => {
 					 const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
-                  const hasChildren = Boolean(breadcrumbNode?.children?.some((n) => n.name === "property" || n.name === "property-of"));
-                  const hasMenu = breadcrumbSiblings.length > 0 || hasChildren;
+                  const hasMenu = breadcrumbSiblings.length > 0;
                   if (!hasMenu) return null;
                   return (
                     <DropdownMenu open={openBreadcrumbDropdownId === crumb.id} onOpenChange={(open) => setOpenBreadcrumbDropdownId(open ? crumb.id : null)}>
@@ -7967,12 +8076,12 @@ useEffect(() => {
                       </Tooltip>
                       <DropdownMenuContent align="end" className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
                         {renderBreadcrumbMenuHeader(breadcrumbBaseLabel, summary, `Move view to ${breadcrumbBaseLabel}`, () => { clearTutorialPreview(); navigateToPropertyPath(crumb.id); }, breadcrumbBoundValues.length > 0)}
-                        {/* Mirror the query tree: this crumb and its siblings sit at the first level, and each one that has child relationships opens a submenu of those children, recursively. */}
-                        {breadcrumbPeers.map((peer) =>
-                          renderBreadcrumbNodeMenuItem(peer, (targetId) => {
+                        {/* Siblings only: the crumb itself is not listed. A sibling with child relationships opens a submenu (headed by its own clickable e.g./i.e. label) of those children, recursively. */}
+                        {breadcrumbSiblings.map((sibling) =>
+                          renderBreadcrumbNodeMenuItem(sibling, (targetId) => {
                             clearTutorialPreview();
                             navigateToPropertyPath(targetId);
-                          }, crumb.id)
+                          })
                         )}
                       </DropdownMenuContent>
                     </DropdownMenu>

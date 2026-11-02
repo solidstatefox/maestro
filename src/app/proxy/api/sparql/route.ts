@@ -277,13 +277,13 @@ export async function POST(request: Request) {
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
         return NextResponse.json(
-          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}.`, details: responseText.slice(0, 2000) },
+          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
           { status: 502 },
         );
       }
       if (!contentType.toLowerCase().includes("json")) {
         return NextResponse.json(
-          { error: "Virtuoso SPARQL endpoint did not return JSON results.", details: responseText.slice(0, 2000) },
+          { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
           { status: 502 },
         );
       }
@@ -319,13 +319,13 @@ export async function POST(request: Request) {
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
         return NextResponse.json(
-          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}.`, details: responseText.slice(0, 2000) },
+          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
           { status: 502 },
         );
       }
       if (!contentType.toLowerCase().includes("json")) {
         return NextResponse.json(
-          { error: "Virtuoso SPARQL endpoint did not return JSON results.", details: responseText.slice(0, 2000) },
+          { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
           { status: 502 },
         );
       }
@@ -371,13 +371,13 @@ export async function POST(request: Request) {
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.ok) {
       return NextResponse.json(
-        { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}.`, details: responseText.slice(0, 2000) },
+        { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
         { status: 502 },
       );
     }
     if (!contentType.toLowerCase().includes("json")) {
       return NextResponse.json(
-        { error: "Virtuoso SPARQL endpoint did not return JSON results.", details: responseText.slice(0, 2000) },
+        { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
         { status: 502 },
       );
     }

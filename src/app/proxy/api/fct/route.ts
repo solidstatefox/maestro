@@ -158,7 +158,9 @@ async function executeSparql(endpoint: string, query: string, accept = "applicat
       },
       body: new URLSearchParams({ query, ...(timeoutMs >= 1000 ? { timeout: String(timeoutMs) } : {}) }).toString(),
       cache: "no-store",
-      signal: AbortSignal.timeout(Math.max(1000, timeoutMs || 20000)),
+      ...(timeoutMs > 0
+        ? { signal: AbortSignal.timeout(Math.max(120000, timeoutMs * 3)) }
+        : {}),
     });
     const text = await response.text();
     return { response, text, key };
@@ -207,8 +209,9 @@ function fctResponseXml(args: {
   vars?: string[]; elapsedMs: number; complete: boolean; timeoutMs?: number; graphOnly?: boolean; countOnly?: boolean;
   labels?: Map<string, string>; error?: string;
   badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse" }>;
+  sqlState?: string; sqlMessage?: string; execMilliseconds?: string; execDbActivity?: string;
 }): string {
-  const { query, view, limit, offset, elapsedMs, complete } = args;
+  const { query, view, limit, offset, elapsedMs, complete, sqlState, sqlMessage, execMilliseconds, execDbActivity } = args;
   if (args.error) return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>no</fct:complete><fct:error>${xmlText(args.error)}</fct:error></fct:facets>`;
   const vars = args.vars ?? [];
   const bindings = args.bindings ?? [];
@@ -227,7 +230,7 @@ function fctResponseXml(args: {
       return fctColumn(binding[name], labelFor(binding[name]), { ...(extraAttrs ?? {}), var: name });
     }).join("")}</fct:row>`;
   }).join("");
-  return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${complete ? "yes" : "no"}</fct:complete><fct:timeout>${args.timeoutMs ?? 0}</fct:timeout><fct:db-activity/><fct:processed>${bindings.length}</fct:processed><fct:view offset="${offset}" limit="${limit}"/><fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;
+  return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${complete ? "yes" : "no"}</fct:complete><fct:timeout>${args.timeoutMs ?? 0}</fct:timeout><fct:sql-state>${xmlText(sqlState ?? "")}</fct:sql-state><fct:sql-message>${xmlText(sqlMessage ?? "")}</fct:sql-message><fct:exec-milliseconds>${xmlText(execMilliseconds ?? "")}</fct:exec-milliseconds><fct:db-activity>${xmlText(execDbActivity ?? "")}</fct:db-activity>${sqlState === "S1TAT" ? `<fct:warning>${xmlText(sqlMessage || "Virtuoso returned partial results because the ANYTIME timeout was reached.")}</fct:warning>` : ""}<fct:processed>${bindings.length}</fct:processed><fct:view offset="${offset}" limit="${limit}"/><fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;
 }
 
 function parseDescribeRdfXml(source: string): Record<string, SparqlBindingTerm>[] {
@@ -425,9 +428,17 @@ export async function POST(request: Request) {
     }
     stage = "execute";
     const startedAt = Date.now();
-    const { response, text, key } = await executeSparql(endpoint.url, compiled.query, isDescribe ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs || 20000);
+    const { response, text, key } = await executeSparql(endpoint.url, compiled.query, isDescribe ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs);
     const elapsedMs = Date.now() - startedAt;
-    if (!response.ok) return fctError(`Virtuoso SPARQL endpoint returned HTTP ${response.status}`, 502, text.slice(0, 2000));
+    const sqlState = response.headers.get("X-SQL-State")?.trim() ?? "";
+    const sqlMessage = response.headers.get("X-SQL-Message") ?? "";
+    const execMilliseconds = response.headers.get("X-Exec-Milliseconds") ?? "";
+    const execDbActivity = response.headers.get("X-Exec-DB-Activity") ?? "";
+    // S1TAT identifies a partial result set; its HTTP status alone must not
+    // cause Maestro to discard the valid rows in the response body.
+    if (!response.ok && sqlState !== "S1TAT") {
+      return fctError(`Virtuoso SPARQL endpoint returned HTTP ${response.status}${sqlState ? ` (${sqlState})` : ""}`, 502, sqlMessage || text.slice(0, 2000));
+    }
 
     if (isDescribe) {
       if (response.status === 200) setQueryCache(key, text);
@@ -437,7 +448,8 @@ export async function POST(request: Request) {
       const labels = await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
       const labelFor = (term: SparqlBindingTerm | undefined) => term?.type === "uri" ? labels.get(term.value) : undefined;
       const describeRows = bindings.map((binding) => `<fct:row>${fctColumn(binding.s, labelFor(binding.s))}${fctColumn(binding.p, labelFor(binding.p))}${fctColumn(binding.o, labelFor(binding.o))}</fct:row>`).join("");
-      const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>yes</fct:complete><fct:timeout>${compiled.timeoutMs}</fct:timeout><fct:db-activity/><fct:processed>${bindings.length}</fct:processed><fct:view offset="${compiled.offset}" limit="${compiled.limit}"/><fct:result type="describe">${describeRows}</fct:result></fct:facets>`;
+      const describeComplete = response.status !== 206 && sqlState !== "S1TAT";
+      const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${describeComplete ? "yes" : "no"}</fct:complete><fct:timeout>${compiled.timeoutMs}</fct:timeout><fct:sql-state>${xmlText(sqlState)}</fct:sql-state><fct:sql-message>${xmlText(sqlMessage)}</fct:sql-message><fct:exec-milliseconds>${xmlText(execMilliseconds)}</fct:exec-milliseconds><fct:db-activity>${xmlText(execDbActivity)}</fct:db-activity>${sqlState === "S1TAT" ? `<fct:warning>${xmlText(sqlMessage || "Virtuoso returned partial results because the ANYTIME timeout was reached.")}</fct:warning>` : ""}<fct:processed>${bindings.length}</fct:processed><fct:view offset="${compiled.offset}" limit="${compiled.limit}"/><fct:result type="describe">${describeRows}</fct:result></fct:facets>`;
       if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS" } });
     }
@@ -462,11 +474,15 @@ export async function POST(request: Request) {
     }
     // FCT <complete> reports execution completion, not whether another page
     // exists. Virtuoso uses HTTP 206 for partial results.
-    const complete = response.status !== 206;
+    const complete = response.status !== 206 && sqlState !== "S1TAT";
     const xml = fctResponseXml({
       query: compiled.query, view: compiled.view, limit: compiled.limit, offset: compiled.offset,
       bindings, vars, elapsedMs, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly, labels,
       badgeColumns: compiled.badgeColumns,
+      sqlState,
+      sqlMessage,
+      execMilliseconds,
+      execDbActivity,
     });
     if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS" } });

@@ -424,8 +424,36 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   const where: SparqlPattern[] = [...(textPatterns ?? []), ...constraints];
   // A fixed subject expressed by a top-level <value> still needs a triple
   // pattern to bind it, particularly for list/text/DESCRIBE views.
-  const hasBindingPattern = where.some((pattern) => pattern.kind === "triple" || pattern.kind === "full-text" || pattern.kind === "graph" || pattern.kind === "quad-map");
-  if (!hasBindingPattern) where.unshift({ kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") });
+  //const hasBindingPattern = where.some((pattern) => pattern.kind === "triple" || pattern.kind === "full-text" || pattern.kind === "graph" || pattern.kind === "quad-map");
+  //if (!hasBindingPattern) where.unshift({ kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") });
+  
+  
+  
+  const hasBindingPattern = where.some(
+  (pattern) =>
+    pattern.kind === "triple" ||
+    pattern.kind === "full-text" ||
+    pattern.kind === "graph" ||
+    pattern.kind === "quad-map"
+);
+
+const viewSuppliesTriple =
+  view === "properties" ||
+  view === "properties-in" ||
+  view === "classes";
+
+if (!hasBindingPattern && !viewSuppliesTriple) {
+  where.unshift({
+    kind: "triple",
+    subject: variable("s1"),
+    predicate: variable("p0"),
+    object: variable("o0"),
+  });
+}
+
+
+  
+  
   const address = root.attributes.addr ?? "";
   const delimiter = address.indexOf("@");
   if (delimiter < 0 || !address.slice(delimiter + 1).trim()) {
@@ -439,6 +467,8 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   const countProjection = (term: SparqlTerm): SparqlProjection => ({ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(term) }, as: variable("n") });
   let query: string;
   if (graphOnly) {
+    /*
+    // OLD GRAPHS QUERY — retained for reference.
     let graphWhere: SparqlPattern[];
     if (searchText && textPatterns) {
       // Match the documented Virtuoso default-quad-map pattern for text search
@@ -484,6 +514,39 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
             { expression: graphLabelKey, direction: "ASC" },
           ]
         : [{ expression: graphLabelKey, direction: graphSort === "label-desc" ? "DESC" : "ASC" }]) : undefined,
+      limit,
+      offset,
+    });
+    */
+
+    // NEW GRAPHS QUERY — enumerate named graphs without counts or labels.
+    const graphPatterns: SparqlPattern[] = [{
+      kind: "triple",
+      subject: variable("s1"),
+      predicate: variable("p0"),
+      object: variable("o0"),
+    }];
+
+    const graphWhere: SparqlPattern[] = [{
+      kind: "graph",
+      graph: variable("g"),
+      patterns: graphPatterns,
+    }];
+
+    if (graphTerm) {
+      graphWhere.push({
+        kind: "filter",
+        expression: binary("=", termExpr(variable("g")), termExpr(graphTerm)),
+      });
+    }
+
+    query = buildSelectQuery({
+      directives,
+      distinct: true,
+projections: [
+  { expression: termExpr(variable("g")), as: variable("c1") },
+  { expression: aggregate("COUNT", variable("s1"), true), as: variable("c2") },
+],      where: graphWhere,
       limit,
       offset,
     });

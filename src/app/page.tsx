@@ -146,6 +146,21 @@ type FacetItem = {
   example?: { uri: string; label: string; termType?: "uri" | "literal" | "bnode" };
 };
 
+function createFacetItem(
+  uri: string,
+  label: string,
+  count: number | null | undefined = 0,
+  example?: FacetItem["example"],
+): FacetItem {
+  return {
+    uri,
+    label,
+    count: count ?? 0,
+    ...(example ? { example } : {}),
+  };
+}
+
+
 type FacetName = string;
 
 type OntologyClassMetadata = { uri: string; ontology: string; parent?: string; ontologyLabel?: string };
@@ -276,6 +291,11 @@ type ParsedFctResponse = {
   describe: { subject: FctResponseColumn; predicate: FctResponseColumn; object: FctResponseColumn }[];
   count?: number;
   shortforms: { uri: string; shortform?: string; label?: string }[];
+    warning?: string;
+  sqlState?: string;
+  sqlMessage?: string;
+  execMilliseconds?: string;
+  dbActivity?: string;
   error?: string;
 };
 
@@ -286,6 +306,13 @@ function parseFctResponse(xmlText: string): ParsedFctResponse {
   const root = document.documentElement;
   const getText = (name: string) => byLocalName(root, name)[0]?.textContent?.trim() ?? "";
   const error = getText("error");
+  
+  const warning = getText("warning");
+const sqlState = getText("sql-state");
+const sqlMessage = getText("sql-message");
+const execMilliseconds = getText("exec-milliseconds");
+const dbActivity = getText("db-activity");
+
   if (error) return { sparql: getText("sparql"), viewType: "error", rows: [], complete: "no", rowCount: 0, results: [], properties: [], classes: [], roles: [], graphs: [], describe: [], count: undefined, shortforms: [], error };
   const resultNode = byLocalName(root, "result")[0];
   const resultType = resultNode?.getAttribute("type") ?? "text";
@@ -392,6 +419,13 @@ function parseFctResponse(xmlText: string): ParsedFctResponse {
     viewType: resultType,
     rows: rowColumns,
     complete: getText("complete") === "yes" ? "yes" : "no",
+	
+	...(warning ? { warning } : {}),
+...(sqlState ? { sqlState } : {}),
+...(sqlMessage ? { sqlMessage } : {}),
+...(execMilliseconds ? { execMilliseconds } : {}),
+...(dbActivity ? { dbActivity } : {}),
+	
     rowCount: Number(getText("processed") || rows.length),
     results: resultType === "text" || resultType === "list" || resultType === "list-count" ? results : [],
     properties: resultType === "properties" ? facetItems : [],
@@ -3586,6 +3620,11 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
 
   const [propertyFacetError, setPropertyFacetError] = useState("");
   const [classFacetError, setClassFacetError] = useState("");
+
+const [propertyFacetWarning, setPropertyFacetWarning] = useState("");
+const [classFacetWarning, setClassFacetWarning] = useState("");
+const [roleFacetWarning, setRoleFacetWarning] = useState("");  
+  
   const [expandedUris, setExpandedUris] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -4002,6 +4041,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           if (cancelled) return;
           rememberShortforms(data?.shortforms);
           setClassFacets(Array.isArray(data.classes) ? data.classes : []);
+		  setClassFacetWarning(data.warning ?? "");
         } catch (error) {
           if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
           setClassFacetError(facetLoadErrorMessage(error, "Failed to load classes facets."));
@@ -4047,6 +4087,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           if (cancelled) return;
           rememberShortforms(data?.shortforms);
           setPropertyFacets(Array.isArray(data.properties) ? data.properties : []);
+		  setPropertyFacetWarning(data.warning ?? "");
           setPropertyFacetSparql(typeof data.sparql === "string" ? data.sparql : "");
         } catch (error) {
           if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
@@ -4091,6 +4132,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           if (cancelled) return;
           rememberShortforms(data?.shortforms);
           setRoleFacets(Array.isArray(data.roles) ? data.roles : []);
+		  setRoleFacetWarning(data.warning ?? "");
           setRoleFacetSparql(typeof data.sparql === "string" ? data.sparql : "");
         } catch (error) {
           if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
@@ -4123,7 +4165,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     setGraphListSparql("");
     async function loadGraphPage() {
       try {
-        const limit = leftPanelLimit;
+        const limit = FACET_PAGE_SIZE; //leftPanelLimit;
         const offset = graphsPage * limit;
         const graphQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
           type: "graphs", sort: graphSort, limit: String(limit), offset: String(offset),
@@ -4149,15 +4191,17 @@ const graphs: FacetItem[] = Array.isArray(data.graphs)
       new Map<string, FacetItem>(
         (data.graphs as FacetItem[])
           .filter((item) => item && typeof item.uri === "string")
-          .map((item) => [item.uri, {
-            uri: item.uri,
-            label: item.label || toLabel(item.uri, "Class"),
-            count: Number.isFinite(item.count) ? item.count : 0,
-          }]),
+          .map((item) => [
+            item.uri,
+            createFacetItem(
+              item.uri,
+              item.label || toLabel(item.uri, "Class"),
+              item.count,
+            ),
+          ]),
       ).values(),
     )
   : [];
-
 setGraphFacets(graphs);
 
         setGraphHasMore(typeof data.rowCount === "number" ? data.rowCount >= limit : graphs.length >= limit);
@@ -8203,31 +8247,64 @@ useEffect(() => {
                       const order = focusListOrder === "Properties" ? ["Properties", "Roles", "Graphs"] : ["Roles", "Properties", "Graphs"];
                       return order.indexOf(a) - order.indexOf(b);
                     }).map((group) => {
-                      let items: { key: string; label: string; count: number | null; example?: FacetItem["example"] }[] =
-                        group === "Properties"
-                          ? propertyFacets.map((item) => ({
-                              key: item.uri,
-                              label: toLabel(item.uri, "Property"),
-                              count: item.count,
-                              example: item.example,
-                            }))
-                          : group === "Classes"
-                            ? classFacets.map((item) => ({
-                                key: item.uri,
-                                label: `${toLabel(item.uri, "Class")}s`,
-                                count: item.count,
-                              }))
-                            : group === "Roles"
-                              ? roleFacets.map((item) => ({
-                                  key: item.uri,
-                                  label: toLabel(item.uri, "Role"),
-                                  count: item.count,
-                                  example: item.example,
-                                }))
-                              : group === "Graphs"
-                                ? graphFacets.map((item) => ({ key: item.uri, label: toLabel(item.uri, "Class"), count: item.count }))
-                                : [];
-
+let items: { key: string; label: string; count: number; example?: FacetItem["example"] }[] =
+  group === "Properties"
+    ? propertyFacets.map((item) => {
+        const facet = createFacetItem(
+          item.uri,
+          toLabel(item.uri, "Property"),
+          item.count,
+          item.example,
+        );
+        return {
+          key: facet.uri,
+          label: facet.label,
+          count: facet.count,
+          example: facet.example,
+        };
+      })
+    : group === "Classes"
+      ? classFacets.map((item) => {
+          const facet = createFacetItem(
+            item.uri,
+            `${toLabel(item.uri, "Class")}s`,
+            item.count,
+          );
+          return {
+            key: facet.uri,
+            label: facet.label,
+            count: facet.count,
+          };
+        })
+      : group === "Roles"
+        ? roleFacets.map((item) => {
+            const facet = createFacetItem(
+              item.uri,
+              toLabel(item.uri, "Role"),
+              item.count,
+              item.example,
+            );
+            return {
+              key: facet.uri,
+              label: facet.label,
+              count: facet.count,
+              example: facet.example,
+            };
+          })
+        : group === "Graphs"
+          ? graphFacets.map((item) => {
+              const facet = createFacetItem(
+                item.uri,
+                toLabel(item.uri, "Class"),
+                item.count,
+              );
+              return {
+                key: facet.uri,
+                label: facet.label,
+                count: facet.count,
+              };
+            })
+          : [];
                       // Keep checked Properties/Roles in a separate pane above
                       // pagination. Only unchecked items participate in paging;
                       // preserve query order for selected items and FCT order below.
@@ -8240,21 +8317,20 @@ useEffect(() => {
                         return { uri: bound.text, termType: isUri ? "uri" as const : "literal" as const, label: isUri ? toLabel(bound.text, "Class") : bound.text };
                       };
                       const selectedItems =
-                        group === "Properties" || group === "Roles"
-                          ? Array.from(
-                              group === "Properties" ? selectedProperties : selectedRoles,
-                              (key) => {
-                                const countKind: DistinctCountKind = group === "Properties" ? "property" : "role";
-                                const countQuery = distinctCountQueryFor(queryTree, countKind, key);
-                                return {
-                                  key,
-                                  label: items.find((item) => item.key === key)?.label ?? toLabel(key, group === "Properties" ? "Property" : "Role"),
-                                  count: facetCandidateCounts[countQuery] ?? null,
-                                  example: exampleForFacetItem(key, items.find((item) => item.key === key)?.example),
-                                };
-                              },
-                            )
-                          : [];
+  group === "Properties" || group === "Roles"
+    ? Array.from(
+        group === "Properties" ? selectedProperties : selectedRoles,
+        (key) => {
+          const facet = items.find((item) => item.key === key);
+          return {
+            key,
+            label: facet?.label ?? toLabel(key, group === "Properties" ? "Property" : "Role"),
+            count: facet?.count ?? 0,
+            example: exampleForFacetItem(key, facet?.example),
+          };
+        },
+      )
+    : [];
                       const selectedKeys = new Set(selectedItems.map((item) => item.key));
                       const facetListStale = group === "Properties" ? isLoadingProperties : group === "Roles" ? isLoadingRoles : group === "Classes" ? isLoadingClasses : false;
                       const unselectedItems = items.filter((item) => {
@@ -8349,7 +8425,15 @@ useEffect(() => {
                                 : (group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError)
                                   ? "Update failed"
                                   : group === "Properties" ? propertyFacets.length : group === "Classes" ? classFacets.length : group === "Roles" ? roleFacets.length : items.length}
-                            </span>} /><TooltipContent>{group === "Properties" ? propertyFacetError : group === "Classes" ? classFacetError : group === "Roles" ? roleFacetError : undefined}</TooltipContent></Tooltip>
+                            </span>} /><TooltipContent>
+  {group === "Properties"
+    ? propertyFacetError || propertyFacetWarning
+    : group === "Roles"
+      ? roleFacetError || roleFacetWarning
+      : group === "Classes"
+        ? classFacetError || classFacetWarning
+        : undefined}
+</TooltipContent></Tooltip>
                           </div>
 
                           {(group === "Properties" || group === "Roles") &&
@@ -8419,16 +8503,7 @@ useEffect(() => {
                                       )}
                                       {item.example && <button type="button" title={item.example.label} disabled={facetListStale || item.example.termType !== "uri"} onClick={() => showClassResults(item.example!.uri, activeLeafId)} className="block break-words text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>{(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) ? "i.e." : "e.g."}</em> {ellipsize(item.example.label)}</button>}
 									  </div>
-                                      <DistinctCount
-                                        tree={queryTree}
-                                        kind={group === "Properties" ? "property" : "role"}
-                                        uri={item.key}
-                                        onCountChange={(countQuery, count) =>
-                                          setFacetCandidateCounts((current) =>
-                                            current[countQuery] === count ? current : { ...current, [countQuery]: count },
-                                          )
-                                        }
-                                      />
+                                      <span className="shrink-0 text-xs text-muted-foreground">{item.count.toLocaleString()}</span>
                                     </div>
                                   ))}
                                 </div>
@@ -8596,31 +8671,13 @@ onMouseLeave={() => {
 								</div>
                                 {(group === "Properties" ||
                                   group === "Roles") && (
-                                  <DistinctCount
-                                    tree={queryTree}
-                                    kind={
-                                      group === "Properties" ? "property" : "role"
-                                    }
-                                    uri={item.key}
-                                    onCountChange={(query, count) =>
-                                      setFacetCandidateCounts((current) =>
-                                        current[query] === count ? current : { ...current, [query]: count },
-                                      )
-                                    }
-                                  />
+                                  <span className="shrink-0 text-xs text-muted-foreground">{item.count.toLocaleString()}</span>
                                 )}
                                 {group === "Classes" && (
-                                  <DistinctCount
-                                    tree={queryTree}
-                                    kind="class"
-                                    uri={item.key}
-                                    onCountChange={(query, count) =>
-                                      setFacetCandidateCounts((current) =>
-                                        current[query] === count ? current : { ...current, [query]: count },
-                                      )
-                                    }
-                                  />
-                                )}
+  <span className="shrink-0 text-xs text-muted-foreground">
+    {item.count.toLocaleString()}
+  </span>
+)}
                               </div>
                               );
                             })}
@@ -8665,7 +8722,7 @@ onMouseLeave={() => {
                             : classFacetError
                               ? "Update failed"
                               : visibleClassDisplayFacets.length}
-                        </span>} /><TooltipContent>{classFacetError || undefined}</TooltipContent></Tooltip>
+                        </span>} /><TooltipContent>{classFacetError || classFacetWarning || undefined}</TooltipContent></Tooltip>
                       </header>
                       {classFacetError ? (
                         <p className="text-xs text-destructive">{classFacetError}</p>

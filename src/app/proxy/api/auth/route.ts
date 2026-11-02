@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { logProxyCaller } from "@/lib/proxy-debug";
 import { fetchWithDigestFallback } from "@/lib/digest-auth";
+import { describeUpstreamError } from "@/lib/upstream-error";
 
 export async function POST(request: Request) {
   logProxyCaller(request, "auth.POST");
@@ -62,7 +63,7 @@ export async function POST(request: Request) {
         failure = await probe(readUrl, "read endpoint");
         if (!failure && writeUrl.toString() !== readUrl.toString()) failure = await probe(writeUrl, "write endpoint");
       } catch (error) {
-        return NextResponse.json({ ok: false, connected: false, error: `Could not reach the personal graph server: ${error instanceof Error ? error.message : "fetch failed"}` }, { status: 200 });
+        return NextResponse.json({ ok: false, connected: false, error: `Could not reach the personal graph server: ${describeUpstreamError(error, "no response")}` }, { status: 200 });
       }
       if (failure) return NextResponse.json({ ok: false, connected: false, ...failure }, { status: 200 });
 
@@ -132,6 +133,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: false, error: "Unknown action." }, { status: 400 });
   } catch (error) {
-    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Auth proxy failed" }, { status: 500 });
+    return NextResponse.json({ ok: false, error: describeUpstreamError(error, "Auth proxy failed") }, { status: 500 });
   }
 }

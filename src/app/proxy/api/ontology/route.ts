@@ -1,5 +1,6 @@
 import { ensureGraphDirectorySeeded, getOntologyGraph, personalSparqlUrl, personalSparqlHeaders } from "@/lib/personal-sparql";
 import { NextResponse } from "next/server";
+import { describeUpstreamError } from "@/lib/upstream-error";
 
 export const maxDuration = 300;
 
@@ -207,6 +208,6 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ items: output, graph: getOntologyGraph(request) });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Ontology discovery failed." }, { status: 502 });
+    return NextResponse.json({ error: describeUpstreamError(error, "Ontology discovery failed.") }, { status: 502 });
   }
 }

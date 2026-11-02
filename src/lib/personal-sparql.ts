@@ -4,6 +4,7 @@ import { extname, resolve } from "node:path";
 import { graphSiteForPrefix } from "./personal-auth";
 import { authNote, fetchWithDigestFallback } from "./digest-auth";
 import { buildInsertData, canParseRdfExtension, parseRdfDocument } from "./rdf-to-sparql";
+import { describeUpstreamError } from "@/lib/upstream-error";
 
 /** Shared server-side access to Maestro's personal SPARQL store and RDF-backed Graphsite registry. */
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -169,7 +170,7 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
       try {
         await updatePersonalSparql(`CLEAR SILENT GRAPH <${destinationGraph}>`, 30000, request);
       } catch (error) {
-        throw new Error(`Could not clear manifest graph ${destinationGraph} before loading via ${writeEndpoint.toString()}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Could not clear manifest graph ${destinationGraph} before loading via ${writeEndpoint.toString()}: ${describeUpstreamError(error)}`);
       }
       console.info(`Maestro cleared manifest graph ${destinationGraph}.`);
     }
@@ -216,7 +217,7 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
         try {
           await updatePersonalSparql(update, 60000, request);
         } catch (error) {
-          throw new Error(`Could not load RDF document ${path} into graph ${destinationGraph} via ${writeEndpoint.toString()}: ${error instanceof Error ? error.message : String(error)}`);
+          throw new Error(`Could not load RDF document ${path} into graph ${destinationGraph} via ${writeEndpoint.toString()}: ${describeUpstreamError(error)}`);
         }
       } else {
         // Formats Maestro cannot parse itself (JSON-LD, RDFa, ...) still go through the graph-store endpoint,

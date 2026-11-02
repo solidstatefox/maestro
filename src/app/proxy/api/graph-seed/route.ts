@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { logProxyCaller } from "@/lib/proxy-debug";
 import { clearQueryCache } from "@/lib/query-cache";
 import { ensureGraphDirectorySeeded, getPersonalSession, personalSparqlUrl, personalSparqlWriteUrl } from "@/lib/personal-sparql";
+import { describeUpstreamError } from "@/lib/upstream-error";
 
 /**
  * Called right after a successful login. Loads every RDF document in ./graph into the user's
@@ -22,6 +23,6 @@ export async function POST(request: Request) {
       loaded,
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Could not load ./graph into the personal graph server." }, { status: 502, headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({ ok: false, error: describeUpstreamError(error, "Could not load ./graph into the personal graph server.") }, { status: 502, headers: { "Cache-Control": "no-store" } });
   }
 }

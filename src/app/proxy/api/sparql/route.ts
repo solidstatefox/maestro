@@ -2,6 +2,7 @@ import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
+import { describeUpstreamError } from "@/lib/upstream-error";
 
 function isSafeIri(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 &&
@@ -242,13 +243,13 @@ export async function POST(request: Request) {
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
         return NextResponse.json(
-          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}.`, details: responseText.slice(0, 2000) },
+          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
           { status: 502 },
         );
       }
       if (!contentType.toLowerCase().includes("json")) {
         return NextResponse.json(
-          { error: "Virtuoso SPARQL endpoint did not return JSON results.", details: responseText.slice(0, 2000) },
+          { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
           { status: 502 },
         );
       }
@@ -400,7 +401,7 @@ export async function POST(request: Request) {
     console.error("[Maestro SPARQL proxy] Upstream request failed.", diagnostics);
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Could not query the SPARQL endpoint.",
+        error: describeUpstreamError(error, "Could not query the SPARQL endpoint."),
         details: diagnostics,
       },
       { status: 500 },

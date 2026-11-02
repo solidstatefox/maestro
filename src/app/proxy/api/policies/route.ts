@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ensureShapesGraphSeeded, getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
 import { logProxyCaller } from "@/lib/proxy-debug";
+import { describeUpstreamError } from "@/lib/upstream-error";
 
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const SH = "http://www.w3.org/ns/shacl#";
@@ -161,6 +162,6 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ error: "Unknown policy action." }, { status: 400 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Policy request failed." }, { status: 502 });
+    return NextResponse.json({ error: describeUpstreamError(error, "Policy request failed.") }, { status: 502 });
   }
 }

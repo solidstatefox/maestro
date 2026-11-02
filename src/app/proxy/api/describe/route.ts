@@ -2,6 +2,7 @@ import { logProxyCaller } from "@/lib/proxy-debug";
 import { NextResponse } from "next/server";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
+import { describeUpstreamError } from "@/lib/upstream-error";
 
 function isSafeIri(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 &&
@@ -38,7 +39,7 @@ export async function POST(request: Request) {
     });
     const rdfXml = await response.text();
     if (!response.ok) {
-      return NextResponse.json({ error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}.`, details: rdfXml.slice(0, 2000) }, { status: 502 });
+      return NextResponse.json({ error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${rdfXml.trim() ? `: ${rdfXml.trim().slice(0, 1000)}` : "."}`, details: rdfXml.slice(0, 2000) }, { status: 502 });
     }
     const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
     if (!contentType.includes("xml") && !contentType.includes("rdf")) {
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
     setQueryCache(cacheKey, rdfXml);
     return NextResponse.json({ rdfXml }, { headers: { "X-Maestro-Cache": "MISS" } });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown DESCRIBE proxy error.";
+    const message = describeUpstreamError(error, "Unknown DESCRIBE proxy error.");
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import { MAESTRO_IDS_NS, getHistoryGraph, VFCT_NS, askPersonalSparql, queryPersonalSparql, updatePersonalSparql, getConfiguredFctEndpoints, personalSparqlUrl } from "@/lib/personal-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
+import { describeUpstreamError } from "@/lib/upstream-error";
 
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const RDFS_NS = "http://www.w3.org/2000/01/rdf-schema#";
@@ -416,7 +417,7 @@ export async function POST(request: Request) {
     await updatePersonal(update);
     return NextResponse.json({ saved: true, bookmark, title, hash: queryHash });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not save query favorite." }, { status: 502 });
+    return NextResponse.json({ error: describeUpstreamError(error, "Could not save query favorite.") }, { status: 502 });
   }
 }
 
@@ -439,6 +440,6 @@ export async function GET(request: Request) {
       .filter((item: { uri: string; queryXml: string }, index: number, all: Array<{ uri: string; queryXml: string }>) => all.findIndex((other: { uri: string; queryXml: string }) => other.uri === item.uri && other.queryXml === item.queryXml) === index);
     return NextResponse.json({ favorites });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not load query favorites." }, { status: 503 });
+    return NextResponse.json({ error: describeUpstreamError(error, "Could not load query favorites.") }, { status: 503 });
   }
 }

@@ -4,6 +4,7 @@ import { XMLParser } from "fast-xml-parser";
 import { compileFctXmlToSparql, type SparqlJsonResults, type SparqlBindingTerm } from "@/lib/fct-sparql-translator";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getDataserversGraph, getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
+import { describeUpstreamError } from "@/lib/upstream-error";
 
 
 function parseResults(text: string): SparqlJsonResults | null {
@@ -278,7 +279,7 @@ export async function GET(request: Request) {
   let endpoints: Awaited<ReturnType<typeof getConfiguredFctEndpoints>>;
   try { endpoints = await getConfiguredFctEndpoints(request); }
   catch (error) {
-    return NextResponse.json({ error: `Could not load Datasites from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}` }, { status: 503 });
+    return NextResponse.json({ error: `Could not load Datasites from the personal SPARQL store: ${describeUpstreamError(error, "unknown error")}` }, { status: 503 });
   }
   const url = new URL(request.url);
   const selectedId = selectConfiguredFctEndpoint(request, endpoints)?.id ?? "";
@@ -471,6 +472,6 @@ export async function POST(request: Request) {
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS" } });
   } catch (error) {
     console.error("FCT-to-SPARQL API error:", error);
-    return fctError(error instanceof Error ? error.message : "Failed to compile or execute the FCT query as SPARQL.", stage === "compile" ? 400 : 502);
+    return fctError(describeUpstreamError(error, "Failed to compile or execute the FCT query as SPARQL."), stage === "compile" ? 400 : 502);
   }
 }

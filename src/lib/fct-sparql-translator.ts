@@ -520,6 +520,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     */
 
     // NEW GRAPHS QUERY — enumerate named graphs without counts or labels.
+    // GRAPHS QUERY — count matching triples per named graph.
     const graphPatterns: SparqlPattern[] = [{
       kind: "triple",
       subject: variable("s1"),
@@ -540,17 +541,54 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       });
     }
 
+    // Derive a fallback label from the graph URI. Do not join rdfs:label
+    // here: multiple labels could multiply the COUNT(*) result.
+    const graphLabel: SparqlExpression = {
+      kind: "function",
+      name: "REPLACE",
+      args: [
+        {
+          kind: "function",
+          name: "STR",
+          args: [termExpr(variable("g"))],
+        },
+        termExpr(literalTerm("^.*[/#]")),
+        termExpr(literalTerm("")),
+      ],
+    };
+
     query = buildSelectQuery({
       directives,
-      distinct: true,
-projections: [
-  { expression: termExpr(variable("g")), as: variable("c1") },
-  { expression: aggregate("COUNT", variable("s1"), true), as: variable("c2") },
-],      where: graphWhere,
+      projections: [
+        { expression: termExpr(variable("g")), as: variable("c1") },
+        {
+          expression: {
+            kind: "aggregate",
+            name: "SAMPLE",
+            distinct: false,
+            expression: graphLabel,
+          },
+          as: variable("label"),
+        },
+        {
+          expression: {
+            kind: "aggregate",
+            name: "COUNT",
+            distinct: false,
+            expression: termExpr({ kind: "raw-term", value: "*" }),
+          },
+          as: variable("n"),
+        },
+      ],
+      where: graphWhere,
+      groupBy: [termExpr(variable("g"))],
+      orderBy: shouldOrder
+        ? [{ expression: termExpr(variable("n")), direction: "DESC" }]
+        : undefined,
       limit,
       offset,
     });
-  } else if (countOnly) {
+	} else if (countOnly) {
     let counted: SparqlTerm;
     let countWhere = scopedWhere;
     if (view === "properties") {

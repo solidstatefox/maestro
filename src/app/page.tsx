@@ -8906,7 +8906,7 @@ onMouseLeave={() => {
                           aria-live="polite"
                         >
                           {isLoadingClasses
-                            ? "Updating…"
+                            ? (categoriesTreeMode ? "Building tree…" : "Updating…")
                             : classFacetError
                               ? "Update failed"
                               : visibleClassDisplayFacets.length}

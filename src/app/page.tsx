@@ -1611,13 +1611,10 @@ useEffect(() => {
           if (session.avatarUrl) setFetchedAvatarUrl(session.avatarUrl);
           // The restored session just (re)set the maestro_session cookie; reload Datasites with it.
           setEndpointReloadRevision((r) => r + 1);
-        } else {
-          // Not logged in: present the login dialog right away (pre-filled with the default demo values).
-          setLoginDialogOpen(true);
         }
+        // Not logged in: the page loads as usual, with no personal graph server logic (no History, Favorites, or store access).
       } catch (err) {
         console.warn("Could not load personal graph auth session", err);
-        setLoginDialogOpen(true);
       }
     })();
   }, []);
@@ -2771,6 +2768,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
   // Ask the personal store whether this exact serialized query already has a bookmark.
   useEffect(() => {
+    if (!authSession) { setIsQueryBookmarked(false); setMatchingBookmarkId(""); return; }
     if (!urlStateInitialized) return;
     let active = true;
     setIsQueryBookmarked(false);
@@ -2796,11 +2794,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       }
     }, 350);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [queryXml, urlStateInitialized, bookmarkCheckRevision, historyBookmarkId]);
+  }, [queryXml, urlStateInitialized, bookmarkCheckRevision, historyBookmarkId, authSession]);
 
   // Keep History navigation enabled state synchronized with the actual store.
   // With no loaded History item, the comparison cursor is the current time.
   useEffect(() => {
+    if (!authSession) { setHistoryHasOlder(false); setHistoryHasNewer(false); return; }
     if (!urlStateInitialized || rootSearchExpanded) return;
     let active = true;
     // Preserve the currently displayed button states while the root search
@@ -2857,7 +2856,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       }
     }, 100);
     return () => { active = false; controller.abort(); window.clearTimeout(timer); };
-  }, [urlStateInitialized, historyBookmarkId, queryXml, bookmarkCheckRevision, rootSearchExpanded]);
+  }, [urlStateInitialized, historyBookmarkId, queryXml, bookmarkCheckRevision, rootSearchExpanded, authSession]);
 
   useEffect(() => {
     if (!bookmarkDialogOpen) return;
@@ -3083,6 +3082,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // snapshot after the search closes. UI-only changes otherwise update the visit.
   useEffect(() => {
     if (!urlStateInitialized) return;
+    // Not logged in: never record History. Tracking refs stay untouched so the current query is recorded as a fresh visit after login.
+    if (!authSession) return;
     const stateUrl = window.location.href;
     const previousQueryXml = historyVisitQueryRef.current;
     const isInitialLoadedHistoryItem = Boolean(historyBookmarkId && !previousQueryXml);
@@ -3153,7 +3154,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     historyWriteQueueRef.current = historyWriteQueueRef.current.then(synchronizeWhenCollapsed, synchronizeWhenCollapsed);
     // Do not cancel queued writes in effect cleanup; pending History is flushed
     // when the root breadcrumb search field closes.
-  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded]);
+  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession]);
 
   // The graph text box may contain an unapplied draft distinct from the query's graph binding.
   // Restore that draft after the query-graph synchronization effect has run once.
@@ -4321,6 +4322,7 @@ setGraphFacets(graphs);
 
   // Discover a record's class policy from the personal SPARQL server after its DESCRIBE data identifies rdf:type values.
   useEffect(() => {
+    if (!authSession) { setRecordPolicy(null); setRecordPolicies([]); setSelectedRecordTemplateUri(""); setRecordPolicyError(""); setIsLoadingRecordPolicy(false); return; }
     if (!selectedUri || !personalSparqlEndpoint || !describedRecord.length || isDescribing) {
       setRecordPolicy(null);
       setRecordPolicies([]);
@@ -4401,7 +4403,7 @@ setGraphFacets(graphs);
       }
     }).finally(() => { if (!controller.signal.aborted) setIsLoadingRecordPolicy(false); });
     return () => controller.abort();
-  }, [selectedUri, personalSparqlEndpoint, describedRecord, isDescribing, recordFormatPreferenceLoaded]);
+  }, [selectedUri, personalSparqlEndpoint, describedRecord, isDescribing, recordFormatPreferenceLoaded, authSession]);
 
   async function validateSelectedRecord(policyOverride: RecordPolicyOption | null = recordPolicy) {
     if (!selectedUri || !policyOverride) return;
@@ -5224,6 +5226,7 @@ useEffect(() => {
   const unselectedClassDisplayFacets = visibleClassDisplayFacets.filter((item) => !selectedClasses.has(item.uri));
   const categoryMetadataUrisKey = classDisplayFacets.map((item) => item.uri).sort().join("\n");
   useEffect(() => {
+    if (!authSession) return;
     if (!categoryMetadataUrisKey) return;
     const controller = new AbortController();
     const uris = categoryMetadataUrisKey.split("\n").filter(Boolean);
@@ -5253,8 +5256,9 @@ useEffect(() => {
       if (!controller.signal.aborted) console.info("Maestro category ontology discovery or ingestion was incomplete; inspect the /proxy/api/ontology response and personal SPARQL store.", error);
     });
     return () => controller.abort();
-  }, [categoryMetadataUrisKey]);
+  }, [categoryMetadataUrisKey, authSession]);
   useEffect(() => {
+    if (!authSession) { setPersonalSparqlEndpoint(""); return; }
     const controller = new AbortController();
     void fetch("/proxy/api/ontology", { signal: controller.signal })
       .then(async (response) => {
@@ -5264,7 +5268,7 @@ useEffect(() => {
       .then((payload) => { if (!controller.signal.aborted) setPersonalSparqlEndpoint(payload.endpoint ?? ""); })
       .catch((error: unknown) => { if (!controller.signal.aborted) console.info("Could not read the personal SPARQL endpoint configuration.", error); });
     return () => controller.abort();
-  }, []);
+  }, [authSession]);
 
   const pagedUnselectedClasses = unselectedClassDisplayFacets.slice(classesPage * FACET_PAGE_SIZE, (classesPage + 1) * FACET_PAGE_SIZE);
   const categoryTreeItems = categoriesTreeMode ? unselectedClassDisplayFacets : pagedUnselectedClasses;
@@ -6954,8 +6958,10 @@ useEffect(() => {
       <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-2">
           <ButtonGroup aria-label="Graphsite navigation" className="shrink-0 border-0 shadow-none">
+            {authSession && (<>
             <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("backward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent className={historyActionMenu === "backward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "backward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Previous query in History · Last ten changes (inverse actions)</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "backward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
             <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("forward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent className={historyActionMenu === "forward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "forward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Next query in History · Last ten changes</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "forward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
+            </>)}
             <Tooltip><TooltipTrigger render={<button type="button" onClick={refreshCurrentBreadcrumb} aria-label="Refresh current query scope" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25"><RotateCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Refresh current query scope using the active breadcrumb</TooltipContent></Tooltip>
           </ButtonGroup>
 
@@ -7096,6 +7102,7 @@ useEffect(() => {
         </Tabs>
           </div>
         </div>
+        {authSession && (
         <Tooltip>
           <TooltipTrigger render={
             <Button
@@ -7155,6 +7162,7 @@ useEffect(() => {
           } />
           <TooltipContent>{isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}</TooltipContent>
         </Tooltip>
+        )}
         <Dialog open={bookmarkDialogOpen} onOpenChange={(open) => { if (!bookmarkSaving) setBookmarkDialogOpen(open); }}>
             <DialogContent className="max-w-lg p-5" showCloseButton={false}>
               <div className="mb-4 flex items-start justify-between gap-4">
@@ -7324,6 +7332,12 @@ useEffect(() => {
                 onClick={async () => {
                   await clearPersonalAuthSession();
                   setAuthSession(null);
+                  // Back to a plain, personal-store-free page: drop History tracking and reload the public Datasites list.
+                  historyVisitQueryRef.current = "";
+                  historyVisitIdRef.current = "";
+                  pendingHistoryVisitRef.current = null;
+                  setHistoryBookmarkId("");
+                  setEndpointReloadRevision((r) => r + 1);
                   toast.add({
                     title: "Logged out",
                     description: "Personal graph server session cleared.",
@@ -7617,10 +7631,11 @@ useEffect(() => {
             <SheetHeader>
               <SheetTitle>Maestro controls</SheetTitle>
               <SheetDescription>Query behavior, appearance, and graph server settings.</SheetDescription>
-              <p className="mt-1 break-all text-xs text-muted-foreground">Using personal: <span className="font-medium text-foreground">{personalSparqlEndpoint || "Not configured"}</span></p>
+              {authSession && <p className="mt-1 break-all text-xs text-muted-foreground">Using personal: <span className="font-medium text-foreground">{personalSparqlEndpoint || "Not configured"}</span></p>}
             </SheetHeader>
             <div className="flex flex-col gap-4 px-4 pb-4">
 
+              {authSession && (
               <div className="flex flex-col gap-3 rounded-md border p-3">
                 <Label>History</Label>
                 <div className="flex flex-wrap items-center gap-2">
@@ -7637,6 +7652,7 @@ useEffect(() => {
                   <Button type="button" variant="destructive" disabled={isDeletingCurrentHistory || isDeletingHistory} onClick={() => setDeleteHistoryDialogOpen(true)}>Delete All</Button>
                 </div>
               </div>
+              )}
 
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
@@ -7768,6 +7784,7 @@ useEffect(() => {
                   aria-label="Order results"
                 />
               </div>
+              {authSession && (
               <button
                 type="button"
                 onClick={() => {
@@ -7776,6 +7793,7 @@ useEffect(() => {
                 }}
                 className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent"
               >RDF Loader</button>
+              )}
             </div>
           </SheetContent>
         </Sheet>

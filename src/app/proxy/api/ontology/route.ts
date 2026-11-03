@@ -1,6 +1,7 @@
 import { ensureGraphDirectorySeeded, getOntologyGraph, personalSparqlUrl, personalSparqlHeaders } from "@/lib/personal-sparql";
 import { NextResponse } from "next/server";
 import { describeUpstreamError } from "@/lib/upstream-error";
+import { requirePersonalLogin } from "@/lib/personal-guard";
 
 export const maxDuration = 300;
 
@@ -182,10 +183,14 @@ async function queryNearestListedParents(uris: string[], request?: Request): Pro
 }
 
 export async function GET(request: Request) {
+  const loginRequired = requirePersonalLogin(request);
+  if (loginRequired) return loginRequired;
   return NextResponse.json({ endpoint: personalSparqlUrl(request).toString(), graph: getOntologyGraph(request) });
 }
 
 export async function POST(request: Request) {
+  const loginRequired = requirePersonalLogin(request);
+  if (loginRequired) return loginRequired;
   const body = await request.json().catch(() => null) as { uris?: unknown } | null;
   const uris = Array.isArray(body?.uris) ? [...new Set(body.uris.filter((uri): uri is string => typeof uri === "string" && uri.length <= 4096 && /^https?:\/\//i.test(uri)).slice(0, 100))] : [];
   try {

@@ -34,6 +34,21 @@ export type PersonalSession = {
   userAvatar?: string;
 };
 
+/** Thrown when personal-graph-store functionality is used without a login session. Nothing is sent over the network. */
+export class PersonalSessionRequiredError extends Error {
+  constructor() {
+    super("Not logged in: the personal graph server is only used with a login session.");
+    this.name = "PersonalSessionRequiredError";
+  }
+}
+
+/** Guard for every personal-store entry point: with no session there is no personal graph server to talk to. */
+export function assertPersonalSession(request?: Request): PersonalSession {
+  const session = getPersonalSession(request);
+  if (!session) throw new PersonalSessionRequiredError();
+  return session;
+}
+
 /** Extract the authenticated personal graph server session from request cookies or headers. */
 export function getPersonalSession(request?: Request): PersonalSession | null {
   if (!request) return null;
@@ -119,6 +134,7 @@ function seedSessionKey(request?: Request): string {
 
 /** Upload each RDF document in /graph to <graphsitePrefix>/query + manifest fragment on the user's graph server. Pass force to reload (used right after login). */
 export async function ensureGraphDirectorySeeded(request?: Request, options: { force?: boolean } = {}): Promise<GraphSeedResult> {
+  assertPersonalSession(request);
   const sessionKey = seedSessionKey(request);
   if (!options.force) {
     const existing = graphDirectorySeedPromises.get(sessionKey);
@@ -256,8 +272,8 @@ type SparqlJson = { results?: { bindings?: Record<string, { type?: string; value
 
 /** Return the personal READ endpoint (/sparql) without embedding credentials in its URL. A pasted /sparql-auth is normalised to /sparql. */
 export function personalSparqlUrl(request?: Request): URL {
-  const session = getPersonalSession(request);
-  const raw = (session?.graphStore || DEFAULT_GRAPH_STORE).trim();
+  const session = assertPersonalSession(request);
+  const raw = (session.graphStore || DEFAULT_GRAPH_STORE).trim();
   const url = new URL(raw);
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Personal graph store must use HTTP or HTTPS.");
   url.pathname = url.pathname.replace(/\/sparql-auth\/?$/i, "/sparql");
@@ -286,6 +302,7 @@ export function personalSparqlHeaders(request?: Request, contentType = "applicat
 
 /** Execute a read-only SPARQL query against the personal endpoint. */
 export async function queryPersonalSparql(query: string, timeoutMs = 20000, request?: Request): Promise<SparqlJson> {
+  assertPersonalSession(request);
   const endpoint = personalSparqlUrl(request);
   const response = await fetch(endpoint, {
     method: "POST",
@@ -307,6 +324,7 @@ export async function queryPersonalSparql(query: string, timeoutMs = 20000, requ
 
 /** Execute a SPARQL ASK against the personal endpoint and return its boolean result. */
 export async function askPersonalSparql(query: string, timeoutMs = 20000, request?: Request): Promise<boolean> {
+  assertPersonalSession(request);
   const endpoint = personalSparqlUrl(request);
   const response = await fetch(endpoint, {
     method: "POST",
@@ -328,6 +346,7 @@ export async function askPersonalSparql(query: string, timeoutMs = 20000, reques
 
 /** Execute a SPARQL Update against the personal WRITE endpoint (/sparql-auth for sparql-auth logins). */
 export async function updatePersonalSparql(update: string, timeoutMs = 30000, request?: Request): Promise<string> {
+  assertPersonalSession(request);
   const endpoint = personalSparqlWriteUrl(request);
   const response = await fetchWithDigestFallback(endpoint, {
     method: "POST",
@@ -348,8 +367,49 @@ function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-/** Seed the registry once, then load endpoint records and groups from its configured RDF graph. */
+let seedEndpointsPromise: Promise<FctEndpoint[]> | null = null;
+
+/**
+ * Endpoint list for visitors who are not logged in: read straight from the local ./graph/dataserver-seed.ttl
+ * (the same document that seeds the personal registry after login). No personal graph server is contacted.
+ */
+export function getSeedFctEndpoints(): Promise<FctEndpoint[]> {
+  if (seedEndpointsPromise) return seedEndpointsPromise;
+  const promise = (async (): Promise<FctEndpoint[]> => {
+    const content = await readFile(resolve(getGraphDirectory(), "dataserver-seed.ttl"), "utf8");
+    const triples = await parseRdfDocument(content, ".ttl", "http://localhost/dataserver-seed");
+    const objects = (subject: string, predicate: string) => triples.filter((t) => t.subject.value === subject && t.predicate.value === predicate).map((t) => t.object);
+    const first = (subject: string, predicate: string) => objects(subject, predicate)[0]?.value;
+    const order = (subject: string, predicate: string) => { const n = Number(first(subject, predicate)); return Number.isFinite(n) ? n : 9999; };
+    const isType = (subject: string, type: string) => objects(subject, `${RDF_NS}type`).some((o) => o.value === type);
+    const servers = [...new Set(triples.map((t) => t.subject.value))].filter((subject) => isType(subject, `${SCHEMA_NS}EntryPoint`));
+    const rows = servers.flatMap((server) => {
+      const label = first(server, `${RDFS_NS}label`)?.trim() ?? "";
+      const url = first(server, `${SCHEMA_NS}url`)?.trim() ?? "";
+      if (!label || !/^https?:\/\//i.test(url)) return [];
+      const group = first(server, `${DCTERMS_NS}isPartOf`);
+      const groupName = (group && isType(group, `${SKOS_NS}Collection`) ? first(group, `${RDFS_NS}label`)?.trim() : "") || "Endpoints";
+      return [{ label, url, group: groupName, groupOrder: group ? order(group, `${SCHEMA_NS}position`) : 9999, serverOrder: order(server, `${SCHEMA_NS}position`) }];
+    });
+    rows.sort((a, b) => a.groupOrder - b.groupOrder || a.serverOrder - b.serverOrder || a.label.localeCompare(b.label));
+    const seen = new Set<string>();
+    const endpoints: FctEndpoint[] = [];
+    for (const row of rows) {
+      const id = row.group === "Endpoints" ? slugify(row.label) : slugify(`${row.group}-${row.label}`);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      endpoints.push({ id, label: row.label, url: row.url, group: row.group });
+    }
+    return endpoints;
+  })();
+  seedEndpointsPromise = promise;
+  promise.catch(() => { if (seedEndpointsPromise === promise) seedEndpointsPromise = null; });
+  return promise;
+}
+
+/** Logged in: seed the registry once, then load endpoint records and groups from its configured RDF graph. Logged out: use the local seed file only. */
 export async function getConfiguredFctEndpoints(request?: Request): Promise<FctEndpoint[]> {
+  if (!getPersonalSession(request)) return getSeedFctEndpoints();
   await ensureGraphDirectorySeeded(request);
   const dataserversGraph = getDataserversGraph(request);
   const legacyNs = `${dataserversGraph}#`;

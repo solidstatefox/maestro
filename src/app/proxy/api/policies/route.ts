@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { ensureShapesGraphSeeded, getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
 import { logProxyCaller } from "@/lib/proxy-debug";
 import { describeUpstreamError } from "@/lib/upstream-error";
+import { requirePersonalLogin } from "@/lib/personal-guard";
 
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const SH = "http://www.w3.org/ns/shacl#";
@@ -23,6 +24,8 @@ function get(row: BindingRow, key: string): string { return row[key]?.value ?? "
 /** Resolve the class policy and its optional HTML template from the configured personal SPARQL server. */
 
 export async function POST(request: Request) {
+  const loginRequired = requirePersonalLogin(request);
+  if (loginRequired) return loginRequired;
   logProxyCaller(request, "/proxy/api/policies", { source: "record-policy", component: "RecordPolicyRoute" });
   try {
     const body = await request.json().catch(() => null) as {

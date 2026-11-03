@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { clearQueryCache } from "@/lib/query-cache";
 import { personalSparqlWriteUrl, personalSparqlHeaders } from "@/lib/personal-sparql";
 import { fetchWithDigestFallback } from "@/lib/digest-auth";
+import { requirePersonalLogin } from "@/lib/personal-guard";
 
 function validateIri(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -32,6 +33,8 @@ function validateIri(value: unknown, field: string): string {
 }
 
 export async function POST(request: Request) {
+  const loginRequired = requirePersonalLogin(request);
+  if (loginRequired) return loginRequired;
   logProxyCaller(request, "rdf-loader.POST");
   try {
     const body = await request.json().catch(() => null);

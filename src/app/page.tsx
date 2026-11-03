@@ -32,12 +32,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Label } from "@/components/ui/label";
 import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, Eye, EyeOff, Info } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
-import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, buildAuthHeader, graphSiteForPrefix } from "@/lib/personal-auth";
+import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphSiteForPrefix } from "@/lib/personal-auth";
 import { cachedFetchFct, clearClientQueryCache } from "@/lib/client-query-cache";
 import { initializeMaestroStorage, maestroStorageGet, maestroStorageSet, clearMaestroStorage } from "@/lib/maestro-storage";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
+import { BasicAssistantChat } from "@/components/ai-elements/basic-chat";
+import { transformMaestroRecordXslt } from "@/lib/maestro-xslt";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -1135,7 +1137,7 @@ function PersonalRoleWidget({
         const bound = (roleNode.children ?? []).find((child) => child.name === "value" && Boolean(child.text));
         const first = bound ? { uri: bound.text ?? "", termType: bound.attributes.datatype === "uri" ? "uri" as const : "literal" as const, title: bound.text ?? "" } : values[0];
         if (!first?.uri) return null;
-        return <button type="button" onClick={() => onFirstExampleClick(first.uri)} disabled={loading} className="mb-2 block max-w-full break-words px-2 text-left text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"><em>{bound ? "i.e." : "e.g."}</em> {ellipsize(first.termType === "uri" ? toLabel(first.uri, "Class") : first.title || first.uri)}</button>;
+        return <button type="button" onClick={() => onFirstExampleClick(first.uri)} disabled={loading} className="mb-2 block max-w-full break-words px-2 text-left text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"><em>e.g.</em> {ellipsize(first.termType === "uri" ? toLabel(first.uri, "Class") : first.title || first.uri)}</button>;
       })()}
       <div className={`space-y-0 ${loading ? "opacity-45" : ""}`}>
         {pageValues.map((value, valueIndex) => {
@@ -1341,7 +1343,7 @@ type ShareableUiState = {
   graphsPage?: number;
   rolesPage?: number;
   findEndpointsEnabled?: boolean;
-  centralTab?: "results" | "groups" | "query-tree" | "view-query";
+  centralTab?: "results" | "groups" | "query-tree" | "view-query" | "chat";
   /** Explicit state for the Results/Query toolbar toggle. */
   queryToggle?: boolean;
   showResultBadges?: boolean;
@@ -1523,6 +1525,8 @@ export default function Home() {
   const historyVisitQueryRef = useRef("");
   const historyVisitIdRef = useRef("");
   const historyWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // A template flush persists every edit but publishes just the final live query.
+  const templateHistoryFlushRef = useRef(false);
   // While the pointer is over the search input, coalesce rapid query edits into
   // While the root breadcrumb search is expanded, coalesce changes into one in-memory snapshot.
   const pendingHistoryVisitRef = useRef<{ queryXml: string; stateUrl: string; action: { operator: "+" | "-"; xpath: string; value?: string } | null } | null>(null);
@@ -1553,7 +1557,10 @@ export default function Home() {
   const [graphNavigationIndex, setGraphNavigationIndex] = useState(0);
   const restoredGraphTextRef = useRef<string | null>(null);
   const [findEndpointsEnabled, setFindEndpointsEnabled] = useState(false);
-  const [centralTab, setCentralTab] = useState<"results" | "groups" | "query-tree" | "view-query">("results");
+  const [centralTab, setCentralTab] = useState<"results" | "groups" | "query-tree" | "view-query" | "chat">("results");
+  const [assistantPromptDraft, setAssistantPromptDraft] = useState("");
+  const [assistantPendingPrompt, setAssistantPendingPrompt] = useState<{ id: number; text: string } | null>(null);
+  const assistantPromptIdRef = useRef(0);
   // The Query Tree is its own pane under the results, not a replacement tab.
   const [queryTreeOpen, setQueryTreeOpen] = useState(false);
   const [queryTreeHeightPercent, setQueryTreeHeightPercent] = useState(40);
@@ -1714,6 +1721,19 @@ useEffect(() => {
       }
     })();
   }, []);
+
+  // Renew the existing authenticated proxy cookie while the page stays open.
+  // Never create a session here: only a restored or explicitly logged-in session qualifies.
+  useEffect(() => {
+    if (!authSession) return;
+    const renew = () => setMaestroSessionCookie(authSession);
+    window.addEventListener("focus", renew);
+    document.addEventListener("visibilitychange", renew);
+    return () => {
+      window.removeEventListener("focus", renew);
+      document.removeEventListener("visibilitychange", renew);
+    };
+  }, [authSession]);
 
   const handleFetchProfile = async () => {
     const targetUrl = loginTab === "sparql-oauth" ? loginOauthProfileUrl.trim() : loginWebIdUri.trim();
@@ -3019,8 +3039,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       if (typeof restored.findEndpointsEnabled === "boolean") setFindEndpointsEnabled(restored.findEndpointsEnabled);
       // "query-tree" was a full-pane tab in older share links; it is now the
       // lower pane, so it maps to Results plus an open Query Tree pane.
-      if (["results", "groups", "query-tree", "view-query"].includes(restored.centralTab ?? "")) {
-        setCentralTab(restored.centralTab === "query-tree" ? "results" : restored.centralTab!);
+      if (["results", "groups", "query-tree", "view-query", "chat"].includes(restored.centralTab ?? "")) {
+        setCentralTab(restored.centralTab === "query-tree" || restored.centralTab === "chat" ? "results" : restored.centralTab!);
       }
       if (typeof restored.queryToggle === "boolean") setQueryTreeOpen(restored.queryToggle);
       else if (restored.centralTab === "query-tree") setQueryTreeOpen(true);
@@ -3210,7 +3230,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   useEffect(() => {
     if (!urlStateInitialized) return;
     // Not logged in: never record History. Tracking refs stay untouched so the current query is recorded as a fresh visit after login.
-    if (!authSession) return;
+    if (!authSession || templateHistoryFlushRef.current) return;
     const stateUrl = window.location.href;
     const previousQueryXml = historyVisitQueryRef.current;
     const isInitialLoadedHistoryItem = Boolean(historyBookmarkId && !previousQueryXml);
@@ -4589,7 +4609,7 @@ setGraphFacets(graphs);
     if (!recordPolicy) return null;
     const templateUri = templateOverride || selectedRecordTemplateUri || recordPolicy.template;
     if (!templateUri) {
-      if (!preview) { setRecordFormatError("This policy does not identify an HTML template yet."); setFormattedRecordHtml(""); }
+      if (!preview) { setRecordFormatError("This policy does not identify an XSLT template yet."); setFormattedRecordHtml(""); }
       return null;
     }
     if (!preview) { setRecordFormatError(""); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); }
@@ -4598,12 +4618,38 @@ setGraphFacets(graphs);
         method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-template", "RecordPolicyTemplate") },
         body: JSON.stringify({ action: "template", template: templateUri }),
       });
-      const templatePayload = await templateResponse.json() as { templateHtml?: string; nextName?: string; nextVersion?: string; error?: string };
-      if (!templateResponse.ok || typeof templatePayload.templateHtml !== "string") throw new Error(templatePayload.error || `Template reload returned HTTP ${templateResponse.status}.`);
-      const document = new DOMParser().parseFromString(templatePayload.templateHtml, "text/html");
+      const templatePayload = await templateResponse.json() as { templateXslt?: string; nextName?: string; nextVersion?: string; error?: string };
+      if (!templateResponse.ok || typeof templatePayload.templateXslt !== "string") throw new Error(templatePayload.error || `Template reload returned HTTP ${templateResponse.status}.`);
+      const dataCache = new Map<string, Promise<XMLDocument>>();
+      const describeDocument = (uri: string): Promise<XMLDocument> => {
+        const cached = dataCache.get(uri);
+        if (cached) return cached;
+        const promise = (async () => {
+          const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+          const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(uri)}</value><view type="describe" limit="10000" offset="0"/></query>`;
+          const response = await cachedFetchFct("/proxy/api/fct", {
+            method: "POST", cache: "no-store",
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-binding-describe", "RecordTemplateBinding") },
+            body: describeQueryXml,
+          });
+          const xml = await response.text();
+          if (!response.ok) throw new Error(`Record DESCRIBE returned HTTP ${response.status}: ${xml.slice(0, 500)}`);
+          const parsed = new DOMParser().parseFromString(xml, "application/xml");
+          if (parsed.querySelector("parsererror") || parsed.documentElement.localName !== "facets") throw new Error("Record DESCRIBE did not return a valid fct:facets XML document.");
+          return parsed;
+        })();
+        dataCache.set(uri, promise);
+        return promise;
+      };
+      const document = await transformMaestroRecordXslt(
+        templatePayload.templateXslt,
+        await describeDocument(selectedUri),
+        serializeFctQuery(queryTree),
+        selectedUri,
+      );
       const templateRoot = document.body.firstElementChild;
       if (!templateRoot || templateRoot.tagName.toLowerCase() !== "section" || templateRoot.id !== "maestro-record-viewer") {
-        throw new Error('The template must have a root <section id="maestro-record-viewer"> so it can replace the default Record viewer content.');
+        throw new Error('The XSLT result must have a root <section id="maestro-record-viewer"> so it can replace the default Record viewer content.');
       }
       // Use the same npm package/version notation used by registry dependency metadata.
       const frameworkRequirement = (templateRoot.getAttribute("mui:framework") ?? "").trim();
@@ -4641,27 +4687,6 @@ setGraphFacets(graphs);
       queryDefinitionContainer.setAttribute("data-maestro-query-definitions", "true");
       for (const queryDefinition of queryDefinitions.values()) queryDefinitionContainer.appendChild(queryDefinition);
       if (queryDefinitions.size > 0) document.body.appendChild(queryDefinitionContainer);
-      const dataCache = new Map<string, Promise<XMLDocument>>();
-      const describeDocument = (uri: string): Promise<XMLDocument> => {
-        const cached = dataCache.get(uri);
-        if (cached) return cached;
-        const promise = (async () => {
-          const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
-          const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(uri)}</value><view type="describe" limit="10000" offset="0"/></query>`;
-          const response = await cachedFetchFct("/proxy/api/fct", {
-            method: "POST", cache: "no-store",
-            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-binding-describe", "RecordTemplateBinding") },
-            body: describeQueryXml,
-          });
-          const xml = await response.text();
-          if (!response.ok) throw new Error(`Record DESCRIBE returned HTTP ${response.status}: ${xml.slice(0, 500)}`);
-          const parsed = new DOMParser().parseFromString(xml, "application/xml");
-          if (parsed.querySelector("parsererror") || parsed.documentElement.localName !== "facets") throw new Error("Record DESCRIBE did not return a valid fct:facets XML document.");
-          return parsed;
-        })();
-        dataCache.set(uri, promise);
-        return promise;
-      };
       const xpathValues = (xml: XMLDocument, expression: string): string[] => {
         const resolver = (prefix: string | null) => prefix === "fct" ? "http://openlinksw.com/services/facets/1.0/" : null;
         try {
@@ -4926,6 +4951,119 @@ setGraphFacets(graphs);
           }
         }
       }
+      // XSLT may emit declarative template calls. Interpret them against query
+      // clones, not the authoritative live tree. A live-scope call is queued
+      // until the full stylesheet and all sandbox queries have completed.
+      // Grammar:
+      //   <mui:template-call scope="sandbox" action="fctQueryTreeApi.setSearchText(undefined, 'cat')"
+      //                      execute="true" target="template-results" />
+      //   <mui:template-call scope="live" action="fctQueryTreeApi.addClass(undefined, null, 'http://example.org/Cat')" />
+      // Optional direct <query> children of a sandbox call may be emitted by
+      // xsl:copy-of from /mctx:context/mctx:live-query/fct:query.
+      const templateCalls = Array.from(document.body.querySelectorAll("mui\\:template-call"));
+      if (templateCalls.length > 64) throw new Error("The XSLT template exceeds the limit of 64 query calls.");
+      const templateApi = fctQueryTreeApi as unknown as Record<string, (...args: unknown[]) => unknown>;
+      let sandboxTree = fctQueryTreeApi.getTree(queryTree);
+      let queuedLiveTree = fctQueryTreeApi.getTree(queryTree);
+      const liveSnapshots: string[] = [];
+      let executedSandboxQueries = 0;
+      for (const call of templateCalls) {
+        const scope = (call.getAttribute("scope") ?? "sandbox").trim();
+        if (scope !== "sandbox" && scope !== "live") throw new Error("XSLT template call scope must be sandbox or live.");
+        const action = (call.getAttribute("action") ?? "").trim();
+        const explicitQuery = call.querySelector("query");
+        if (scope === "live" && explicitQuery) throw new Error("Live template calls must use the approved query-edit API, not raw query XML.");
+        if (action) {
+          const parsedAction = parsePolicyQueryAction(action, call, selectedUri);
+          const startingTree = scope === "live" ? queuedLiveTree : sandboxTree;
+          const result = templateApi[parsedAction.method](startingTree, ...parsedAction.args.slice(1));
+          if (!result || typeof result !== "object") throw new Error(`Template operation ${parsedAction.method} did not produce a query tree.`);
+          const nextTree = fctQueryTreeApi.getTree(result as typeof startingTree);
+          if (scope === "live") {
+            queuedLiveTree = nextTree;
+            liveSnapshots.push(serializeFctQuery(nextTree));
+          } else sandboxTree = nextTree;
+        } else if (!explicitQuery) {
+          throw new Error("An XSLT template call must have an approved action or a cloned query.");
+        }
+
+        if (call.getAttribute("execute") === "true") {
+          if (scope !== "sandbox") throw new Error("Only sandboxed template queries may execute before the live queue is flushed.");
+          if (++executedSandboxQueries > 4) throw new Error("The XSLT template exceeds four sandbox query executions.");
+          let queryXml = explicitQuery ? explicitQuery.outerHTML : serializeFctQuery(sandboxTree);
+          const isolatedQuery = new DOMParser().parseFromString(queryXml, "application/xml");
+          if (isolatedQuery.querySelector("parsererror") || isolatedQuery.documentElement.localName !== "query") {
+            throw new Error("Sandbox template query is not a valid FCT XML query.");
+          }
+          const address = isolatedQuery.documentElement.getAttribute("addr") ?? "";
+          const currentAddress = queryTree.attributes.addr ?? "";
+          // Templates may change filters and view settings, but must not
+          // silently redirect credentials/requests to a different graph server.
+          if (!address || address.slice(address.indexOf("@") + 1) !== currentAddress.slice(currentAddress.indexOf("@") + 1)) {
+            throw new Error("A sandbox query must use the live query's graph server.");
+          }
+          for (const view of Array.from(isolatedQuery.getElementsByTagName("*")).filter((element) => element.localName === "view")) {
+            const limit = Number(view.getAttribute("limit") ?? 30);
+            if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) view.setAttribute("limit", "100");
+            view.setAttribute("offset", "0");
+          }
+          queryXml = new XMLSerializer().serializeToString(isolatedQuery);
+          if (queryXml.length > 100000) throw new Error("Sandbox FCT query is too large.");
+          if (!preview) {
+            const response = await cachedFetchFct("/proxy/api/fct", {
+              method: "POST", cache: "no-store",
+              headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-xslt-sandbox", "RecordXsltSandbox") },
+              body: queryXml,
+            });
+            const results = (await readFctResponse(response)).results.slice(0, 100);
+            const targetId = (call.getAttribute("target") ?? "").trim();
+            const target = targetId ? document.getElementById(targetId) : null;
+            if (target) {
+              // Preserve the first child as a styled result prototype when present.
+              const prototype = target.firstElementChild?.cloneNode(true) as Element | undefined;
+              target.replaceChildren();
+              for (const result of results) {
+                const child = prototype?.cloneNode(true) as Element | undefined ?? document.createElement("div");
+                child.removeAttribute("id");
+                child.textContent = result.title || result.uri;
+                target.appendChild(child);
+              }
+            }
+          }
+        }
+        call.remove();
+      }
+
+      if (!preview && liveSnapshots.length) {
+        // Save every intermediate History snapshot in queue order, but do not
+        // publish any intermediate tree. Only the final replaceTree notifies
+        // Maestro's FCT subscribers and causes a query to execute.
+        const finalXml = liveSnapshots[liveSnapshots.length - 1];
+        if (authSession) {
+          templateHistoryFlushRef.current = true;
+          try {
+            await historyWriteQueueRef.current;
+            let previousXml = serializeFctQuery(queryTree);
+            for (const snapshot of liveSnapshots) {
+              if (snapshot === previousXml) continue;
+              const url = new URL(window.location.href);
+              url.searchParams.set("q", snapshot);
+              await writeHistoryVisit(snapshot, url.toString(), deriveHistoryAction(previousXml, snapshot));
+              previousXml = snapshot;
+            }
+            historyVisitQueryRef.current = finalXml;
+          } catch (cause) {
+            console.warn("Could not persist every queued template edit to History", cause);
+            // Let Maestro's ordinary History effect record the final query if
+            // an intermediate History write fails.
+            historyVisitQueryRef.current = "";
+          } finally {
+            templateHistoryFlushRef.current = false;
+          }
+        }
+        replaceQueryTree(queuedLiveTree);
+      }
+
       sanitize(document.body);
       // Embedded XML query definitions remain present with their IDs in the hidden template area.
       document.querySelectorAll("query").forEach((element) => { element.setAttribute("hidden", ""); element.setAttribute("aria-hidden", "true"); });
@@ -6282,7 +6420,7 @@ useEffect(() => {
       >
         <span className="flex w-full items-center justify-between gap-2">
           <span className="max-w-40 truncate font-medium text-foreground">
-            <em>{bound ? "i.e." : "e.g."}</em> {ellipsize(summary?.label || label, 32)}
+            <em>e.g.</em> {ellipsize(summary?.label || label, 32)}
           </span>
           <span className="shrink-0 tabular-nums">
             {summary?.count !== undefined && summary?.count !== null ? shortenCount(summary.count) : "…"}
@@ -8683,7 +8821,7 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                                           )}
                                         </button>} /><TooltipContent>{`Filter by role ${item.label}`}</TooltipContent></Tooltip>
                                       )}
-                                      {item.example && <button type="button" title={item.example.label} disabled={facetListStale || item.example.termType !== "uri"} onClick={() => showClassResults(item.example!.uri, activeLeafId)} className="block break-words text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>{(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) ? "i.e." : "e.g."}</em> {ellipsize(item.example.label)}</button>}
+                                      {item.example && !(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) && <button type="button" title={item.example.label} disabled={facetListStale || item.example.termType !== "uri"} onClick={() => showClassResults(item.example!.uri, activeLeafId)} className="block break-words text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>e.g.</em> {ellipsize(item.example.label)}</button>}
 									  </div>
                                       <span className="shrink-0 text-xs text-muted-foreground">{item.count.toLocaleString()}</span>
                                     </div>
@@ -9252,7 +9390,7 @@ onMouseLeave={() => {
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize={45} minSize={25} className="min-w-0">
             <section ref={centralPaneRef} className="flex h-full min-h-0 min-w-0 flex-col border-r">
-              <div className="group/header shrink-0 border-b px-3 pb-3 pt-0">
+              <div className={`group/header shrink-0 border-b px-3 pb-3 pt-0 ${centralTab === "chat" ? "hidden" : ""}`}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm">
                   <span className="shrink-0 text-muted-foreground">
                     Group <strong className="font-semibold text-foreground">{isCountingResults || effectiveResultsTotalCount === null ? "…" : shortenCount(effectiveResultsTotalCount)}</strong> results by:
@@ -9501,6 +9639,24 @@ onMouseLeave={() => {
                 </div>
               )}
 
+              {centralTab === "chat" && (
+                <div
+                  id="central-panel-chat"
+                  role="region"
+                  aria-label="Maestro assistant chat"
+                  className="flex min-h-0 flex-1 flex-col overflow-hidden"
+                >
+                  <BasicAssistantChat
+                    userName={authSession ? (authSession.userName || authSession.username || "User") : undefined}
+                    userAvatarUrl={authSession?.avatarUrl}
+                    onShowResults={() => { setAssistantPromptDraft(""); setCentralTab("results"); }}
+                    initialDraft={assistantPromptDraft}
+                    pendingPrompt={assistantPendingPrompt}
+                    onPendingPromptConsumed={(id) => setAssistantPendingPrompt((current) => current?.id === id ? null : current)}
+                  />
+                </div>
+              )}
+
               {centralTab === "groups" && selectedGroupByOption && (
                 <div id="central-panel-groups" role="tabpanel" aria-labelledby="central-tab-groups" className="flex min-h-0 flex-1 flex-col overflow-hidden">
                   {groupByOptions.length > 0 ? (
@@ -9618,11 +9774,31 @@ onMouseLeave={() => {
                 </div>
               </div>
               <div className="group/header shrink-0 border-t bg-muted p-3">
+                {centralTab === "chat" ? (
+                  <div id="maestro-assistant-composer-slot" className="w-full" />
+                ) : (<>
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
                     <input
+                      onFocus={() => setCentralTab("chat")}
                       aria-label="Ask the assistant"
-                      placeholder="Ask the assistant…"
+                      placeholder="Message Maestro…"
+                      value={assistantPromptDraft}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        setAssistantPromptDraft(value);
+                        if (value.length > 0) setCentralTab("chat");
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" || event.shiftKey) return;
+                        event.preventDefault();
+                        const text = assistantPromptDraft.trim();
+                        if (!text) return;
+                        const id = ++assistantPromptIdRef.current;
+                        setAssistantPendingPrompt({ id, text });
+                        setAssistantPromptDraft("");
+                        setCentralTab("chat");
+                      }}
                       className="h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
                     />
                   </div>
@@ -9708,6 +9884,7 @@ onMouseLeave={() => {
                   </ButtonGroup>
                 </div>
                 {searchError && <p className="mt-2 text-sm text-destructive">{searchError}{searchError.includes("Could not load Datasites from the personal SPARQL store") && <> Check that your <a href={personalSparqlEndpoint || undefined} target="_blank" rel="noreferrer" className="underline underline-offset-2">personal graph server</a> is online.</>}</p>}
+                </>)}
               </div>
             </section>
             </ResizablePanel>

@@ -183,7 +183,7 @@ export function setMaestroSessionCookie(session: PersonalAuthSession | null) {
     userName: session.displayName || session.userName || session.username,
     userAvatar: session.avatarUrl,
   };
-  const maxAge = session.rememberMe ? 60 * 60 * 24 * 30 : ""; // 30 days or session
+  const maxAge = session.rememberMe ? 60 * 60 * 24 * 400 : ""; // Renewed on page load/focus; session cookie when Remember Me is off
   document.cookie = `${COOKIE_NAME}=${encodeURIComponent(JSON.stringify(payload))}; path=/; SameSite=Lax; ${maxAge ? `max-age=${maxAge}` : ""}`;
 }
 

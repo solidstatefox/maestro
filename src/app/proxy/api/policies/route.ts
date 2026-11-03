@@ -21,7 +21,7 @@ function safeIri(value: unknown): value is string {
 function sparqlIri(value: string): string { return `<${value}>`; }
 function get(row: BindingRow, key: string): string { return row[key]?.value ?? ""; }
 
-/** Resolve the class policy and its optional HTML template from the configured personal SPARQL server. */
+/** Resolve the class policy and its XSLT template from the configured personal SPARQL server. */
 
 export async function POST(request: Request) {
   const loginRequired = requirePersonalLogin(request);
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
       if (types.length === 0) return NextResponse.json({ policy: null });
       const values = types.map(sparqlIri).join(" ");
       const shapesGraph = sparqlIri(getShapesGraph(request));
-      const query = `PREFIX rdf: <${RDF}>\nPREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?policy ?policyLabel ?recordShape ?template ?templateLabel WHERE { GRAPH ${shapesGraph} { VALUES ?class { ${values} } ?policy a mui:ClassPolicy ; mui:forClass ?class ; mui:recordShape ?recordShape ; rdfs:label ?policyLabel . OPTIONAL { ?policy mui:htmlTemplate ?template . OPTIONAL { ?template rdfs:label ?templateLabel } } } } ORDER BY LCASE(STR(?policyLabel)) LCASE(STR(?templateLabel)) LIMIT 100`;
+      const query = `PREFIX rdf: <${RDF}>\nPREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?policy ?policyLabel ?recordShape ?template ?templateLabel WHERE { GRAPH ${shapesGraph} { VALUES ?class { ${values} } ?policy a mui:ClassPolicy ; mui:forClass ?class ; mui:recordShape ?recordShape ; rdfs:label ?policyLabel . OPTIONAL { ?policy mui:xsltTemplate ?template . OPTIONAL { ?template rdfs:label ?templateLabel } } } } ORDER BY LCASE(STR(?policyLabel)) LCASE(STR(?templateLabel)) LIMIT 100`;
       const payload = await queryPersonalSparql(query, 20000, request);
       const grouped = new Map<string, { uri: string; label: string; recordShape: string; templates: { uri: string; label: string }[] }>();
       for (const row of (payload.results?.bindings ?? []) as BindingRow[]) {
@@ -62,17 +62,18 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "template") {
-      if (!safeIri(body.template)) return NextResponse.json({ error: "A valid HTML template URI is required." }, { status: 400 });
-      // Read from the manifest-mapped policy graph, and ignore stale template literals
-      // that cannot satisfy Format's required record-viewer root.
-      const query = `PREFIX rdf: <${RDF}>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?templateHtml WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} { ${sparqlIri(body.template)} (rdf:value|mui:templateContent) ?templateHtml . FILTER(CONTAINS(STR(?templateHtml), 'id="maestro-record-viewer"')) } } LIMIT 1`;
+      if (!safeIri(body.template)) return NextResponse.json({ error: "A valid XSLT template URI is required." }, { status: 400 });
+      // Load the graph-stored XSLT 3.0 stylesheet; the SaxonJS proxy
+      // compiles it to SEF, and Maestro validates its rendered commands.
+      const query = `PREFIX rdf: <${RDF}>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?templateXslt WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} { ${sparqlIri(body.template)} (rdf:value|mui:templateContent) ?templateXslt . FILTER(CONTAINS(STR(?templateXslt), 'xsl:stylesheet')) } } LIMIT 1`;
       const payload = await queryPersonalSparql(query, 20000, request);
-      const templateHtml = get((payload.results?.bindings?.[0] ?? {}) as BindingRow, "templateHtml");
-      if (!templateHtml) return NextResponse.json({ error: `Template ${body.template} has no HTML literal in ${getShapesGraph(request)} containing the required maestro-record-viewer root.` }, { status: 404 });
+      const templateXslt = get((payload.results?.bindings?.[0] ?? {}) as BindingRow, "templateXslt");
+      if (!templateXslt) return NextResponse.json({ error: `Template ${body.template} has no XSLT stylesheet in ${getShapesGraph(request)}. Reload the updated ./graph policy documents into the Personal graph store.` }, { status: 404 });
+      if (templateXslt.length > 250000) return NextResponse.json({ error: "XSLT template is too large." }, { status: 413 });
       // Resolve the actual installed runtime version instead of trusting a version copied into the template.
       const nextPackage = JSON.parse(await readFile(resolve(process.cwd(), "node_modules/next/package.json"), "utf8")) as { name?: unknown; version?: unknown };
       if (nextPackage.name !== "next" || typeof nextPackage.version !== "string") throw new Error("Could not determine the installed Next.js package name and version.");
-      return NextResponse.json({ templateHtml, nextName: nextPackage.name, nextVersion: nextPackage.version });
+      return NextResponse.json({ templateXslt, nextName: nextPackage.name, nextVersion: nextPackage.version });
     }
 
     if (body.action === "validate") {

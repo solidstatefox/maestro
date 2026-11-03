@@ -152,42 +152,47 @@ mui:CodeRole
     rdfs:comment "Values that are source text (XML, SPARQL, JSON) and should be shown verbatim in a code view. Pair with mui:syntax. Technical: record viewer only."@en .
 
 # ---------------------------------------------------------------------------
-# HTML template policies and safe template annotations used by Maestro.
+# XSLT template policies and safe template annotations used by Maestro.
 # ---------------------------------------------------------------------------
 
-mui:HtmlTemplate
+mui:XsltTemplate
     a owl:Class ;
-    rdfs:label "HTML template"@en ;
-    rdfs:comment "An HTML fragment used to format a record in Maestro. The template content is stored as a literal on this resource."@en .
+    rdfs:label "XSLT template"@en ;
+    rdfs:comment "An XSLT 1.0 stylesheet that formats FCT DESCRIBE XML while preserving Maestro rendering and actions. The stylesheet is stored as an RDF literal."@en .
 
-mui:htmlTemplate
+mui:xsltTemplate
     a owl:ObjectProperty ;
-    rdfs:label "HTML template"@en ;
-    rdfs:comment "The HTML template resource used by a class policy's Format action."@en ;
+    rdfs:label "XSLT template"@en ;
+    rdfs:comment "The XSLT stylesheet resource used by a class policy's Format action."@en ;
     rdfs:domain mui:ClassPolicy ;
-    rdfs:range mui:HtmlTemplate .
+    rdfs:range mui:XsltTemplate .
 
 mui:templateContent
     a owl:DatatypeProperty ;
     rdfs:label "template content"@en ;
-    rdfs:comment "The HTML template source. Store the HTML as a literal; CDATA is a serialization detail, not part of the RDF literal value."@en ;
-    rdfs:domain mui:HtmlTemplate ;
+    rdfs:comment "The XSLT stylesheet source. Store the stylesheet as a literal; RDF/XML CDATA is only a serialization detail."@en ;
+    rdfs:domain mui:XsltTemplate ;
     rdfs:range xsd:string .
 
 mui:data
     a owl:AnnotationProperty ;
     rdfs:label "data binding"@en ;
-    rdfs:comment "In a Maestro HTML template, the value is the full property URI whose value(s) in the current query scope populate the element."@en .
+    rdfs:comment "In a Maestro XSLT result template, the value is the full property URI whose value(s) in the current query scope populate the element."@en .
 
 mui:query
     a owl:AnnotationProperty ;
     rdfs:label "query binding"@en ;
-    rdfs:comment "In a Maestro HTML template, the value is the id of an embedded XML query whose results instantiate the component."@en .
+    rdfs:comment "In a Maestro XSLT result template, the value is the id of an embedded XML query whose results instantiate the component."@en .
 
 mui:action
     a owl:AnnotationProperty ;
     rdfs:label "Maestro action"@en ;
     rdfs:comment "Declares a constrained interaction routed through Maestro's approved live-query update API. The initial interpreter accepts only a direct allowlisted fctQueryTreeApi method call with literal or approved data-binding arguments; template content is never evaluated as unrestricted JavaScript or TypeScript."@en .
+
+mui:templateCall
+    a owl:AnnotationProperty ;
+    rdfs:label "template query call"@en ;
+    rdfs:comment "An XSLT-result instruction for a bounded sandbox query operation or a queued live query edit. Calls are validated by Maestro and never run as JavaScript."@en .
 
 # Serialized SPARQL form of the FCT query saved with a Bookmark.
  mui:querySparql

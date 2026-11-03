@@ -89,6 +89,7 @@ const parser = new XMLParser({
 });
 
 const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const RDFS_SUBCLASS_OF = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 
 
 const variable = (name: string): SparqlTerm => ({ kind: "variable", name: name.replace(/^\?/, "") });
@@ -607,12 +608,32 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     const subject = view === "properties-in" ? variable("related") : target;
     const predicate = view === "classes" ? iriTerm(RDF_TYPE) : view === "properties-in" ? facet : facet;
     const object = view === "properties-in" ? target : view === "classes" ? facet : variable("o");
-    const facetWhere = [...scopedWhere, { kind: "triple", subject, predicate, object } satisfies SparqlPattern];
+    // <view type="classes" tree="yes">: list every class of the result set AND all of its superclasses up
+    // to the root (rdf:type/rdfs:subClassOf*), one row per (class, immediate parent). A class with several
+    // parents therefore appears once per parent; a root has no parent column value. The count is still the
+    // number of distinct result resources that are instances of the class (directly or via a subclass).
+    const classTree = view === "classes" && ["yes", "true", "1", "on"].includes((viewNode?.attributes.tree ?? "").trim().toLowerCase());
+    const parent = variable("parent");
+    const treePath: SparqlTerm = { kind: "raw-term", value: `<${RDF_TYPE}>/<${RDFS_SUBCLASS_OF}>*` };
+    const facetWhere: SparqlPattern[] = classTree
+      ? [
+          ...scopedWhere,
+          { kind: "triple", subject, predicate: treePath, object },
+          { kind: "filter", expression: { kind: "function", name: "isIRI", args: [termExpr(facet)] } },
+          { kind: "optional", patterns: [
+            { kind: "triple", subject: facet, predicate: iriTerm(RDFS_SUBCLASS_OF), object: parent },
+            { kind: "filter", expression: { kind: "function", name: "isIRI", args: [termExpr(parent)] } },
+            { kind: "filter", expression: binary("!=", termExpr(parent), termExpr(facet)) },
+          ] },
+        ]
+      : [...scopedWhere, { kind: "triple", subject, predicate, object } satisfies SparqlPattern];
     const projections: SparqlProjection[] = [
       { expression: termExpr(facet), as: variable("c1") },
       countProjection(view === "properties-in" ? variable("related") : target),
     ];
-    if (view === "properties") {
+    if (classTree) {
+      projections.push({ expression: termExpr(parent) });
+    } else if (view === "properties") {
       projections.push({
         expression: { kind: "aggregate", name: "SAMPLE", distinct: false, expression: termExpr(variable("o")) },
         as: variable("sampleVal"),
@@ -627,11 +648,15 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       directives,
       projections,
       where: facetWhere,
-      groupBy: [termExpr(facet)],
+      groupBy: classTree ? [termExpr(facet), termExpr(parent)] : [termExpr(facet)],
       // With "Order results" on, every non-count query carries an ORDER BY. Count ordering is
       // used when the active Group By facet requests it; otherwise order by the facet IRI so
       // pages are deterministic. ORDER BY runs before LIMIT/OFFSET, so pages are globally sorted.
-      ...(shouldOrder
+      // The class tree is always ordered by parent hierarchy (roots, whose parent is unbound, come first),
+      // so a limit truncates deterministically.
+      ...(classTree
+        ? { orderBy: [{ expression: termExpr(parent), direction: "ASC" as const }, { expression: termExpr(facet), direction: "ASC" as const }] }
+        : shouldOrder
         ? {
             orderBy: viewNode?.attributes.sort === "count"
               ? [{ expression: termExpr(variable("n")), direction: "DESC" as const }, { expression: { kind: "function", name: "STR", args: [termExpr(facet)] } as SparqlExpression, direction: "ASC" as const }]

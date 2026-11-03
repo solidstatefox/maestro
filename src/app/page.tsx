@@ -30,7 +30,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Ban, Bot, Check, ChevronDown, ChevronRight, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, Eye, EyeOff, Info } from "lucide-react";
+import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, Eye, EyeOff, Info } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, buildAuthHeader, graphSiteForPrefix } from "@/lib/personal-auth";
 import { cachedFetchFct, clearClientQueryCache } from "@/lib/client-query-cache";
@@ -100,7 +100,9 @@ const RESULTS_PAGE_SIZE_OPTIONS = [10, 20, 30, 50] as const;
 const RESULTS_BATCH_SIZE_OPTIONS = [30, 100, 250, 500, 1000] as const;
 /** LIMIT applied to every left-panel widget: Categories, Personal facets, Graphsites, and Configure Properties/Roles. */
 const LEFT_PANEL_LIMIT_STORAGE_KEY = "maestro-left-panel-limit";
-const DEFAULT_LEFT_PANEL_LIMIT = 100;
+const DEFAULT_LEFT_PANEL_LIMIT = 30;
+/** Row window for the Categories tree query (type="classes" tree="yes"): one row per class/parent edge. */
+const CATEGORY_TREE_QUERY_LIMIT = 500;
 const RDFS_LABEL_URI = "http://www.w3.org/2000/01/rdf-schema#label";
 
 /** Common RDF vocabulary properties used as human-readable names or labels. */
@@ -143,6 +145,8 @@ type FacetItem = {
   uri: string;
   label: string;
   count: number;
+  /** Immediate superclass, present on rows of a tree="yes" classes view (one row per parent). */
+  parent?: string;
   example?: { uri: string; label: string; termType?: "uri" | "literal" | "bnode" };
 };
 
@@ -165,6 +169,54 @@ type FacetName = string;
 
 type OntologyClassMetadata = { uri: string; ontology: string; parent?: string; ontologyLabel?: string };
 type CategoryTreeNode = { item: FacetItem; children: CategoryTreeNode[] };
+
+/** At most this many distinct leaf categories are listed on one page of the Categories tree. */
+const CATEGORY_TREE_LEAVES_PER_PAGE = 10;
+/** A node is identified by its path, because a class with several parents appears once under each. */
+const categoryTreeNodeKey = (parentKey: string, uri: string) => (parentKey ? `${parentKey}\u0000${uri}` : uri);
+
+/** Every node that has children (the ones that can be collapsed), by path key. */
+function collectCategoryTreeParentKeys(roots: CategoryTreeNode[]): string[] {
+  const keys: string[] = [];
+  const visit = (node: CategoryTreeNode, parentKey: string) => {
+    const key = categoryTreeNodeKey(parentKey, node.item.uri);
+    if (node.children.length > 0) { keys.push(key); node.children.forEach((child) => visit(child, key)); }
+  };
+  roots.forEach((root) => visit(root, ""));
+  return keys;
+}
+
+/**
+ * Split the tree into pages holding at most CATEGORY_TREE_LEAVES_PER_PAGE distinct leaf categories each.
+ * Leaves are taken in tree order; a page shows its leaves together with the ancestor path leading to each
+ * of them, so a subtree larger than one page continues on the next page under the same ancestors.
+ */
+function paginateCategoryTree(roots: CategoryTreeNode[]): CategoryTreeNode[][] {
+  const pageLeaves: Array<Set<string>> = [new Set()];
+  const pagesOfNode = new Map<string, Set<number>>();
+  const assign = (node: CategoryTreeNode, parentKey: string): Set<number> => {
+    const key = categoryTreeNodeKey(parentKey, node.item.uri);
+    const pages = new Set<number>();
+    if (node.children.length === 0) {
+      let current = pageLeaves[pageLeaves.length - 1];
+      if (!current.has(node.item.uri) && current.size >= CATEGORY_TREE_LEAVES_PER_PAGE) { current = new Set(); pageLeaves.push(current); }
+      current.add(node.item.uri);
+      pages.add(pageLeaves.length - 1);
+    } else {
+      for (const child of node.children) assign(child, key).forEach((page) => pages.add(page));
+    }
+    pagesOfNode.set(key, pages);
+    return pages;
+  };
+  roots.forEach((root) => assign(root, ""));
+  const prune = (node: CategoryTreeNode, parentKey: string, page: number): CategoryTreeNode | null => {
+    const key = categoryTreeNodeKey(parentKey, node.item.uri);
+    if (!pagesOfNode.get(key)?.has(page)) return null;
+    return { item: node.item, children: node.children.flatMap((child) => prune(child, key, page) ?? []) };
+  };
+  if (roots.length === 0) return [[]];
+  return pageLeaves.map((_, page) => roots.flatMap((root) => prune(root, "", page) ?? []));
+}
 
 type EnrichedTerm = {
   value: string;
@@ -305,7 +357,7 @@ function parseFctResponse(xmlText: string): ParsedFctResponse {
   const byLocalName = (root: ParentNode, name: string) => Array.from(root.childNodes).filter((node): node is Element => node.nodeType === 1 && (node as Element).localName === name);
   const root = document.documentElement;
   const getText = (name: string) => byLocalName(root, name)[0]?.textContent?.trim() ?? "";
-  const error = getText("error");
+  const error = presentServerError(getText("error"));
   
   const warning = getText("warning");
 const sqlState = getText("sql-state");
@@ -399,6 +451,7 @@ const dbActivity = getText("db-activity");
       uri: columns[0].value,
       label: columns[0].label || columns[0].shortform || toLabel(columns[0].value, labelKind),
       count: Number(columns[1]?.value ?? 0),
+      ...(resultType === "classes" && columns[2]?.termType === "uri" && columns[2].value ? { parent: columns[2].value } : {}),
       ...(exampleColumn?.value ? { example: { uri: exampleColumn.value, label: exampleColumn.label || exampleColumn.shortform || (exampleColumn.termType === "uri" ? toLabel(exampleColumn.value, "Class") : exampleColumn.value), termType: exampleColumn.termType } } : {}),
     }];
   });
@@ -442,6 +495,18 @@ const dbActivity = getText("db-activity");
   };
 }
 
+/**
+ * Some raw graph-server errors are not actionable as-is. A Virtuoso ANYTIME timeout means the query ran into the
+ * server's time limit; the raw text goes to the console and the UI tells the user what to change instead.
+ */
+function presentServerError(message: string): string {
+  if (/ANYTIME\s+timeout/i.test(message)) {
+    console.error("Maestro: the graph server reported an ANYTIME timeout.", message);
+    return "The graph server stopped this query at its time limit. Open the Maestro controls (gear icon) and set Query timeout to a value greater than 0.";
+  }
+  return message;
+}
+
 /** Browser/undici fetch errors are often just "Failed to fetch"; say what actually failed. */
 function facetLoadErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
@@ -452,7 +517,7 @@ function facetLoadErrorMessage(error: unknown, fallback: string): string {
     const causeText = cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "";
     return `${message}${causeText ? `: ${causeText}` : ""} — the request to the Maestro server did not complete (server down, network interruption, or blocked request).`;
   }
-  return message;
+  return presentServerError(message);
 }
 
 async function readFctResponse(response: Response): Promise<ParsedFctResponse> {
@@ -695,7 +760,7 @@ function DistinctCount({
           proxyResponse: responseDiagnostics,
           cause: requestError instanceof Error ? requestError.cause : undefined,
         });
-        setError(`${stage}: ${message}`);
+        setError(`${stage}: ${presentServerError(message)}`);
       }
     }
 
@@ -798,21 +863,38 @@ function treeHasPropertyFilter(
   );
 }
 
+/**
+ * Canonical Group By ordering, used by BOTH the Results group cards and the Personal facet widget that is being
+ * grouped on: facet-equivalent count (column 2) descending, then label. One comparator keeps the two lists in the
+ * same order, so a facet value always sits at the same position as its group card.
+ */
+function compareGroupValues(a: FctResult, b: FctResult): number {
+  const aCount = Number(a.columns?.[1]?.value ?? 0);
+  const bCount = Number(b.columns?.[1]?.value ?? 0);
+  return bCount - aCount || (a.title || a.uri).localeCompare(b.title || b.uri);
+}
+
 /** Each widget owns a real subscription to the authoritative query store. */
 function PersonalWidgetQueryListener({
   propertyUri,
   sortByCount,
   limit,
+  groupBy,
   setPersonalWidgets,
 }: {
   propertyUri: string;
   sortByCount: boolean;
   limit: number;
+  /** When this facet is the active Group By, run the exact query the Results group pane runs. */
+  groupBy?: { option: GroupByOption; limit: number };
   setPersonalWidgets: Dispatch<SetStateAction<PersonalWidget[]>>;
 }) {
   const { tree } = useFctQuery();
   const widgetTree = createPropertyWidgetQuery(tree, propertyUri, "forward", undefined, true);
-  const widgetQueryXml = serializeFctQuery(setQueryViewAttributes(widgetTree, { sort: sortByCount ? "count" : "", limit: String(limit) }));
+  const widgetQueryXml = groupBy
+    ? serializeFctQuery(createGroupValuesQuery(tree, groupBy.option, { limit: groupBy.limit, offset: 0 }))
+    : serializeFctQuery(setQueryViewAttributes(widgetTree, { sort: sortByCount ? "count" : "", limit: String(limit) }));
+  const orderLikeGroups = Boolean(groupBy);
 
   useEffect(() => {
     // Reconcile every mounted widget against the active <view> scope. A widget
@@ -866,9 +948,10 @@ function PersonalWidgetQueryListener({
             const datatype = child.attributes.datatype ?? (lang ? undefined : "string");
             return fctTermKey(child.text ?? "", datatype, lang);
           });
-        const values = selectedTerms.length
+        const filteredValues = selectedTerms.length
           ? fetchedValues.filter((value) => selectedTerms.includes(facetValueKey(value)))
           : fetchedValues;
+        const values = orderLikeGroups ? filteredValues.slice().sort(compareGroupValues) : filteredValues;
         if (cancelled) return;
         setPersonalWidgets((current) =>
           current.map((widget) =>
@@ -914,7 +997,7 @@ function PersonalWidgetQueryListener({
       cancelled = true;
       controller.abort();
     };
-  }, [widgetQueryXml, propertyUri, setPersonalWidgets]);
+  }, [widgetQueryXml, propertyUri, setPersonalWidgets, orderLikeGroups]);
 
   return null;
 }
@@ -925,6 +1008,8 @@ function PersonalRoleWidget({
   roleNode,
   label,
   isGroupByRole,
+  groupBy,
+  limit,
   onGroupValueClick,
   setRoleWidgetStatuses,
   onFirstExampleClick,
@@ -933,6 +1018,9 @@ function PersonalRoleWidget({
   roleNode: FctQueryNode;
   label: string;
   isGroupByRole: boolean;
+  /** When this role is the active Group By, run the exact query the Results group pane runs. */
+  groupBy?: { option: GroupByOption; limit: number };
+  limit: number;
   onGroupValueClick: (value: FctResult) => void;
   setRoleWidgetStatuses: Dispatch<SetStateAction<Record<string, RoleWidgetStatus>>>;
   onFirstExampleClick: (uri: string) => void;
@@ -960,10 +1048,13 @@ function PersonalRoleWidget({
     }),
   };
   const roleWidgetTree = createPropertyWidgetQuery(unconstrainedTree, uri, "reverse", roleNode.id, true);
-  const widgetQueryXml = serializeFctQuery(setQueryViewAttributes(
-    roleWidgetTree,
-    isGroupByRole ? { sort: "count" } : { sort: "" },
-  ));
+  const widgetQueryXml = groupBy
+    ? serializeFctQuery(createGroupValuesQuery(tree, groupBy.option, { limit: groupBy.limit, offset: 0 }))
+    : serializeFctQuery(setQueryViewAttributes(
+      roleWidgetTree,
+      { ...(isGroupByRole ? { sort: "count" } : { sort: "" }), limit: String(limit) },
+    ));
+  const roleOrderLikeGroups = Boolean(groupBy);
   const selectedKeys = (roleNode.children ?? [])
     .filter((child) => child.name === "value" && Boolean(child.text))
     .map((child) => fctTermKey(child.text ?? "", child.attributes.datatype, child.attributes["xml:lang"]));
@@ -998,20 +1089,21 @@ function PersonalRoleWidget({
         const data = await readFctResponse(response);
         rememberShortforms(data?.shortforms);
         if (!response.ok) throw new Error(data.error ?? `Failed to load role values for ${uri}.`);
-        const fetched = Array.isArray(data.results) ? data.results as FctResult[] : [];
+        const fetchedRaw = Array.isArray(data.results) ? data.results as FctResult[] : [];
+        const fetched = roleOrderLikeGroups ? fetchedRaw.slice().sort(compareGroupValues) : fetchedRaw;
         if (cancelled) return;
         setValues((current) => current.length === fetched.length && current.every((item, index) => item.uri === fetched[index]?.uri && item.datatype === fetched[index]?.datatype && item.lang === fetched[index]?.lang) ? current : fetched);
         setPage((current) => Math.min(current, Math.max(0, Math.ceil(fetched.length / 10) - 1)));
       } catch (requestError) {
         if (cancelled || (requestError instanceof Error && requestError.name === "AbortError")) return;
-        setError(requestError instanceof Error ? requestError.message : "Failed to load role values.");
+        setError(presentServerError(requestError instanceof Error ? requestError.message : "Failed to load role values."));
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
     void loadValues();
     return () => { cancelled = true; controller.abort(); };
-  }, [uri, widgetQueryXml, tree]);
+  }, [uri, widgetQueryXml, tree, roleOrderLikeGroups]);
 
   const visibleValues = values.filter((value) => {
     const binding = groupValueBinding(value);
@@ -1269,6 +1361,10 @@ type ShareableUiState = {
   graphText?: string;
   rdfSourceUrl?: string;
   rdfTargetGraph?: string;
+  /** Root breadcrumb signal (URI / Name / All fields / Clear Terms). */
+  selectedSignalMode?: "uri" | "name" | "all" | "clear";
+  /** The text currently shown in the root breadcrumb field (URI or search term, depending on the signal). */
+  searchDraft?: string;
   /** Last text-search term retained while another signal is active. */
   savedSearchDraft?: string;
   /** Last fixed-subject URI retained independently from the text-search term. */
@@ -1884,6 +1980,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const FACET_PAGE_SIZE = 10;
   const [propertyFacets, setPropertyFacets] = useState<FacetItem[]>([]);
   const [classFacets, setClassFacets] = useState<FacetItem[]>([]);
+  // Class -> immediate superclass edges from the tree="yes" classes view (a class may have several parents).
+  const [classTreeEdges, setClassTreeEdges] = useState<Array<{ uri: string; parent: string }>>([]);
   const [classCandidateCounts, setClassCandidateCounts] = useState<Record<string, number | null>>({});
   const [facetCandidateCounts, setFacetCandidateCounts] = useState<Record<string, number | null>>({});
   const [roleFacets, setRoleFacets] = useState<FacetItem[]>([]);
@@ -2030,6 +2128,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   rootSearchExpandedRef.current = rootSearchExpanded;
   const [namePropertyMenuOpen, setNamePropertyMenuOpen] = useState(false);
   const [categoriesTreeMode, setCategoriesTreeMode] = useState(false);
+  // Path keys of collapsed tree nodes (a node under two parents is collapsed independently under each).
+  const [collapsedCategoryNodes, setCollapsedCategoryNodes] = useState<Set<string>>(() => new Set());
   const [ontologyClassMetadata, setOntologyClassMetadata] = useState<Record<string, OntologyClassMetadata>>({});
   const [personalSparqlEndpoint, setPersonalSparqlEndpoint] = useState("");
   const [breadcrumbPreviewSummaries, setBreadcrumbPreviewSummaries] = useState<Record<string, FctUiResultSummary>>({});
@@ -2964,6 +3064,31 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       if (typeof restored.rdfSourceUrl === "string") setRdfSourceUrl(restored.rdfSourceUrl);
       if (typeof restored.rdfTargetGraph === "string") setRdfTargetGraph(restored.rdfTargetGraph);
     }
+    // Root breadcrumb: signal status plus the URI and search-text values saved with this History item.
+    // The explicit saved fields win; items saved before they existed fall back to what the query itself implies.
+    {
+      const rootChildren = serializedQuery ? (parseFctQueryXml(serializedQuery)?.children ?? []) : [];
+      const impliedUri = rootChildren.find((node) => node.name === "value" && node.attributes.datatype === "uri");
+      const impliedText = rootChildren.find((node) => node.name === "text" && node.id === "query-text");
+      const impliedMode: "uri" | "name" | "all" | "clear" = impliedUri ? "uri" : !impliedText ? "clear" : impliedText.attributes.property ? "name" : "all";
+      const savedMode = restored?.selectedSignalMode;
+      const mode: "uri" | "name" | "all" | "clear" | null = savedMode === "uri" || savedMode === "name" || savedMode === "all" || savedMode === "clear"
+        ? savedMode
+        : (serializedQuery ? impliedMode : null);
+      if (mode) {
+        selectedSignalModeRef.current = mode;
+        setSelectedSignalMode(mode);
+      }
+      if (serializedQuery || restored) {
+        const uriValue = typeof restored?.savedUriDraft === "string" ? restored.savedUriDraft : (impliedUri?.text ?? "");
+        const textValue = typeof restored?.savedSearchDraft === "string" ? restored.savedSearchDraft : (impliedText?.text ?? "");
+        setSavedUriDraft(uriValue);
+        setSavedSearchDraft(textValue);
+        const shown = typeof restored?.searchDraft === "string" ? restored.searchDraft : (mode === "uri" ? uriValue : mode === "clear" ? "" : textValue);
+        searchDraftRef.current = shown;
+        setSearchDraft(shown);
+      }
+    }
     return restoredQueryFromUrl;
   }
 
@@ -3006,6 +3131,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       graphText,
       rdfSourceUrl,
       rdfTargetGraph,
+      selectedSignalMode,
+      searchDraft,
       savedSearchDraft,
       savedUriDraft,
       selectedNamePropertyUris,
@@ -3014,7 +3141,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     params.set("state", JSON.stringify(state));
     const nextUrl = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", nextUrl);
-  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode]);
+  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft]);
 
   /** Describe the first XML-tree delta between two query snapshots for History replay. */
   function deriveHistoryAction(previousXml: string, nextXml: string): { operator: "+" | "-"; xpath: string; value?: string } | null {
@@ -3049,7 +3176,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     if (added && (!removed || added[0].split("/").length >= removed[0].split("/").length)) {
       return { operator: "+", xpath: added[0], value: added[1].value };
     }
-    if (removed) return { operator: "-", xpath: removed[0] };
+    if (removed) return { operator: "-", xpath: removed[0], value: removed[1].value };
     return null;
   }
 
@@ -3154,7 +3281,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     historyWriteQueueRef.current = historyWriteQueueRef.current.then(synchronizeWhenCollapsed, synchronizeWhenCollapsed);
     // Do not cancel queued writes in effect cleanup; pending History is flushed
     // when the root breadcrumb search field closes.
-  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession]);
+  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession, selectedSignalMode]);
 
   // The graph text box may contain an unapplied draft distinct from the query's graph binding.
   // Restore that draft after the query-graph synchronization effect has run once.
@@ -3207,13 +3334,11 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const groupMemberRequestStates = useRef(new Map<string, "loading" | "loaded">());
   // Counts are derived from the member rows loaded for each visible group.
   // Keep the index and cards in the same descending-count order.
-  const pageGroupValues = groupValues.slice(groupUiPage * resultsPageSize, (groupUiPage + 1) * resultsPageSize);
-  const visibleGroupValues = pageGroupValues.slice().sort((a, b) => {
-      // Order by the facet-equivalent count carried by each group heading.
-      const aCount = Number(a.columns?.[1]?.value ?? 0);
-      const bCount = Number(b.columns?.[1]?.value ?? 0);
-      return bCount - aCount || (a.title || a.uri).localeCompare(b.title || b.uri);
-    });
+  // Order the WHOLE loaded set with the canonical comparator before paging, so page N of the cards, the group
+  // index, and the grouped Personal facet widget (same comparator, same query) all list values in one order.
+  const orderedGroupValues = groupValues.slice().sort(compareGroupValues);
+  const pageGroupValues = orderedGroupValues.slice(groupUiPage * resultsPageSize, (groupUiPage + 1) * resultsPageSize);
+  const visibleGroupValues = pageGroupValues;
   const groupedPersonalFacetUri = selectedGroupByOption?.direction === "forward"
     && selectedGroupByOption.uri !== RDF_TYPE_URI
     && personalWidgets.some((widget) => widget.uri === selectedGroupByOption.uri && !widget.excluded)
@@ -3246,9 +3371,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
   function scrollToGroupForFacetValue(value: FctResult) {
     if (centralTab !== "groups" || !selectedGroupByOption) return;
-    const matchIndex = groupValues.findIndex((groupValue) => facetValueKey(groupValue) === facetValueKey(value));
+    const clickedKey = facetValueKey(value);
+    let matchIndex = orderedGroupValues.findIndex((groupValue) => facetValueKey(groupValue) === clickedKey);
+    // Fall back to the value's identity (URI/text + language) if term-type metadata differs between the two panes.
+    if (matchIndex < 0) matchIndex = orderedGroupValues.findIndex((groupValue) => groupValue.uri === value.uri && (groupValue.lang ?? "") === (value.lang ?? ""));
     if (matchIndex < 0) return;
-    const groupValue = groupValues[matchIndex];
+    const groupValue = orderedGroupValues[matchIndex];
     const key = `${selectedGroupByOption.key}::${groupValueKey(groupValue)}`;
     const targetPage = Math.floor(matchIndex / resultsPageSize);
     if (targetPage !== groupUiPage) {
@@ -3260,13 +3388,16 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   }
   const sourceSparql = sparqlQuery || "# SPARQL will appear after the endpoint returns a query.";
   const queryWithoutPagingXml = useCallback(
-  (viewType?: string, sortByCount = false) =>
+  (viewType?: string, sortByCount = false, classTree = false) =>
     serializeFctQuery(
       setQueryViewAttributes(queryTree, {
         ...(viewType ? { type: viewType } : {}),
         sort: sortByCount ? "count" : "",
-        limit: String(leftPanelLimit),
+        // tree="yes" adds every superclass up to the root, so the view returns one row per
+        // (class, parent) edge and needs a much larger window than the flat list.
+        limit: String(classTree ? CATEGORY_TREE_QUERY_LIMIT : leftPanelLimit),
         offset: "0",
+        ...(classTree ? { tree: "yes" } : {}),
       }),
     ),
   [queryTree, leftPanelLimit],
@@ -3274,7 +3405,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // Snapshot the semantic facet requests. Effects depend on their serialized XML,
   // not queryWithoutPagingXml's callback identity (which changes on every tree edit).
   const propertyFacetQueryXml = queryWithoutPagingXml("properties");
-  const classFacetQueryXml = queryWithoutPagingXml("classes", isGroupByCategory);
+  const classFacetQueryXml = queryWithoutPagingXml("classes", isGroupByCategory && !categoriesTreeMode, categoriesTreeMode);
   const roleFacetQueryXml = queryWithoutPagingXml("properties-in");
   // Ask FCT for the total independently of the current results page. The
   // count view uses the same active scope and filters, but never the page offset.
@@ -3355,7 +3486,7 @@ useEffect(() => {
 
     // Keep the persistent facet widget shells/headers; clear only their data.
     setPropertyFacets([]);
-    setClassFacets([]);
+    setClassFacets([]); setClassTreeEdges([]);
     setRoleFacets([]);
     setGraphFacets([]);
     setPropertyFacetSparql("");
@@ -3717,7 +3848,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
         setResultsPageMatchCount(0);
         setSelectedUri("");
         setSearchError(
-          error instanceof Error ? error.message : "Search failed.",
+          presentServerError(error instanceof Error ? error.message : "Search failed."),
         );
       } finally {
         resultsBatchRequestPending.current = false;
@@ -3913,7 +4044,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       } catch (error) {
         if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
         setGroupValues([]);
-        setGroupValuesError(error instanceof Error ? error.message : "Failed to load group values.");
+        setGroupValuesError(presentServerError(error instanceof Error ? error.message : "Failed to load group values."));
       } finally {
         if (!cancelled) setGroupValuesLoading(false);
       }
@@ -3994,7 +4125,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
     const query = search.trim();
     if (!query && !endpointReadyForQuery) {
       setPropertyFacets([]);
-      setClassFacets([]);
+      setClassFacets([]); setClassTreeEdges([]);
       setRoleFacets([]);
       setGraphFacets([]);
       setPropertyFacetSparql("");
@@ -4019,7 +4150,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
   // loading state. It does not wait for Properties or Roles.
   useEffect(() => {
     if (!search.trim() && !endpointReadyForQuery) {
-      setClassFacets([]);
+      setClassFacets([]); setClassTreeEdges([]);
       setClassFacetError("");
       setIsLoadingClasses(false);
       return;
@@ -4041,7 +4172,13 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
           if (!response.ok) throw new Error(data.error ?? "Failed to load classes facets.");
           if (cancelled) return;
           rememberShortforms(data?.shortforms);
-          setClassFacets(Array.isArray(data.classes) ? data.classes : []);
+          const classRows: FacetItem[] = Array.isArray(data.classes) ? data.classes : [];
+          // A tree query returns one row per (class, parent). Keep one entry per class for every flat consumer
+          // and the parent edges separately for the hierarchy.
+          const uniqueClasses = new Map<string, FacetItem>();
+          for (const row of classRows) if (!uniqueClasses.has(row.uri)) uniqueClasses.set(row.uri, row);
+          setClassFacets(Array.from(uniqueClasses.values()));
+          setClassTreeEdges(classRows.flatMap((row) => row.parent ? [{ uri: row.uri, parent: row.parent }] : []));
 		  setClassFacetWarning(data.warning ?? "");
         } catch (error) {
           if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
@@ -5218,7 +5355,9 @@ useEffect(() => {
     const countQuery = distinctCountQueryFor(queryTree, "class", item.uri);
     // Selected classes stay visible so they can be unchecked; unselected classes
     // disappear once their count against this exact live query is confirmed 0.
-    return selectedClasses.has(item.uri) || classCandidateCounts[countQuery] !== 0;
+    // In tree mode the superclass rows are not necessarily direct rdf:type values, so a direct-type
+    // count of 0 is expected for them; the tree view reports its own inherited counts.
+    return selectedClasses.has(item.uri) || categoriesTreeMode || classCandidateCounts[countQuery] !== 0;
   });
   // Like Properties and Roles, Categories puts query-selected terms in a
   // dedicated pane above the paged list, so selected items do not appear twice.
@@ -5273,37 +5412,56 @@ useEffect(() => {
   const pagedUnselectedClasses = unselectedClassDisplayFacets.slice(classesPage * FACET_PAGE_SIZE, (classesPage + 1) * FACET_PAGE_SIZE);
   const categoryTreeItems = categoriesTreeMode ? unselectedClassDisplayFacets : pagedUnselectedClasses;
   const categoryTreeRoots: CategoryTreeNode[] = (() => {
-    const byUri = new Map(categoryTreeItems.map((item) => [item.uri, { item, children: [] as CategoryTreeNode[] }]));
-    const roots: CategoryTreeNode[] = [];
-    for (const node of byUri.values()) {
-      const parentUri = ontologyClassMetadata[node.item.uri]?.parent;
-      const parent = parentUri ? byUri.get(parentUri) : undefined;
-      // Malformed ontologies can contain subclass cycles. Do not attach a node if following
-      // the candidate parent's ancestry would loop back to that node; keep it as a root instead.
-      let ancestor = parent;
-      const seen = new Set<string>([node.item.uri]);
-      let wouldCycle = false;
-      while (ancestor) {
-        if (seen.has(ancestor.item.uri)) { wouldCycle = true; break; }
-        seen.add(ancestor.item.uri);
-        const nextParentUri = ontologyClassMetadata[ancestor.item.uri]?.parent;
-        ancestor = nextParentUri ? byUri.get(nextParentUri) : undefined;
-      }
-      if (parent && !wouldCycle) parent.children.push(node);
-      else roots.push(node);
+    // The hierarchy comes from the query itself (rdfs:subClassOf edges of the result-set classes up to the
+    // root). A class with several parents is listed under each of them, with its own subtree repeated.
+    const itemByUri = new Map(categoryTreeItems.map((item) => [item.uri, item]));
+    const parentsOf = new Map<string, Set<string>>();
+    for (const edge of classTreeEdges) {
+      if (edge.uri === edge.parent || !itemByUri.has(edge.uri) || !itemByUri.has(edge.parent)) continue;
+      (parentsOf.get(edge.uri) ?? parentsOf.set(edge.uri, new Set()).get(edge.uri)!).add(edge.parent);
     }
-    const sortTree = (nodes: CategoryTreeNode[]) => {
-      nodes.sort((a, b) => toLabel(a.item.uri).localeCompare(toLabel(b.item.uri)));
-      nodes.forEach((node) => sortTree(node.children));
+    // Where the query returned no subclass edge, fall back to the ontology store's recorded parent.
+    for (const item of categoryTreeItems) {
+      if (parentsOf.has(item.uri)) continue;
+      const fallback = ontologyClassMetadata[item.uri]?.parent;
+      if (fallback && fallback !== item.uri && itemByUri.has(fallback)) parentsOf.set(item.uri, new Set([fallback]));
+    }
+    const childrenOf = new Map<string, string[]>();
+    for (const [uri, parents] of parentsOf) for (const parent of parents) (childrenOf.get(parent) ?? childrenOf.set(parent, []).get(parent)!).push(uri);
+    const byLabel = (a: CategoryTreeNode, b: CategoryTreeNode) => toLabel(a.item.uri).localeCompare(toLabel(b.item.uri));
+    // Repeating a multi-parent subtree can grow quickly; bound the total rendered nodes.
+    let budget = 2000;
+    const build = (uri: string, path: ReadonlySet<string>): CategoryTreeNode => {
+      budget -= 1;
+      const nextPath = new Set(path).add(uri);
+      // Skipping ancestors on the current path breaks subclass cycles in malformed ontologies.
+      const children = budget > 0 ? (childrenOf.get(uri) ?? []).filter((child) => !nextPath.has(child)).map((child) => build(child, nextPath)) : [];
+      children.sort(byLabel);
+      return { item: itemByUri.get(uri)!, children };
     };
-    sortTree(roots);
+    const roots = categoryTreeItems.filter((item) => !parentsOf.has(item.uri)).map((item) => build(item.uri, new Set()));
+    // Classes that only occur inside a subclass cycle have no root; surface them rather than hiding them.
+    const reachable = new Set<string>();
+    const collect = (node: CategoryTreeNode) => { reachable.add(node.item.uri); node.children.forEach(collect); };
+    roots.forEach(collect);
+    for (const item of categoryTreeItems) {
+      if (reachable.has(item.uri)) continue;
+      const node = build(item.uri, new Set());
+      collect(node);
+      roots.push(node);
+    }
+    roots.sort(byLabel);
     return roots;
   })();
+  const categoryTreePages = categoriesTreeMode ? paginateCategoryTree(categoryTreeRoots) : [];
+  const categoryTreeParentKeys = categoriesTreeMode ? collectCategoryTreeParentKeys(categoryTreeRoots) : [];
+  const categoryTreeAllCollapsed = categoryTreeParentKeys.length > 0 && categoryTreeParentKeys.every((key) => collapsedCategoryNodes.has(key));
+  const categoryPageCount = categoriesTreeMode
+    ? Math.max(1, categoryTreePages.length)
+    : Math.max(1, Math.ceil(unselectedClassDisplayFacets.length / FACET_PAGE_SIZE));
   useEffect(() => {
-    setClassesPage((current) =>
-      Math.min(current, Math.max(0, Math.ceil(unselectedClassDisplayFacets.length / FACET_PAGE_SIZE) - 1)),
-    );
-  }, [unselectedClassDisplayFacets.length]);
+    setClassesPage((current) => Math.min(current, categoryPageCount - 1));
+  }, [categoryPageCount]);
   const autoConfigureFacetCount =
     facetAutofillCandidates.property.filter((uri) => !selectedProperties.has(uri)).length +
     facetAutofillCandidates["property-in"].filter((uri) => !selectedRoles.has(uri)).length;
@@ -5574,7 +5732,8 @@ useEffect(() => {
       setHistoryActionItems([]);
       void fetch("/proxy/api/query-favorites", {
         method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history-actions", "HistoryActionMenu") },
-        body: JSON.stringify({ action: "recentActions" }), cache: "no-store",
+        // Radiate from the loaded History item: earlier items for Back, later items for Forward.
+        body: JSON.stringify({ action: "recentActions", direction, historyId: historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId || undefined) : (historyBookmarkId || undefined) }), cache: "no-store",
       }).then(async (response) => {
         const payload = await response.json() as { items?: Array<{ historyId: string; created: string; action: { operator: "+" | "-"; xpath: string; value?: string } | null }> };
         if (response.ok && Array.isArray(payload.items)) setHistoryActionItems(payload.items);
@@ -5602,6 +5761,8 @@ useEffect(() => {
       const restoredUiState = savedUrl ? readShareableUiState(savedUrl.search) : null;
       historyVisitQueryRef.current = serializeFctQuery(tree);
       historyVisitIdRef.current = historyId;
+      pendingHistoryVisitRef.current = null;
+      setRootSearchExpanded(false);
       restoreQueryAndUiState(payload.queryXml, restoredUiState, historyId);
       setHistoryBookmarkId(historyId);
       const params = new URLSearchParams(window.location.search);
@@ -5655,6 +5816,8 @@ useEffect(() => {
 
       historyVisitQueryRef.current = serializeFctQuery(restoredTree);
       historyVisitIdRef.current = payload.historyId;
+      pendingHistoryVisitRef.current = null;
+      setRootSearchExpanded(false);
       restoreQueryAndUiState(payload.queryXml, restoredUiState, payload.historyId);
 
       // Keep the current browser URL synchronized without navigating. The URL
@@ -6951,6 +7114,7 @@ useEffect(() => {
           propertyUri={widget.uri}
           sortByCount={centralTab === "groups" && groupByPropertyUri === `forward:${widget.uri}`}
           limit={leftPanelLimit}
+          groupBy={centralTab === "groups" && selectedGroupByOption && groupedPersonalFacetUri === widget.uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined}
           setPersonalWidgets={setPersonalWidgets}
         />
       ))}
@@ -6959,8 +7123,8 @@ useEffect(() => {
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-2">
           <ButtonGroup aria-label="Graphsite navigation" className="shrink-0 border-0 shadow-none">
             {authSession && (<>
-            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("backward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent className={historyActionMenu === "backward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "backward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Previous query in History · Last ten changes (inverse actions)</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "backward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
-            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("forward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent className={historyActionMenu === "forward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "forward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Next query in History · Last ten changes</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "forward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
+            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("backward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent className={historyActionMenu === "backward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "backward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Earlier in History · latest first · each change inverted</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "backward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
+            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("forward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent className={historyActionMenu === "forward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "forward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Later in History · earliest first</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "forward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
             </>)}
             <Tooltip><TooltipTrigger render={<button type="button" onClick={refreshCurrentBreadcrumb} aria-label="Refresh current query scope" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25"><RotateCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Refresh current query scope using the active breadcrumb</TooltipContent></Tooltip>
           </ButtonGroup>
@@ -8710,13 +8874,19 @@ onMouseLeave={() => {
                   <div className="space-y-3">
                     <article ref={categoriesWidgetRef} className={`flex min-w-0 flex-col ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
                       <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
-                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes")}\n<!-- FCT API option: view=classes -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /><Tooltip><TooltipTrigger render={<button
+                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes", false, categoriesTreeMode)}\n<!-- FCT API option: view=classes${categoriesTreeMode ? " tree=yes" : ""} -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /><Tooltip><TooltipTrigger render={<button
                           type="button"
                           aria-pressed={categoriesTreeMode}
-                          onClick={() => setCategoriesTreeMode((current) => !current)}
+                          onClick={() => { setCategoriesTreeMode((current) => !current); setClassesPage(0); }}
                           className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${categoriesTreeMode ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`}
-                          aria-label={categoriesTreeMode ? "Show categories as a flat list" : "Group categories by ontology"}
-                        >{categoriesTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{categoriesTreeMode ? "Show flat category list" : "Group categories by ontology"}</TooltipContent></Tooltip><Tooltip><TooltipTrigger render={<button
+                          aria-label={categoriesTreeMode ? "Show categories as a flat list" : "Show categories as a superclass tree"}
+                        >{categoriesTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{categoriesTreeMode ? "Show flat category list" : "Show category tree (superclass path of each category, up to the root)"}</TooltipContent></Tooltip>{categoriesTreeMode && <Tooltip><TooltipTrigger render={<button
+                          type="button"
+                          disabled={categoryTreeParentKeys.length === 0}
+                          onClick={() => setCollapsedCategoryNodes(categoryTreeAllCollapsed ? new Set() : new Set(categoryTreeParentKeys))}
+                          className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+                          aria-label={categoryTreeAllCollapsed ? "Open all categories" : "Collapse all categories"}
+                        >{categoryTreeAllCollapsed ? <ChevronsUpDown className="size-4" aria-hidden="true" /> : <ChevronsDownUp className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{categoryTreeAllCollapsed ? "Open all" : "Collapse all"}</TooltipContent></Tooltip>}<Tooltip><TooltipTrigger render={<button
                           type="button"
                           aria-pressed={isGroupByCategory}
                           onClick={() => {
@@ -8798,7 +8968,7 @@ onMouseLeave={() => {
                               </div>
                             </div>
                           )}
-                          {!categoriesTreeMode && unselectedClassDisplayFacets.length > FACET_PAGE_SIZE && (
+                          {categoryPageCount > 1 && (
                             <div className="mt-2 mb-2 flex items-center justify-between gap-2 text-xs">
                               <button
                                 type="button"
@@ -8809,13 +8979,13 @@ onMouseLeave={() => {
                                 Previous
                               </button>
                               <span className="text-muted-foreground">
-                                Page {Math.min(classesPage + 1, Math.ceil(unselectedClassDisplayFacets.length / FACET_PAGE_SIZE))} of {Math.max(1, Math.ceil(unselectedClassDisplayFacets.length / FACET_PAGE_SIZE))}
+                                Page {Math.min(classesPage + 1, categoryPageCount)} of {categoryPageCount}
                               </span>
                               <button
                                 type="button"
                                 className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
-                                onClick={() => setClassesPage((page) => Math.min(Math.ceil(unselectedClassDisplayFacets.length / FACET_PAGE_SIZE) - 1, page + 1))}
-                                disabled={classesPage >= Math.ceil(unselectedClassDisplayFacets.length / FACET_PAGE_SIZE) - 1}
+                                onClick={() => setClassesPage((page) => Math.min(categoryPageCount - 1, page + 1))}
+                                disabled={classesPage >= categoryPageCount - 1}
                               >
                                 Next
                               </button>
@@ -8825,21 +8995,30 @@ onMouseLeave={() => {
                             {categoriesTreeMode ? (
                               <div className="space-y-0">
                                   {(() => {
-                                    const renderTreeNode = (node: CategoryTreeNode, depth: number): ReactNode => {
+                                    const renderTreeNode = (node: CategoryTreeNode, depth: number, parentKey: string): ReactNode => {
                                       const item = node.item;
-                                      const countQuery = distinctCountQueryFor(queryTree, "class", item.uri);
-                                      const isZeroCount = classCandidateCounts[countQuery] === 0;
+                                      const nodeKey = categoryTreeNodeKey(parentKey, item.uri);
+                                      const isCollapsed = collapsedCategoryNodes.has(nodeKey);
+                                      const isZeroCount = false;
                                       return <div key={item.uri} className="min-w-0">
                                         <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-accent/50" style={{ paddingLeft: `${8 + depth * 14}px` }}>
-                                          {node.children.length > 0 ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" /> : <span className="size-3.5 shrink-0" aria-hidden="true" />}
+                                          {node.children.length > 0
+                                            ? <button
+                                                type="button"
+                                                aria-expanded={!isCollapsed}
+                                                aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${toLabel(item.uri, "Class")}`}
+                                                onClick={() => setCollapsedCategoryNodes((current) => { const next = new Set(current); if (!next.delete(nodeKey)) next.add(nodeKey); return next; })}
+                                                className="inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                                              >{isCollapsed ? <ChevronRight className="size-3.5" aria-hidden="true" /> : <ChevronDown className="size-3.5" aria-hidden="true" />}</button>
+                                            : <span className="size-4 shrink-0" aria-hidden="true" />}
                                           <input type="checkbox" checked={selectedClasses.has(item.uri)} onChange={(event) => toggleClass(item.uri, event.target.checked)} aria-label={`Filter by class ${toLabel(item.uri, "Class")}`} className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} />
                                           <Tooltip><TooltipTrigger render={<button type="button" className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`} onClick={() => { if (isGroupByCategory) scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri, "Class"), matches: [], termType: "uri" }); else { if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true); showClassResults(item.uri, activeLeafId); } }}>{toLabel(item.uri, "Class")}</button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri, "Class")}` : `Show results for class ${toLabel(item.uri, "Class")}`}</TooltipContent></Tooltip>
-                                          <DistinctCount tree={queryTree} kind="class" uri={item.uri} onCountChange={(query, count) => setClassCandidateCounts((current) => current[query] === count ? current : { ...current, [query]: count })} />
+                                          <span className="shrink-0 text-xs text-muted-foreground">{item.count.toLocaleString()}</span>
                                         </div>
-                                        {node.children.length > 0 && <div className="ml-2 border-l border-border/60">{node.children.map((child) => renderTreeNode(child, depth + 1))}</div>}
+                                        {node.children.length > 0 && !isCollapsed && <div className="ml-2 border-l border-border/60">{node.children.map((child) => renderTreeNode(child, depth + 1, nodeKey))}</div>}
                                       </div>;
                                     };
-                                    return categoryTreeRoots.map((node) => renderTreeNode(node, 0));
+                                    return (categoryTreePages[Math.min(classesPage, categoryPageCount - 1)] ?? []).map((node) => renderTreeNode(node, 0, ""));
                                   })()}
                               </div>
                             ) : pagedUnselectedClasses.map((item) => {
@@ -8963,7 +9142,7 @@ onMouseLeave={() => {
                                   : shortenCount(roleWidgetStatuses[roleNode.id]?.count ?? 0)}
                             </span>} /><TooltipContent>{roleWidgetStatuses[roleNode.id]?.error || undefined}</TooltipContent></Tooltip>
                           </header>
-                          <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} onFirstExampleClick={(valueUri) => showClassResults(valueUri, activeLeafId)} />
+                          <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} groupBy={centralTab === "groups" && selectedGroupByOption && groupedRoleUri === uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined} limit={leftPanelLimit} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} onFirstExampleClick={(valueUri) => showClassResults(valueUri, activeLeafId)} />
                         </article>
                       );
                     })}

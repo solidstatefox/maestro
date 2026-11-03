@@ -76,7 +76,18 @@ export async function POST(request: Request) {
     }
 
     if (action === "recentActions") {
-      const query = `PREFIX rdf: <${RDF_NS}> PREFIX vfct: <${VFCT_NS}> SELECT ?visit ?created ?action WHERE { GRAPH ${graph} { ?visit rdf:type vfct:QueryHistoryVisit ; vfct:historyCreated ?created . OPTIONAL { ?visit vfct:historyAction ?action } } } ORDER BY DESC(?created) LIMIT 10`;
+      // Radiate outward from the currently loaded History item: "backward" lists items EARLIER than it
+      // (latest first), "forward" lists items LATER than it (earliest first). With no loaded item the
+      // cursor is "now": everything is earlier, nothing is later.
+      const direction = body.direction === "forward" ? "forward" : "backward";
+      if (direction === "forward" && !historyId) return NextResponse.json({ items: [] });
+      const comparison = direction === "backward" ? "<" : ">";
+      const order = direction === "backward" ? "DESC" : "ASC";
+      const cursor = historyId
+        ? `${iri(historyId)} vfct:historyCreated ?cursorCreated . `
+        : "";
+      const cursorFilter = historyId ? `FILTER(?created ${comparison} ?cursorCreated)` : "";
+      const query = `PREFIX rdf: <${RDF_NS}> PREFIX vfct: <${VFCT_NS}> SELECT ?visit ?created ?action WHERE { GRAPH ${graph} { ${cursor}?visit rdf:type vfct:QueryHistoryVisit ; vfct:historyCreated ?created . OPTIONAL { ?visit vfct:historyAction ?action } ${cursorFilter} } } ORDER BY ${order}(?created) LIMIT 10`;
       const result = await queryPersonal(query);
       const items = (result.results?.bindings ?? []).map((row: any) => {
         let parsedAction: unknown = null;

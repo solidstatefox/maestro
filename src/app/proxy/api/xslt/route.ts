@@ -2,54 +2,26 @@ import { NextResponse } from "next/server";
 import { XMLValidator, XMLParser } from "fast-xml-parser";
 import SaxonJS from "saxon-js";
 import { requirePersonalLogin } from "@/lib/personal-guard";
-import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { join } from "node:path";
-import { existsSync } from "node:fs";
+// SaxonJS 2.7 exposes dynamic XSLT 3.0 execution through XPath fn:transform().
+// This path runs entirely in the current Node.js process: no xslt3 executable,
+// child process, or temporary filesystem output is required.
+const DYNAMIC_TRANSFORM_XPATH = `
+  transform(map {
+    'stylesheet-text': $stylesheet,
+    'source-node': parse-xml($source),
+    'stylesheet-params': map { QName('', 'recordUri'): $recordUri },
+    'delivery-format': 'serialized'
+  })?output
+`;
 
-const execFileAsync = promisify(execFile);
-const compiledStylesheets = new Map<string, Promise<string>>();
-
-async function compileStylesheet(xslt: string): Promise<string> {
-  const key = createHash("sha256").update(xslt).digest("hex");
-  const cached = compiledStylesheets.get(key);
-  if (cached) return cached;
-  const task = (async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "maestro-xslt-"));
-    try {
-      const source = path.join(directory, "record.xsl");
-      const exportPath = path.join(directory, "record.sef.json");
-      await writeFile(source, xslt, "utf8");
-      // xslt3 ships with SaxonJS's own free XSLT 3.0 compiler.
-const compiler = join(
-  process.cwd(),
-  "node_modules",
-  "xslt3",
-  "xslt3.js"
-);
-
-if (!existsSync(compiler)) {
-  throw new Error(`SaxonJS XSLT compiler not found: ${compiler}`);
-}
-      await execFileAsync(process.execPath, [compiler, `-xsl:${source}`, `-export:${exportPath}`, "-nogo", "-ns:##html5"], {
-        timeout: 20000,
-        maxBuffer: 512 * 1024,
-      });
-      const sef = await readFile(exportPath, "utf8");
-      if (sef.length > 3000000) throw new Error("Compiled stylesheet exceeds size limit.");
-      return sef;
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  })();
-  compiledStylesheets.set(key, task);
-  if (compiledStylesheets.size > 32) compiledStylesheets.delete(compiledStylesheets.keys().next().value!);
-  task.catch(() => { if (compiledStylesheets.get(key) === task) compiledStylesheets.delete(key); });
-  return task;
+function transformStylesheet(xslt: string, sourceXml: string, recordUri: string): string {
+  const output = SaxonJS.XPath.evaluate(DYNAMIC_TRANSFORM_XPATH, null, {
+    params: { stylesheet: xslt, source: sourceXml, recordUri },
+  });
+  if (typeof output !== "string") {
+    throw new Error("The XSLT output was invalid or too large.");
+  }
+  return output;
 }
 
 
@@ -108,26 +80,18 @@ export async function POST(request: Request) {
     }
     validateTemplate(stylesheetText);
     if (XMLValidator.validate(sourceXml) !== true || !sourceXml.includes("mctx:context")) throw new Error("Invalid FCT context envelope.");
-    const sef = await compileStylesheet(stylesheetText);
-    const result = await SaxonJS.transform({
-      stylesheetText: sef,
-      sourceText: sourceXml,
-      destination: "serialized",
-      stylesheetParams: { recordUri },
-    }, "async");
-    const html = result.principalResult;
+    // fn:transform compiles and executes the supplied stylesheet in-process.
+    // SaxonJS 2.7 does not expose a stable public compile-to-SEF API.
+    const html = transformStylesheet(stylesheetText, sourceXml, recordUri);
     if (typeof html !== "string" || html.length > 1000000) throw new Error("The XSLT output was invalid or too large.");
     return NextResponse.json({ html }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    // Subprocess failures can include local server paths, arguments and full Node.js stacks.
-    // Never return raw compiler output to browser clients.
+    // Compiler/transform failures can contain internal server paths and stacks.
+    // Never return raw engine diagnostics to browser clients.
     console.error("Record XSLT transformation failed:", error);
-    const missingAxios = error instanceof Error && /Cannot find module [\'\"]axios[\'\"]/.test(error.message);
-    const safeMessage = missingAxios
-      ? "The record format service is missing the axios runtime dependency. The server administrator must install it and redeploy; Default format is still available."
-      : error instanceof Error && /^(Invalid |Expected |Record templates |Saxon extension |XSLT instruction |External-|External document|Missing the XSLT namespace|The XSLT output |Compiled stylesheet exceeds|Executable HTML)/.test(error.message)
-        ? error.message
-        : "Record format could not be generated. Check the server XSLT dependencies or choose Default format.";
-    return NextResponse.json({ error: safeMessage }, { status: missingAxios ? 503 : 400, headers: { "Cache-Control": "no-store" } });
+    const safeMessage = error instanceof Error && /^(Invalid |Expected |Record templates |Saxon extension |XSLT instruction |External-|External document|Missing the XSLT namespace|The XSLT output |Executable HTML)/.test(error.message)
+      ? error.message
+      : "Record format could not be generated. Choose Default format or review the server logs.";
+    return NextResponse.json({ error: safeMessage }, { status: 400, headers: { "Cache-Control": "no-store" } });
   }
 }

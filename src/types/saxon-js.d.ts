@@ -1,16 +1,12 @@
-/** Minimal SaxonJS 2.7 Node transform API used by Maestro's XSLT endpoint. */
+/** SaxonJS 2.7 XPath API used for in-process dynamic XSLT execution. */
 declare module "saxon-js" {
-  interface TransformOptions {
-    stylesheetText: string; // Compiled SEF JSON, not the original .xsl source.
-    sourceText: string;
-    destination: "serialized";
-    stylesheetParams?: Record<string, string>;
-  }
-  interface TransformResult {
-    principalResult?: unknown;
+  interface XPathEvaluationOptions {
+    params?: Record<string, string>;
   }
   const SaxonJS: {
-    transform(options: TransformOptions, execution: "async"): Promise<TransformResult>;
+    XPath: {
+      evaluate(xpath: string, contextItem: null, options: XPathEvaluationOptions): unknown;
+    };
   };
   export = SaxonJS;
 }

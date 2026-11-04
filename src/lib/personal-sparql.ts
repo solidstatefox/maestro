@@ -1,33 +1,33 @@
 import { readFile, readdir } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
-import { graphSiteForPrefix } from "./personal-auth";
+import { graphForPrefix } from "./personal-auth";
 import { authNote, fetchWithDigestFallback } from "./digest-auth";
 import { buildInsertData, canParseRdfExtension, parseRdfDocument } from "./rdf-to-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
 
-/** Shared server-side access to Maestro's personal SPARQL store and RDF-backed Graphsite registry. */
+/** Shared server-side access to Maestro's personal SPARQL store and RDF-backed Graph registry. */
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const RDFS_NS = "http://www.w3.org/2000/01/rdf-schema#";
 const DCTERMS_NS = "http://purl.org/dc/terms/";
 const SKOS_NS = "http://www.w3.org/2004/02/skos/core#";
 const SCHEMA_NS = "https://schema.org/";
 
-/** The manifest maps each RDF filename in /graph to its destination Graphsite graph IRI or local path. */
+/** The manifest maps each RDF filename in /graph to its destination Graph graph IRI or local path. */
 const getGraphDirectory = () => {
   const cwd = typeof process !== "undefined" && typeof process.cwd === "function" ? process.cwd() : ".";
   return resolve(cwd, "graph");
 };
 const getGraphManifestPath = () => resolve(getGraphDirectory(), "manifest.json");
 
-export const DEFAULT_USER_GRAPHSITE = "http://localhost:8890/DAV/home/dba";
+export const DEFAULT_USER_GRAPH = "http://localhost:8890/DAV/home/dba";
 export const DEFAULT_GRAPH_STORE = "http://localhost:8890/sparql";
 
 type GraphManifest = Record<string, string>;
 
 export type PersonalSession = {
   graphStore: string;
-  graphsitePrefix: string;
+  graphPrefix: string;
   authHeader?: string;
   authType?: string;
   userName?: string;
@@ -56,25 +56,26 @@ export function getPersonalSession(request?: Request): PersonalSession | null {
   const match = cookie.match(/(?:^|;\s*)maestro_session=([^;]+)/);
   if (match) {
     try {
-      return JSON.parse(decodeURIComponent(match[1])) as PersonalSession;
+      const parsed = JSON.parse(decodeURIComponent(match[1])) as PersonalSession & { graphsitePrefix?: string };
+      return { ...parsed, graphPrefix: parsed.graphPrefix || parsed.graphsitePrefix || "" };
     } catch {
       return null;
     }
   }
   const headerStore = request.headers.get("x-personal-graph-store");
-  const headerPrefix = request.headers.get("x-personal-graphsite");
+  const headerPrefix = request.headers.get("x-personal-graph");
   const authHeader = request.headers.get("authorization") || request.headers.get("x-personal-auth") || undefined;
   if (headerStore && headerPrefix) {
     return {
       graphStore: headerStore,
-      graphsitePrefix: headerPrefix,
+      graphPrefix: headerPrefix,
       authHeader,
     };
   }
   return null;
 }
 
-/** Read and validate the file-to-Graphsite mapping. */
+/** Read and validate the file-to-Graph mapping. */
 function getGraphManifest(): GraphManifest {
   let manifest: unknown;
   try {
@@ -83,40 +84,40 @@ function getGraphManifest(): GraphManifest {
     throw new Error(`Could not read graph/manifest.json: ${error instanceof Error ? error.name : "Unknown error"}`);
   }
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    throw new Error(`graph/manifest.json must contain a JSON object mapping RDF filenames to Graphsite graph local paths or IRIs.`);
+    throw new Error(`graph/manifest.json must contain a JSON object mapping RDF filenames to Graph graph local paths or IRIs.`);
   }
   const result: GraphManifest = {};
   for (const [filename, rawGraph] of Object.entries(manifest as Record<string, unknown>)) {
     if (!filename || filename === "manifest.json" || filename.includes("/") || filename.includes("\\") || filename.startsWith(".")) {
       throw new Error(`Invalid RDF filename in graph/manifest.json: ${filename}`);
     }
-    if (typeof rawGraph !== "string") throw new Error(`Graphsite for ${filename} must be a string in graph/manifest.json.`);
+    if (typeof rawGraph !== "string") throw new Error(`Graph for ${filename} must be a string in graph/manifest.json.`);
     result[filename] = rawGraph.trim().replace(/\\:/g, ":");
   }
   return result;
 }
 
-/** Resolve the target graph for an RDF file listed in /graph/manifest.json: <graphsite>/query + manifest fragment. */
+/** Resolve the target graph for an RDF file listed in /graph/manifest.json: <graph>/query + manifest fragment. */
 export function graphForFile(filename: string, request?: Request): string {
   const rawPath = getGraphManifest()[filename];
-  if (!rawPath) throw new Error(`No Graphsite mapping for ${filename} in graph/manifest.json.`);
+  if (!rawPath) throw new Error(`No Graph mapping for ${filename} in graph/manifest.json.`);
   if (/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(rawPath)) {
     return rawPath;
   }
-  const graphSite = getUserGraphSite(request);
+  const graph = getUserGraph(request);
   const local = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
-  return `${graphSite}${local}`;
+  return `${graph}${local}`;
 }
 
-/** The user's Maestro graphsite: <graphsitePrefix>/query (no fragment). */
-export function getUserGraphSite(request?: Request): string {
+/** The user's Maestro graph: <graphPrefix>/query (no fragment). */
+export function getUserGraph(request?: Request): string {
   const session = getPersonalSession(request);
-  return graphSiteForPrefix(session?.graphsitePrefix || DEFAULT_USER_GRAPHSITE);
+  return graphForPrefix(session?.graphPrefix || DEFAULT_USER_GRAPH);
 }
 
 export const getDataserversGraph = (request?: Request): string => graphForFile("dataserver-seed.ttl", request);
-/** History graph base IRI (<graphsite>/query). Callers append #history / #bookmarks. */
-export const getHistoryGraph = (request?: Request): string => getUserGraphSite(request);
+/** History graph base IRI (<graph>/query). Callers append #history / #bookmarks. */
+export const getHistoryGraph = (request?: Request): string => getUserGraph(request);
 export const getOntologyGraph = (request?: Request): string => graphForFile("maestro-ui-ontology.ttl", request);
 export const getShapesGraph = (request?: Request): string => graphForFile("maestro-shacl-policies.rdf", request);
 export const VFCT_NS = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#";
@@ -124,15 +125,15 @@ export const MAESTRO_IDS_NS = "gttp://ggg.maestro.ecosys/ids/";
 
 export type GraphSeedResult = { file: string; graph: string }[];
 
-/** One seed per personal session (store + graphsite + credentials), not one per server process. */
+/** One seed per personal session (store + graph + credentials), not one per server process. */
 const graphDirectorySeedPromises = new Map<string, Promise<GraphSeedResult>>();
 
 function seedSessionKey(request?: Request): string {
   const session = getPersonalSession(request);
-  return [session?.graphStore ?? "", session?.graphsitePrefix ?? "", session?.authHeader ?? ""].join("|");
+  return [session?.graphStore ?? "", session?.graphPrefix ?? "", session?.authHeader ?? ""].join("|");
 }
 
-/** Upload each RDF document in /graph to <graphsitePrefix>/query + manifest fragment on the user's graph server. Pass force to reload (used right after login). */
+/** Upload each RDF document in /graph to <graphPrefix>/query + manifest fragment on the user's graph server. Pass force to reload (used right after login). */
 export async function ensureGraphDirectorySeeded(request?: Request, options: { force?: boolean } = {}): Promise<GraphSeedResult> {
   assertPersonalSession(request);
   const sessionKey = seedSessionKey(request);
@@ -166,7 +167,7 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
       if (!listedFiles.has(filename)) throw new Error(`Manifest entry ${filename} has no matching supported RDF file in ${getGraphDirectory()}.`);
     }
     for (const file of files) {
-      if (!manifest[file.name]) throw new Error(`No Graphsite mapping for ${file.name} in graph/manifest.json.`);
+      if (!manifest[file.name]) throw new Error(`No Graph mapping for ${file.name} in graph/manifest.json.`);
     }
 
     const endpoint = personalSparqlUrl(request); // read endpoint (/sparql), advertised in the Datasites seed

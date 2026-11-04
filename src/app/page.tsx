@@ -32,7 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Label } from "@/components/ui/label";
 import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, Eye, EyeOff, Info } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
-import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphSiteForPrefix } from "@/lib/personal-auth";
+import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix } from "@/lib/personal-auth";
 import { cachedFetchFct, clearClientQueryCache } from "@/lib/client-query-cache";
 import { initializeMaestroStorage, maestroStorageGet, maestroStorageSet, clearMaestroStorage } from "@/lib/maestro-storage";
 import { Progress } from "@/components/ui/progress";
@@ -100,7 +100,7 @@ const DEFAULT_RESULTS_PAGE_SIZE = 30;
 const RESULTS_PAGE_SIZE_STORAGE_KEY = "maestro-results-page-size";
 const RESULTS_PAGE_SIZE_OPTIONS = [10, 20, 30, 50] as const;
 const RESULTS_BATCH_SIZE_OPTIONS = [30, 100, 250, 500, 1000] as const;
-/** LIMIT applied to every left-panel widget: Categories, Personal facets, Graphsites, and Configure Properties/Roles. */
+/** LIMIT applied to every left-panel widget: Categories, Personal facets, Graphs, and Configure Properties/Roles. */
 const LEFT_PANEL_LIMIT_STORAGE_KEY = "maestro-left-panel-limit";
 const DEFAULT_LEFT_PANEL_LIMIT = 30;
 /** Row window for the Categories tree query (type="classes" tree="yes"): one row per class/parent edge. */
@@ -883,9 +883,11 @@ function PersonalWidgetQueryListener({
   limit,
   groupBy,
   setPersonalWidgets,
+  endpointReady,
 }: {
   propertyUri: string;
   sortByCount: boolean;
+  endpointReady: boolean;
   limit: number;
   /** When this facet is the active Group By, run the exact query the Results group pane runs. */
   groupBy?: { option: GroupByOption; limit: number };
@@ -899,6 +901,9 @@ function PersonalWidgetQueryListener({
   const orderLikeGroups = Boolean(groupBy);
 
   useEffect(() => {
+    // A restored query can mount this widget before its graph server is loaded.
+    // Never dispatch speculative FCT requests during endpoint initialization.
+    if (!endpointReady) return;
     // Reconcile every mounted widget against the active <view> scope. A widget
     // whose filter belongs to another breadcrumb scope must not retain stale
     // values while the parent pane catches up with the new query revision.
@@ -999,7 +1004,7 @@ function PersonalWidgetQueryListener({
       cancelled = true;
       controller.abort();
     };
-  }, [widgetQueryXml, propertyUri, setPersonalWidgets, orderLikeGroups]);
+  }, [widgetQueryXml, propertyUri, setPersonalWidgets, orderLikeGroups, endpointReady]);
 
   return null;
 }
@@ -1014,7 +1019,7 @@ function PersonalRoleWidget({
   limit,
   onGroupValueClick,
   setRoleWidgetStatuses,
-  onFirstExampleClick,
+  endpointReady,
 }: {
   tree: FctQueryTree;
   roleNode: FctQueryNode;
@@ -1025,7 +1030,7 @@ function PersonalRoleWidget({
   limit: number;
   onGroupValueClick: (value: FctResult) => void;
   setRoleWidgetStatuses: Dispatch<SetStateAction<Record<string, RoleWidgetStatus>>>;
-  onFirstExampleClick: (uri: string) => void;
+  endpointReady: boolean;
 }) {
   const { setRoleValue } = useFctQuery();
   const uri = roleNode.attributes.iri ?? "";
@@ -1074,7 +1079,7 @@ function PersonalRoleWidget({
   }, [roleNode.id, values.length, loading, error, setRoleWidgetStatuses]);
 
   useEffect(() => {
-    if (!uri) return;
+    if (!uri || !endpointReady) return;
     let cancelled = false;
     const controller = new AbortController();
     setLoading(true);
@@ -1105,7 +1110,7 @@ function PersonalRoleWidget({
     }
     void loadValues();
     return () => { cancelled = true; controller.abort(); };
-  }, [uri, widgetQueryXml, tree, roleOrderLikeGroups]);
+  }, [uri, widgetQueryXml, tree, roleOrderLikeGroups, endpointReady]);
 
   const visibleValues = values.filter((value) => {
     const binding = groupValueBinding(value);
@@ -1133,12 +1138,6 @@ function PersonalRoleWidget({
           <button type="button" className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40" disabled={page >= pageCount - 1} onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}>Next</button>
         </div>
       )}
-      {(() => {
-        const bound = (roleNode.children ?? []).find((child) => child.name === "value" && Boolean(child.text));
-        const first = bound ? { uri: bound.text ?? "", termType: bound.attributes.datatype === "uri" ? "uri" as const : "literal" as const, title: bound.text ?? "" } : values[0];
-        if (!first?.uri) return null;
-        return <button type="button" onClick={() => onFirstExampleClick(first.uri)} disabled={loading} className="mb-2 block max-w-full break-words px-2 text-left text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"><em>e.g.</em> {ellipsize(first.termType === "uri" ? toLabel(first.uri, "Class") : first.title || first.uri)}</button>;
-      })()}
       <div className={`space-y-0 ${loading ? "opacity-45" : ""}`}>
         {pageValues.map((value, valueIndex) => {
           const binding = groupValueBinding(value);
@@ -1147,12 +1146,12 @@ function PersonalRoleWidget({
           const isZeroCount = candidateCounts[countQuery] === 0;
           return (
             <div key={`${value.uri}:${value.datatype ?? ""}:${value.lang ?? ""}`} className={`flex w-full items-start gap-2 rounded-md px-2 py-1 text-sm hover:bg-accent/50 ${isGroupByRole ? "" : "cursor-pointer"}`}>
-              <input id={`personal-role-value-${roleNode.id}-${valueIndex}`} type="checkbox" disabled={loading} checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`} />
+              <input id={`personal-role-value-${roleNode.id}-${valueIndex}`} type="checkbox" disabled={loading} checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}`} />
               {isGroupByRole ? (
-                <Tooltip><TooltipTrigger render={<button type="button" onClick={() => onGroupValueClick(value)} className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`}>{value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}</button>} /><TooltipContent>{`Scroll to group ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`}</TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger render={<button type="button" onClick={() => onGroupValueClick(value)} className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`}>{value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}</button>} /><TooltipContent>{`Scroll to group ${value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}`}</TooltipContent></Tooltip>
               ) : (
                 <label htmlFor={`personal-role-value-${roleNode.id}-${valueIndex}`} className={`min-w-0 flex-1 break-words cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}>
-                  {value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}
+                  {value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}
                 </label>
               )}
               <DistinctCount
@@ -1489,19 +1488,19 @@ export default function Home() {
   const [bookmarkCheckRevision, setBookmarkCheckRevision] = useState(0);
   const [historyBookmarkId, setHistoryBookmarkId] = useState("");
   const [authSession, setAuthSession] = useState<PersonalAuthSession | null>(null);
-  // Graphsite info card (opened from the info icon in the graphsite input group).
+  // Graph info card (opened from the info icon in the graph input group).
   const [graphInfoOpen, setGraphInfoOpen] = useState(false);
   const [graphInfo, setGraphInfo] = useState<{
-    graphsite: string;
+    graph: string;
     subjectCount: number | null; subjectCountLoading: boolean; subjectCountError: string;
     access: boolean | null; accessLoading: boolean; accessError: string;
-  }>({ graphsite: "", subjectCount: null, subjectCountLoading: false, subjectCountError: "", access: null, accessLoading: false, accessError: "" });
+  }>({ graph: "", subjectCount: null, subjectCountLoading: false, subjectCountError: "", access: null, accessLoading: false, accessError: "" });
   const graphInfoRequestRef = useRef(0);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [endpointReloadRevision, setEndpointReloadRevision] = useState(0);
   const [loginTab, setLoginTab] = useState<AuthType>("sparql-auth");
   const [loginGraphStore, setLoginGraphStore] = useState("http://demo.openlinksw.com/sparql");
-  const [loginGraphsitePrefix, setLoginGraphsitePrefix] = useState("http://demo.openlinksw.com/ods/home/acme");
+  const [loginGraphPrefix, setLoginGraphPrefix] = useState("http://demo.openlinksw.com/ods/home/acme");
   const [loginUsername, setLoginUsername] = useState("acme");
   const [loginPassword, setLoginPassword] = useState("123456");
   const [loginShowPassword, setLoginShowPassword] = useState(false);
@@ -1572,6 +1571,7 @@ export default function Home() {
   const [showResultBadges, setShowResultBadges] = useState(false);
   const [orderResults, setOrderResults] = useState(false);
   const [breadcrumbBadgeMode, setBreadcrumbBadgeMode] = useState<"records" | "classes">("records");
+  const [hoveredBreadcrumbBadgeId, setHoveredBreadcrumbBadgeId] = useState<string | null>(null);
   const [openBreadcrumbDropdownId, setOpenBreadcrumbDropdownId] = useState<string | null>(null);
   const [shiftKeyDown, setShiftKeyDown] = useState(false);
   const [hoveredFacetKey, setHoveredFacetKey] = useState<string | null>(null);
@@ -1698,7 +1698,7 @@ useEffect(() => {
             setLoginGraphStore(session.graphStore);
             setPersonalSparqlEndpoint(session.graphStore);
           }
-          if (session.graphsitePrefix) setLoginGraphsitePrefix(session.graphsitePrefix);
+          if (session.graphPrefix) setLoginGraphPrefix(session.graphPrefix);
           setLoginTab(session.authType);
           if (session.authType === "sparql-auth") {
             if (session.userName) setLoginUsername(session.userName);
@@ -1762,17 +1762,17 @@ useEffect(() => {
   };
 
   /** Live values from the login <form>; browsers can autofill fields without firing React onChange. */
-  type LoginFormValues = { graphStore?: string; graphsitePrefix?: string; username?: string; password?: string };
+  type LoginFormValues = { graphStore?: string; graphPrefix?: string; username?: string; password?: string };
   const readLoginFormValues = (form: HTMLFormElement | null): LoginFormValues => {
     if (!form) return {};
     const data = new FormData(form);
     const text = (name: string) => (data.has(name) ? String(data.get(name) ?? "") : undefined);
-    return { graphStore: text("graph_store"), graphsitePrefix: text("graphsite_prefix"), username: text("username"), password: text("password") };
+    return { graphStore: text("graph_store"), graphPrefix: text("graph_prefix"), username: text("username"), password: text("password") };
   };
 
   const buildCurrentSession = (form: LoginFormValues = {}): PersonalAuthSession => {
     const formGraphStore = form.graphStore ?? loginGraphStore;
-    const formGraphsitePrefix = form.graphsitePrefix ?? loginGraphsitePrefix;
+    const formGraphPrefix = form.graphPrefix ?? loginGraphPrefix;
     const formUsername = form.username ?? loginUsername;
     const formPassword = form.password ?? loginPassword;
     let userName = "";
@@ -1805,7 +1805,7 @@ useEffect(() => {
     return {
       authType: loginTab,
       graphStore: formGraphStore.trim() || "http://demo.openlinksw.com/sparql",
-      graphsitePrefix: formGraphsitePrefix.trim() || "http://demo.openlinksw.com/ods/home/acme",
+      graphPrefix: formGraphPrefix.trim() || "http://demo.openlinksw.com/ods/home/acme",
       userName,
       password: loginTab === "sparql-auth" ? formPassword : undefined,
       authHeader,
@@ -1830,7 +1830,7 @@ useEffect(() => {
           authType: session.authType,
           graphStore: session.graphStore,
           authHeader: session.authHeader,
-          graphsitePrefix: session.graphsitePrefix,
+          graphPrefix: session.graphPrefix,
         }),
       });
       const data = await response.json();
@@ -1839,7 +1839,7 @@ useEffect(() => {
       }
       toast.add({
         title: "Connection test succeeded",
-        description: `Connected to personal graph server (HTTP ${data.status}). History graph: ${graphSiteForPrefix(session.graphsitePrefix)}`,
+        description: `Connected to personal graph server (HTTP ${data.status}). History graph: ${graphForPrefix(session.graphPrefix)}`,
         type: "success",
       });
     } catch (err) {
@@ -1856,7 +1856,7 @@ useEffect(() => {
     const formValues = readLoginFormValues(e.currentTarget);
     // Keep React state in step with what is actually in the fields.
     if (formValues.graphStore !== undefined) setLoginGraphStore(formValues.graphStore);
-    if (formValues.graphsitePrefix !== undefined) setLoginGraphsitePrefix(formValues.graphsitePrefix);
+    if (formValues.graphPrefix !== undefined) setLoginGraphPrefix(formValues.graphPrefix);
     if (formValues.username !== undefined) setLoginUsername(formValues.username);
     if (formValues.password !== undefined) setLoginPassword(formValues.password);
     const session = buildCurrentSession(formValues);
@@ -1871,7 +1871,7 @@ useEffect(() => {
           authType: session.authType,
           graphStore: session.graphStore,
           authHeader: session.authHeader,
-          graphsitePrefix: session.graphsitePrefix,
+          graphPrefix: session.graphPrefix,
         }),
       });
       const data = await response.json();
@@ -1885,18 +1885,18 @@ useEffect(() => {
       setLoginDialogOpen(false);
       toast.add({
         title: "Connected",
-        description: `Logged in as ${session.userName}. History set to ${graphSiteForPrefix(session.graphsitePrefix)}`,
+        description: `Logged in as ${session.userName}. History set to ${graphForPrefix(session.graphPrefix)}`,
         type: "success",
       });
 
-      // As soon as login succeeds, load every ./graph document into <graphsite>/query + manifest fragment.
+      // As soon as login succeeds, load every ./graph document into <graph>/query + manifest fragment.
       try {
         const seedResponse = await fetch("/proxy/api/graph-seed", { method: "POST", cache: "no-store", headers: proxyDebugHeaders("login-graph-seed", "Login") });
         const seedData = await seedResponse.json().catch(() => ({}));
         if (!seedResponse.ok || !seedData.ok) throw new Error(seedData.error || `Graph load failed (HTTP ${seedResponse.status})`);
         toast.add({
           title: "Graphs loaded",
-          description: `Loaded ${Array.isArray(seedData.loaded) ? seedData.loaded.length : 0} RDF documents into ${graphSiteForPrefix(session.graphsitePrefix)}.`,
+          description: `Loaded ${Array.isArray(seedData.loaded) ? seedData.loaded.length : 0} RDF documents into ${graphForPrefix(session.graphPrefix)}.`,
           type: "success",
         });
       } catch (seedError) {
@@ -2153,6 +2153,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const [ontologyClassMetadata, setOntologyClassMetadata] = useState<Record<string, OntologyClassMetadata>>({});
   const [personalSparqlEndpoint, setPersonalSparqlEndpoint] = useState("");
   const [breadcrumbPreviewSummaries, setBreadcrumbPreviewSummaries] = useState<Record<string, FctUiResultSummary>>({});
+  const [breadcrumbMenuPreviewSummaries, setBreadcrumbMenuPreviewSummaries] = useState<Record<string, FctUiResultSummary>>({});
+  const breadcrumbMenuPreviewPendingRef = useRef(new Set<string>());
+  useEffect(() => { setBreadcrumbMenuPreviewSummaries({}); breadcrumbMenuPreviewPendingRef.current.clear(); }, [queryRevision, selectedEndpointId]);
   const [breadcrumbPreviewPendingIds, setBreadcrumbPreviewPendingIds] = useState<Set<string>>(() => new Set());
   // Reuse result-set metadata for the exact scoped query before issuing a breadcrumb-only request.
   const metadataRegistryRef = useRef<Map<string, FctUiResultSummary>>(new Map());
@@ -3445,10 +3448,16 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const resultsLoadedQueryIdentityRef = useRef("");
   const activeQueryIdentityRef = useRef("");
   const previousResultsQueryIdentityRef = useRef("");
+  const queryGraphServer = readGraphServerFromQueryXml(queryCountXml);
   const endpointReadyForQuery = Boolean(
     selectedEndpointId &&
     selectedEndpointStatus?.status != null &&
-    selectedEndpointStatus.status < 400
+    selectedEndpointStatus.status < 400 &&
+    // addr is authoritative: a restored query must not race ahead of its server.
+    (!queryGraphServer || fctEndpoints.some((endpoint) =>
+      endpoint.id === selectedEndpointId &&
+      (queryGraphServer === endpoint.id || queryGraphServer === endpoint.url || queryGraphServer === endpoint.label)
+    ))
   );
 
   // Keep the active request identity current for stale-response protection, but
@@ -4345,7 +4354,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
         const data = parseFctResponse(responseText);
         if (!cancelled) rememberShortforms(data?.shortforms);
         if (!cancelled) setGraphListSparql(data.sparql ?? "");
-        if (!response.ok) throw new Error(data.error ?? "Failed to load graphsites for the current query.");
+        if (!response.ok) throw new Error(data.error ?? "Failed to load graphs for the current query.");
         if (data.error) throw new Error(data.error);
         if (cancelled) return;
         //const graphs = Array.isArray(data.graphs) ? [...new Set(data.graphs.filter((value: unknown): value is string => typeof value === "string"))] : [];
@@ -4856,7 +4865,7 @@ setGraphFacets(graphs);
       if ((historyCountElement || historyResultsElement) && historyQueryXml && /^\s*(?:<\?xml[^>]*>\s*)?<query\b/i.test(historyQueryXml)) {
         const savedQueryDocument = new DOMParser().parseFromString(historyQueryXml, "application/xml");
         if (savedQueryDocument.querySelector("parsererror")) throw new Error("The Bookmark's saved FCT query XML is malformed.");
-        // addr is authoritative: its first @ separates graphsite from graph
+        // addr is authoritative: its first @ separates graph from graph
         // server, and any later @ belongs to the graph-server portion.
         const savedQueryRoot = savedQueryDocument.documentElement;
         const existingAddress = savedQueryRoot.getAttribute("addr") ?? "";
@@ -4866,10 +4875,10 @@ setGraphFacets(graphs);
           ? fctEndpoints.find((endpoint) => endpoint.id === endpointHint || endpoint.url === endpointHint || endpoint.label === endpointHint)
           : fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId);
         if (!savedEndpoint) throw new Error("The Bookmark's query addr does not identify a configured graph server.");
-        const graphsite = addressDelimiter >= 0
+        const graph = addressDelimiter >= 0
           ? existingAddress.slice(0, addressDelimiter).trim()
           : (savedQueryRoot.getAttribute("graph")?.trim() ?? "");
-        savedQueryRoot.setAttribute("addr", `${graphsite}@${savedEndpoint.id}`);
+        savedQueryRoot.setAttribute("addr", `${graph}@${savedEndpoint.id}`);
         savedQueryRoot.removeAttribute("graph");
         //if (savedEndpoint.id !== selectedEndpointId) await synchronizeFctEndpointSelection(savedEndpoint.id);
 		
@@ -5855,11 +5864,11 @@ useEffect(() => {
   }, [queryTree.attributes.graph]);
 
   // Keep the serialized query address synchronized with the selected graph
-  // server and graphsite. The proxy treats this address as authoritative.
+  // server and graph. The proxy treats this address as authoritative.
   useEffect(() => {
     if (!selectedEndpointId) return;
-    const graphsite = queryTree.attributes.graph?.trim() ?? "";
-    const addr = `${graphsite}@${selectedEndpointId}`;
+    const graph = queryTree.attributes.graph?.trim() ?? "";
+    const addr = `${graph}@${selectedEndpointId}`;
     if (queryTree.attributes.addr !== addr) setQueryAttribute("addr", addr);
   }, [selectedEndpointId, queryTree.attributes.addr, queryTree.attributes.graph]);
 
@@ -6010,7 +6019,7 @@ useEffect(() => {
         }
       });
       if (!personalEndpoint) {
-        throw new Error(`The personal SPARQL endpoint (${payload.personalEndpointUrl}) is not present in the Graphsites graph.`);
+        throw new Error(`The personal SPARQL endpoint (${payload.personalEndpointUrl}) is not present in the Graphs graph.`);
       }
       // Build the History query as a complete FCT query, then pass it through
       // the same restore path used by URL state. That path updates the live
@@ -6179,24 +6188,24 @@ useEffect(() => {
     setGraphNavigationIndex(next.length - 1);
   }
 
-  async function openGraphsiteInfo() {
-    const graphsite = graphText.trim();
+  async function openGraphInfo() {
+    const graph = graphText.trim();
     const requestId = ++graphInfoRequestRef.current;
     const isCurrent = () => graphInfoRequestRef.current === requestId;
     setGraphInfoOpen(true);
-    const validIri = /^https?:\/\/[^\s<>"{}|\\^`]+$/i.test(graphsite);
+    const validIri = /^https?:\/\/[^\s<>"{}|\\^`]+$/i.test(graph);
     if (!validIri) {
-      setGraphInfo({ graphsite, subjectCount: null, subjectCountLoading: false, subjectCountError: graphsite ? "Not a valid graphsite IRI." : "Enter a graphsite URI first.", access: null, accessLoading: false, accessError: "" });
+      setGraphInfo({ graph, subjectCount: null, subjectCountLoading: false, subjectCountError: graph ? "Not a valid graph IRI." : "Enter a graph URI first.", access: null, accessLoading: false, accessError: "" });
       return;
     }
-    setGraphInfo({ graphsite, subjectCount: null, subjectCountLoading: true, subjectCountError: "", access: null, accessLoading: true, accessError: "" });
+    setGraphInfo({ graph, subjectCount: null, subjectCountLoading: true, subjectCountError: "", access: null, accessLoading: true, accessError: "" });
 
     const loadCount = async () => {
       try {
-        const sparql = `SELECT (COUNT(DISTINCT ?s) AS ?ct) WHERE { GRAPH <${graphsite}> { ?s ?p ?o } }`;
+        const sparql = `SELECT (COUNT(DISTINCT ?s) AS ?ct) WHERE { GRAPH <${graph}> { ?s ?p ?o } }`;
         const response = await fetch("/proxy/api/sparql", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graphsite-info-count", "GraphsiteInfo:count") },
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-info-count", "GraphInfo:count") },
           body: JSON.stringify({ facetValueCount: { sparql } }),
         });
         const data = await response.json().catch(() => ({}));
@@ -6208,10 +6217,10 @@ useEffect(() => {
     };
     const loadAccess = async () => {
       try {
-        const response = await fetch("/proxy/api/graphsite-access", {
+        const response = await fetch("/proxy/api/graph-access", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graphsite-info-access", "GraphsiteInfo:access") },
-          body: JSON.stringify({ graphsite }),
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-info-access", "GraphInfo:access") },
+          body: JSON.stringify({ graph }),
         });
         const data = await response.json().catch(() => ({}));
         if (typeof data.access !== "boolean") throw new Error(data.error ?? `Access test failed (HTTP ${response.status}).`);
@@ -6411,6 +6420,46 @@ useEffect(() => {
     return lang ? `${base} @${lang}` : base;
   }
 
+  /** Lazy, real example/count for a submenu node, never the predicate display name. */
+  async function loadBreadcrumbMenuPreview(nodeId: string) {
+    if (breadcrumbPreviewSummaries[nodeId] || breadcrumbMenuPreviewSummaries[nodeId] || breadcrumbMenuPreviewPendingRef.current.has(nodeId)) return;
+    const scoped = makeBreadcrumbScopedTree(nodeId);
+    if (!scoped || !endpointReadyForQuery) return;
+    breadcrumbMenuPreviewPendingRef.current.add(nodeId);
+    try {
+      const sparql = buildFctCountSparql(scoped);
+      const [response, countResponse] = await Promise.all([
+        cachedFetchFct("/proxy/api/fct", {
+          method: "POST", cache: "no-store",
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("breadcrumb-menu-preview", `BreadcrumbMenu:${nodeId}`) },
+          body: serializeFctQuery(scoped),
+        }),
+        sparql ? cachedFetchFct("/proxy/api/sparql", {
+          method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-menu-count", `BreadcrumbMenu:${nodeId}:count`) },
+          body: JSON.stringify({ facetValueCount: { sparql } }),
+        }) : Promise.resolve(null),
+      ]);
+      const parsed = await readFctResponse(response);
+      const first = parsed.results[0];
+      let count: number | null = null;
+      if (countResponse?.ok) {
+        const payload = await countResponse.json() as { count?: unknown };
+        const n = Number(payload.count);
+        if (Number.isSafeInteger(n) && n >= 0) count = n;
+      }
+      setBreadcrumbMenuPreviewSummaries((current) => ({ ...current, [nodeId]: {
+        label: first?.label?.trim() || first?.title?.trim() || (first ? toLabel(first.uri, "OBJECT") : "—"),
+        count,
+        ...(first ? { uri: first.uri, termType: first.termType ?? "uri" } : {}),
+      } }));
+    } catch (error) {
+      console.info("Maestro submenu example lookup failed", { nodeId, error });
+    } finally {
+      breadcrumbMenuPreviewPendingRef.current.delete(nodeId);
+    }
+  }
+
   /** Clickable "e.g. <label> <count>" header: runs the same action the node's own menu item would. */
   function renderBreadcrumbMenuHeader(
     label: string,
@@ -6425,13 +6474,14 @@ useEffect(() => {
         onSelect={onActivate}
         className="mb-1 rounded-b-none border-b pb-1.5 text-xs font-normal text-muted-foreground"
       >
-        <span className="flex w-full items-center justify-between gap-2">
-          <span className="max-w-40 truncate font-medium text-foreground">
-            <em>e.g.</em> {ellipsize(summary?.label || label, 32)}
+        <span className="flex w-full flex-col gap-0.5">
+          <span className="font-semibold text-foreground">{label}</span>
+          <span className="flex items-center justify-between gap-2"><span className="max-w-40 truncate font-medium text-foreground">
+            {summary?.label && summary.label !== "—" ? <><em>{bound ? "i.e." : "e.g."}</em> {ellipsize(summary.label, 32)}</> : <span className="text-muted-foreground">Example loading…</span>}
           </span>
           <span className="shrink-0 tabular-nums">
             {summary?.count !== undefined && summary?.count !== null ? shortenCount(summary.count) : "…"}
-          </span>
+          </span></span>
         </span>
       </DropdownMenuItem>
     );
@@ -6455,7 +6505,7 @@ useEffect(() => {
     const baseLabel = toLabel(iri, directionSuffix ? "Role" : "Property") + directionSuffix;
     const isExcluded = node.attributes?.exclude?.trim().toLowerCase() === "yes";
     const boundValues = boundValueNodes(node);
-    const summary = breadcrumbPreviewSummaries[node.id] ?? node.uiResultSummary;
+    const summary = breadcrumbPreviewSummaries[node.id] ?? breadcrumbMenuPreviewSummaries[node.id];
 
     const nodeContent = (
       <span className="flex items-center gap-1.5 flex-1 min-w-0">
@@ -6474,7 +6524,7 @@ useEffect(() => {
 
     if (isChildBearing) {
       return (
-        <DropdownMenuSub key={node.id}>
+        <DropdownMenuSub key={node.id} onOpenChange={(open) => { if (open) void loadBreadcrumbMenuPreview(node.id); }}>
           <DropdownMenuSubTrigger
             onClick={() => onSelectNode(node.id)}
             className="whitespace-normal break-words flex items-center justify-between"
@@ -6482,7 +6532,7 @@ useEffect(() => {
             {nodeContent}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
-            {renderBreadcrumbMenuHeader(baseLabel, summary, `Move view to ${baseLabel}`, () => onSelectNode(node.id), boundValues.length > 0)}
+            {renderBreadcrumbMenuHeader(`${baseLabel}${node.name !== "property-of" && childRelationshipNodes.length > 0 ? "’s" : ""}`, summary, `Move view to ${baseLabel}`, () => onSelectNode(node.id), boundValues.length > 0)}
             {childRelationshipNodes.map((child) => renderBreadcrumbNodeMenuItem(child, onSelectNode))}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
@@ -6968,7 +7018,7 @@ useEffect(() => {
                           const countQuery = distinctCountQueryFor(queryTree, "value", value.uri, widget.uri, value);
                           const isZeroCount = facetCandidateCounts[countQuery] === 0;
                           const valueInputId = `personal-facet-value-${personalWidgets.indexOf(widget)}-${valueIndex}`;
-                          const valueLabel = value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri;
+                          const valueLabel = value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri;
                           return (
                           <div
                             key={`${facetValueKey(value)}-${valueIndex}`}
@@ -6991,7 +7041,7 @@ useEffect(() => {
                                   event.currentTarget.checked,
                                 );
                               }}
-                              aria-label={`Bind ${toLabel(widget.uri, "Property")} to ${value.termType === "uri" ? toLabel(value.uri) : value.title || value.uri}`}
+                              aria-label={`Bind ${toLabel(widget.uri, "Property")} to ${value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}`}
                               className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
                               aria-invalid={isZeroCount ? true : undefined}
                             />
@@ -7253,7 +7303,7 @@ useEffect(() => {
           <Progress className="h-full rounded-none bg-muted" value={endpointChecksTotal > 0 ? (endpointChecksCompleted / endpointChecksTotal) * 100 : 0} indeterminate={endpointChecksTotal === 0 || endpointChecksCompleted === 0} aria-label="FCT endpoint check progress" />
         </div>
       )}
-      {personalWidgets.map((widget) => (
+      {endpointReadyForQuery && personalWidgets.map((widget) => (
         <PersonalWidgetQueryListener
           key={widget.uri}
           propertyUri={widget.uri}
@@ -7261,12 +7311,13 @@ useEffect(() => {
           limit={leftPanelLimit}
           groupBy={centralTab === "groups" && selectedGroupByOption && groupedPersonalFacetUri === widget.uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined}
           setPersonalWidgets={setPersonalWidgets}
+          endpointReady={endpointReadyForQuery}
         />
       ))}
 
       <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-2">
-          <ButtonGroup aria-label="Graphsite navigation" className="shrink-0 border-0 shadow-none">
+          <ButtonGroup aria-label="Graph navigation" className="shrink-0 border-0 shadow-none">
             {authSession && (<>
             <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("backward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent className={historyActionMenu === "backward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "backward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Earlier in History · latest first · each change inverted</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "backward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
             <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("forward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent className={historyActionMenu === "forward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "forward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Later in History · earliest first</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "forward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
@@ -7274,15 +7325,15 @@ useEffect(() => {
             <Tooltip><TooltipTrigger render={<button type="button" onClick={refreshCurrentBreadcrumb} aria-label="Refresh current query scope" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25"><RotateCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Refresh current query scope using the active breadcrumb</TooltipContent></Tooltip>
           </ButtonGroup>
 
-          {/* One address: [graphsite]@[graph server], with no gap around the at-sign. */}
+          {/* One address: [graph]@[graph server], with no gap around the at-sign. */}
           <div className="flex min-w-0 flex-1 items-center">
-            <div className="group/graphsite-input flex min-w-0 max-w-3xl flex-1 items-stretch overflow-hidden rounded-md border border-input bg-background">
+            <div className="group/graph-input flex min-w-0 max-w-3xl flex-1 items-stretch overflow-hidden rounded-md border border-input bg-background">
               <Tooltip><TooltipTrigger render={<button
                 type="button"
-                onClick={() => void openGraphsiteInfo()}
-                aria-label="Graphsite info"
+                onClick={() => void openGraphInfo()}
+                aria-label="Graph info"
                 className="inline-flex shrink-0 items-center justify-center px-2.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              ><Info aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Graphsite info"}</TooltipContent></Tooltip>
+              ><Info aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Graph info"}</TooltipContent></Tooltip>
               <input
                 id="maestro-graph-input"
                 value={graphText}
@@ -7295,21 +7346,21 @@ useEffect(() => {
               <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={clearGraph}
-                aria-label="Remove graphsite"
-                className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-hover/graphsite-input:max-w-10 group-hover/graphsite-input:px-2.5 group-hover/graphsite-input:opacity-100 group-focus-within/graphsite-input:max-w-10 group-focus-within/graphsite-input:px-2.5 group-focus-within/graphsite-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
-              ><X aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Remove graphsite"}</TooltipContent></Tooltip>
+                aria-label="Remove graph"
+                className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-hover/graph-input:max-w-10 group-hover/graph-input:px-2.5 group-hover/graph-input:opacity-100 group-focus-within/graph-input:max-w-10 group-focus-within/graph-input:px-2.5 group-focus-within/graph-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
+              ><X aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Remove graph"}</TooltipContent></Tooltip>
               <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={applyGraphText}
                 aria-label="Go"
-                className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-hover/graphsite-input:max-w-10 group-hover/graphsite-input:px-2.5 group-hover/graphsite-input:opacity-100 group-focus-within/graphsite-input:max-w-10 group-focus-within/graphsite-input:px-2.5 group-focus-within/graphsite-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
+                className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-hover/graph-input:max-w-10 group-hover/graph-input:px-2.5 group-hover/graph-input:opacity-100 group-focus-within/graph-input:max-w-10 group-focus-within/graph-input:px-2.5 group-focus-within/graph-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
               ><CirclePlay aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Go"}</TooltipContent></Tooltip>
             </div>
             <Dialog open={graphInfoOpen} onOpenChange={setGraphInfoOpen}>
               <DialogContent className="max-w-md p-5">
                 <DialogHeader>
-                  <DialogTitle>Graphsite info</DialogTitle>
-                  <DialogDescription className="break-all font-mono text-xs">{graphInfo.graphsite || "No graphsite URI entered"}</DialogDescription>
+                  <DialogTitle>Graph info</DialogTitle>
+                  <DialogDescription className="break-all font-mono text-xs">{graphInfo.graph || "No graph URI entered"}</DialogDescription>
                 </DialogHeader>
                 <dl className="mt-3 flex flex-col gap-2 text-sm">
                   <div className="flex items-start justify-between gap-3">
@@ -7620,8 +7671,8 @@ useEffect(() => {
                       </div>
                     </div>
                   </div>
-                  <p className="text-xs leading-none text-muted-foreground truncate" title={authSession.graphsitePrefix}>
-                    {authSession.graphsitePrefix}
+                  <p className="text-xs leading-none text-muted-foreground truncate" title={authSession.graphPrefix}>
+                    {authSession.graphPrefix}
                   </p>
                   <span className="inline-block text-[10px] font-mono uppercase bg-muted px-1.5 py-0.5 rounded w-fit text-muted-foreground">
                     {authSession.authType}
@@ -7712,19 +7763,19 @@ useEffect(() => {
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="personal-graphsite-prefix">Personal Graphsite Prefix</Label>
+                <Label htmlFor="personal-graph-prefix">Personal Graph Prefix</Label>
                 <Input
-                  id="personal-graphsite-prefix"
-                  name="graphsite_prefix"
+                  id="personal-graph-prefix"
+                  name="graph_prefix"
                   type="url"
                   required
-                  value={loginGraphsitePrefix}
-                  onChange={(e) => setLoginGraphsitePrefix(e.target.value)}
+                  value={loginGraphPrefix}
+                  onChange={(e) => setLoginGraphPrefix(e.target.value)}
                   placeholder="http://demo.openlinksw.com/ods/home/acme"
                   className="font-mono text-xs"
                 />
                 <p className="text-xs text-muted-foreground">
-                  History graph: <span className="font-mono">{loginGraphsitePrefix ? graphSiteForPrefix(loginGraphsitePrefix) : "USER_SITE/query"}</span>
+                  History graph: <span className="font-mono">{loginGraphPrefix ? graphForPrefix(loginGraphPrefix) : "USER_SITE/query"}</span>
                 </p>
               </div>
 
@@ -8047,7 +8098,7 @@ useEffect(() => {
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <Label htmlFor="left-panel-limit">Left panel limit</Label>
-                  <p className="mt-1 text-xs text-muted-foreground">LIMIT for Categories, Personal facets, Graphsites, and the Properties and Roles configure lists.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">LIMIT for Categories, Personal facets, Graphs, and the Properties and Roles configure lists.</p>
                 </div>
                 <select
                   id="left-panel-limit"
@@ -8294,12 +8345,14 @@ useEffect(() => {
           </ButtonGroup>
           {(breadcrumbPreviewSummaries["query-root"] || breadcrumbPreviewPendingIds.has("query-root")) && (
             /* 15px centers this compact metadata badge beneath the next slash. */
-            <span className="absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
+            <span className="absolute left-[calc(100%+15px)] top-full -translate-x-1/2 pt-1"
+                    onMouseEnter={() => setHoveredBreadcrumbBadgeId("query-root")}
+                    onMouseLeave={() => setHoveredBreadcrumbBadgeId((current) => current === "query-root" ? null : current)}>
               {breadcrumbPreviewSummaries["query-root"] ? (
                 <Tooltip><TooltipTrigger render={<Badge
                   variant="outline"
                   onClick={toggleBreadcrumbBadgeMode}
-                  className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3 cursor-pointer hover:bg-accent select-none"
+                  className="flex max-w-52 items-center gap-1 whitespace-nowrap bg-background text-[10px] font-normal leading-3 cursor-pointer hover:bg-accent select-none"
                   title="Click to toggle category/record metadata"
                 >
                   <span className="max-w-32 truncate">
@@ -8339,7 +8392,7 @@ useEffect(() => {
           // badge example takes "’s", and so does its label unless it is a role (property-of) crumb.
           const breadcrumbHasSuccessor = index < tutorialBreadcrumbPath.length - 1;
           return (
-            <span key={crumb.id} className="relative flex max-w-full items-center gap-1">
+            <span key={crumb.id} className="relative flex max-w-full items-center gap-1" style={{ zIndex: hoveredBreadcrumbBadgeId === crumb.id ? tutorialBreadcrumbPath.length + 20 : index + 1 }}>
               <span className="flex size-3.5 shrink-0 items-center justify-center">
                 <Slash aria-hidden="true" className="size-3.5 text-muted-foreground" />
               </span>
@@ -8350,19 +8403,21 @@ useEffect(() => {
                 const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
                 const isPending = breadcrumbPreviewPendingIds.has(crumb.id);
                 if (isTutorialSuccessor) return (
-                  <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
-                    <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap border-purple-400/70 text-[10px] font-normal leading-3 text-purple-700 dark:text-purple-300">Preview · …</Badge>
+                  <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full -translate-x-1/2 pt-1">
+                    <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap bg-background border-purple-400/70 text-[10px] font-normal leading-3 text-purple-700 dark:text-purple-300">Preview · …</Badge>
                   </span>
                 );
                 if (openBreadcrumbDropdownId === crumb.id) return null;
                 return summary || isPending ? (
                   /* Match the next slash center: 8px nav gap + 7px half of the 14px icon. */
-                  <span className="absolute left-[calc(100%+15px)] top-full z-10 -translate-x-1/2 pt-1">
+                  <span className="absolute left-[calc(100%+15px)] top-full -translate-x-1/2 pt-1"
+                    onMouseEnter={() => setHoveredBreadcrumbBadgeId(crumb.id)}
+                    onMouseLeave={() => setHoveredBreadcrumbBadgeId((current) => current === crumb.id ? null : current)}>
                     {summary ? (
                       <Tooltip><TooltipTrigger render={<Badge
                         variant="outline"
                         onClick={toggleBreadcrumbBadgeMode}
-                        className="flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3 cursor-pointer hover:bg-accent select-none"
+                        className="flex max-w-52 items-center gap-1 whitespace-nowrap bg-background text-[10px] font-normal leading-3 cursor-pointer hover:bg-accent select-none"
                         title="Click to toggle category/record metadata"
                       >
                         <span className="max-w-32 truncate">
@@ -8378,7 +8433,7 @@ useEffect(() => {
                         )}
                       </Badge>} /><TooltipContent>{`${summary.label} · ${summary.zeroClasses ? "0" : shortenCount(summary.count)} (Click to toggle)`}</TooltipContent></Tooltip>
                     ) : (
-                      <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" aria-label={`Loading metadata for ${breadcrumbBaseLabel}`}>
+                      <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap bg-background text-[10px] font-normal leading-3" aria-label={`Loading metadata for ${breadcrumbBaseLabel}`}>
                         <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
                         Loading…
                       </Badge>
@@ -8449,7 +8504,7 @@ useEffect(() => {
                         <TooltipContent>{"Choose a relationship"}</TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="end" className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
-                        {renderBreadcrumbMenuHeader(breadcrumbBaseLabel, summary, `Move view to ${breadcrumbBaseLabel}`, () => { clearTutorialPreview(); navigateToPropertyPath(crumb.id); }, breadcrumbBoundValues.length > 0)}
+                        {renderBreadcrumbMenuHeader(`${breadcrumbBaseLabel}${breadcrumbHasSuccessor && !breadcrumbIsRole ? "’s" : ""}`, summary, `Move view to ${breadcrumbBaseLabel}`, () => { clearTutorialPreview(); navigateToPropertyPath(crumb.id); }, breadcrumbBoundValues.length > 0)}
                         {/* Siblings only: the crumb itself is not listed. A sibling with child relationships opens a submenu (headed by its own clickable e.g./i.e. label) of those children, recursively. */}
                         {breadcrumbSiblings.map((sibling) =>
                           renderBreadcrumbNodeMenuItem(sibling, (targetId) => {
@@ -9290,7 +9345,7 @@ onMouseLeave={() => {
                                   : shortenCount(roleWidgetStatuses[roleNode.id]?.count ?? 0)}
                             </span>} /><TooltipContent>{roleWidgetStatuses[roleNode.id]?.error || undefined}</TooltipContent></Tooltip>
                           </header>
-                          <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} groupBy={centralTab === "groups" && selectedGroupByOption && groupedRoleUri === uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined} limit={leftPanelLimit} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} onFirstExampleClick={(valueUri) => showClassResults(valueUri, activeLeafId)} />
+                          {endpointReadyForQuery && <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} groupBy={centralTab === "groups" && selectedGroupByOption && groupedRoleUri === uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined} limit={leftPanelLimit} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} endpointReady={endpointReadyForQuery} />}
                         </article>
                       );
                     })}
@@ -9299,17 +9354,17 @@ onMouseLeave={() => {
                       <header className="group/header flex items-center gap-2 px-2 py-2">
                         <div className="flex min-w-0 flex-1 items-center gap-1">
                           <h2 className="text-sm font-semibold">Graphs</h2>
-                          <QueryInspectorButton query={`${queryWithoutPagingXml()}\n<!-- FCT API option: graphOnly=true -->`} filename="graphsites-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
+                          <QueryInspectorButton query={`${queryWithoutPagingXml()}\n<!-- FCT API option: graphOnly=true -->`} filename="graphs-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
                           {queryTree.attributes.graph && (
                             <Tooltip><TooltipTrigger render={<button
                               type="button"
                               onClick={clearGraph}
                               className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
                               aria-label="Clear graph selection"
-                            ><X className="size-4" aria-hidden="true" /></button>} /><TooltipContent>{"Clear graphsite selection and Graphsite field"}</TooltipContent></Tooltip>
+                            ><X className="size-4" aria-hidden="true" /></button>} /><TooltipContent>{"Clear graph selection and Graph field"}</TooltipContent></Tooltip>
                           )}
                           <div
-                            aria-label="Sort graphsites"
+                            aria-label="Sort graphs"
                             className={`invisible ml-1 shrink-0 overflow-hidden opacity-0 transition-[width,opacity] duration-200 group-hover/header:visible group-hover/header:opacity-100 focus-within:visible focus-within:opacity-100 ${graphSortPickerExpanded ? "w-28" : "w-7"}`}
                             onMouseEnter={() => setGraphSortPickerExpanded(true)}
                             onMouseLeave={() => setGraphSortPickerExpanded(false)}
@@ -9355,7 +9410,7 @@ onMouseLeave={() => {
                       </header>
                       {graphFacets.length === 0 ? (
                         <p className="px-2 text-xs text-muted-foreground">
-                          {isLoadingGraphs ? "Loading graphsites…" : "No registered graphs yet."}
+                          {isLoadingGraphs ? "Loading graphs…" : "No registered graphs yet."}
                         </p>
                       ) : (
                         <>
@@ -9369,7 +9424,7 @@ onMouseLeave={() => {
                           <div className="space-y-0">
                             {graphFacets.map((item) => (
                               <label key={item.uri} className="flex min-w-0 items-start gap-2 rounded-md px-2 py-1 text-sm hover:bg-accent/50 cursor-pointer">
-                                <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri} onChange={() => bindGraph(item.uri)} aria-label={`Bind graphsite ${item.label}`} className="mt-0.5 size-4 shrink-0 accent-current" />
+                                <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri} onChange={() => bindGraph(item.uri)} aria-label={`Bind graph ${item.label}`} className="mt-0.5 size-4 shrink-0 accent-current" />
                                 <span className="min-w-0 flex-1">
                                   <span className="block break-words">{item.label}</span>
                                   <Tooltip><TooltipTrigger render={<span className="block break-all text-xs text-muted-foreground">{item.uri}</span>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
@@ -9677,7 +9732,7 @@ onMouseLeave={() => {
                       <div className="min-w-0 flex-1 overflow-y-auto p-3">
                         <div className="flex flex-col gap-3">
                         {visibleGroupValues.map((groupValue) => {
-                          const groupValueLabel = groupValue.termType === "uri" ? toLabel(groupValue.uri, selectedGroupByOption?.direction === "reverse" ? "Role" : "Property") : groupValue.title || groupValue.uri;
+                          const groupValueLabel = groupValue.termType === "uri" ? toLabel(groupValue.uri, "OBJECT") : groupValue.title || groupValue.uri;
                           const memberKey = `${selectedGroupByOption!.key}::${groupValueKey(groupValue)}`;
                           const members = groupMembers[memberKey] ?? { results: [], loading: true, error: "" };
                           const selectedRelationshipNode = findQueryNode(queryTree.children, selectedGroupByOption!.nodeId);
@@ -9925,8 +9980,22 @@ onMouseLeave={() => {
                       </DropdownMenuContent>
                     </DropdownMenu>
                     <DropdownMenu>
-                      <DropdownMenuTrigger asChild><button type="button" aria-pressed={recordFormatEnabled} disabled={!recordFormatPreferenceLoaded} className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}>Format{recordPolicy.templates.length > 1 && <ChevronDown className="size-3.5" />}</button></DropdownMenuTrigger>
+                      <DropdownMenuTrigger asChild><button type="button" aria-pressed={recordFormatEnabled} disabled={!recordFormatPreferenceLoaded} className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}>Format<ChevronDown className="size-3.5" /></button></DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="w-80">
+                        <DropdownMenuItem onSelect={() => {
+                          setRecordFormatEnabled(false);
+                          setSelectedRecordTemplateUri("");
+                          setFormattedRecordHtml("");
+                          setFormattedRecordButtonsHtml({});
+                          setRecordFormatError("");
+                          try { queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences").put("", `record-template:${selectedUri}`); } catch (error) { console.warn("Maestro could not persist the default record format", error); }
+                        }} className="flex items-start gap-3 py-3">
+                          <span className="flex h-24 w-24 shrink-0 flex-col gap-1 overflow-hidden rounded border bg-background p-2" aria-hidden="true">
+                            <span className="border-b pb-1 text-[9px] font-semibold">Name　 Value</span>
+                            <span className="h-2 rounded-sm bg-muted" /><span className="h-2 rounded-sm bg-muted/70" /><span className="h-2 rounded-sm bg-muted/50" />
+                          </span>
+                          <span className="min-w-0"><span className="block font-medium">Default</span><span className="block text-xs text-muted-foreground">Property/value table and roles</span></span>
+                        </DropdownMenuItem>
                         {recordPolicy.templates.map((template) => <DropdownMenuItem key={template.uri} onSelect={() => { setSelectedRecordTemplateUri(template.uri); setFormattedRecordHtml(""); setRecordFormatError(""); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); store?.put(recordPolicy.uri, `record-policy:${selectedUri}`); store?.put(template.uri, `record-template:${selectedUri}`); } catch (error) { console.warn("Maestro could not persist the selected record format in IndexedDB", error); } if (!recordFormatEnabled) setRecordFormatEnabled(true); }} className="flex items-start gap-3 py-3">
                           <span className="mt-0.5 block h-24 w-24 shrink-0 overflow-hidden rounded border bg-background"><span className="pointer-events-none block h-24 w-44 origin-top-left scale-[0.5] overflow-hidden" dangerouslySetInnerHTML={{ __html: recordFormatPreviews[template.uri] ?? "<div class=\"p-2 text-xs text-muted-foreground\">Preparing preview…</div>" }} /></span>
                           <span className="min-w-0"><span className="block font-medium">{template.label}</span><span className="block break-all text-xs text-muted-foreground">{template.uri}</span></span>

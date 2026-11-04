@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { requirePersonalLogin } from "@/lib/personal-guard";
-import { graphForFile, getUserGraphSite, updatePersonalSparql } from "@/lib/personal-sparql";
+import { graphForFile, getUserGraph, updatePersonalSparql } from "@/lib/personal-sparql";
 import { parseRdfDocument, buildInsertData } from "@/lib/rdf-to-sparql";
 import { listChatSurveys, runTranscoder, type OtcLlmActivity, type OtcProgressReporter } from "@/lib/otc-runtime";
 
@@ -49,7 +49,7 @@ async function processPost(request: Request, report?: OtcProgressReporter) {
     if (file.size === 0 || file.size > MAX_UPLOAD_BYTES) {
       return NextResponse.json({ error: "The Turtle input must be between 1 byte and 700 KB." }, { status: 413 });
     }
-    const namespace = getUserGraphSite(request).replace(/#.*$/, "");
+    const namespace = getUserGraph(request).replace(/#.*$/, "");
     temporaryGraph = `${namespace}#otc-input-${randomUUID()}`;
     report?.({ step: "select", status: "running", detail: `Parsing uploaded RDF file: ${file.name}` });
     const triples = await parseRdfDocument(await file.text(), ".ttl", temporaryGraph);

@@ -458,11 +458,11 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
   const address = root.attributes.addr ?? "";
   const delimiter = address.indexOf("@");
   if (delimiter < 0 || !address.slice(delimiter + 1).trim()) {
-    throw new Error('The query addr attribute must use "graphsite@graphserver" syntax (graphsite may be empty).');
+    throw new Error('The query addr attribute must use "graph@graphserver" syntax (graph may be empty).');
   }
   const graph = address.slice(0, delimiter).trim();
   const graphTerm = graph ? iri(graph) : null;
-  if (graph && !graphTerm) throw new Error("The graphsite portion of query addr is not a valid IRI.");
+  if (graph && !graphTerm) throw new Error("The graph portion of query addr is not a valid IRI.");
   const scopedWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: where } satisfies SparqlPattern] : where;
   const directives = queryDirectives(root);
   const countProjection = (term: SparqlTerm): SparqlProjection => ({ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(term) }, as: variable("n") });

@@ -6,7 +6,7 @@ import { describeUpstreamError } from "@/lib/upstream-error";
 
 /**
  * Called right after a successful login. Loads every RDF document in ./graph into the user's
- * personal graph server: <graphsitePrefix>/query + the fragment mapped in graph/manifest.json.
+ * personal graph server: <graphPrefix>/query + the fragment mapped in graph/manifest.json.
  */
 export async function POST(request: Request) {
   logProxyCaller(request, "graph-seed.POST");

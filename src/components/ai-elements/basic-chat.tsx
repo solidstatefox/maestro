@@ -472,9 +472,9 @@ export function BasicAssistantChat({
             </Trace>}
             {message.surveyOptions?.length ? <div className="mt-2 w-full max-w-md space-y-2">
               <p className="text-xs font-semibold text-muted-foreground">Choose one survey</p>
-              <div className="scrollbar-none flex scroll-fade-x gap-2 overflow-x-auto overscroll-x-contain pb-1">
+              <div className="flex w-full flex-wrap gap-2 pb-1">
                 {message.surveyOptions.map(option => <Button key={option.uri} type="button" variant="outline" size="sm"
-                  title={option.description || option.uri} className="h-auto shrink-0 whitespace-nowrap"
+                  title={option.description || option.uri} className="h-auto max-w-full whitespace-normal break-words text-left"
                   disabled={loading || !selectingSurvey || pendingTranscode.current === null}
                   onClick={() => void runSelectedSurvey(option, message.id)}>{option.title}</Button>)}
               </div>

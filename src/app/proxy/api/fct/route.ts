@@ -366,7 +366,7 @@ export async function POST(request: Request) {
     if (!queryXml) return fctError("An FCT query XML document is required.", 400);
 
     // Resolve the endpoint from this query's address, not the mutable selection
-    // cookie. Only the first @ separates graphsite from graph-server ID.
+    // cookie. Only the first @ separates graph from graph-server ID.
     const rootTag = queryXml.match(/<query\b([^>]*)>/i)?.[1] ?? "";
     const addrMatch = rootTag.match(/\baddr\s*=\s*(["'])(.*?)\1/i);
     let address = addrMatch?.[2];
@@ -379,7 +379,7 @@ export async function POST(request: Request) {
     }
     const delimiter = address?.indexOf("@") ?? -1;
     if (delimiter < 0 || !address?.slice(delimiter + 1).trim()) {
-      return fctError('Every FCT query must have a valid addr="graphsite@graphserver" attribute; graphsite may be empty.', 400);
+      return fctError('Every FCT query must have a valid addr="graph@graphserver" attribute; graph may be empty.', 400);
     }
     if (delimiter > 0) {
       const graphValue = address.slice(0, delimiter);
@@ -397,7 +397,7 @@ export async function POST(request: Request) {
     if (!endpoint) return fctError(`The graph server in query addr is not configured: ${serverAddress}`, 400);
 
     // Maestro uses #history and #bookmarks as client-side names for its two
-    // private storage graphs. Other graphsite fragments are local labels only
+    // private storage graphs. Other graph fragments are local labels only
     // and must not change the named graph requested by an ordinary FCT query.
     const graphAttribute = rootTag.match(/\bgraph\s*=\s*(["'])(.*?)\1/i);
     if (graphAttribute) {

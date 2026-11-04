@@ -42,8 +42,10 @@ function getDb(): Promise<IDBDatabase> {
 export function computeClientCacheKey(url: string, init?: RequestInit): string | null {
   const method = (init?.method ?? "GET").toUpperCase();
   if (method === "GET") {
-    // Health checks are live probes, don't cache
-    if (url.includes("health=1")) return null;
+    // FCT endpoint lists depend on the user's Personal login and graph server
+    // configuration. Never restore them from an old browser IndexedDB entry.
+    // Health checks must also use fresh results.
+    if (url.includes("/proxy/api/fct") || url.includes("health=1")) return null;
     return `GET::${url}`;
   }
   if (method === "POST") {

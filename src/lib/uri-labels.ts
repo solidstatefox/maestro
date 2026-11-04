@@ -159,10 +159,10 @@ function splitNamespace(uri: string): { namespace: string; local: string } {
   return { namespace: "", local: uri };
 }
 
-export type EntityType = "Class" | "Property" | "Role";
+export type EntityType = "Class" | "Property" | "Role" | "OBJECT";
 
 function formatEntityLabel(label: string, entityType?: EntityType): string {
-  if (!entityType) return label;
+  if (!entityType || entityType === "OBJECT") return label;
   if (entityType === "Class") {
     // Capitalize each word in the class label (preserving prefix like 'schema:')
     return label.replace(/\b[a-zA-Z]/g, (match) => match.toUpperCase());

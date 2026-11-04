@@ -9,7 +9,7 @@ export type AuthType = "sparql-auth" | "sparql-oauth" | "sparql-webid";
 export interface PersonalAuthSession {
   authType: AuthType;
   graphStore: string;
-  graphsitePrefix: string;
+  graphPrefix: string;
   username?: string;
   userName?: string;
   password?: string;
@@ -26,19 +26,19 @@ export interface PersonalAuthSession {
 
 export interface PublicSessionPayload {
   graphStore: string;
-  graphsitePrefix: string;
+  graphPrefix: string;
   authType: AuthType;
   authHeader?: string;
   userName?: string;
   userAvatar?: string;
 }
 
-/** Path appended to the user's graphsite prefix to form the Maestro graphsite (history, bookmarks, /graph files). */
-export const MAESTRO_GRAPHSITE_PATH = "/query";
+/** Path appended to the user's graph prefix to form the Maestro graph (history, bookmarks, /graph files). */
+export const MAESTRO_GRAPH_PATH = "/query";
 
 /** e.g. http://host/DAV/home/acme -> http://host/DAV/home/acme/query */
-export function graphSiteForPrefix(prefix: string): string {
-  return `${(prefix || "").trim().replace(/\/+$/, "")}${MAESTRO_GRAPHSITE_PATH}`;
+export function graphForPrefix(prefix: string): string {
+  return `${(prefix || "").trim().replace(/\/+$/, "")}${MAESTRO_GRAPH_PATH}`;
 }
 
 const STORAGE_KEY = "maestro_personal_auth_v1";
@@ -177,7 +177,7 @@ export function setMaestroSessionCookie(session: PersonalAuthSession | null) {
   }
   const payload: PublicSessionPayload = {
     graphStore: session.graphStore,
-    graphsitePrefix: session.graphsitePrefix,
+    graphPrefix: session.graphPrefix,
     authType: session.authType,
     authHeader: buildAuthHeader(session) || undefined,
     userName: session.displayName || session.userName || session.username,
@@ -241,6 +241,7 @@ export async function loadPersonalAuthSession(): Promise<PersonalAuthSession | n
 
     const session: PersonalAuthSession = {
       ...parsed,
+      graphPrefix: parsed.graphPrefix || (parsed as unknown as { graphsitePrefix?: string }).graphsitePrefix || "",
       username: parsed.username || parsed.userName,
       userName: parsed.userName || parsed.username,
       token: decryptedToken || parsed.token || parsed.oauthToken,

@@ -6523,27 +6523,20 @@ useEffect(() => {
     }
   }
 
-  /** Clickable "e.g. <label> <count>" header: runs the same action the node's own menu item would. */
+  /** Breadcrumb menu's first item is the example itself, never the relationship label. */
   function renderBreadcrumbMenuHeader(
-    _label: string,
     summary: FctUiResultSummary | undefined,
     ariaLabel: string,
     onActivate: () => void,
-    bound = false,
   ): ReactNode {
     return (
       <DropdownMenuItem
         aria-label={ariaLabel}
         onSelect={onActivate}
-        className="mb-1 rounded-b-none border-b pb-1.5 text-xs font-normal text-muted-foreground"
+        className="mb-1 rounded-b-none border-b pb-1.5 text-xs font-medium text-foreground"
       >
-        <span className="flex w-full flex-col gap-0.5">
-          <span className="flex items-center justify-between gap-2"><span className="max-w-40 truncate font-medium text-foreground">
-            {summary?.label && summary.label !== "—" ? <><em>{bound ? "i.e." : "e.g."}</em> {ellipsize(summary.label, 32)}’s</> : <span className="text-muted-foreground">Example loading…</span>}
-          </span>
-          <span className="shrink-0 tabular-nums">
-            {summary?.count !== undefined && summary?.count !== null ? shortenCount(summary.count) : "…"}
-          </span></span>
+        <span className="max-w-56 truncate">
+          {summary?.label && summary.label !== "—" ? `${ellipsize(summary.label, 40).replace(/[’']s$/u, "")}’s` : "Example loading…"}
         </span>
       </DropdownMenuItem>
     );
@@ -6594,7 +6587,7 @@ useEffect(() => {
             {nodeContent}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
-            {renderBreadcrumbMenuHeader(`${baseLabel}${node.name !== "property-of" && childRelationshipNodes.length > 0 ? "’s" : ""}`, summary, `Move view to ${baseLabel}`, () => onSelectNode(node.id), boundValues.length > 0)}
+            {renderBreadcrumbMenuHeader(summary, `Move view to ${baseLabel}`, () => onSelectNode(node.id))}
             {childRelationshipNodes.map((child) => renderBreadcrumbNodeMenuItem(child, onSelectNode))}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
@@ -7678,9 +7671,11 @@ useEffect(() => {
                 try {
                   await navigator.clipboard.writeText(window.location.href);
                   setShareLinkCopied(true);
+                  toast.add({ title: "Share link copied", description: "The query URL is on your clipboard.", type: "success" });
                   window.setTimeout(() => setShareLinkCopied(false), 1800);
                 } catch {
                   setShareLinkCopied(false);
+                  toast.add({ title: "Could not copy share link", description: "The browser denied clipboard access.", type: "error" });
                 }
               }}
             ><Link aria-hidden="true" /></Button>
@@ -8574,7 +8569,7 @@ useEffect(() => {
                         <TooltipContent>{"Choose a relationship"}</TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="end" className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
-                        {renderBreadcrumbMenuHeader(`${breadcrumbBaseLabel}${breadcrumbHasSuccessor && !breadcrumbIsRole ? "’s" : ""}`, summary, `Move view to ${breadcrumbBaseLabel}`, () => { clearTutorialPreview(); navigateToPropertyPath(crumb.id); }, breadcrumbBoundValues.length > 0)}
+                        {renderBreadcrumbMenuHeader(summary, `Move view to ${breadcrumbBaseLabel}`, () => { clearTutorialPreview(); navigateToPropertyPath(crumb.id); })}
                         {/* Siblings only: the crumb itself is not listed. A sibling with child relationships opens a submenu (headed by its own clickable e.g./i.e. label) of those children, recursively. */}
                         {breadcrumbSiblings.map((sibling) =>
                           renderBreadcrumbNodeMenuItem(sibling, (targetId) => {

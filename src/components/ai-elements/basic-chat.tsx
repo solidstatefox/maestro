@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
-import { ArrowUp, Bot, LoaderCircle, List, User, Plus, X, Download, ChevronDown, Terminal as TerminalIcon } from "lucide-react";
+import { ArrowUp, Bot, LoaderCircle, List, User, Plus, X, Download, ChevronDown, FileText, Terminal as TerminalIcon } from "lucide-react";
 import { createPortal } from "react-dom";
+import { Attachment, AttachmentMedia, AttachmentContent, AttachmentTitle, AttachmentDescription, AttachmentActions, AttachmentAction, AttachmentGroup } from "@/components/ui/attachment";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Trace, TraceCollapsible, TraceCollapsibleTrigger, TraceCollapsibleContent, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
@@ -27,11 +28,15 @@ type ChatMessage = {
   createdAt?: string;
   usage?: { input?: number; output?: number; total?: number };
   download?: { name: string; content: string };
-  transcode?: { fileName: string; inputGraph?: string; rulesGraph?: string; surveyTitle?: string; surveyIri?: string };
+  transcode?: { fileName: string; fileSize?: number; fileType?: string; uploadState?: "idle" | "uploading" | "processing" | "error" | "done"; uploadPercent?: number; inputGraph?: string; rulesGraph?: string; surveyTitle?: string; surveyIri?: string };
   surveyOptions?: Array<{ uri: string; title: string; description: string }>;
   otcProgress?: OtcProgressEvent[];
 };
 type PendingPrompt = { id: number; text: string } | null;
+
+function formatAttachmentSize(bytes: number): string {
+  return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
+}
 
 const DB_NAME = "maestro-assistant-chat";
 const DB_VERSION = 1;
@@ -218,7 +223,7 @@ export function BasicAssistantChat({
       role: "user",
       content: text,
       createdAt: new Date().toISOString(),
-      ...(sentAttachment && /^transcode\b/i.test(text) ? { transcode: { fileName: sentAttachment.name } } : {}),
+      ...(sentAttachment && /^transcode\b/i.test(text) ? { transcode: { fileName: sentAttachment.name, fileSize: sentAttachment.size, fileType: sentAttachment.type, uploadState: "idle" as const } } : {}),
     };
     const priorMessages = messagesRef.current;
     const nextMessages = [...priorMessages, userMessage];
@@ -309,19 +314,19 @@ export function BasicAssistantChat({
     });
     messagesRef.current = prepared;
     setMessages(prepared);
+    const updateAttachmentStatus = (uploadState: "uploading" | "processing" | "error" | "done", uploadPercent?: number) => {
+      const updated = messagesRef.current.map(message => message.id === pending.messageId && message.transcode ? {
+        ...message, transcode: { ...message.transcode, uploadState, ...(uploadPercent !== undefined ? { uploadPercent } : {}) },
+      } : message);
+      messagesRef.current = updated;
+      setMessages(updated);
+    };
     try {
       const form = new FormData();
       form.set("prompt", pending.prompt);
       form.set("file", pending.file);
       form.set("transcoder", option.uri);
-      const response = await fetch("/proxy/api/otc/chat", {
-        method: "POST", body: form, cache: "no-store", headers: { Accept: "application/x-ndjson" },
-      });
-      if (!response.ok || !response.body) throw new Error(`Could not start OTC stream (HTTP ${response.status}).`);
       const streamState: { complete?: { status: number; result: unknown } } = {};
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       const handleLine = (line: string) => {
         if (!line.trim()) return;
         const packet = JSON.parse(line) as
@@ -335,20 +340,44 @@ export function BasicAssistantChat({
           setMessages(updated);
         } else streamState.complete = packet;
       };
-      try {
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
+      // XMLHttpRequest exposes real upload progress while preserving incremental NDJSON activity.
+      // A streaming fetch response alone cannot report upload bytes in the browser.
+      updateAttachmentStatus("uploading", 0);
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        let processed = 0;
+        let buffer = "";
+        let rejected = false;
+        const consume = (flush = false) => {
+          buffer += xhr.responseText.slice(processed);
+          processed = xhr.responseText.length;
           let index: number;
           while ((index = buffer.indexOf("\n")) >= 0) {
-            handleLine(buffer.slice(0, index));
+            const line = buffer.slice(0, index);
             buffer = buffer.slice(index + 1);
+            if (line.trim()) handleLine(line);
           }
-        }
-        buffer += decoder.decode();
-        if (buffer.trim()) handleLine(buffer);
-      } finally { reader.releaseLock(); }
+          if (flush && buffer.trim()) { handleLine(buffer); buffer = ""; }
+        };
+        xhr.open("POST", "/proxy/api/otc/chat");
+        xhr.setRequestHeader("Accept", "application/x-ndjson");
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) updateAttachmentStatus("uploading", Math.min(100, Math.round(100 * event.loaded / event.total)));
+        };
+        xhr.upload.onload = () => updateAttachmentStatus("processing", 100);
+        xhr.onprogress = () => { try { consume(); } catch (err) { rejected = true; xhr.abort(); reject(err); } };
+        xhr.onload = () => {
+          if (rejected) return;
+          try {
+            consume(true);
+            if (xhr.status < 200 || xhr.status >= 300) throw new Error(`Could not start OTC stream (HTTP ${xhr.status}).`);
+            resolve();
+          } catch (err) { reject(err); }
+        };
+        xhr.onerror = () => reject(new Error("Could not connect to the OTC service."));
+        xhr.onabort = () => { if (!rejected) reject(new Error("OTC upload was cancelled.")); };
+        xhr.send(form);
+      });
       const completion = streamState.complete;
       if (!completion) throw new Error("OTC progress stream ended before the result arrived.");
       const data = completion.result as {
@@ -381,7 +410,9 @@ export function BasicAssistantChat({
       });
       messagesRef.current = completed;
       setMessages(completed);
+      updateAttachmentStatus("done", 100);
     } catch (cause) {
+      updateAttachmentStatus("error");
       const description = cause instanceof Error ? cause.message : "Transcoding failed.";
       setError(description);
       const failed = [...messagesRef.current, { id: crypto.randomUUID(), role: "assistant" as const,
@@ -434,6 +465,14 @@ export function BasicAssistantChat({
         {timeline.map((item) => item.kind === "message" ? (() => { const message = item.message; return (
           <Message key={message.id} role={message.role} userName={userName} userAvatarUrl={userAvatarUrl}>
             <Bubble role={message.role}>{message.content}</Bubble>
+            {message.transcode && <Attachment className="mt-2 w-full max-w-md" state={message.transcode.uploadState ?? "done"} size="sm" aria-label={`Attached file ${message.transcode.fileName}`}>
+              <AttachmentMedia><FileText className="size-4" /></AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle>{message.transcode.fileName}</AttachmentTitle>
+                <AttachmentDescription>{message.transcode.uploadState === "uploading" ? `Uploading · ${message.transcode.uploadPercent ?? 0}%` : message.transcode.uploadState === "processing" ? "Processing transcoder survey…" : message.transcode.uploadState === "error" ? "Upload or survey failed" : message.transcode.uploadState === "done" ? "Submitted" : "Ready to upload"}{typeof message.transcode.fileSize === "number" ? ` · ${formatAttachmentSize(message.transcode.fileSize)}` : ""}</AttachmentDescription>
+                {message.transcode.uploadState === "uploading" && <div role="progressbar" aria-label="Attachment upload progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={message.transcode.uploadPercent ?? 0} className="h-1 w-full overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${message.transcode.uploadPercent ?? 0}%` }} /></div>}
+              </AttachmentContent>
+            </Attachment>}
             {message.transcode && <Trace className="mt-2 max-w-full text-xs">
               <TraceCollapsible defaultOpen>
                 <TraceCollapsibleTrigger><TraceLine><TraceIcon><TerminalIcon className="size-4" /></TraceIcon><TraceTitle>Submitted for transcoding</TraceTitle></TraceLine></TraceCollapsibleTrigger>
@@ -472,9 +511,9 @@ export function BasicAssistantChat({
             </Trace>}
             {message.surveyOptions?.length ? <div className="mt-2 w-full max-w-md space-y-2">
               <p className="text-xs font-semibold text-muted-foreground">Choose one survey</p>
-              <div className="flex w-full flex-wrap gap-2 pb-1">
+              <div className="scrollbar-none flex scroll-fade-x gap-2 overflow-x-auto overscroll-x-contain pb-1">
                 {message.surveyOptions.map(option => <Button key={option.uri} type="button" variant="outline" size="sm"
-                  title={option.description || option.uri} className="h-auto max-w-full whitespace-normal break-words text-left"
+                  title={option.description || option.uri} className="h-auto shrink-0 whitespace-nowrap"
                   disabled={loading || !selectingSurvey || pendingTranscode.current === null}
                   onClick={() => void runSelectedSurvey(option, message.id)}>{option.title}</Button>)}
               </div>
@@ -510,10 +549,13 @@ export function BasicAssistantChat({
       {composerHost && createPortal(<form onSubmit={submit} className="w-full">
         <InputGroup>
           {attachment && <InputGroupAddon align="block-start">
-            <span className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-lg border bg-muted/40 px-2 py-1 text-xs">
-              <span className="truncate" title={attachment.name}>{attachment.name}</span>
-              <button type="button" className="rounded-full p-0.5 hover:bg-muted" aria-label="Remove attachment" onClick={() => { setAttachment(null); if (fileRef.current) fileRef.current.value = ""; }}><X className="size-3" /></button>
-            </span>
+            <AttachmentGroup className="w-full">
+              <Attachment state="idle" size="sm" className="max-w-full" aria-label={`Selected file ${attachment.name}`}>
+                <AttachmentMedia><FileText className="size-4" /></AttachmentMedia>
+                <AttachmentContent><AttachmentTitle>{attachment.name}</AttachmentTitle><AttachmentDescription>Turtle · {formatAttachmentSize(attachment.size)} · Ready to send</AttachmentDescription></AttachmentContent>
+                <AttachmentActions><AttachmentAction aria-label={`Remove ${attachment.name}`} onClick={() => { setAttachment(null); if (fileRef.current) fileRef.current.value = ""; }}><X className="size-3" /></AttachmentAction></AttachmentActions>
+              </Attachment>
+            </AttachmentGroup>
           </InputGroupAddon>}
           <div className="flex min-w-0 items-start px-1">
             {badgeDraft && <span className="ml-2 mt-3 shrink-0 rounded-full border bg-muted px-2 py-0.5 text-xs font-medium" title="Backspace or Delete at the start of the text removes transcode">transcode</span>}

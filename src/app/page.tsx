@@ -3752,6 +3752,39 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   const [isLoadingProperties, setIsLoadingProperties] = useState(false);
   const [isLoadingClasses, setIsLoadingClasses] = useState(false);
 
+  // The authoritative <query> revision, not the asynchronous facet effects,
+  // starts both Configure spinners. Keep a short visible interval even when
+  // cached FCT responses complete before the next browser paint.
+  const [configureQueryTransition, setConfigureQueryTransition] = useState(false);
+  const previousConfigureQueryRevisionRef = useRef(queryRevision);
+  const previouslyVisibleConfigureButtonsRef = useRef({ properties: false, roles: false });
+  useLayoutEffect(() => {
+    if (previousConfigureQueryRevisionRef.current === queryRevision) return;
+    previousConfigureQueryRevisionRef.current = queryRevision;
+    setConfigureQueryTransition(true);
+    const timer = window.setTimeout(() => setConfigureQueryTransition(false), 450);
+    return () => window.clearTimeout(timer);
+  }, [queryRevision]);
+
+  // Facet arrays can be cleared synchronously with a query change. Retain only
+  // the buttons that were visible before that change until the spinner settles.
+  if (propertyFacets.length > 0) previouslyVisibleConfigureButtonsRef.current.properties = true;
+  if (roleFacets.length > 0) previouslyVisibleConfigureButtonsRef.current.roles = true;
+  useEffect(() => {
+    if (!configureQueryTransition && !isLoadingProperties) {
+      previouslyVisibleConfigureButtonsRef.current.properties = propertyFacets.length > 0;
+    }
+    if (!configureQueryTransition && !isLoadingRoles) {
+      previouslyVisibleConfigureButtonsRef.current.roles = roleFacets.length > 0;
+    }
+  }, [configureQueryTransition, isLoadingProperties, isLoadingRoles, propertyFacets.length, roleFacets.length]);
+  const showConfigureProperties = propertyFacets.length > 0 ||
+    (configureQueryTransition && previouslyVisibleConfigureButtonsRef.current.properties);
+  const showConfigureRoles = roleFacets.length > 0 ||
+    (configureQueryTransition && previouslyVisibleConfigureButtonsRef.current.roles);
+  const showPropertiesSpinner = configureQueryTransition || isLoadingProperties;
+  const showRolesSpinner = configureQueryTransition || isLoadingRoles;
+
   // Start the Configure count spinners as soon as the authoritative facet
   // requests change, before the next paint. Waiting for the asynchronous
   // request effects can briefly show counts from the previous query.
@@ -6492,7 +6525,7 @@ useEffect(() => {
 
   /** Clickable "e.g. <label> <count>" header: runs the same action the node's own menu item would. */
   function renderBreadcrumbMenuHeader(
-    label: string,
+    _label: string,
     summary: FctUiResultSummary | undefined,
     ariaLabel: string,
     onActivate: () => void,
@@ -6505,9 +6538,8 @@ useEffect(() => {
         className="mb-1 rounded-b-none border-b pb-1.5 text-xs font-normal text-muted-foreground"
       >
         <span className="flex w-full flex-col gap-0.5">
-          <span className="font-semibold text-foreground">{label}</span>
           <span className="flex items-center justify-between gap-2"><span className="max-w-40 truncate font-medium text-foreground">
-            {summary?.label && summary.label !== "—" ? <><em>{bound ? "i.e." : "e.g."}</em> {ellipsize(summary.label, 32)}</> : <span className="text-muted-foreground">Example loading…</span>}
+            {summary?.label && summary.label !== "—" ? <><em>{bound ? "i.e." : "e.g."}</em> {ellipsize(summary.label, 32)}’s</> : <span className="text-muted-foreground">Example loading…</span>}
           </span>
           <span className="shrink-0 tabular-nums">
             {summary?.count !== undefined && summary?.count !== null ? shortenCount(summary.count) : "…"}
@@ -8323,7 +8355,12 @@ useEffect(() => {
         <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-start gap-2 bg-background px-4 pt-2 pb-7">
         <span
           className="relative flex min-w-0 items-center gap-1"
-          onMouseLeave={() => { if (!namePropertyMenuOpen) setRootSearchExpanded(false); }}
+          style={{ zIndex: hoveredBreadcrumbBadgeId === "query-root" ? tutorialBreadcrumbPath.length + 100 : 1 }}
+          onMouseEnter={() => setHoveredBreadcrumbBadgeId("query-root")}
+          onMouseLeave={() => {
+            setHoveredBreadcrumbBadgeId((current) => current === "query-root" ? null : current);
+            if (!namePropertyMenuOpen) setRootSearchExpanded(false);
+          }}
         >
           <ButtonGroup aria-label="Root query controls" className={`min-w-0 max-w-full ${rootSearchExpanded ? "border border-input" : "border border-border"} ${facetHoverPreview?.kind === "record" ? "rounded-md !border-purple-500/80 text-purple-800 dark:text-purple-200" : ""}`}>
             {rootSearchExpanded ? (
@@ -8422,7 +8459,10 @@ useEffect(() => {
           // badge example takes "’s", and so does its label unless it is a role (property-of) crumb.
           const breadcrumbHasSuccessor = index < tutorialBreadcrumbPath.length - 1;
           return (
-            <span key={crumb.id} className="relative flex max-w-full items-center gap-1" style={{ zIndex: hoveredBreadcrumbBadgeId === crumb.id ? tutorialBreadcrumbPath.length + 20 : index + 1 }}>
+            <span key={crumb.id} className="relative flex max-w-full items-center gap-1"
+              style={{ zIndex: hoveredBreadcrumbBadgeId === crumb.id ? tutorialBreadcrumbPath.length + 100 : index + 2 }}
+              onMouseEnter={() => setHoveredBreadcrumbBadgeId(crumb.id)}
+              onMouseLeave={() => setHoveredBreadcrumbBadgeId((current) => current === crumb.id ? null : current)}>
               <span className="flex size-3.5 shrink-0 items-center justify-center">
                 <Slash aria-hidden="true" className="size-3.5 text-muted-foreground" />
               </span>
@@ -8601,7 +8641,7 @@ useEffect(() => {
                         ) : null}
                       </div>
                     ) : null}
-                    {propertyFacets.length > 0 && (
+                    {showConfigureProperties && (
                       <ButtonGroup aria-label="Configure properties">
                         <button type="button" onClick={() => { setFocusListOrder("Properties"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="inline-flex items-center gap-1 px-2 text-xs font-medium hover:bg-accent" title="Configure Properties" aria-label="Configure Properties"><MousePointerClick className="size-3.5" aria-hidden="true" /> Properties</button>
                         <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
@@ -8614,10 +8654,10 @@ useEffect(() => {
                           }}
                           className="px-3 py-1.5 text-sm hover:bg-accent"
                           aria-label={`Show Focus properties, ${propertyFacets.length} properties`}
-                        >{isLoadingProperties ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading properties" role="status" /> : propertyFacets.length}</button>} /><TooltipContent>{"Show Focus properties first"}</TooltipContent></Tooltip>
+                        >{showPropertiesSpinner ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading properties" role="status" /> : propertyFacets.length}</button>} /><TooltipContent>{"Show Focus properties first"}</TooltipContent></Tooltip>
                       </ButtonGroup>
                     )}
-                    {roleFacets.length > 0 && (
+                    {showConfigureRoles && (
                       <ButtonGroup aria-label="Configure roles">
                         <button type="button" onClick={() => { setFocusListOrder("Roles"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="inline-flex items-center gap-1 px-2 text-xs font-medium hover:bg-accent" title="Configure Roles" aria-label="Configure Roles"><MousePointerClick className="size-3.5" aria-hidden="true" /> Roles</button>
                         <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
@@ -8630,7 +8670,7 @@ useEffect(() => {
                           }}
                           className="px-3 py-1.5 text-sm hover:bg-accent"
                           aria-label={`Show Focus roles, ${roleFacets.length} roles`}
-                        >{isLoadingRoles ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading roles" role="status" /> : roleFacets.length}</button>} /><TooltipContent>{"Show Focus roles first"}</TooltipContent></Tooltip>
+                        >{showRolesSpinner ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading roles" role="status" /> : roleFacets.length}</button>} /><TooltipContent>{"Show Focus roles first"}</TooltipContent></Tooltip>
                       </ButtonGroup>
                     )}
                     {autoConfigureFacetCount > 0 && (

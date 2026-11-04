@@ -2525,9 +2525,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         if (!response.ok)
           throw new Error(data.error ?? "Could not load FCT endpoints.");
         if (cancelled) return;
-        const endpoints = Array.isArray(data.endpoints)
+        const rawEndpoints = Array.isArray(data.endpoints)
           ? (data.endpoints as EndpointOption[])
           : [];
+        const endpoints = authSession
+          ? rawEndpoints
+          : rawEndpoints.filter((item) => item.id !== "personal-sparql" && item.label.trim().toLowerCase() !== "personal sparql");
         const savedSelection = typeof data.selectedId === "string" ? data.selectedId : "";
         const requestedEndpoint = typeof requestedUrlSelection === "string"
           ? endpoints.find((endpoint) => endpoint.id === requestedUrlSelection || endpoint.url === requestedUrlSelection || endpoint.label === requestedUrlSelection)
@@ -2693,6 +2696,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     if (!endpointId) return;
     const endpoint = fctEndpoints.find((item) => item.id === endpointId);
     if (!endpoint) throw new Error(`The saved query refers to an unknown graph server: ${endpointId}`);
+    if (!authSession && (endpoint.id === "personal-sparql" || endpoint.label.trim().toLowerCase() === "personal sparql")) {
+      throw new Error("Log in before selecting the Personal SPARQL graph server.");
+    }
     let health = endpointStatuses[endpointId];
     if (!health) {
       const checked = await runEndpointChecks([endpoint]);
@@ -2722,6 +2728,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     if (!endpointId || endpointId === selectedEndpointId) return;
     const endpoint = fctEndpoints.find((item) => item.id === endpointId);
     if (!endpoint) return;
+    if (!authSession && (endpoint.id === "personal-sparql" || endpoint.label.trim().toLowerCase() === "personal sparql")) return;
 
     setEndpointMenuError("");
     try {
@@ -7281,7 +7288,7 @@ useEffect(() => {
                 value={graphText}
                 onChange={(event) => setGraphText(event.target.value)}
                 onKeyDown={(event) => { if (event.key === "Enter") applyGraphText(); }}
-                placeholder="Enter graphsite URI"
+                placeholder="Enter graph URI"
                 aria-label="Site URI"
                 className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
               />
@@ -8096,10 +8103,13 @@ useEffect(() => {
                 className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent"
               >RDF Loader</button>
               )}
+
             </div>
           </SheetContent>
         </Sheet>
       </header>
+
+
 
       <Dialog open={isRdfLoaderOpen} onOpenChange={(open) => { if (!isRdfLoading) setIsRdfLoaderOpen(open); }}>
         <DialogContent aria-labelledby="rdf-loader-title" className="w-full max-w-xl p-5">
@@ -9288,7 +9298,7 @@ onMouseLeave={() => {
                     <article className="flex min-w-0 flex-col">
                       <header className="group/header flex items-center gap-2 px-2 py-2">
                         <div className="flex min-w-0 flex-1 items-center gap-1">
-                          <h2 className="text-sm font-semibold">Graphsites</h2>
+                          <h2 className="text-sm font-semibold">Graphs</h2>
                           <QueryInspectorButton query={`${queryWithoutPagingXml()}\n<!-- FCT API option: graphOnly=true -->`} filename="graphsites-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
                           {queryTree.attributes.graph && (
                             <Tooltip><TooltipTrigger render={<button

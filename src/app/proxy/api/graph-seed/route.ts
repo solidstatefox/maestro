@@ -23,6 +23,12 @@ export async function POST(request: Request) {
       loaded,
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return NextResponse.json({ ok: false, error: describeUpstreamError(error, "Could not load ./graph into the personal graph server.") }, { status: 502, headers: { "Cache-Control": "no-store" } });
+    // Keep full diagnostics server-side; never send project or temp paths to the browser.
+    console.error("Maestro graph seed failed:", error);
+    const message = describeUpstreamError(error, "Could not load ./graph into the personal graph server.");
+    const safeMessage = message
+      .replaceAll(process.cwd(), "[project]")
+      .replace(/[A-Za-z]:[\\/][^\r\n]+?(?=[:\s]|$)/g, "[local path]");
+    return NextResponse.json({ ok: false, error: safeMessage }, { status: 502, headers: { "Cache-Control": "no-store" } });
   }
 }

@@ -80,17 +80,17 @@ function getGraphManifest(): GraphManifest {
   try {
     manifest = JSON.parse(readFileSync(getGraphManifestPath(), "utf8"));
   } catch (error) {
-    throw new Error(`Could not read ${getGraphManifestPath()}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Could not read graph/manifest.json: ${error instanceof Error ? error.name : "Unknown error"}`);
   }
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    throw new Error(`${getGraphManifestPath()} must contain a JSON object mapping RDF filenames to Graphsite graph local paths or IRIs.`);
+    throw new Error(`graph/manifest.json must contain a JSON object mapping RDF filenames to Graphsite graph local paths or IRIs.`);
   }
   const result: GraphManifest = {};
   for (const [filename, rawGraph] of Object.entries(manifest as Record<string, unknown>)) {
     if (!filename || filename === "manifest.json" || filename.includes("/") || filename.includes("\\") || filename.startsWith(".")) {
-      throw new Error(`Invalid RDF filename in ${getGraphManifestPath()}: ${filename}`);
+      throw new Error(`Invalid RDF filename in graph/manifest.json: ${filename}`);
     }
-    if (typeof rawGraph !== "string") throw new Error(`Graphsite for ${filename} must be a string in ${getGraphManifestPath()}.`);
+    if (typeof rawGraph !== "string") throw new Error(`Graphsite for ${filename} must be a string in graph/manifest.json.`);
     result[filename] = rawGraph.trim().replace(/\\:/g, ":");
   }
   return result;
@@ -99,7 +99,7 @@ function getGraphManifest(): GraphManifest {
 /** Resolve the target graph for an RDF file listed in /graph/manifest.json: <graphsite>/query + manifest fragment. */
 export function graphForFile(filename: string, request?: Request): string {
   const rawPath = getGraphManifest()[filename];
-  if (!rawPath) throw new Error(`No Graphsite mapping for ${filename} in ${getGraphManifestPath()}.`);
+  if (!rawPath) throw new Error(`No Graphsite mapping for ${filename} in graph/manifest.json.`);
   if (/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(rawPath)) {
     return rawPath;
   }
@@ -160,13 +160,13 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
     };
     const manifest = getGraphManifest();
     const files = entries.filter((entry) => entry.isFile() && mediaTypes[extname(entry.name).toLowerCase()]);
-    if (files.length === 0) throw new Error(`No supported RDF documents were found in ${getGraphDirectory()}.`);
+    if (files.length === 0) throw new Error(`No supported RDF documents were found in ./graph.`);
     const listedFiles = new Set(files.map((file) => file.name));
     for (const filename of Object.keys(manifest)) {
       if (!listedFiles.has(filename)) throw new Error(`Manifest entry ${filename} has no matching supported RDF file in ${getGraphDirectory()}.`);
     }
     for (const file of files) {
-      if (!manifest[file.name]) throw new Error(`No Graphsite mapping for ${file.name} in ${getGraphManifestPath()}.`);
+      if (!manifest[file.name]) throw new Error(`No Graphsite mapping for ${file.name} in graph/manifest.json.`);
     }
 
     const endpoint = personalSparqlUrl(request); // read endpoint (/sparql), advertised in the Datasites seed
@@ -199,7 +199,7 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
       const path = resolve(getGraphDirectory(), file.name);
       let content = await readFile(path, "utf8");
       if (!content.trim()) {
-        console.warn(`Maestro skipped empty RDF document ${path}.`);
+        console.warn(`Maestro skipped empty RDF document ${file.name}.`);
         continue;
       }
       if (file.name.toLowerCase() === "dataserver-seed.ttl") {
@@ -228,12 +228,12 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
           const triples = await parseRdfDocument(content, extension, destinationGraph);
           update = buildInsertData(destinationGraph, triples);
         } catch (error) {
-          throw new Error(`Could not parse RDF document ${path}: ${error instanceof Error ? error.message : String(error)}`);
+          throw new Error(`Could not parse RDF document ${file.name}: ${error instanceof Error ? error.message : String(error)}`);
         }
         try {
           await updatePersonalSparql(update, 60000, request);
         } catch (error) {
-          throw new Error(`Could not load RDF document ${path} into graph ${destinationGraph} via ${writeEndpoint.toString()}: ${describeUpstreamError(error)}`);
+          throw new Error(`Could not load RDF document ${file.name} into graph ${destinationGraph}: ${describeUpstreamError(error)}`);
         }
       } else {
         // Formats Maestro cannot parse itself (JSON-LD, RDFa, ...) still go through the graph-store endpoint,
@@ -247,7 +247,7 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
         });
         const responseText = (await response.text()).slice(0, 3000);
         if (!response.ok || /(?:Virtuoso\s+Exception|Error\s+SR|SPARQL\s+.*Error|failed)/i.test(responseText) && !/0 errors/i.test(responseText)) {
-          throw new Error(`Could not load RDF document ${path} into graph ${destinationGraph} (HTTP ${response.status}): ${responseText || "no response details"}${authNote(response) ? ` [${authNote(response)}]` : ""}`);
+          throw new Error(`Could not load RDF document ${file.name} into graph ${destinationGraph} (HTTP ${response.status}): ${responseText || "no response details"}${authNote(response) ? ` [${authNote(response)}]` : ""}`);
         }
       }
       console.info(`Maestro loaded ${file.name} into ${destinationGraph}.`);
@@ -409,7 +409,11 @@ export function getSeedFctEndpoints(): Promise<FctEndpoint[]> {
 
 /** Logged in: seed the registry once, then load endpoint records and groups from its configured RDF graph. Logged out: use the local seed file only. */
 export async function getConfiguredFctEndpoints(request?: Request): Promise<FctEndpoint[]> {
-  if (!getPersonalSession(request)) return getSeedFctEndpoints();
+  if (!getPersonalSession(request)) {
+    const seeded = await getSeedFctEndpoints();
+    // A locally seeded Personal SPARQL entry must never be selected or probed by visitors.
+    return seeded.filter((endpoint) => endpoint.id !== "personal-sparql" && endpoint.label.trim().toLowerCase() !== "personal sparql");
+  }
   await ensureGraphDirectorySeeded(request);
   const dataserversGraph = getDataserversGraph(request);
   const legacyNs = `${dataserversGraph}#`;

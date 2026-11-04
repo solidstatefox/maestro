@@ -90,5 +90,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Maestro returned an empty or unsupported response." }, { status: 502 });
   }
 
-  return NextResponse.json({ message: content });
+  const usage = payload && typeof payload === "object" && "usage" in payload
+    ? (payload as { usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }).usage
+    : undefined;
+  return NextResponse.json({ message: content,
+    ...(usage ? { usage: { input: usage.prompt_tokens, output: usage.completion_tokens, total: usage.total_tokens } } : {}),
+  });
 }

@@ -1729,7 +1729,13 @@ useEffect(() => {
     const renew = () => setMaestroSessionCookie(authSession);
     window.addEventListener("focus", renew);
     document.addEventListener("visibilitychange", renew);
+    // Keep the existing login cookie alive during a long-lived active Maestro tab.
+    // This does not extend an OAuth token's provider-defined expiry or create a new login.
+    const renewalTimer = window.setInterval(() => {
+      if (document.visibilityState === "visible") renew();
+    }, 10 * 60 * 1000);
     return () => {
+      window.clearInterval(renewalTimer);
       window.removeEventListener("focus", renew);
       document.removeEventListener("visibilitychange", renew);
     };
@@ -8416,7 +8422,7 @@ useEffect(() => {
                   variant="outline"
                   onClick={toggleBreadcrumbBadgeMode}
                   className="flex max-w-52 items-center gap-1 whitespace-nowrap bg-background text-[10px] font-normal leading-3 cursor-pointer hover:bg-accent select-none"
-                  title="Click to toggle category/record metadata"
+                  aria-label="Click to toggle category or record metadata"
                 >
                   <span className="max-w-32 truncate">
   <em>
@@ -8430,7 +8436,7 @@ useEffect(() => {
                   ) : (
                     <span>{shortenCount(breadcrumbPreviewSummaries["query-root"].count)}</span>
                   )}
-                </Badge>} /><TooltipContent>{`${breadcrumbPreviewSummaries["query-root"].label} · ${breadcrumbPreviewSummaries["query-root"].zeroClasses ? "0" : shortenCount(breadcrumbPreviewSummaries["query-root"].count)} (Click to toggle)`}</TooltipContent></Tooltip>
+                </Badge>} /><TooltipContent side="bottom" sideOffset={7}>{`${breadcrumbPreviewSummaries["query-root"].label} · ${breadcrumbPreviewSummaries["query-root"].zeroClasses ? "0" : shortenCount(breadcrumbPreviewSummaries["query-root"].count)} (Click to toggle)`}</TooltipContent></Tooltip>
               ) : (
                 <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" aria-label="Loading root result metadata">
                   <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
@@ -8484,7 +8490,7 @@ useEffect(() => {
                         variant="outline"
                         onClick={toggleBreadcrumbBadgeMode}
                         className="flex max-w-52 items-center gap-1 whitespace-nowrap bg-background text-[10px] font-normal leading-3 cursor-pointer hover:bg-accent select-none"
-                        title="Click to toggle category/record metadata"
+                        aria-label="Click to toggle category or record metadata"
                       >
                         <span className="max-w-32 truncate">
   <em>
@@ -8497,7 +8503,7 @@ useEffect(() => {
                         ) : (
                           <span>{shortenCount(summary.count)}</span>
                         )}
-                      </Badge>} /><TooltipContent>{`${summary.label} · ${summary.zeroClasses ? "0" : shortenCount(summary.count)} (Click to toggle)`}</TooltipContent></Tooltip>
+                      </Badge>} /><TooltipContent side="bottom" sideOffset={7}>{`${summary.label} · ${summary.zeroClasses ? "0" : shortenCount(summary.count)} (Click to toggle)`}</TooltipContent></Tooltip>
                     ) : (
                       <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap bg-background text-[10px] font-normal leading-3" aria-label={`Loading metadata for ${breadcrumbBaseLabel}`}>
                         <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />

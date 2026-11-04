@@ -119,6 +119,15 @@ export async function POST(request: Request) {
     if (typeof html !== "string" || html.length > 1000000) throw new Error("The XSLT output was invalid or too large.");
     return NextResponse.json({ html }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Record transformation failed." }, { status: 400 });
+    // Subprocess failures can include local server paths, arguments and full Node.js stacks.
+    // Never return raw compiler output to browser clients.
+    console.error("Record XSLT transformation failed:", error);
+    const missingAxios = error instanceof Error && /Cannot find module [\'\"]axios[\'\"]/.test(error.message);
+    const safeMessage = missingAxios
+      ? "The record format service is missing the axios runtime dependency. The server administrator must install it and redeploy; Default format is still available."
+      : error instanceof Error && /^(Invalid |Expected |Record templates |Saxon extension |XSLT instruction |External-|External document|Missing the XSLT namespace|The XSLT output |Compiled stylesheet exceeds|Executable HTML)/.test(error.message)
+        ? error.message
+        : "Record format could not be generated. Check the server XSLT dependencies or choose Default format.";
+    return NextResponse.json({ error: safeMessage }, { status: missingAxios ? 503 : 400, headers: { "Cache-Control": "no-store" } });
   }
 }

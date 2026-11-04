@@ -9,6 +9,8 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } fro
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Trace, TraceCollapsible, TraceCollapsibleTrigger, TraceCollapsibleContent, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { Button } from "@/components/ui/button";
+import { PromptInput, PromptInputTextarea, PromptInputSubmit } from "@/components/ai-elements/prompt-input";
+import { Task, TaskItem } from "@/components/ai-elements/task";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { appendAssistantActivity, readAssistantActivity, clearAssistantActivity, ASSISTANT_ACTIVITY_CHANGED, type AssistantActivity } from "@/lib/assistant-activity";
 
@@ -104,7 +106,7 @@ function Message({ role, children, userName, userAvatarUrl }: { role: ChatRole; 
         ) : <Bot className="size-4" />}
       </div>
       <div className={`min-w-0 max-w-[88%] ${role === "user" ? "items-end" : "items-start"} flex flex-col`}>
-        <span className="mb-1 text-[11px] text-muted-foreground">{role === "user" ? "You · Ask assistant" : "Maestro · Ask assistant"}</span>
+        <span className="mb-1 text-[11px] text-muted-foreground">{role === "user" ? "You" : "Maestro"}</span>
         {children}
       </div>
     </article>
@@ -272,7 +274,7 @@ export function BasicAssistantChat({
         pendingTranscode.current = { messageId: userMessage.id, prompt: text, file: sentAttachment! };
         setSelectingSurvey(true);
         const menuMessage: ChatMessage = {
-          id: crypto.randomUUID(), role: "assistant", content: "Choose one survey to run. Qwen will only receive the selected survey.",
+          id: crypto.randomUUID(), role: "assistant", content: "Choose one survey to run. Maestro will execute only your selection.",
           surveyOptions: data.surveys,
           createdAt: new Date().toISOString(),
         };
@@ -312,7 +314,7 @@ export function BasicAssistantChat({
       setError(message);
       void appendAssistantActivity([{
         id: crypto.randomUUID(), createdAt: new Date().toISOString(),
-        source: "Ask assistant", prompt: text, response: message, status: "error",
+        source: "Maestro", prompt: text, response: message, status: "error",
       }]).catch(() => {});
     } finally {
       setLoading(false);
@@ -512,18 +514,20 @@ export function BasicAssistantChat({
                 ].filter(Boolean).join("\n")}</pre></TraceCollapsibleContent>
               </TraceCollapsible>
             </Trace>}
-            {message.otcProgress && <Trace className="mt-2 max-w-full text-xs">
+            {message.otcProgress && <Task className="mt-2 max-w-full text-xs">
               <TraceCollapsible defaultOpen>
                 <TraceCollapsibleTrigger><TraceLine><TraceIcon><TerminalIcon className="size-4" /></TraceIcon>
-                  <TraceTitle>OTC execution · SHACL validation and Qwen</TraceTitle>
+                  <TraceTitle>OTC transcoding · SHACL validation and survey</TraceTitle>
                   <span className="text-muted-foreground">({message.otcProgress.length} events)</span>
                 </TraceLine></TraceCollapsibleTrigger>
                 <TraceCollapsibleContent><div className="max-h-80 space-y-1 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-xs" role="log" aria-label="OTC execution events">
-                  {message.otcProgress.map((event, index) => <details key={index} className="border-b border-border/50 pb-1 last:border-0">
-                    <summary className="cursor-pointer whitespace-pre-wrap break-words">
-                      <span className={event.status === "error" ? "text-destructive" : event.status === "warning" ? "text-amber-600 dark:text-amber-400" : event.status === "success" ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}>
+                  {message.otcProgress.map((event, index) => <TaskItem key={index} status={event.status} title={`${event.step.toUpperCase()}: ${event.detail}`}>
+                    <details className="pb-1">
+                    <summary className="cursor-pointer whitespace-pre-wrap break-words text-muted-foreground">
+                      Details
+                      <span className="sr-only" data-status={event.status}><span className={event.status === "error" ? "text-destructive" : event.status === "warning" ? "text-amber-600 dark:text-amber-400" : event.status === "success" ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}>
                         {event.status === "running" ? "…" : event.status === "success" ? "✓" : event.status === "warning" ? "!" : "✕"}
-                      </span>{" "}[{event.step.toUpperCase()}] {event.detail}
+                      </span>{" "}[{event.step.toUpperCase()}] {event.detail}</span>
                     </summary>
                     <div className="ml-4 mt-1 space-y-1 whitespace-pre-wrap break-all text-muted-foreground">
                       {event.rule && <div>Rule: {event.rule}</div>}
@@ -532,15 +536,15 @@ export function BasicAssistantChat({
                       {event.counts && <div>Counts: {JSON.stringify(event.counts)}</div>}
                       {event.violations?.map((violation, i) => <div key={i} className="text-destructive">Violation: {violation}</div>)}
                     </div>
-                  </details>)}
+                  </details></TaskItem>)}
                 </div></TraceCollapsibleContent>
               </TraceCollapsible>
-            </Trace>}
+            </Task>}
             {message.surveyOptions?.length ? <div className="mt-2 w-full max-w-md space-y-2">
               <p className="text-xs font-semibold text-muted-foreground">Choose one survey</p>
-              <div className="scrollbar-none flex scroll-fade-x gap-2 overflow-x-auto overscroll-x-contain pb-1">
+              <div className="flex w-full min-w-0 flex-col gap-2">
                 {message.surveyOptions.map(option => <Button key={option.uri} type="button" variant="outline" size="sm"
-                  title={option.description || option.uri} className="h-auto shrink-0 whitespace-nowrap"
+                  title={option.description || option.uri} className="h-auto w-full min-w-0 justify-start whitespace-normal break-words text-left"
                   disabled={loading || !selectingSurvey || pendingTranscode.current === null}
                   onClick={() => void runSelectedSurvey(option, message.id)}>{option.title}</Button>)}
               </div>
@@ -557,10 +561,10 @@ export function BasicAssistantChat({
                 <span className={entry.status === "error" ? "text-destructive" : ""}>{entry.status}</span>
               </div>
               <details className="rounded-md border p-2">
-                <summary className="cursor-pointer text-xs font-medium">Prompt sent to Qwen</summary>
+                <summary className="cursor-pointer text-xs font-medium">Survey input sent by Maestro</summary>
                 <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{entry.prompt}</pre>
               </details>
-              <div className="text-xs font-medium">Qwen response</div>
+              <div className="text-xs font-medium">Survey response</div>
               <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{entry.response}</pre>
               {entry.usage && <p className="text-xs text-muted-foreground">Tokens: {entry.usage.input ?? "?"} input / {entry.usage.output ?? "?"} output{entry.usage.total !== undefined ? ` / ${entry.usage.total} total` : ""}</p>}
             </div>
@@ -574,7 +578,7 @@ export function BasicAssistantChat({
         {error && <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p>}
       </div>
       {composerHost && createPortal(<form onSubmit={submit} className="w-full">
-        <InputGroup>
+        <PromptInput>
           {attachment && <InputGroupAddon align="block-start">
             <AttachmentGroup className="w-full">
               <Attachment state="idle" size="sm" className="max-w-full" aria-label={`Selected file ${attachment.name}`}>
@@ -589,7 +593,7 @@ export function BasicAssistantChat({
           </InputGroupAddon>}
           <div className="flex min-w-0 items-start px-1">
             {badgeDraft && <span className="ml-2 mt-3 shrink-0 rounded-full border bg-muted px-2 py-0.5 text-xs font-medium" title="Backspace or Delete at the start of the text removes transcode">transcode</span>}
-            <InputGroupTextarea
+            <PromptInputTextarea
               ref={inputRef} value={composerText} onChange={event => updateComposer(event.currentTarget.value)}
               onKeyDown={event => {
                 if (badgeDraft && (event.key === "Backspace" || event.key === "Delete") &&
@@ -617,11 +621,11 @@ export function BasicAssistantChat({
               </DropdownMenuContent>
             </DropdownMenu>
             <InputGroupButton type="button" variant="outline" size="icon-sm" className="rounded-full" onClick={onShowResults} aria-label="Back to results" title="Back to results"><List className="size-4" /></InputGroupButton>
-            <InputGroupButton type="submit" variant="default" size="icon-sm" className="rounded-full" aria-label="Send" disabled={!draft.trim() || loading || !storageReady || selectingSurvey}>
+            <PromptInputSubmit disabled={!draft.trim() || loading || !storageReady || selectingSurvey}>
               {loading ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
-            </InputGroupButton>
+            </PromptInputSubmit>
           </InputGroupAddon>
-        </InputGroup>
+        </PromptInput>
       </form>, composerHost)}
     </div>
   );

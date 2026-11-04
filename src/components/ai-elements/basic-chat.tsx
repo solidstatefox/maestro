@@ -146,6 +146,9 @@ export function BasicAssistantChat({
   }, []);
   const [draft, setDraft] = useState("");
   const [attachment, setAttachment] = useState<File | null>(null);
+  // File bytes remain available for downloads only during this page session.
+  // Saved chat history retains metadata, not potentially sensitive uploaded content.
+  const availableUploadsRef = useRef<Map<string, File>>(new Map());
   const pendingTranscode = useRef<{ messageId: string; prompt: string; file: File } | null>(null);
   const [selectingSurvey, setSelectingSurvey] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -157,6 +160,25 @@ export function BasicAssistantChat({
     ...messages.map((message, index) => ({ kind: "message" as const, id: message.id, timestamp: Date.parse(message.createdAt || "") || index, index, message })),
     ...activity.map((entry, index) => ({ kind: "activity" as const, id: `activity-${entry.id}`, timestamp: Date.parse(entry.createdAt || "") || index, index, entry })),
   ].sort((a, b) => a.timestamp - b.timestamp || (a.kind === "message" ? -1 : 1));
+  const downloadAvailableUpload = (messageId: string) => {
+    const file = availableUploadsRef.current.get(messageId);
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.name;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const downloadComposerUpload = () => {
+    if (!attachment) return;
+    const url = URL.createObjectURL(attachment);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = attachment.name;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   const downloadTurtle = (value: { name: string; content: string }) => {
     const url = URL.createObjectURL(new Blob([value.content], { type: "text/turtle;charset=utf-8" }));
     const link = document.createElement("a");
@@ -225,6 +247,7 @@ export function BasicAssistantChat({
       createdAt: new Date().toISOString(),
       ...(sentAttachment && /^transcode\b/i.test(text) ? { transcode: { fileName: sentAttachment.name, fileSize: sentAttachment.size, fileType: sentAttachment.type, uploadState: "idle" as const } } : {}),
     };
+    if (sentAttachment && /^transcode\b/i.test(text)) availableUploadsRef.current.set(userMessage.id, sentAttachment);
     const priorMessages = messagesRef.current;
     const nextMessages = [...priorMessages, userMessage];
     messagesRef.current = nextMessages;
@@ -255,7 +278,7 @@ export function BasicAssistantChat({
         };
         const prepared = [...nextMessages, menuMessage];
         prepared[prepared.length - 2] = { ...userMessage, transcode: {
-          fileName: sentAttachment!.name, rulesGraph: data.rulesGraph,
+          ...userMessage.transcode!, rulesGraph: data.rulesGraph,
         } };
         messagesRef.current = prepared;
         setMessages(prepared);
@@ -445,6 +468,7 @@ export function BasicAssistantChat({
         </div>
         <Button type="button" variant="outline" size="sm" disabled={loading || (messages.length === 0 && activity.length === 0)} onClick={() => {
           messagesRef.current = [];
+          availableUploadsRef.current.clear();
           pendingTranscode.current = null;
           setSelectingSurvey(false);
           setAttachment(null);
@@ -472,6 +496,9 @@ export function BasicAssistantChat({
                 <AttachmentDescription>{message.transcode.uploadState === "uploading" ? `Uploading · ${message.transcode.uploadPercent ?? 0}%` : message.transcode.uploadState === "processing" ? "Processing transcoder survey…" : message.transcode.uploadState === "error" ? "Upload or survey failed" : message.transcode.uploadState === "done" ? "Submitted" : "Ready to upload"}{typeof message.transcode.fileSize === "number" ? ` · ${formatAttachmentSize(message.transcode.fileSize)}` : ""}</AttachmentDescription>
                 {message.transcode.uploadState === "uploading" && <div role="progressbar" aria-label="Attachment upload progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={message.transcode.uploadPercent ?? 0} className="h-1 w-full overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${message.transcode.uploadPercent ?? 0}%` }} /></div>}
               </AttachmentContent>
+              {availableUploadsRef.current.has(message.id) && <AttachmentActions>
+                <AttachmentAction aria-label={`Download ${message.transcode.fileName}`} title="Download attached file" onClick={() => downloadAvailableUpload(message.id)}><Download className="size-3.5" /></AttachmentAction>
+              </AttachmentActions>}
             </Attachment>}
             {message.transcode && <Trace className="mt-2 max-w-full text-xs">
               <TraceCollapsible defaultOpen>
@@ -553,7 +580,10 @@ export function BasicAssistantChat({
               <Attachment state="idle" size="sm" className="max-w-full" aria-label={`Selected file ${attachment.name}`}>
                 <AttachmentMedia><FileText className="size-4" /></AttachmentMedia>
                 <AttachmentContent><AttachmentTitle>{attachment.name}</AttachmentTitle><AttachmentDescription>Turtle · {formatAttachmentSize(attachment.size)} · Ready to send</AttachmentDescription></AttachmentContent>
-                <AttachmentActions><AttachmentAction aria-label={`Remove ${attachment.name}`} onClick={() => { setAttachment(null); if (fileRef.current) fileRef.current.value = ""; }}><X className="size-3" /></AttachmentAction></AttachmentActions>
+                <AttachmentActions>
+                  <AttachmentAction aria-label={`Download ${attachment.name}`} title="Download attached file" onClick={downloadComposerUpload}><Download className="size-3" /></AttachmentAction>
+                  <AttachmentAction aria-label={`Remove ${attachment.name}`} onClick={() => { setAttachment(null); if (fileRef.current) fileRef.current.value = ""; }}><X className="size-3" /></AttachmentAction>
+                </AttachmentActions>
               </Attachment>
             </AttachmentGroup>
           </InputGroupAddon>}

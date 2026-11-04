@@ -6528,6 +6528,7 @@ useEffect(() => {
     summary: FctUiResultSummary | undefined,
     ariaLabel: string,
     onActivate: () => void,
+    isBound: boolean,
   ): ReactNode {
     return (
       <DropdownMenuItem
@@ -6536,7 +6537,7 @@ useEffect(() => {
         className="mb-1 rounded-b-none border-b pb-1.5 text-xs font-medium text-foreground"
       >
         <span className="max-w-56 truncate">
-          {summary?.label && summary.label !== "—" ? `${ellipsize(summary.label, 40).replace(/[’']s$/u, "")}’s` : "Example loading…"}
+          {summary?.label && summary.label !== "—" ? `${isBound ? "i.e." : "e.g."} ${ellipsize(summary.label, 40).replace(/[’']s$/u, "")}’s` : "Example loading…"}
         </span>
       </DropdownMenuItem>
     );
@@ -6587,7 +6588,7 @@ useEffect(() => {
             {nodeContent}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
-            {renderBreadcrumbMenuHeader(summary, `Move view to ${baseLabel}`, () => onSelectNode(node.id))}
+            {renderBreadcrumbMenuHeader(summary, `Move view to ${baseLabel}`, () => onSelectNode(node.id), boundValues.length > 0)}
             {childRelationshipNodes.map((child) => renderBreadcrumbNodeMenuItem(child, onSelectNode))}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
@@ -8569,7 +8570,7 @@ useEffect(() => {
                         <TooltipContent>{"Choose a relationship"}</TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="end" className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
-                        {renderBreadcrumbMenuHeader(summary, `Move view to ${breadcrumbBaseLabel}`, () => { clearTutorialPreview(); navigateToPropertyPath(crumb.id); })}
+                        {renderBreadcrumbMenuHeader(summary, `Move view to ${breadcrumbBaseLabel}`, () => { clearTutorialPreview(); navigateToPropertyPath(crumb.id); }, breadcrumbBoundValues.length > 0)}
                         {/* Siblings only: the crumb itself is not listed. A sibling with child relationships opens a submenu (headed by its own clickable e.g./i.e. label) of those children, recursively. */}
                         {breadcrumbSiblings.map((sibling) =>
                           renderBreadcrumbNodeMenuItem(sibling, (targetId) => {
@@ -8782,7 +8783,7 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
       )
     : [];
                       const selectedKeys = new Set(selectedItems.map((item) => item.key));
-                      const facetListStale = group === "Properties" ? isLoadingProperties : group === "Roles" ? isLoadingRoles : group === "Classes" ? isLoadingClasses : false;
+                      const facetListStale = group === "Classes" ? isLoadingClasses : false;
                       const unselectedItems = items.filter((item) => {
                         if (selectedKeys.has(item.key)) return false;
                         if (group !== "Properties" && group !== "Roles") return true;

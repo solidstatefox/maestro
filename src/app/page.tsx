@@ -2519,9 +2519,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       setEndpointChecksCompleted(0);
       setSelectedEndpointId("");
       setEndpointStatuses({});
+      setEndpointHealthToast(null);
       try {
-        // Load the configured server list without probing every server. Only
-        // the one candidate that will become active is health-checked on startup.
+        // Load the configured server list. Logged-out startup probes it in
+        // order and stops at the first healthy graph server.
         const response = await cachedFetchFct("/proxy/api/fct", { cache: "no-store", headers: proxyDebugHeaders("endpoint-menu", "EndpointMenu") });
         const data = await response.json();
         rememberShortforms(data?.shortforms);
@@ -2543,34 +2544,45 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         setFctEndpoints(endpoints);
         setEndpointMenuError("");
 
-        // Choose one candidate only: URL/session preference, then proxy-saved
-        // selection, then the first configured server. Other servers remain
-        // unchecked (grey) until the user explicitly selects or checks them.
-        const effectiveSelection = requestedSelection || endpoints[0]?.id || "";
-        if (!effectiveSelection) {
+        // Logged-out startup is a sequential failover: try configured graph
+        // servers in list order and stop as soon as one passes its health check.
+        // A saved choice must not strand an anonymous user on an offline server.
+        // Logged-in startup retains its explicit URL/session selection behavior.
+        const candidates = authSession
+          ? [endpoints.find((endpoint) => endpoint.id === (requestedSelection || endpoints[0]?.id))].filter(
+              (endpoint): endpoint is EndpointOption => Boolean(endpoint),
+            )
+          : endpoints;
+        if (candidates.length === 0) {
           setSelectedEndpointId("");
-          setEndpointMenuError("No graph servers are configured. Configure a reachable server before browsing data.");
-          return;
-        }
-        const selectedEndpoint = endpoints.find((endpoint) => endpoint.id === effectiveSelection);
-        if (!selectedEndpoint) {
-          setSelectedEndpointId("");
-          setEndpointMenuError("The requested graph server is not in the configured server list.");
+          setEndpointMenuError(endpoints.length === 0
+            ? "No graph servers are configured. Configure a reachable server before browsing data."
+            : "The requested graph server is not in the configured server list.");
           return;
         }
 
-        setEndpointChecksTotal(1);
-        const checked = await runEndpointChecks([selectedEndpoint], () => cancelled);
+        const checked = await runEndpointChecks(candidates, () => cancelled, !authSession);
         if (cancelled) return;
-        const status = checked[effectiveSelection];
-        const isReachable = status?.status != null && status.status < 400 && status.state === "ok";
-        if (!isReachable) {
+        const selectedEndpoint = candidates.find((endpoint) => {
+          const status = checked[endpoint.id];
+          return status?.state === "ok" && status.status != null && status.status < 400;
+        });
+        if (!selectedEndpoint) {
           setSelectedEndpointId("");
-          const message = `Graph server ${selectedEndpoint.label} did not pass its health check.`;
-          setEndpointMenuError(`${message} Refresh to retry this server, or choose another server.`);
-          setEndpointHealthToast({ endpointId: effectiveSelection, message });
+          if (!authSession) {
+            setEndpointMenuError(`None of the ${candidates.length} configured graph servers passed a health check. Refresh to retry.`);
+            setEndpointHealthToast(null);
+          } else {
+            const candidate = candidates[0];
+            const message = `Graph server ${candidate.label} did not pass its health check.`;
+            setEndpointMenuError(`${message} Refresh to retry this server, or choose another server.`);
+            setEndpointHealthToast({ endpointId: candidate.id, message });
+          }
           return;
         }
+        const effectiveSelection = selectedEndpoint.id;
+        setEndpointHealthToast(null);
+        setEndpointMenuError("");
 
         // Synchronize the proxy cookie only after the single candidate passes
         // its health check, so the UI and actual query destination cannot diverge.
@@ -2613,6 +2625,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   async function runEndpointChecks(
     endpoints: EndpointOption[],
     isCancelled: () => boolean = () => false,
+    stopOnFirstSuccess = false,
   ): Promise<Record<string, EndpointStatus>> {
     setIsCheckingEndpoints(true);
     setEndpointChecksCompleted(0);
@@ -2620,42 +2633,45 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     const results: Record<string, EndpointStatus> = {};
     let completed = 0;
 
-    // Each endpoint reports independently; the menu updates as each AJAX request returns.
-    await Promise.all(
-      endpoints.map(async (endpoint) => {
-        let status: EndpointStatus;
-        try {
-          const response = await fetch(
-            `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}`,
-            { cache: "no-store", headers: proxyDebugHeaders("endpoint-health", `EndpointHealth:${endpoint.id}`) },
-          );
-          const data = await response.json();
+    async function checkOne(endpoint: EndpointOption): Promise<EndpointStatus> {
+      let status: EndpointStatus;
+      try {
+        const response = await fetch(
+          `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}`,
+          { cache: "no-store", headers: proxyDebugHeaders("endpoint-health", `EndpointHealth:${endpoint.id}`) },
+        );
+        const data = await response.json();
         rememberShortforms(data?.shortforms);
-          if (!response.ok || !data.check)
-            throw new Error(data.error ?? "Health check failed.");
-          status = data.check as EndpointStatus;
-        } catch {
-          status = {
-            id: endpoint.id,
-            status: null,
-            state: "unreachable",
-            testedUrl: endpoint.url,
-          };
-        }
-        results[endpoint.id] = status;
-        completed += 1;
-        if (!isCancelled()) {
-          setEndpointStatuses((current) => ({
-            ...current,
-            [endpoint.id]: status,
-          }));
-          setEndpointChecksCompleted(completed);
-        }
-      }),
-    );
+        if (!response.ok || !data.check)
+          throw new Error(data.error ?? "Health check failed.");
+        status = data.check as EndpointStatus;
+      } catch {
+        status = {
+          id: endpoint.id,
+          status: null,
+          state: "unreachable",
+          testedUrl: endpoint.url,
+        };
+      }
+      results[endpoint.id] = status;
+      completed += 1;
+      if (!isCancelled()) {
+        setEndpointStatuses((current) => ({ ...current, [endpoint.id]: status }));
+        setEndpointChecksCompleted(completed);
+      }
+      return status;
+    }
 
-    if (isCancelled()) return results;
-
+    if (stopOnFirstSuccess) {
+      for (const endpoint of endpoints) {
+        if (isCancelled()) break;
+        const status = await checkOne(endpoint);
+        if (status.state === "ok" && status.status != null && status.status < 400) break;
+      }
+    } else {
+      // Manual Check All retains concurrent checks and independent status updates.
+      await Promise.all(endpoints.map(checkOne));
+    }
     return results;
   }
 

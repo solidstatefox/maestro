@@ -8600,7 +8600,7 @@ useEffect(() => {
                           }}
                           className="px-3 py-1.5 text-sm hover:bg-accent"
                           aria-label={`Show Focus properties, ${propertyFacets.length} properties`}
-                        >{propertyFacets.length}</button>} /><TooltipContent>{"Show Focus properties first"}</TooltipContent></Tooltip>
+                        >{isLoadingProperties ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading properties" role="status" /> : propertyFacets.length}</button>} /><TooltipContent>{"Show Focus properties first"}</TooltipContent></Tooltip>
                       </ButtonGroup>
                     )}
                     {roleFacets.length > 0 && (
@@ -8616,7 +8616,7 @@ useEffect(() => {
                           }}
                           className="px-3 py-1.5 text-sm hover:bg-accent"
                           aria-label={`Show Focus roles, ${roleFacets.length} roles`}
-                        >{roleFacets.length}</button>} /><TooltipContent>{"Show Focus roles first"}</TooltipContent></Tooltip>
+                        >{isLoadingRoles ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading roles" role="status" /> : roleFacets.length}</button>} /><TooltipContent>{"Show Focus roles first"}</TooltipContent></Tooltip>
                       </ButtonGroup>
                     )}
                     {autoConfigureFacetCount > 0 && (

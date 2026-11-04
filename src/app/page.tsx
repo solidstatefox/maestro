@@ -3752,6 +3752,20 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   const [isLoadingProperties, setIsLoadingProperties] = useState(false);
   const [isLoadingClasses, setIsLoadingClasses] = useState(false);
 
+  // Start the Configure count spinners as soon as the authoritative facet
+  // requests change, before the next paint. Waiting for the asynchronous
+  // request effects can briefly show counts from the previous query.
+  const pendingConfigureFacetIdentityRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const identity = `${selectedEndpointId}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}\u0000${propertyFacetQueryXml}\u0000${roleFacetQueryXml}`;
+    if (pendingConfigureFacetIdentityRef.current === identity) return;
+    pendingConfigureFacetIdentityRef.current = identity;
+    if (endpointReadyForQuery) {
+      setIsLoadingProperties(true);
+      setIsLoadingRoles(true);
+    }
+  }, [selectedEndpointId, endpointReadyForQuery, propertyFacetQueryXml, roleFacetQueryXml]);
+
   // Scroll to the active Group by facet when that widget's own request settles.
   // Other facet widgets load independently and must not delay this scroll.
   useEffect(() => {
@@ -4291,7 +4305,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       cancelled = true;
       window.clearTimeout(timer);
       controller.abort();
-      setIsLoadingProperties(false);
+      // The replacement request owns the loading flag; do not clear it on cancellation.
     };
   }, [search, propertyFacetQueryXml, selectedEndpointId, endpointReadyForQuery]);
 
@@ -4336,7 +4350,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       cancelled = true;
       window.clearTimeout(timer);
       controller.abort();
-      setIsLoadingRoles(false);
+      // The replacement request owns the loading flag; do not clear it on cancellation.
     };
   }, [search, roleFacetQueryXml, selectedEndpointId, endpointReadyForQuery]);
 

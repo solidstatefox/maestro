@@ -604,7 +604,8 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     let countWhere = scopedWhere;
     if (view === "properties") {
       counted = variable("p");
-      countWhere = [...scopedWhere, { kind: "triple", subject: target, predicate: variable("p"), object: variable("o") }];
+      countWhere = [...scopedWhere, { kind: "triple", subject: target, predicate: variable("p"), object: variable("o") },
+        { kind: "filter", expression: binary("!=", termExpr(variable("p")), termExpr(iriTerm(RDF_TYPE))) }];
     } else if (view === "classes") {
       counted = variable("c");
       countWhere = [...scopedWhere, { kind: "triple", subject: target, predicate: iriTerm(RDF_TYPE), object: variable("c") }];
@@ -615,6 +616,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     query = buildSelectQuery({ directives, projections: [countProjection(counted)], where: countWhere });
   } else if (view === "properties" || view === "classes" || view === "properties-in") {
     const facet = variable(view === "classes" ? "c" : "p");
+    const sampleClasses = view === "classes" && ["yes", "true", "1"].includes((viewNode?.attributes.sample ?? "").trim().toLowerCase());
     const subject = view === "properties-in" ? variable("related") : target;
     const predicate = view === "classes" ? iriTerm(RDF_TYPE) : view === "properties-in" ? facet : facet;
     const object = view === "properties-in" ? target : view === "classes" ? facet : variable("o");
@@ -636,7 +638,12 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
             { kind: "filter", expression: binary("!=", termExpr(parent), termExpr(facet)) },
           ] },
         ]
-      : [...scopedWhere, { kind: "triple", subject, predicate, object } satisfies SparqlPattern];
+      : [
+          ...scopedWhere,
+          { kind: "triple", subject, predicate, object } satisfies SparqlPattern,
+          // rdf:type belongs to Categories. It is not an available forward property.
+          ...(view === "properties" ? [{ kind: "filter", expression: binary("!=", termExpr(facet), termExpr(iriTerm(RDF_TYPE))) } satisfies SparqlPattern] : []),
+        ];
     const projections: SparqlProjection[] = [
       { expression: termExpr(facet), as: variable("c1") },
       countProjection(view === "properties-in" ? variable("related") : target),
@@ -654,7 +661,20 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
         as: variable("sampleVal"),
       });
     }
-    query = buildSelectQuery({
+    if (sampleClasses) {
+      // Recovery path for Anytime queries interrupted before their aggregate
+      // emits any class rows. Bound the raw class/resource pairs without
+      // GROUP BY or ORDER BY; the client computes sampled frequencies.
+      query = buildSelectQuery({
+        directives, distinct: true,
+        projections: [
+          { expression: termExpr(facet), as: variable("c1") },
+          { expression: termExpr(target), as: variable("sampleResource") },
+        ],
+        where: facetWhere,
+        limit, offset: 0,
+      });
+    } else query = buildSelectQuery({
       directives,
       projections,
       where: facetWhere,
@@ -765,7 +785,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       }
     }
     const orderByList: SparqlOrder[] | undefined = shouldOrder
-      ? (searchText ? [entityRankOrder(target)] : [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }])
+      ? [entityRankOrder(target)]
       : undefined;
     query = buildSelectQuery({ directives, distinct: true, projections, where: indexedWhere, orderBy: orderByList, limit, offset });
   } else if (view === "list") {

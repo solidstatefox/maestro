@@ -11,6 +11,6 @@ export async function GET(request: Request) {
     if (!endpoint) return NextResponse.json({ graphs: [] }, { status: 200 });
     return NextResponse.json({ graphs: await getGraphFacets(endpoint.url) });
   } catch (error) {
-    return NextResponse.json({ error: describeUpstreamError(error, "Could not load configured Datasites."), graphs: [] }, { status: 503 });
+    return NextResponse.json({ error: describeUpstreamError(error, "Could not load configured graphs."), graphs: [] }, { status: 503 });
   }
 }

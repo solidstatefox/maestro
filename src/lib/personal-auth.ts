@@ -44,6 +44,7 @@ export function graphForPrefix(prefix: string): string {
 const STORAGE_KEY = "maestro_personal_auth_v1";
 const DEVICE_KEY_NAME = "maestro_device_salt";
 const COOKIE_NAME = "maestro_session";
+export const AUTH_EXPECTED_KEY = "maestro_login_expected_v1";
 
 /** Generate or retrieve a persistent client-side encryption key for local credential storage. */
 async function getStorageCryptoKey(): Promise<CryptoKey> {
@@ -219,6 +220,7 @@ export async function savePersonalAuthSession(
   const serialized = JSON.stringify(storagePayload);
 
   window.localStorage.setItem(STORAGE_KEY, serialized);
+  window.localStorage.setItem(AUTH_EXPECTED_KEY, "1");
   window.sessionStorage.removeItem(STORAGE_KEY);
 
   setMaestroSessionCookie(effectiveSession);
@@ -228,7 +230,31 @@ export async function savePersonalAuthSession(
 export async function loadPersonalAuthSession(): Promise<PersonalAuthSession | null> {
   if (typeof window === "undefined") return null;
   const raw = window.localStorage.getItem(STORAGE_KEY) || window.sessionStorage.getItem(STORAGE_KEY);
-  if (!raw) return null;
+  if (!raw) {
+    // The 400-day proxy cookie survives a server deployment/restart and normal
+    // browser restarts even if the local encrypted-session entry is missing.
+    // Prefer the encrypted local session when available; use this only as a
+    // recovery path for an existing cookie, never to create a login.
+    const match = document.cookie.match(/(?:^|;\s*)maestro_session=([^;]+)/);
+    if (!match) return null;
+    try {
+      const cookieSession = JSON.parse(decodeURIComponent(match[1])) as PublicSessionPayload;
+      if (!cookieSession.graphStore || !cookieSession.graphPrefix || !cookieSession.authType || !cookieSession.authHeader) return null;
+      const restored: PersonalAuthSession = {
+        authType: cookieSession.authType,
+        graphStore: cookieSession.graphStore,
+        graphPrefix: cookieSession.graphPrefix,
+        authHeader: cookieSession.authHeader,
+        userName: cookieSession.userName,
+        avatarUrl: cookieSession.userAvatar,
+        rememberMe: true,
+      };
+      await savePersonalAuthSession(restored, true);
+      return restored;
+    } catch {
+      return null;
+    }
+  }
   try {
     const parsed = JSON.parse(raw) as PersonalAuthSession;
     const decryptedPassword = parsed.password ? await decryptSecret(parsed.password) : undefined;
@@ -264,6 +290,7 @@ export async function loadPersonalAuthSession(): Promise<PersonalAuthSession | n
 export function clearPersonalAuthSession(): void {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(STORAGE_KEY);
+  window.localStorage.removeItem(AUTH_EXPECTED_KEY);
   window.sessionStorage.removeItem(STORAGE_KEY);
   setMaestroSessionCookie(null);
 }

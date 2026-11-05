@@ -137,10 +137,116 @@ export async function POST(request: Request) {
     }
 
     if (action === "read") {
-      if (!historyId) return NextResponse.json({ error: "A bookmark ID is required." }, { status: 400 });
-      const result = await queryPersonal(`PREFIX rdf: <${RDF_NS}> PREFIX dcterms: <${DCTERMS_NS}> PREFIX rdfs: <${RDFS_NS}> PREFIX schema: <${SCHEMA_NS}> PREFIX vfct: <${VFCT_NS}> SELECT ?type ?title ?description ?stateUrl ?shareUrl WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} rdf:type ?type . OPTIONAL { ${iri(historyId)} dcterms:title ?title } OPTIONAL { ${iri(historyId)} dcterms:description ?description } OPTIONAL { ${iri(historyId)} vfct:historyStateUrl ?stateUrl } OPTIONAL { ${iri(historyId)} schema:url ?shareUrl } } } LIMIT 1`);
-      const row = result.results?.bindings?.[0];
-      return NextResponse.json({ found: Boolean(row), historyId, title: row?.title?.value ?? "", description: row?.description?.value ?? "", stateUrl: row?.stateUrl?.value ?? row?.shareUrl?.value ?? "" });
+      if (!historyId) return NextResponse.json({ error: "A bookmark or History ID is required." }, { status: 400 });
+      // The dialog edits a History visit. Read its original metadata first, then
+      // overlay values already saved in the Bookmarks graph, if present.
+      const metadataPredicates = [
+        `${RDF_NS}type`, `${DCTERMS_NS}title`, `${RDFS_NS}label`,
+        `${DCTERMS_NS}description`, `${SKOS_NS}prefLabel`,
+        `${DCTERMS_NS}subject`, `${SCOT_NS}has_tag`,
+        `${historyState}`, `${SCHEMA_NS}url`,
+      ];
+      const query = `SELECT ?source ?predicate ?value WHERE {
+        VALUES ?source { ${graph} ${bookmarkGraph} }
+        GRAPH ?source { ${iri(historyId)} ?predicate ?value }
+        FILTER(?predicate IN (${metadataPredicates.map(iri).join(", ")}))
+      }`;
+      const result = await queryPersonal(query);
+      const bindings = result.results?.bindings ?? [];
+      const valuesFor = (source: string, predicate: string) => bindings
+        .filter((row) => row.source?.value === source && row.predicate?.value === predicate)
+        .map((row) => row.value?.value ?? "").filter(Boolean);
+      const historyGraphIri = `${baseGraph}#history`;
+      const bookmarkGraphIri = `${baseGraph}#bookmarks`;
+      // Once bookmarked, the bookmark graph is authoritative: an absent
+      // description or tag means the user cleared it, not "inherit History".
+      const savedBookmark = valuesFor(bookmarkGraphIri, `${RDF_NS}type`).includes(`${BOOKMARK_NS}Bookmark`);
+      const first = (predicate: string) => savedBookmark
+        ? (valuesFor(bookmarkGraphIri, predicate)[0] ?? "")
+        : (valuesFor(historyGraphIri, predicate)[0] ?? "");
+      const tagPredicates: { predicate: string; vocabulary: "skos" | "dcterms" | "scot" }[] = [
+        { predicate: `${SKOS_NS}prefLabel`, vocabulary: "skos" },
+        { predicate: `${DCTERMS_NS}subject`, vocabulary: "dcterms" },
+        { predicate: `${SCOT_NS}has_tag`, vocabulary: "scot" },
+      ];
+      const authoritativeGraph = savedBookmark ? bookmarkGraphIri : historyGraphIri;
+      const selectedTags = tagPredicates.find(({ predicate }) => valuesFor(authoritativeGraph, predicate).length > 0);
+      const tags = selectedTags ? [...new Set(valuesFor(authoritativeGraph, selectedTags.predicate))] : [];
+      return NextResponse.json({
+        found: bindings.length > 0,
+        historyId,
+        title: first(`${DCTERMS_NS}title`) || first(`${RDFS_NS}label`),
+        description: first(`${DCTERMS_NS}description`),
+        tags,
+        tagVocabulary: selectedTags?.vocabulary ?? "skos",
+        stateUrl: first(`${historyState}`) || first(`${SCHEMA_NS}url`),
+      });
+    }
+
+    // Portable RDF-term archive. Import always targets this user's personal
+    // Bookmarks graph; the archive cannot select or override the destination.
+    if (action === "exportBookmarks") {
+      const query = `SELECT ?s ?p ?o WHERE { GRAPH ${bookmarkGraph} { ?s ?p ?o } } LIMIT 20001`;
+      const result = await queryPersonal(query);
+      const triples = result.results?.bindings ?? [];
+      // Limit output so an upstream truncation cannot silently create an archive
+      // mistaken for a complete backup. Fail explicitly when this bound is hit.
+      if (triples.length > 20000) return NextResponse.json({ error: "Bookmarks graph exceeds the 20,000-triple export safety limit." }, { status: 413 });
+      for (const row of triples) {
+        if (!row.s || !row.p || !row.o) return NextResponse.json({ error: "The graph server returned an incomplete bookmark triple." }, { status: 502 });
+      }
+      return NextResponse.json({ format: "maestro-bookmarks-rdf-json", version: 1, triples: triples.map(({s,p,o}) => ({ s,p,o })) }, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    if (action === "importBookmarks") {
+      const archive = (body as {archive?: unknown}).archive;
+      if (!archive || typeof archive !== "object" || Array.isArray(archive)) return NextResponse.json({ error: "Select a valid Maestro Bookmarks JSON export." }, { status: 400 });
+      const content = archive as { format?: unknown; version?: unknown; triples?: unknown };
+      if (content.format !== "maestro-bookmarks-rdf-json" || content.version !== 1 || !Array.isArray(content.triples))
+        return NextResponse.json({ error: "Unsupported Bookmarks archive format or version." }, { status: 400 });
+      if (content.triples.length > 20000) return NextResponse.json({ error: "The import exceeds the 20,000-triple safety limit." }, { status: 413 });
+      type Term = { type: "uri" | "literal" | "typed-literal" | "bnode"; value: string; datatype?: string; "xml:lang"?: string };
+      const isTerm = (value: unknown): value is Term => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+        const term = value as Partial<Term>;
+        return (term.type === "uri" || term.type === "literal" || term.type === "typed-literal" || term.type === "bnode") &&
+          typeof term.value === "string" && term.value.length <= 100000 &&
+          (term.datatype === undefined || typeof term.datatype === "string") &&
+          (term["xml:lang"] === undefined || typeof term["xml:lang"] === "string");
+      };
+      const bnodeNames = new Map<string,string>();
+      const termText = (term: Term, position: "s" | "p" | "o") => {
+        if (term.type === "uri") return iri(term.value);
+        if (term.type === "bnode") {
+          if (position === "p") throw new Error("RDF predicates cannot be blank nodes.");
+          if (!bnodeNames.has(term.value)) bnodeNames.set(term.value, `maestroImport${bnodeNames.size}`);
+          return `_:${bnodeNames.get(term.value)}`;
+        }
+        if (position !== "o") throw new Error("Only RDF objects may be literals.");
+        const literal = sparqlString(term.value);
+        if (term["xml:lang"]) {
+          if (!/^[a-zA-Z]+(?:-[a-zA-Z0-9]+)*$/u.test(term["xml:lang"])) throw new Error("Invalid language tag in Bookmarks archive.");
+          return `${literal}@${term["xml:lang"]}`;
+        }
+        return term.datatype ? `${literal}^^${iri(term.datatype)}` : literal;
+      };
+      let statements: string[];
+      try {
+        statements = content.triples.map((unknownTriple) => {
+          if (!unknownTriple || typeof unknownTriple !== "object" || Array.isArray(unknownTriple)) throw new Error("Invalid RDF triple in Bookmarks archive.");
+          const triple = unknownTriple as {s?: unknown;p?: unknown;o?: unknown};
+          if (!isTerm(triple.s) || !isTerm(triple.p) || !isTerm(triple.o)) throw new Error("Invalid RDF term in Bookmarks archive.");
+          if (triple.s.type !== "uri" && triple.s.type !== "bnode") throw new Error("RDF subject must be an IRI or blank node.");
+          if (triple.p.type !== "uri") throw new Error("RDF predicate must be an IRI.");
+          return `${termText(triple.s, "s")} ${termText(triple.p, "p")} ${termText(triple.o, "o")} .`;
+        });
+      } catch (error) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid RDF archive." }, { status: 400 });
+      }
+      // One INSERT DATA operation preserves blank-node identity between triples.
+      // The operation merges bookmarks; it never clears other personal graph data.
+      if (statements.length) await updatePersonal(`INSERT DATA { GRAPH ${bookmarkGraph} { ${statements.join("\n")} } }`);
+      return NextResponse.json({ imported: statements.length });
     }
 
     if (action === "deleteBookmarks") {
@@ -274,10 +380,38 @@ export async function POST(request: Request) {
       };
       walk(parsed);
 
-      await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}title> ?oldTitle ; <${RDFS_NS}label> ?oldLabel ; <${DCTERMS_NS}description> ?oldDescription ; <${SCHEMA_NS}url> ?oldUrl ; <${SCHEMA_NS}identifier> ?oldHash ; <${historyQuery}> ?oldQuery ; <${MAESTRO_UI_NS}querySparql> ?oldQuerySparql ; <${DCTERMS_NS}created> ?oldCreated ; <${DCTERMS_NS}subject> ?oldSubject ; <${SCOT_NS}has_tag> ?oldScotTag } } INSERT { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${RDF_NS}type> <${BOOKMARK_NS}Bookmark> ; <${DCTERMS_NS}title> ${sparqlString(title || historyId)} ; <${RDFS_NS}label> ${sparqlString(title || historyId)} ; <${DCTERMS_NS}created> ${sparqlString(bookmarkCreated)}^^<${XSD_NS}dateTime>${description ? ` ; <${DCTERMS_NS}description> ${sparqlString(description)}` : ""} ; <${SCHEMA_NS}identifier> ${sparqlString(queryHash)} ; <${historyQuery}> ${sparqlString(queryXml)} ; <${MAESTRO_UI_NS}querySparql> ${sparqlString(querySparql)}${shareUrl ? ` ; <${SCHEMA_NS}url> ${iri(shareUrl)}` : ""} } } WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}title> ?oldTitle } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${RDFS_NS}label> ?oldLabel } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}description> ?oldDescription } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${SCHEMA_NS}url> ?oldUrl } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${SCHEMA_NS}identifier> ?oldHash } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${historyQuery}> ?oldQuery } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${MAESTRO_UI_NS}querySparql> ?oldQuerySparql } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}created> ?oldCreated } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${DCTERMS_NS}subject> ?oldSubject } } OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${SCOT_NS}has_tag> ?oldScotTag } } }`);
+      // Replace every editable dialog field, including tags in all three vocabularies.
+      // DELETE and INSERT are one SPARQL Update operation; OPTIONAL guarantees
+      // insertion still runs when there is no prior bookmark metadata.
+      const replacedPredicates = [
+        `${DCTERMS_NS}title`, `${RDFS_NS}label`, `${DCTERMS_NS}description`,
+        `${SCHEMA_NS}url`, `${SCHEMA_NS}identifier`, historyQuery,
+        `${MAESTRO_UI_NS}querySparql`, `${DCTERMS_NS}created`,
+        `${DCTERMS_NS}subject`, `${SCOT_NS}has_tag`, `${SKOS_NS}prefLabel`,
+      ];
+      const metadataTriples = [
+        `${iri(historyId)} <${RDF_NS}type> <${BOOKMARK_NS}Bookmark>`,
+        `${iri(historyId)} <${DCTERMS_NS}title> ${sparqlString(title || historyId)}`,
+        `${iri(historyId)} <${RDFS_NS}label> ${sparqlString(title || historyId)}`,
+        `${iri(historyId)} <${DCTERMS_NS}created> ${sparqlString(bookmarkCreated)}^^<${XSD_NS}dateTime>`,
+        `${iri(historyId)} <${SCHEMA_NS}identifier> ${sparqlString(queryHash)}`,
+        `${iri(historyId)} <${historyQuery}> ${sparqlString(queryXml)}`,
+        `${iri(historyId)} <${MAESTRO_UI_NS}querySparql> ${sparqlString(querySparql)}`,
+        ...(description ? [`${iri(historyId)} <${DCTERMS_NS}description> ${sparqlString(description)}`] : []),
+        ...(shareUrl ? [`${iri(historyId)} <${SCHEMA_NS}url> ${iri(shareUrl)}`] : []),
+        ...triples.filter((triple) =>
+          triple.startsWith(`${iri(historyId)} <${DCTERMS_NS}subject>`) ||
+          triple.startsWith(`${iri(historyId)} <${SCOT_NS}has_tag>`) ||
+          triple.startsWith(`${iri(historyId)} <${SKOS_NS}prefLabel>`)),
+      ];
+      await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ${iri(historyId)} ?oldPredicate ?oldValue } }
+        INSERT { GRAPH ${bookmarkGraph} { ${metadataTriples.join(" .\n")} . } }
+        WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} ?oldPredicate ?oldValue .
+          FILTER(?oldPredicate IN (${replacedPredicates.map(iri).join(", ")})) } } }`);
+
       // Replace the bookmark's query-resource link with a DELETE/INSERT update,
       // rather than accumulating duplicate recalls links on repeated edits.
-      await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${BOOKMARK_NS}recalls> ?oldQueryResource . ?oldQueryResource ?oldLinkedPredicate ?oldLinkedObject } } INSERT { GRAPH ${bookmarkGraph} { ${triples.map((triple) => `${triple} .`).join("\n")} } } WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${BOOKMARK_NS}recalls> ?oldQueryResource . OPTIONAL { ?oldQueryResource ?oldLinkedPredicate ?oldLinkedObject } } } }`);
+      await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${BOOKMARK_NS}recalls> ?oldQueryResource . ?oldQueryResource ?oldLinkedPredicate ?oldLinkedObject } } INSERT { GRAPH ${bookmarkGraph} { ${triples.map((triple) => `${triple} .`).join("\n")} } } WHERE { OPTIONAL { GRAPH ${bookmarkGraph} { ${iri(historyId)} <${BOOKMARK_NS}recalls> ?oldQueryResource . OPTIONAL { GRAPH ${bookmarkGraph} { ?oldQueryResource ?oldLinkedPredicate ?oldLinkedObject } } } } }`);
       return NextResponse.json({ saved: true, historyId, shareUrl });
     }
 

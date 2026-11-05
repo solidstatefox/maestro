@@ -8,7 +8,7 @@ import { getSelectedFctEndpoint } from "@/lib/personal-sparql";
 export async function POST(request: Request) {
   try {
     const endpoint = await getSelectedFctEndpoint(request);
-    if (!endpoint) return NextResponse.json({ error: "No Datasites are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
+    if (!endpoint) return NextResponse.json({ error: "No graphs are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
 
     const body = await request.json().catch(() => null) as {
       observations?: unknown;

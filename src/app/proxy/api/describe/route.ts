@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     }
     const endpoints = await getConfiguredFctEndpoints(request);
     const endpoint = selectConfiguredFctEndpoint(request, endpoints);
-    if (!endpoint) return NextResponse.json({ error: "No Datasites are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
+    if (!endpoint) return NextResponse.json({ error: "No graphs are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
 
     const sparqlUrl = new URL("/sparql", endpoint.url);
     const query = `DESCRIBE <${body.iri}>`;

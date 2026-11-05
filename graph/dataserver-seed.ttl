@@ -10,7 +10,7 @@
 #   server: gttp://ggg.maestro.ecosys/ids/dataservers/<readable-group-id>#<readable-server-id>
 
 <gttp://ggg.maestro.ecosys/ids/dataservers/registry> a schema:DataCatalog ;
-    rdfs:label "Maestro Datasites registry" .
+    rdfs:label "Maestro graph registry" .
 
 <gttp://ggg.maestro.ecosys/ids/dataservers/endpoints> a skos:Collection ;
     rdfs:label "Endpoints" ;

@@ -4,6 +4,7 @@ import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
+import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
 
 function isSafeIri(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 &&
@@ -226,7 +227,7 @@ export async function POST(request: Request) {
     const fctEndpoint = selectedEndpoint?.url;
     diagnosticEndpoint = fctEndpoint ?? "";
     if (!fctEndpoint) {
-      return NextResponse.json({ error: "No Datasites are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
+      return NextResponse.json({ error: "No graphs are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
     }
 
     // The Results pane compiles the authoritative FCT query tree to SPARQL on
@@ -242,25 +243,27 @@ export async function POST(request: Request) {
       diagnosticQuery = resultsQuery;
       const { responseText, response, key } = await querySparql(fctEndpoint, resultsQuery);
       const contentType = response.headers.get("content-type") ?? "";
-      if (!response.ok) {
+      if (!response.ok && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
         proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
         return NextResponse.json(
           { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
           { status: response.status },
         );
       }
-      if (!contentType.toLowerCase().includes("json")) {
+      if (!contentType.toLowerCase().includes("json") && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
         return NextResponse.json(
           { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
           { status: response.status },
         );
       }
-      const parsed = parseSparqlResults(responseText);
+      const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
+      if (incomplete) proxyLog("warn", "sparql.anytime", { operation: diagnosticOperation, message: virtuosoAnytimeMessage(response, responseText) });
+      const parsed = parseSparqlResults(responseText) ?? (incomplete ? { head: { vars: ["c1"] }, results: { bindings: [] } } : null);
       if (!parsed || !parsed.head.vars.includes("c1")) {
         return NextResponse.json({ error: "Virtuoso returned invalid Results SPARQL JSON (expected ?c1)." }, { status: 502 });
       }
-      if (response.status === 200) setQueryCache(key, responseText);
-      return NextResponse.json({ ...parsed, query: resultsQuery });
+      if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
+      return NextResponse.json({ ...parsed, query: resultsQuery, incomplete }, { headers: anytimeResponseHeaders(response, incomplete) });
     }
 
     if (body?.facetValueCount && typeof body.facetValueCount === "object") {
@@ -277,28 +280,32 @@ export async function POST(request: Request) {
       diagnosticQuery = countQuery;
       const { responseText, response, key } = await querySparql(fctEndpoint, countQuery);
       const contentType = response.headers.get("content-type") ?? "";
-      if (!response.ok) {
+      if (!response.ok && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
         proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
         return NextResponse.json(
           { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
           { status: response.status },
         );
       }
-      if (!contentType.toLowerCase().includes("json")) {
+      if (!contentType.toLowerCase().includes("json") && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
         return NextResponse.json(
           { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
           { status: response.status },
         );
       }
+      const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
+      if (incomplete) proxyLog("warn", "sparql.anytime", { operation: diagnosticOperation, message: virtuosoAnytimeMessage(response, responseText) });
       const parsed = parseSparqlResults(responseText);
+      if (!parsed && incomplete) return NextResponse.json({ incomplete: true, query: countQuery }, { headers: anytimeResponseHeaders(response, true) });
       const countValue = parsed?.results.bindings[0]?.ct?.value;
       const count = countValue !== undefined && /^\d+$/.test(countValue) ? Number(countValue) : NaN;
       if (!parsed || !parsed.head.vars.includes("ct") || parsed.results.bindings.length !== 1 ||
           !Number.isSafeInteger(count) || count < 0) {
+        if (incomplete) return NextResponse.json({ incomplete: true, query: countQuery }, { headers: anytimeResponseHeaders(response, true) });
         return NextResponse.json({ error: "Virtuoso returned an invalid SPARQL count result." }, { status: 502 });
       }
-      if (response.status === 200) setQueryCache(key, responseText);
-      return NextResponse.json({ count, query: countQuery });
+      if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
+      return NextResponse.json({ count, query: countQuery, incomplete }, { headers: anytimeResponseHeaders(response, incomplete) });
     }
 
     if (body?.facetIntersection && typeof body.facetIntersection === "object") {
@@ -320,20 +327,22 @@ export async function POST(request: Request) {
       diagnosticQuery = built.query;
       const { responseText, response, key } = await querySparql(fctEndpoint, built.query);
       const contentType = response.headers.get("content-type") ?? "";
-      if (!response.ok) {
+      if (!response.ok && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
         proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
         return NextResponse.json(
           { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
           { status: response.status },
         );
       }
-      if (!contentType.toLowerCase().includes("json")) {
+      if (!contentType.toLowerCase().includes("json") && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
         return NextResponse.json(
           { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
           { status: response.status },
         );
       }
-      const parsed = parseSparqlResults(responseText);
+      const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
+      if (incomplete) proxyLog("warn", "sparql.anytime", { operation: diagnosticOperation, message: virtuosoAnytimeMessage(response, responseText) });
+      const parsed = parseSparqlResults(responseText) ?? (incomplete ? { head: { vars: [built.variable] }, results: { bindings: [] } } : null);
       if (!parsed || !parsed.head.vars.includes(built.variable)) {
         return NextResponse.json({ error: "Virtuoso returned an invalid SPARQL facet-intersection result." }, { status: 502 });
       }
@@ -341,8 +350,8 @@ export async function POST(request: Request) {
       const uris = [...new Set(bindings
         .map((binding) => binding[built.variable]?.value)
         .filter((value): value is string => typeof value === "string" && value.length > 0))];
-      if (response.status === 200) setQueryCache(key, responseText);
-      return NextResponse.json({ uris });
+      if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
+      return NextResponse.json({ uris, incomplete }, { headers: anytimeResponseHeaders(response, incomplete) });
     }
 
     // Results enrichment is intentionally bounded to exact FCT result URIs and
@@ -373,27 +382,30 @@ export async function POST(request: Request) {
     diagnosticQuery = query;
     const { responseText, response, key } = await querySparql(fctEndpoint, query);
     const contentType = response.headers.get("content-type") ?? "";
-    if (!response.ok) {
+    if (!response.ok && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
       proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
       return NextResponse.json(
         { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
         { status: response.status },
       );
     }
-    if (!contentType.toLowerCase().includes("json")) {
+    if (!contentType.toLowerCase().includes("json") && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
       return NextResponse.json(
         { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
         { status: response.status },
       );
     }
 
-    if (!parseSparqlResults(responseText)) {
+    const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
+    if (incomplete) proxyLog("warn", "sparql.anytime", { operation: diagnosticOperation, message: virtuosoAnytimeMessage(response, responseText) });
+    const parsed = parseSparqlResults(responseText);
+    if (!parsed && !incomplete) {
       return NextResponse.json({ error: "Virtuoso returned invalid SPARQL results JSON." }, { status: 502 });
     }
-    if (response.status === 200) setQueryCache(key, responseText);
-    return new NextResponse(responseText, {
+    if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
+    return NextResponse.json(parsed ? { ...parsed, incomplete } : { head: { vars: [] }, results: { bindings: [] }, incomplete: true }, {
       status: 200,
-      headers: { "Content-Type": "application/sparql-results+json; charset=utf-8", "Cache-Control": "no-store" },
+      headers: { "Cache-Control": "no-store", ...anytimeResponseHeaders(response, incomplete) },
     });
   } catch (error) {
     const diagnostics = {

@@ -1,3 +1,4 @@
+import { setMaestroIncompleteResults } from "./maestro-incomplete-results";
 /**
  * Client-side query cache persisted to IndexedDB.
  * Duplicates proxy cache on the client to avoid eating network bandwidth,
@@ -138,18 +139,28 @@ export async function cachedFetchFct(input: RequestInfo | URL, init?: RequestIni
   if (!isCacheableEndpoint) {
     return fetch(input, init);
   }
+  const requestHeaders = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+  // Component identity is distinct from the operation/source. Several widgets
+  // share `facet-load`; do not collapse their incomplete states into one entry.
+  const source = requestHeaders.get("x-maestro-debug-component") || requestHeaders.get("x-maestro-debug-source") || urlStr;
+  const requestId = requestHeaders.get("x-maestro-debug-request") || "";
+  const track = (response: Response): Response => {
+    const incomplete = response.headers.get("x-maestro-incomplete") === "true";
+    setMaestroIncompleteResults(source, { incomplete, requestId, message: incomplete ? "Virtuoso ANYTIME returned incomplete results." : "" });
+    return response;
+  };
   const key = computeClientCacheKey(urlStr, init);
   if (!key) {
-    return fetch(input, init);
+    return track(await fetch(input, init));
   }
 
   const cached = await getClientCachedResponse(key);
   if (cached) {
-    return cached;
+    return track(cached);
   }
 
   const response = await fetch(input, init);
-  if (response.ok && (response.status === 200 || response.status === 206)) {
+  if (response.ok && response.status === 200 && response.headers.get("x-maestro-incomplete") !== "true") {
     try {
       const clone = response.clone();
       const bodyText = await clone.text();
@@ -159,5 +170,5 @@ export async function cachedFetchFct(input: RequestInfo | URL, init?: RequestIni
       // Non-fatal clone failure
     }
   }
-  return response;
+  return track(response);
 }

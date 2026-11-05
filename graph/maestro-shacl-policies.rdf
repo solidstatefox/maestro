@@ -29,13 +29,13 @@
   <rdfs:label xml:lang="en">Bookmark record shape</rdfs:label></rdf:Description>
   <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb7">
     <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
-    <sh:path rdf:resource="https://schema.org/identifier"/>
-    <sh:name>Bookmark hash</sh:name>
+    <sh:path rdf:resource="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyStateUrl"/>
+    <sh:name>Query URL</sh:name>
     <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2</sh:order>
   </rdf:Description>
   <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb8">
     <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
-    <sh:path rdf:resource="http://purl.org/dc/terms/created"/>
+    <sh:path rdf:resource="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated"/>
     <sh:name>Created</sh:name>
     <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">3</sh:order>
   </rdf:Description>
@@ -47,7 +47,7 @@
   </rdf:Description>
   <rdf:Description rdf:nodeID="nd46a697f8739430685391bf740ede73fb3">
     <rdf:type rdf:resource="http://www.w3.org/ns/shacl#PropertyShape"/>
-    <sh:path rdf:resource="http://www.w3.org/2002/01/bookmark#title"/>
+    <sh:path rdf:resource="http://purl.org/dc/terms/title"/>
     <sh:name>Title</sh:name>
     <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2</sh:order>
   </rdf:Description>
@@ -73,7 +73,7 @@
     <sh:order rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:order>
   </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate">
-    <rdf:value><![CDATA[<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:svg="http://www.w3.org/2000/svg" xmlns:xs="http://www.w3.org/2001/XMLSchema" version="3.0" exclude-result-prefixes="xs fct mctx"><xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/><xsl:param name="recordUri"/><xsl:mode on-no-match="shallow-copy"/><xsl:function name="mui:joined-values" as="xs:string"><xsl:param name="context" as="node()"/><xsl:param name="predicate" as="xs:string"/><xsl:try><xsl:sequence select="string-join($context/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.=$predicate]]/fct:column[last()] ! string(.), ', ')"/><xsl:catch><xsl:sequence select="''"/></xsl:catch></xsl:try></xsl:function><xsl:template match="/"><section id="maestro-record-viewer" class="mx-auto flex w-full max-w-2xl flex-col gap-4 p-1" mui:framework="next@^16.4.0"><article id="history-record"><h2 id="history-title" mui:data="http://www.w3.org/2000/01/rdf-schema#label"><xsl:value-of select="mui:joined-values(root(.), &apos;http://www.w3.org/2000/01/rdf-schema#label&apos;)"/></h2><p id="history-type-label">Query history bookmark</p><p id="history-hash" mui:data="https://schema.org/identifier"><xsl:value-of select="mui:joined-values(root(.), &apos;https://schema.org/identifier&apos;)"/></p><p id="history-created" mui:data="http://purl.org/dc/terms/created"><xsl:value-of select="mui:joined-values(root(.), &apos;http://purl.org/dc/terms/created&apos;)"/></p></article></section></xsl:template></xsl:stylesheet>]]></rdf:value>
+    <rdf:value><![CDATA[<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:svg="http://www.w3.org/2000/svg" xmlns:xs="http://www.w3.org/2001/XMLSchema" version="3.0" exclude-result-prefixes="xs fct mctx"><xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/><xsl:param name="recordUri"/><xsl:mode on-no-match="shallow-copy"/><xsl:function name="mui:joined-values" as="xs:string"><xsl:param name="context" as="node()"/><xsl:param name="predicate" as="xs:string"/><xsl:try><xsl:sequence select="string-join($context/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.=$predicate]]/fct:column[last()] ! string(.), ', ')"/><xsl:catch><xsl:sequence select="''"/></xsl:catch></xsl:try></xsl:function><xsl:template match="/"><section id="maestro-record-viewer" class="mx-auto flex w-full max-w-2xl flex-col gap-4 p-1" mui:framework="next@^16.4.0"><article id="history-record"><h2 id="history-title" mui:data="http://www.w3.org/2000/01/rdf-schema#label"><xsl:value-of select="mui:joined-values(root(.), &apos;http://www.w3.org/2000/01/rdf-schema#label&apos;)"/></h2><p id="history-type-label">Query history bookmark</p><p id="history-state-url" mui:data="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyStateUrl"><xsl:value-of select="mui:joined-values(root(.), &apos;https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyStateUrl&apos;)"/></p><p id="history-created" mui:data="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated"><xsl:value-of select="mui:joined-values(root(.), &apos;https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated&apos;)"/></p></article></section></xsl:template></xsl:stylesheet>]]></rdf:value>
   </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/query-history-visit">
     <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
@@ -94,7 +94,7 @@
       <div id="bookmark-heading-group" class="space-y-2">
         <p id="bookmark-eyebrow" class="text-sm font-medium text-muted-foreground">Your collection</p>
         <div id="bookmark-title-row" class="flex min-w-0 items-center gap-2">
-          <a id="bookmark-title-link" class="inline-flex min-w-0 items-center gap-2 break-words text-2xl font-semibold tracking-tight text-primary underline-offset-4 hover:underline cursor-pointer sm:text-3xl" mui:href="xpath:/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyStateUrl']]/fct:column[last()]" target="_blank" rel="noopener noreferrer" aria-label="Open the saved query state">
+          <a id="bookmark-title-link" class="inline-flex min-w-0 items-center gap-2 break-words text-2xl font-semibold tracking-tight text-primary underline-offset-4 hover:underline cursor-pointer sm:text-3xl" mui:href="xpath:/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='https://vos.openlinksw.com/owiki/wiki/VOS/https://schema.org/url']]/fct:column[last()]" target="_blank" rel="noopener noreferrer" aria-label="Open the saved query state">
             <span id="bookmark-title-text" mui:data="http://purl.org/dc/terms/title"><xsl:value-of select="mui:joined-values(root(.), &apos;http://purl.org/dc/terms/title&apos;)"/></span>
             <svg:svg id="bookmark-title-binoculars-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="inline-block size-5 shrink-0" role="img" aria-label="Open saved query">
               <svg:path id="bookmark-title-binoculars-center" d="M10 10h4"/>

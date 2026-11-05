@@ -98,33 +98,51 @@ export async function POST(request: Request) {
       const snapshots = [data.classQuery, data.propertyQuery, data.roleQuery];
       if (snapshots.some((item) => typeof item !== "string" || item.length > 200000))
         return NextResponse.json({ error: "The cloned FCT facet queries are required." }, { status: 400 });
-      const targets = classes.map(sparqlIri).join(" ");
-      const properties = forward.map(sparqlIri).join(" ");
-      const roles = reverse.map(sparqlIri).join(" ");
-      const graph = sparqlIri(getShapesGraph(request));
-      if (!classes.length && !forward.length && !reverse.length && !safeIri(body.recordShape))
-        return NextResponse.json({ facets: [] });
-      const recordShape = safeIri(body.recordShape) ? sparqlIri(body.recordShape) : "<urn:maestro:no-record-shape>";
-      const query = `PREFIX sh: <${SH}>\nSELECT DISTINCT ?path ?inverse ?name ?shape WHERE { GRAPH ${graph} {
-        { ?shape sh:property ?propertyShape . FILTER(?shape = ${recordShape}) }
-        ${targets ? `UNION { VALUES ?class { ${targets} } ?shape sh:targetClass ?class ; sh:property ?propertyShape . }` : ""}
-        ${properties ? `UNION { VALUES ?predicate { ${properties} } ?shape sh:targetSubjectsOf ?predicate ; sh:property ?propertyShape . }` : ""}
-        ${roles ? `UNION { VALUES ?predicate { ${roles} } ?shape sh:targetObjectsOf ?predicate ; sh:property ?propertyShape . }` : ""}
+      // The selected record's SHACL shape is authoritative. Scanning all
+      // Categories/Properties/Roles candidate target shapes can turn a simple
+      // Record Validate into an expensive endpoint-wide join (and return no
+      // rows after Virtuoso ANYTIME). The clone snapshots are still retained
+      // as scope context; only sh:property of this record shape is ingested.
+      if (!safeIri(body.recordShape)) {
+        return NextResponse.json({ error: "A valid Record SHACL shape IRI is required." }, { status: 400 });
+      }
+      // Read the SHACL path term directly. The previous OPTIONAL/FILTER/BIND
+      // projection could leave ?path unbound even when a sh:path triple existed.
+      // Inverse paths are blank nodes carrying sh:inversePath; ordinary paths
+      // are IRI-valued sh:path terms. Neither needs a computed SPARQL binding.
+      const shapesGraph = getShapesGraph(request);
+      const query = `PREFIX sh: <${SH}>\nSELECT DISTINCT ?propertyShape ?rawPath ?inverse ?name WHERE { GRAPH ${sparqlIri(shapesGraph)} {
+        ${sparqlIri(body.recordShape)} sh:property ?propertyShape .
         ?propertyShape sh:path ?rawPath .
         OPTIONAL { ?propertyShape sh:name ?name }
         OPTIONAL { ?rawPath sh:inversePath ?inverse }
-        OPTIONAL { FILTER(isIRI(?rawPath)) BIND(?rawPath AS ?path) }
       } } LIMIT 300`;
       const payload = await queryPersonalSparql(query, 20000, request);
-      const facets = [...new Map(((payload.results?.bindings ?? []) as BindingRow[])
-        .flatMap((row) => {
-          const uri = get(row, "inverse") || get(row, "path");
-          if (!safeIri(uri)) return [];
-          const direction = get(row, "inverse") ? "reverse" : "forward";
-          return [{ uri, direction, label: get(row, "name") || "", shape: get(row, "shape") }];
-        }).map((facet) => [`${facet.direction}:${facet.uri}`, facet])).values()];
-      proxyLog("info", "policies.facet-discover", { count: facets.length });
-      return NextResponse.json({ facets });
+      const rows = (payload.results?.bindings ?? []) as BindingRow[];
+      const facets = [...new Map(rows.flatMap((row) => {
+        const inverse = row.inverse?.type === "uri" ? get(row, "inverse") : "";
+        const direct = row.rawPath?.type === "uri" ? get(row, "rawPath") : "";
+        const uri = inverse || direct;
+        // Categories already own rdf:type, so it must not become a Personal facet.
+        if (!safeIri(uri) || uri === `${RDF}type`) return [];
+        const direction: "forward" | "reverse" = inverse ? "reverse" : "forward";
+        return [{ uri, direction, label: get(row, "name") || "" }];
+      }).map((facet) => [`${facet.direction}:${facet.uri}`, facet])).values()];
+      // A successful SELECT with no paths does not prove a shape has none:
+      // check whether its sh:property links are present in the installed graph.
+      let propertyShapes: number | undefined;
+      if (!rows.length) {
+        const diagnostics = await queryPersonalSparql(
+          `PREFIX sh: <${SH}>\nSELECT (COUNT(?propertyShape) AS ?ct) WHERE { GRAPH ${sparqlIri(shapesGraph)} { ${sparqlIri(body.recordShape)} sh:property ?propertyShape } }`,
+          20000, request,
+        );
+        propertyShapes = Number(get(((diagnostics.results?.bindings ?? [])[0] ?? {}) as BindingRow, "ct") || 0);
+        proxyLog("warn", "policies.facet-discover.no-paths", { recordShape: body.recordShape, shapesGraph, propertyShapes });
+      } else {
+        propertyShapes = new Set(rows.map((row) => get(row, "propertyShape")).filter(Boolean)).size;
+      }
+      proxyLog("info", "policies.facet-discover", { count: facets.length, rawPaths: rows.length, propertyShapes, recordShape: body.recordShape });
+      return NextResponse.json({ facets, graph: shapesGraph, propertyShapes, rawPaths: rows.length });
     }
 
     if (body.action === "validate") {

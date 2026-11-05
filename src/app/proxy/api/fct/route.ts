@@ -6,6 +6,7 @@ import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getDataserversGraph, getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
 import { proxyLog } from "@/lib/maestro-logger";
+import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
 
 
 function parseResults(text: string): SparqlJsonResults | null {
@@ -283,7 +284,7 @@ export async function GET(request: Request) {
   let endpoints: Awaited<ReturnType<typeof getConfiguredFctEndpoints>>;
   try { endpoints = await getConfiguredFctEndpoints(request); }
   catch (error) {
-    return NextResponse.json({ error: `Could not load Datasites from the personal SPARQL store: ${describeUpstreamError(error, "unknown error")}` }, { status: 503 });
+    return NextResponse.json({ error: `Could not load graphs from the personal SPARQL store: ${describeUpstreamError(error, "unknown error")}` }, { status: 503 });
   }
   const url = new URL(request.url);
   const selectedId = selectConfiguredFctEndpoint(request, endpoints)?.id ?? "";
@@ -347,7 +348,7 @@ export async function POST(request: Request) {
     let endpoints: Awaited<ReturnType<typeof getConfiguredFctEndpoints>>;
     try { endpoints = await getConfiguredFctEndpoints(request); }
     catch (error) {
-      return fctError(`Could not load Datasites from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}`, 503);
+      return fctError(`Could not load graphs from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}`, 503);
     }
 
     if (typeof body?.selectEndpointId === "string") {
@@ -432,35 +433,47 @@ export async function POST(request: Request) {
     const { response, text, key } = await executeSparql(endpoint.url, compiled.query, isDescribe ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs);
     const elapsedMs = Date.now() - startedAt;
     const sqlState = response.headers.get("X-SQL-State")?.trim() ?? "";
+    const anytime = isVirtuosoAnytime(response, text);
+    const partial = anytime || response.status === 206;
     const sqlMessage = response.headers.get("X-SQL-Message") ?? "";
     const execMilliseconds = response.headers.get("X-Exec-Milliseconds") ?? "";
     const execDbActivity = response.headers.get("X-Exec-DB-Activity") ?? "";
     // S1TAT identifies a partial result set; its HTTP status alone must not
     // cause Maestro to discard the valid rows in the response body.
-    if (!response.ok && sqlState !== "S1TAT") {
+    if (!response.ok && !anytime) {
       proxyLog("error", "fct.upstream", { status: response.status, sqlState, sqlMessage, responseBody: text.slice(0, 16000) });
       return fctError(`Virtuoso SPARQL endpoint returned HTTP ${response.status}${sqlState ? ` (${sqlState})` : ""}`, response.status, sqlMessage || text.slice(0, 16000));
     }
 
+    if (anytime) proxyLog("warn", "fct.anytime", { endpoint: endpoint.url, view: compiled.view, status: response.status, sqlState, message: virtuosoAnytimeMessage(response, text) });
+
+    const incompleteHeaders = anytimeResponseHeaders(response, partial);
     if (isDescribe) {
-      if (response.status === 200) setQueryCache(key, text);
+      if (response.status === 200 && !partial) setQueryCache(key, text);
       let bindings: Record<string, SparqlBindingTerm>[];
       try { bindings = parseDescribeRdfXml(text); }
-      catch (error) { return fctError(error instanceof Error ? error.message : "Invalid DESCRIBE response", 502, text.slice(0, 1000)); }
+      catch (error) {
+        if (!anytime) return fctError(error instanceof Error ? error.message : "Invalid DESCRIBE response", 502, text.slice(0, 1000));
+        proxyLog("warn", "fct.describe-anytime-no-rows", { view: compiled.view, status: response.status });
+        bindings = [];
+      }
       const labels = await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
       const labelFor = (term: SparqlBindingTerm | undefined) => term?.type === "uri" ? labels.get(term.value) : undefined;
       const describeRows = bindings.map((binding) => `<fct:row>${fctColumn(binding.s, labelFor(binding.s))}${fctColumn(binding.p, labelFor(binding.p))}${fctColumn(binding.o, labelFor(binding.o))}</fct:row>`).join("");
-      const describeComplete = response.status !== 206 && sqlState !== "S1TAT";
+      const describeComplete = !partial;
       const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${describeComplete ? "yes" : "no"}</fct:complete><fct:timeout>${compiled.timeoutMs}</fct:timeout><fct:sql-state>${xmlText(sqlState)}</fct:sql-state><fct:sql-message>${xmlText(sqlMessage)}</fct:sql-message><fct:exec-milliseconds>${xmlText(execMilliseconds)}</fct:exec-milliseconds><fct:db-activity>${xmlText(execDbActivity)}</fct:db-activity>${sqlState === "S1TAT" ? `<fct:warning>${xmlText(sqlMessage || "Virtuoso returned partial results because the ANYTIME timeout was reached.")}</fct:warning>` : ""}<fct:processed>${bindings.length}</fct:processed><fct:view offset="${compiled.offset}" limit="${compiled.limit}"/><fct:result type="describe">${describeRows}</fct:result></fct:facets>`;
-      if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
-      return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS" } });
+      if (response.status === 200 && !partial) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+      return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...incompleteHeaders } });
     }
 
     const parsed = parseResults(text);
-    if (!parsed) return fctError("Virtuoso SPARQL endpoint returned an invalid SPARQL Results JSON document", 502, text.slice(0, 1500));
-    let bindings = parsed.results?.bindings ?? [];
-    let vars = parsed.head?.vars ?? [];
-    if (response.status === 200) setQueryCache(key, text);
+    if (!parsed && !anytime) return fctError("Virtuoso SPARQL endpoint returned an invalid SPARQL Results JSON document", 502, text.slice(0, 1500));
+    // An ANYTIME timeout can arrive with an error-only body and no result rows.
+    // No rows were received: do not fabricate rows or report a complete empty set.
+    if (!parsed && anytime) proxyLog("warn", "fct.anytime-no-rows", { view: compiled.view, status: response.status });
+    let bindings = parsed?.results?.bindings ?? [];
+    let vars = parsed?.head?.vars ?? [];
+    if (response.status === 200 && !partial) setQueryCache(key, text);
     const labels = countOnly
       ? new Map<string, string>()
       : await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
@@ -476,18 +489,18 @@ export async function POST(request: Request) {
     }
     // FCT <complete> reports execution completion, not whether another page
     // exists. Virtuoso uses HTTP 206 for partial results.
-    const complete = response.status !== 206 && sqlState !== "S1TAT";
+    const complete = !partial;
     const xml = fctResponseXml({
       query: compiled.query, view: compiled.view, limit: compiled.limit, offset: compiled.offset,
       bindings, vars, elapsedMs, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly, labels,
       badgeColumns: compiled.badgeColumns,
-      sqlState,
-      sqlMessage,
+      sqlState: anytime ? "S1TAT" : sqlState,
+      sqlMessage: anytime ? virtuosoAnytimeMessage(response, text) : sqlMessage,
       execMilliseconds,
       execDbActivity,
     });
-    if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
-    return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS" } });
+    if (response.status === 200 && !partial) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+    return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...incompleteHeaders } });
   } catch (error) {
     proxyLog("error", "fct.POST.failed", { stage, err: error, message: describeUpstreamError(error) });
     const message = describeUpstreamError(error, "Failed to compile or execute the FCT query as SPARQL.");

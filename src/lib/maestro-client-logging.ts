@@ -34,6 +34,11 @@ export function configureMaestroBrowserLogging(active: boolean, level: BrowserLo
       const level = response.ok ? "info" : "error";
       emit(level, "proxy.response", { url: url.pathname, status: response.status, elapsedMs, requestId,
         cache: response.headers.get("x-maestro-cache") });
+      if (response.headers.get("x-maestro-incomplete") === "true") {
+        emit("warn", "virtuoso.anytime", { url: url.pathname, requestId, source: requestHeaders.get("x-maestro-debug-source"),
+          message: "Virtuoso reported incomplete results; all returned rows are retained.",
+          sqlState: response.headers.get("x-maestro-upstream-sql-state") });
+      }
       const encoded = response.headers.get("x-maestro-diagnostic");
       if (encoded) {
         try { emit("error", "proxy.diagnostic", JSON.parse(decodeURIComponent(escape(atob(encoded))))); }

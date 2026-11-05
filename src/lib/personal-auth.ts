@@ -183,7 +183,7 @@ export function setMaestroSessionCookie(session: PersonalAuthSession | null) {
     userName: session.displayName || session.userName || session.username,
     userAvatar: session.avatarUrl,
   };
-  const maxAge = session.rememberMe ? 60 * 60 * 24 * 400 : ""; // Renewed on page load/focus; session cookie when Remember Me is off
+  const maxAge = 60 * 60 * 24 * 400; // Persistent, rolling lifetime; cookie renewed on page load/focus.
   document.cookie = `${COOKIE_NAME}=${encodeURIComponent(JSON.stringify(payload))}; path=/; SameSite=Lax; ${maxAge ? `max-age=${maxAge}` : ""}`;
 }
 
@@ -193,7 +193,7 @@ export async function savePersonalAuthSession(
   rememberMeOverride?: boolean,
 ): Promise<void> {
   if (typeof window === "undefined") return;
-  const isRemember = rememberMeOverride !== undefined ? rememberMeOverride : session.rememberMe;
+  const isRemember = true; // Persist until explicit logout; session-only auth is no longer offered.
   const effectiveSession: PersonalAuthSession = {
     ...session,
     rememberMe: isRemember,
@@ -218,13 +218,8 @@ export async function savePersonalAuthSession(
   };
   const serialized = JSON.stringify(storagePayload);
 
-  if (isRemember) {
-    window.localStorage.setItem(STORAGE_KEY, serialized);
-    window.sessionStorage.removeItem(STORAGE_KEY);
-  } else {
-    window.sessionStorage.setItem(STORAGE_KEY, serialized);
-    window.localStorage.removeItem(STORAGE_KEY);
-  }
+  window.localStorage.setItem(STORAGE_KEY, serialized);
+  window.sessionStorage.removeItem(STORAGE_KEY);
 
   setMaestroSessionCookie(effectiveSession);
 }
@@ -232,7 +227,7 @@ export async function savePersonalAuthSession(
 /** Restore stored session on page load. */
 export async function loadPersonalAuthSession(): Promise<PersonalAuthSession | null> {
   if (typeof window === "undefined") return null;
-  const raw = window.sessionStorage.getItem(STORAGE_KEY) || window.localStorage.getItem(STORAGE_KEY);
+  const raw = window.localStorage.getItem(STORAGE_KEY) || window.sessionStorage.getItem(STORAGE_KEY);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as PersonalAuthSession;
@@ -251,7 +246,13 @@ export async function loadPersonalAuthSession(): Promise<PersonalAuthSession | n
       password: decryptedPassword,
       authHeader: parsed.authHeader || buildAuthHeader(parsed),
     };
-    setMaestroSessionCookie(session);
+    session.rememberMe = true;
+    if (window.sessionStorage.getItem(STORAGE_KEY)) {
+      // Migrate legacy session-only logins so the next browser restart retains them.
+      await savePersonalAuthSession(session, true);
+    } else {
+      setMaestroSessionCookie(session);
+    }
     return session;
   } catch (error) {
     console.warn("Could not decrypt saved personal graph server session", error);

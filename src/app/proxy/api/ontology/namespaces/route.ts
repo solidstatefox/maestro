@@ -1,3 +1,4 @@
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 
 /** Public vocabulary namespace documents used by Maestro's RDF record-label map. */
@@ -80,7 +81,8 @@ async function loadMetadata(item: typeof VOCABULARIES[number]): Promise<Namespac
 }
 
 /** Dereference public ontology documents following Linked Data content negotiation. */
-export async function GET() {
+export async function GET(request: Request) {
+  logProxyCaller(request, "namespaces.GET");
   const namespaces = await Promise.all(VOCABULARIES.map(loadMetadata));
   return NextResponse.json({ namespaces }, { headers: { "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400" } });
 }

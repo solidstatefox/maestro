@@ -1,8 +1,9 @@
-import { logProxyCaller } from "@/lib/proxy-debug";
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
+import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
 
 function isSafeIri(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 &&
@@ -242,15 +243,16 @@ export async function POST(request: Request) {
       const { responseText, response, key } = await querySparql(fctEndpoint, resultsQuery);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
+        proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
         return NextResponse.json(
-          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
-          { status: 502 },
+          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
+          { status: response.status },
         );
       }
       if (!contentType.toLowerCase().includes("json")) {
         return NextResponse.json(
-          { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
-          { status: 502 },
+          { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
+          { status: response.status },
         );
       }
       const parsed = parseSparqlResults(responseText);
@@ -276,15 +278,16 @@ export async function POST(request: Request) {
       const { responseText, response, key } = await querySparql(fctEndpoint, countQuery);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
+        proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
         return NextResponse.json(
-          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
-          { status: 502 },
+          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
+          { status: response.status },
         );
       }
       if (!contentType.toLowerCase().includes("json")) {
         return NextResponse.json(
-          { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
-          { status: 502 },
+          { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
+          { status: response.status },
         );
       }
       const parsed = parseSparqlResults(responseText);
@@ -318,15 +321,16 @@ export async function POST(request: Request) {
       const { responseText, response, key } = await querySparql(fctEndpoint, built.query);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok) {
+        proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
         return NextResponse.json(
-          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
-          { status: 502 },
+          { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
+          { status: response.status },
         );
       }
       if (!contentType.toLowerCase().includes("json")) {
         return NextResponse.json(
-          { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
-          { status: 502 },
+          { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
+          { status: response.status },
         );
       }
       const parsed = parseSparqlResults(responseText);
@@ -370,15 +374,16 @@ export async function POST(request: Request) {
     const { responseText, response, key } = await querySparql(fctEndpoint, query);
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.ok) {
+      proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
       return NextResponse.json(
-        { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
-        { status: 502 },
+        { error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
+        { status: response.status },
       );
     }
     if (!contentType.toLowerCase().includes("json")) {
       return NextResponse.json(
-        { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText.slice(0, 2000) },
-        { status: 502 },
+        { error: `Virtuoso SPARQL endpoint did not return JSON results${responseText.trim() ? `: ${responseText.trim().slice(0, 1000)}` : "."}`, details: responseText },
+        { status: response.status },
       );
     }
 
@@ -398,13 +403,7 @@ export async function POST(request: Request) {
       query: diagnosticQuery || null,
       error: describeProxyError(error),
     };
-    console.error("[Maestro SPARQL proxy] Upstream request failed.", diagnostics);
-    return NextResponse.json(
-      {
-        error: describeUpstreamError(error, "Could not query the SPARQL endpoint."),
-        details: diagnostics,
-      },
-      { status: 500 },
-    );
+    proxyLog("error", "sparql.POST.failed", { operation: diagnosticOperation, endpoint: diagnostics.endpoint, error: diagnostics.error, err: error });
+    return proxyFailure(request, "sparql.POST", error, { operation: diagnosticOperation, endpoint: diagnostics.endpoint });
   }
 }

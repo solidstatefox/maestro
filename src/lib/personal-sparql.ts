@@ -301,6 +301,14 @@ export function personalSparqlHeaders(request?: Request, contentType = "applicat
   return headers;
 }
 
+/** Preserve the real graph-server status and complete upstream error document. */
+export class PersonalSparqlHttpError extends Error {
+  constructor(public status: number, public responseBody: string, operation: string) {
+    super(`Personal SPARQL ${operation} returned HTTP ${status}: ${responseBody.slice(0, 4000)}`);
+    this.name = "PersonalSparqlHttpError";
+  }
+}
+
 /** Execute a read-only SPARQL query against the personal endpoint. */
 export async function queryPersonalSparql(query: string, timeoutMs = 20000, request?: Request): Promise<SparqlJson> {
   assertPersonalSession(request);
@@ -313,7 +321,7 @@ export async function queryPersonalSparql(query: string, timeoutMs = 20000, requ
     signal: AbortSignal.timeout(timeoutMs),
   });
   const body = await response.text();
-  if (!response.ok) throw new Error(`Personal SPARQL query returned HTTP ${response.status}: ${body.slice(0, 1000)}`);
+  if (!response.ok) throw new PersonalSparqlHttpError(response.status, body, "query");
   try {
     const parsed = JSON.parse(body) as SparqlJson;
     if (!parsed || !Array.isArray(parsed.results?.bindings)) throw new Error("missing results.bindings");
@@ -335,7 +343,7 @@ export async function askPersonalSparql(query: string, timeoutMs = 20000, reques
     signal: AbortSignal.timeout(timeoutMs),
   });
   const body = await response.text();
-  if (!response.ok) throw new Error(`Personal SPARQL ASK returned HTTP ${response.status}: ${body.slice(0, 1000)}`);
+  if (!response.ok) throw new PersonalSparqlHttpError(response.status, body, "ASK");
   try {
     const parsed = JSON.parse(body) as { boolean?: unknown };
     if (typeof parsed.boolean !== "boolean") throw new Error("missing boolean result");

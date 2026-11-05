@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { logProxyCaller } from "@/lib/proxy-debug";
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { getPersonalSession, updatePersonalSparql } from "@/lib/personal-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
 

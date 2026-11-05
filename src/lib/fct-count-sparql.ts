@@ -183,6 +183,27 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
     queryAttributes.push('DEFINE input:same-as "yes"');
   }
 
+  // Mirror the view-level alphabet selection in scalar result counts.
+  const findView = (nodes: FctQueryNode[]): FctQueryNode | null => {
+    for (const node of nodes) {
+      if (node.name === "view") return node;
+      const nested = findView(node.children);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  const viewNode = findView(tree.children);
+  const indexLetter = viewNode?.attributes.index?.trim() ?? "";
+  if (indexLetter) {
+    if (!/^[A-Z]$/.test(indexLetter)) return null;
+    const props = [...new Set((viewNode?.attributes.indexLabels || "http://www.w3.org/2000/01/rdf-schema#label").split(/[\s,]+/).filter(Boolean))];
+    if (!props.length || props.length > 20 || props.some((prop) => !iriTerm(prop))) return null;
+    const available = props.map((prop) => `<${prop}>`).join(", ");
+    state.patterns.push(`${state.viewVariable} ?maestroIndexPredicate ?maestroIndexLabel .`);
+    state.patterns.push(`FILTER (?maestroIndexPredicate IN (${available}))`);
+    state.patterns.push(`FILTER (STRSTARTS(UCASE(STR(?maestroIndexLabel)), "${indexLetter}"))`);
+  }
+
   let whereBody = state.patterns.join("\n  ");
   const graph = tree.attributes.graph?.trim();
   if (graph) {

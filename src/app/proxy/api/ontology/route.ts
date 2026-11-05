@@ -1,3 +1,4 @@
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { ensureGraphDirectorySeeded, getOntologyGraph, personalSparqlUrl, personalSparqlHeaders } from "@/lib/personal-sparql";
 import { NextResponse } from "next/server";
 import { describeUpstreamError } from "@/lib/upstream-error";
@@ -183,12 +184,14 @@ async function queryNearestListedParents(uris: string[], request?: Request): Pro
 }
 
 export async function GET(request: Request) {
+  logProxyCaller(request, "ontology.GET");
   const loginRequired = requirePersonalLogin(request);
   if (loginRequired) return loginRequired;
   return NextResponse.json({ endpoint: personalSparqlUrl(request).toString(), graph: getOntologyGraph(request) });
 }
 
 export async function POST(request: Request) {
+  logProxyCaller(request, "ontology.POST");
   const loginRequired = requirePersonalLogin(request);
   if (loginRequired) return loginRequired;
   const body = await request.json().catch(() => null) as { uris?: unknown } | null;

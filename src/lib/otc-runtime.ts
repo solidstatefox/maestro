@@ -1,3 +1,4 @@
+import { qwenThinkingOptions, type QwenThinkingBudget } from "@/lib/qwen-thinking";
 /** OpenLink Transcoder: Liquid templates and bounded, synchronous SHACL-gated successor discovery. */
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -220,7 +221,7 @@ async function sourceSparql(request: Request, query: string, source: string, sou
   return { rows: json.results.bindings };
 }
 
-async function survey(request: Request, rule: OtcRule, row: Row, activity: OtcLlmActivity[], transcoder: string, userRequest?: string): Promise<Row> {
+async function survey(request: Request, rule: OtcRule, row: Row, activity: OtcLlmActivity[], transcoder: string, userRequest?: string, report?: OtcProgressReporter, thinkingBudget: QwenThinkingBudget = 0, cancellationSignal?: AbortSignal): Promise<Row> {
   const key = process.env.ITERACOMPUTE_API_KEY?.trim();
   if (!key) throw new Error("ITERACOMPUTE_API_KEY is required for OTC surveys.");
   // The resource description is supplied as Turtle data, never as executable instructions.
@@ -261,30 +262,104 @@ async function survey(request: Request, rule: OtcRule, row: Row, activity: OtcLl
   try {
     response = await fetch("https://api.iteracompute.com/v1/chat/completions", {
       method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "qwen/qwen3.8-27b", reasoning: false, max_tokens: 1400, temperature: 0, messages: [{ role: "system", content: skill }, { role: "user", content: prompt }] }),
-      cache: "no-store", signal: AbortSignal.timeout(120000),
+      body: JSON.stringify({ model: "qwen/qwen3.8-27b", ...qwenThinkingOptions(thinkingBudget, 1400), stream: true, stream_options: { include_usage: true }, temperature: 0, messages: [{ role: "system", content: skill }, { role: "user", content: prompt }] }),
+      cache: "no-store", signal: AbortSignal.any([request.signal, ...(cancellationSignal ? [cancellationSignal] : []), AbortSignal.timeout(120000)]),
     });
   } catch (error) {
     log.response = error instanceof Error && error.name === "TimeoutError"
       ? "IteraCompute request timed out." : "Could not connect to IteraCompute.";
     throw new Error(`OTC survey: ${log.response}`);
   }
-  const body = await response.text();
-  let payload: {
-    choices?: Array<{ message?: { content?: string } }>;
-    error?: { message?: string };
-    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-  } = {};
-  try { payload = JSON.parse(body) as typeof payload; } catch { /* keep safe diagnostic */ }
-  if (payload.usage) log.usage = {
-    input: payload.usage.prompt_tokens, output: payload.usage.completion_tokens,
-    total: payload.usage.total_tokens,
+  // IteraCompute streams OpenAI-compatible SSE. Output text is buffered until
+  // completion; partial JSON is NEVER treated as survey bindings.
+  type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  type Delta = { content?: string | null; reasoning_content?: string | null; reasoning?: string | null };
+  type Chunk = { choices?: Array<{ delta?: Delta; finish_reason?: string | null; message?: { content?: string } }>; usage?: Usage | null; error?: { message?: string } };
+  let raw = "";
+  let reasoningText = "";
+  let providerUsage: Usage | undefined;
+  let ended = false;
+  const estimatedInput = Math.ceil((skill.length + prompt.length) / 4);
+  const priorUsage = activity.slice(0, -1).reduce((total, entry) => ({
+    input: total.input + (entry.usage?.input ?? 0),
+    output: total.output + (entry.usage?.output ?? 0),
+  }), { input: 0, output: 0 });
+  let lastUpdate = 0;
+  let lastChars = 0;
+  const publish = (force = false) => {
+    const now = Date.now();
+    const chars = raw.length + reasoningText.length;
+    if (!force && now - lastUpdate < 250 && chars - lastChars < 160) return;
+    lastUpdate = now;
+    lastChars = chars;
+    const input = priorUsage.input + (providerUsage?.prompt_tokens ?? estimatedInput);
+    const output = priorUsage.output + (providerUsage?.completion_tokens ?? Math.ceil(chars / 4));
+    report?.({ step: "qwen", status: "running", rule: rule.id, message: row.message?.value,
+      detail: "Receiving streamed model output", live: {
+        reasoning: reasoningText.slice(-3000), content: raw.slice(-3000),
+        reasoningTokens: Math.ceil(reasoningText.length / 4), thinkingBudget,
+        input, output, total: priorUsage.input + priorUsage.output + (providerUsage?.total_tokens ?? ((providerUsage?.prompt_tokens ?? estimatedInput) + (providerUsage?.completion_tokens ?? Math.ceil(chars / 4)))),
+        estimated: !providerUsage || providerUsage.total_tokens === undefined,
+        phase: raw ? "response" : reasoningText ? "reasoning" : "waiting",
+      },
+    });
   };
   if (!response.ok) {
-    log.response = `IteraCompute HTTP ${response.status}: ${payload.error?.message || "upstream request failed"}`;
+    const body = await response.text();
+    let explanation = "upstream request failed";
+    try { explanation = (JSON.parse(body) as Chunk).error?.message || explanation; } catch { /* no JSON details */ }
+    log.response = `IteraCompute HTTP ${response.status}: ${explanation}`;
     throw new Error(`OTC survey: IteraCompute returned HTTP ${response.status}.`);
   }
-  const raw = payload.choices?.[0]?.message?.content?.trim() ?? "";
+  if (!response.body) throw new Error("OTC survey returned no streaming response body.");
+  publish(true);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const parseEvent = (eventText: string) => {
+    const data = eventText.split(/\r?\n/).filter(line => line.startsWith("data:"))
+      .map(line => line.slice(5).trimStart()).join("\n").trim();
+    if (!data) return;
+    if (data === "[DONE]") { ended = true; return; }
+    let chunk: Chunk;
+    try { chunk = JSON.parse(data) as Chunk; } catch { throw new Error("OTC survey returned malformed streaming data."); }
+    if (chunk.error) throw new Error(`OTC survey: ${chunk.error.message || "stream failed"}`);
+    if (chunk.usage) providerUsage = chunk.usage;
+    for (const choice of chunk.choices ?? []) {
+      raw += choice.delta?.content ?? choice.message?.content ?? "";
+      reasoningText += choice.delta?.reasoning_content ?? choice.delta?.reasoning ?? "";
+    }
+    publish();
+    // Thinking budgets are advisory when the provider does not enforce them.
+    // Continue streaming the survey; the Trace reports live token estimates.
+  };
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE events are separated by a blank line, including CRLF line endings.
+      let match: RegExpExecArray | null;
+      while ((match = /\r?\n\r?\n/.exec(buffer))) {
+        parseEvent(buffer.slice(0, match.index));
+        buffer = buffer.slice(match.index + match[0].length);
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) parseEvent(buffer);
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  if (!ended && !raw.trim()) throw new Error("OTC survey stream ended without a response.");
+  if (providerUsage) log.usage = {
+    input: providerUsage.prompt_tokens, output: providerUsage.completion_tokens,
+    total: providerUsage.total_tokens,
+  };
+  publish(true);
+  raw = raw.trim();
   log.response = raw || "The model returned an empty response.";
   if (!raw) throw new Error("OTC survey returned an empty response.");
   const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
@@ -312,6 +387,8 @@ export type OtcProgressEvent = {
   message?: string;
   violations?: string[];
   counts?: { checked?: number; passed?: number; failed?: number; triples?: number };
+  /** Replaces the previous live snapshot in chat; it is not an audit-log row. */
+  live?: { reasoning: string; content: string; input: number; output: number; total: number; estimated: boolean; phase: "waiting" | "reasoning" | "response"; reasoningTokens?: number; thinkingBudget?: number };
 };
 export type OtcProgressReporter = (event: OtcProgressEvent) => void;
 
@@ -325,7 +402,7 @@ export type OtcLlmActivity = {
   usage?: { input?: number; output?: number; total?: number };
 };
 
-export type RunOptions = { rulesGraph: string; transcoder: string; namespace: string; source: string; sourceGraph?: string; dryRun: boolean; instruction?: string; followSuccessors?: boolean };
+export type RunOptions = { rulesGraph: string; transcoder: string; namespace: string; source: string; sourceGraph?: string; dryRun: boolean; instruction?: string; followSuccessors?: boolean; thinkingBudget?: QwenThinkingBudget; cancellationSignal?: AbortSignal };
 
 type SkippedInput = { message: string; violations: string[] };
 type RuleTrace = { rule: string; rows: number; turtle: string[]; bindings: Row[]; ask?: boolean; skippedInvalid?: SkippedInput[] };
@@ -336,7 +413,7 @@ type OutputTriple = Awaited<ReturnType<typeof parseRdfDocument>>[number];
 async function executeStage(
   request: Request, rulesGraph: string, transcoder: string, rules: OtcRule[],
   source: string, sourceGraph: string | undefined, runGraph: string,
-  previousTripleCount: number, activity: OtcLlmActivity[], instruction?: string, report?: OtcProgressReporter,
+  previousTripleCount: number, activity: OtcLlmActivity[], instruction?: string, report?: OtcProgressReporter, thinkingBudget: QwenThinkingBudget = 0, cancellationSignal?: AbortSignal,
 ): Promise<{ triples: OutputTriple[]; trace: RuleTrace[] }> {
   const stageTriples: OutputTriple[] = [];
   const trace: RuleTrace[] = [];
@@ -387,7 +464,7 @@ async function executeStage(
         counts: { checked, passed, failed: checked - passed } });
       report?.({ step: "qwen", status: "running", rule: rule.id,
         message: row.message?.value, detail: "Sending validated message to Qwen" });
-      const bindings = await survey(request, rule, row, activity, transcoder, instruction);
+      const bindings = await survey(request, rule, row, activity, transcoder, instruction, report, thinkingBudget, cancellationSignal);
       report?.({ step: "qwen", status: "success", rule: rule.id,
         message: row.message?.value, detail: "Qwen supplied survey bindings" });
       const turtle = await renderOtcLiquid(rule.template, bindings);
@@ -559,7 +636,7 @@ export async function runTranscoder(request: Request, options: RunOptions, activ
   try {
     // One successor hop (two stages maximum); no polling, events, or automatic subscribers.
     for (let depth = 0; depth < 2; depth++) {
-      const output = await executeStage(request, options.rulesGraph, current, rules, source, sourceGraph, runGraph, triples.length, activity, options.instruction, report);
+      const output = await executeStage(request, options.rulesGraph, current, rules, source, sourceGraph, runGraph, triples.length, activity, options.instruction, report, options.thinkingBudget, options.cancellationSignal);
       trace.push(...output.trace);
       triples.push(...output.triples);
       if (!output.triples.length || depth === 1 || options.followSuccessors === false || !rules.some((r) => r.target.trim())) break;

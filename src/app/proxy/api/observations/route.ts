@@ -1,4 +1,4 @@
-import { logProxyCaller } from "@/lib/proxy-debug";
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { isIP } from "node:net";
 import { recordUriObservations } from "@/lib/uri-registry";

@@ -282,9 +282,10 @@ function compileConstraints(
         ? { kind: "triple", subject, predicate, object: related, ...(options.length ? { options } : {}) }
         : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) };
       const isExcluded = ["yes", "true", "1"].includes((node.attributes.exclude ?? "").trim().toLowerCase());
-      const hasBoundValue = (children: XmlNode[]): boolean => children.some((child) =>
-        child.name === "value" || hasBoundValue(child.children));
-      if (isExcluded && hasBoundValue(node.children)) {
+      // An excluded predicate without any bound values means that this
+      // relationship must not exist (e.g., Not rdf:type). With bound values,
+      // exclude only the specific property/value combination.
+      if (isExcluded && !node.children.some((child) => child.name === "view")) {
         // Negate the relationship and its bound-value constraints together.
         // This means "no matching property/role with this value", rather than
         // merely negating the value comparison after a positive triple match.
@@ -360,6 +361,15 @@ function buildSelectQuery(args: {
 }): string {
   const document = new SparqlQueryDocument({ kind: "select", ...args });
   return document.toString();
+}
+
+const DEFAULT_INDEX_LABEL = "http://www.w3.org/2000/01/rdf-schema#label";
+function indexLabelPredicates(view: XmlNode | null): string[] {
+  const list = (view?.attributes.indexLabels || DEFAULT_INDEX_LABEL).split(/[\s,]+/).filter(Boolean);
+  const values = [...new Set(list)];
+  if (!values.length || values.length > 20 || values.some((value) => !iri(value)))
+    throw new Error("Alphabet label selectors must contain 1–20 valid predicate IRIs.");
+  return values;
 }
 
 export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false): CompiledFctQuery {
@@ -672,11 +682,33 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
     ], where: scopedWhere, groupBy: [termExpr(target)], orderBy: shouldOrder ? [{ expression: termExpr(variable("n")), direction: "DESC" }] : undefined, limit, offset });
   } else if (view === "alphabet") {
-    const firstLetter: SparqlExpression = { kind: "function", name: "sql:subseq", args: [termExpr(target), termExpr({ kind: "raw-term", value: "0" }), termExpr({ kind: "raw-term", value: "1" })] };
+    // Alphabet is a label-based system facet. Its counts always ignore the
+    // selected index letter so the other A-Z choices remain visible.
+    const props = indexLabelPredicates(viewNode);
+    const namePredicate = variable("maestroLabelPredicate");
+    const name = variable("maestroLabel");
+    const letter: SparqlExpression = { kind: "function", name: "UCASE", args: [
+      { kind: "function", name: "SUBSTR", args: [
+        { kind: "function", name: "STR", args: [termExpr(name)] },
+        termExpr({ kind: "raw-term", value: "1" }),
+        termExpr({ kind: "raw-term", value: "1" }),
+      ] },
+    ] };
+    const labelPatterns: SparqlPattern[] = [
+      { kind: "triple", subject: target, predicate: namePredicate, object: name },
+      { kind: "filter", expression: { kind: "in", value: termExpr(namePredicate), options: props.map(iriTerm) } },
+      { kind: "filter", expression: { kind: "function", name: "isLiteral", args: [termExpr(name)] } },
+      { kind: "filter", expression: { kind: "function", name: "REGEX", args: [
+        { kind: "function", name: "STR", args: [termExpr(name)] }, termExpr(literalTerm("^[A-Za-z]")),
+      ] } },
+    ];
+    const alphabetWhere: SparqlPattern[] = graphTerm
+      ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...labelPatterns] }]
+      : [...where, ...labelPatterns];
     query = buildSelectQuery({ directives, projections: [
-      { expression: firstLetter, as: variable("c1") },
-      { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
-    ], where: scopedWhere, groupBy: [firstLetter], orderBy: shouldOrder ? [{ expression: firstLetter, direction: "ASC" }] : undefined, limit, offset });
+      { expression: letter, as: variable("c1") },
+      { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(target) }, as: variable("n") },
+    ], where: alphabetWhere, groupBy: [letter], orderBy: [{ expression: letter, direction: "ASC" }], limit: 26, offset: 0 });
   } else if (view === "years" || view === "months" || view === "weeks") {
     const functionName = view === "years" ? "sql::year" : view === "months" ? "sql::round_month" : "sql::round_week";
     const bucket: SparqlExpression = { kind: "function", name: functionName, args: [termExpr(target)] };
@@ -699,6 +731,28 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     const document = new SparqlQueryDocument({ kind: "describe", describe: target, directives, projections: [], where: scopedWhere, limit, offset });
     query = document.toString();
   } else if (view === "text") {
+    // The view-level alphabet index constrains label values, not URI initials.
+    // Every label property selected beside the root search input is eligible.
+    const selectedLetter = (viewNode?.attributes.index ?? "").trim();
+    if (selectedLetter && !/^[A-Z]$/.test(selectedLetter))
+      throw new Error("The alphabet index must be A–Z or empty.");
+    let indexedWhere: SparqlPattern[] = [...scopedWhere];
+    if (selectedLetter) {
+      const predicates = indexLabelPredicates(viewNode);
+      const name = variable("maestroIndexLabel");
+      const predicate = variable("maestroIndexPredicate");
+      const labelPatterns: SparqlPattern[] = [
+        { kind: "triple", subject: target, predicate, object: name },
+        { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
+        { kind: "filter", expression: { kind: "function", name: "STRSTARTS", args: [
+          { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(name)] }] },
+          termExpr(literalTerm(selectedLetter)),
+        ] } },
+      ];
+      indexedWhere = graphTerm
+        ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...labelPatterns] }]
+        : [...where, ...labelPatterns];
+    }
     const projections: SparqlProjection[] = [{ expression: termExpr(target), as: variable("c1") }];
     if (searchText && textPatterns) {
       const tokens = searchText.match(/[\p{L}\p{N}_]+/gu) ?? [];
@@ -713,7 +767,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     const orderByList: SparqlOrder[] | undefined = shouldOrder
       ? (searchText ? [entityRankOrder(target)] : [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const }])
       : undefined;
-    query = buildSelectQuery({ directives, distinct: true, projections, where: scopedWhere, orderBy: orderByList, limit, offset });
+    query = buildSelectQuery({ directives, distinct: true, projections, where: indexedWhere, orderBy: orderByList, limit, offset });
   } else if (view === "list") {
     // Virtuoso FCT list view selects the RDF term. Its SQL/XML response
     // wrapper resolves the human-readable label; do not call the SQL-only

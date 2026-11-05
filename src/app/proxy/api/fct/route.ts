@@ -1,10 +1,11 @@
-import { logProxyCaller } from "@/lib/proxy-debug";
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
 import { compileFctXmlToSparql, type SparqlJsonResults, type SparqlBindingTerm } from "@/lib/fct-sparql-translator";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getDataserversGraph, getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
+import { proxyLog } from "@/lib/maestro-logger";
 
 
 function parseResults(text: string): SparqlJsonResults | null {
@@ -437,7 +438,8 @@ export async function POST(request: Request) {
     // S1TAT identifies a partial result set; its HTTP status alone must not
     // cause Maestro to discard the valid rows in the response body.
     if (!response.ok && sqlState !== "S1TAT") {
-      return fctError(`Virtuoso SPARQL endpoint returned HTTP ${response.status}${sqlState ? ` (${sqlState})` : ""}`, 502, sqlMessage || text.slice(0, 2000));
+      proxyLog("error", "fct.upstream", { status: response.status, sqlState, sqlMessage, responseBody: text.slice(0, 16000) });
+      return fctError(`Virtuoso SPARQL endpoint returned HTTP ${response.status}${sqlState ? ` (${sqlState})` : ""}`, response.status, sqlMessage || text.slice(0, 16000));
     }
 
     if (isDescribe) {
@@ -487,7 +489,8 @@ export async function POST(request: Request) {
     if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS" } });
   } catch (error) {
-    console.error("FCT-to-SPARQL API error:", error);
-    return fctError(describeUpstreamError(error, "Failed to compile or execute the FCT query as SPARQL."), stage === "compile" ? 400 : 502);
+    proxyLog("error", "fct.POST.failed", { stage, err: error, message: describeUpstreamError(error) });
+    const message = describeUpstreamError(error, "Failed to compile or execute the FCT query as SPARQL.");
+    return fctError(message, stage === "compile" ? 400 : /aborted due to timeout|timed? out/i.test(message) ? 504 : 502);
   }
 }

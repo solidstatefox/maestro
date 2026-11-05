@@ -1,3 +1,4 @@
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { requirePersonalLogin } from "@/lib/personal-guard";
 import { safeIri } from "@/lib/otc-runtime";
@@ -16,6 +17,7 @@ function jsonError(message: string, status: number): NextResponse {
 
 /** Imports OTC source triples and rule definitions to a caller-selected Personal named graph. */
 export async function POST(request: Request) {
+  logProxyCaller(request, "import.POST");
   const blocked = requirePersonalLogin(request);
   if (blocked) return blocked;
 

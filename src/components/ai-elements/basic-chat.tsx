@@ -2,27 +2,34 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
-import { ArrowUp, Bot, LoaderCircle, List, User, Plus, X, Download, ChevronDown, FileText, Terminal as TerminalIcon } from "lucide-react";
+import { ArrowUp, Bot, LoaderCircle, List, User, Plus, X, Download, ChevronDown, FileText, Terminal as TerminalIcon, CheckCircle2, AlertCircle, AlertTriangle, CircleDashed, Activity, Brain, Square } from "lucide-react";
 import { createPortal } from "react-dom";
 import { Attachment, AttachmentMedia, AttachmentContent, AttachmentTitle, AttachmentDescription, AttachmentActions, AttachmentAction, AttachmentGroup } from "@/components/ui/attachment";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Trace, TraceCollapsible, TraceCollapsibleTrigger, TraceCollapsibleContent, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
+import { Trace, TraceCollapsible, TraceCollapsibleTrigger, TraceCollapsibleContent, TraceIcon, TraceLine, TraceTitle, TraceDescription } from "@/components/ui/trace";
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { QWEN_THINKING_BUDGETS, type QwenThinkingBudget } from "@/lib/qwen-thinking";
 import { PromptInput, PromptInputTextarea, PromptInputSubmit } from "@/components/ai-elements/prompt-input";
-import { Task, TaskItem } from "@/components/ai-elements/task";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { appendAssistantActivity, readAssistantActivity, clearAssistantActivity, ASSISTANT_ACTIVITY_CHANGED, type AssistantActivity } from "@/lib/assistant-activity";
 
 type OtcProgressEvent = {
-  step: "shape" | "ask" | "select" | "shacl" | "qwen" | "liquid" | "cleanup";
-  status: "running" | "success" | "warning" | "error";
+  step: "shape" | "ask" | "select" | "shacl" | "qwen" | "liquid" | "cleanup" | "stop";
+  status: "running" | "success" | "warning" | "error" | "stopped";
   detail: string;
   rule?: string;
   shape?: string;
   message?: string;
   violations?: string[];
   counts?: { checked?: number; passed?: number; failed?: number; triples?: number };
+  live?: OtcLiveSnapshot;
+  receivedAt?: number;
+};
+type OtcLiveSnapshot = {
+  reasoning: string; content: string; input: number; output: number; total: number;
+  estimated: boolean; phase: "waiting" | "reasoning" | "response"; reasoningTokens?: number; thinkingBudget?: number;
 };
 type ChatRole = "user" | "assistant";
 type ChatMessage = {
@@ -33,8 +40,41 @@ type ChatMessage = {
   transcode?: { fileName: string; fileSize?: number; fileType?: string; uploadState?: "idle" | "uploading" | "processing" | "error" | "done"; uploadPercent?: number; inputGraph?: string; rulesGraph?: string; surveyTitle?: string; surveyIri?: string };
   surveyOptions?: Array<{ uri: string; title: string; description: string }>;
   otcProgress?: OtcProgressEvent[];
+  otcLive?: OtcLiveSnapshot;
+  otcFinished?: "success" | "error" | "stopped";
+  runStartedAt?: number;
+  runEndedAt?: number;
+  durationMs?: number;
 };
+/** Resolve old "running" events without discarding the original audit trail. */
+function resolvedOtcStatus(
+  events: OtcProgressEvent[], index: number, finished?: "success" | "error" | "stopped",
+): OtcProgressEvent["status"] {
+  const event = events[index];
+  if (event.status !== "running") return event.status;
+  const later = events.slice(index + 1);
+  // Prefer the terminal update for this exact operation, including its focus node.
+  const terminal = later.find(next =>
+    next.step === event.step && next.rule === event.rule &&
+    (!event.message || next.message === event.message) &&
+    (!event.shape || next.shape === event.shape) &&
+    next.status !== "running"
+  );
+  if (terminal) return terminal.status;
+  // A later phase implies this step has stopped running, even if the runtime
+  // reports its final summary later (for example after multiple SHACL rows).
+  if (later.some(next => next.step !== event.step)) return "success";
+  // A completed/failed request must never leave an indefinite spinner.
+  return finished === "error" ? "error" : finished === "stopped" ? "stopped" : finished === "success" ? "success" : "running";
+}
+
 type PendingPrompt = { id: number; text: string } | null;
+
+function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
 
 function formatAttachmentSize(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
@@ -139,6 +179,9 @@ export function BasicAssistantChat({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activity, setActivity] = useState<AssistantActivity[]>([]);
   const modelId = "qwen/qwen3.8-27b";
+  const [thinkingBudget, setThinkingBudget] = useState<QwenThinkingBudget>(0);
+  const thinkingIndex = QWEN_THINKING_BUDGETS.indexOf(thinkingBudget);
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   useEffect(() => {
     let mounted = true;
     const refresh = () => { void readAssistantActivity().then((rows) => { if (mounted) setActivity(rows); }).catch(() => {}); };
@@ -147,6 +190,20 @@ export function BasicAssistantChat({
     return () => { mounted = false; window.removeEventListener(ASSISTANT_ACTIVITY_CHANGED, refresh); };
   }, []);
   const [draft, setDraft] = useState("");
+  const [transcodePrefLoaded, setTranscodePrefLoaded] = useState(false);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("maestro-chat-transcode-mode") === "yes")
+        setDraft((current) => current.trim() ? current : "transcode ");
+    } catch { /* Private browsing may disable storage. */ }
+    setTranscodePrefLoaded(true);
+  }, []);
+  useEffect(() => {
+    if (!transcodePrefLoaded) return;
+    try {
+      window.localStorage.setItem("maestro-chat-transcode-mode", /^transcode\b/i.test(draft.trimStart()) ? "yes" : "no");
+    } catch { /* The mode still works without persistent storage. */ }
+  }, [draft, transcodePrefLoaded]);
   const [attachment, setAttachment] = useState<File | null>(null);
   // File bytes remain available for downloads only during this page session.
   // Saved chat history retains metadata, not potentially sensitive uploaded content.
@@ -194,6 +251,24 @@ export function BasicAssistantChat({
   useEffect(() => { setComposerHost(document.getElementById("maestro-assistant-composer-slot")); }, []);
   useEffect(() => { if (initialDraft) setDraft(initialDraft); }, [initialDraft]);
   const [loading, setLoading] = useState(false);
+  const currentFetchRef = useRef<AbortController | null>(null);
+  const currentOtcRef = useRef<XMLHttpRequest | null>(null);
+  const cancelledRef = useRef(false);
+  const activeRequestStartedAtRef = useRef<number | null>(null);
+  const [clockNow, setClockNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!loading) return;
+    setClockNow(Date.now());
+    const interval = window.setInterval(() => setClockNow(Date.now()), 250);
+    return () => window.clearInterval(interval);
+  }, [loading]);
+  const stopGeneration = () => {
+    cancelledRef.current = true;
+    currentFetchRef.current?.abort();
+    currentOtcRef.current?.abort();
+    setError("");
+  };
+  useEffect(() => () => { currentFetchRef.current?.abort(); currentOtcRef.current?.abort(); }, []);
   const [storageReady, setStorageReady] = useState(false);
   const [error, setError] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -237,7 +312,12 @@ export function BasicAssistantChat({
     const text = rawText.trim();
     if (!text || loading) return;
     setError("");
-    setDraft("");
+    cancelledRef.current = false;
+    const startedAt = Date.now();
+    activeRequestStartedAtRef.current = startedAt;
+    setClockNow(startedAt);
+    // Keep Transcode mode after sending; removing its badge explicitly exits it.
+    setDraft(/^transcode\b/i.test(text) ? "transcode " : "");
     const sentAttachment = attachment;
     setAttachment(null);
     if (fileRef.current) fileRef.current.value = "";
@@ -264,7 +344,9 @@ export function BasicAssistantChat({
         answer = "Please attach a Turtle (.ttl) document using the paperclip, then send your transcode request again.";
       } else if (isTranscode) {
         // Fetch the menu first. This endpoint performs no LLM requests.
-        const response = await fetch("/proxy/api/otc/chat", { cache: "no-store" });
+        const controller = new AbortController();
+        currentFetchRef.current = controller;
+        const response = await fetch("/proxy/api/otc/chat", { cache: "no-store", signal: controller.signal });
         const data = await response.json().catch(() => ({})) as {
           error?: string; rulesGraph?: string;
           surveys?: Array<{ uri: string; title: string; description: string }>;
@@ -287,9 +369,11 @@ export function BasicAssistantChat({
         setLoading(false);
         return;
       } else {
+        const controller = new AbortController();
+        currentFetchRef.current = controller;
         const response = await fetch("/api/assistant", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: nextMessages.map(({ role, content }) => ({ role, content })) }),
+          signal: controller.signal, method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: nextMessages.map(({ role, content }) => ({ role, content })), thinkingBudget }),
         });
         const payload = await response.json().catch(() => ({})) as {
           error?: string; message?: string;
@@ -305,11 +389,19 @@ export function BasicAssistantChat({
         createdAt: new Date().toISOString(),
         ...(usage ? { usage } : {}),
         ...(download ? { download } : {}),
+        durationMs: Date.now() - startedAt,
       };
       const completed = [...nextMessages, assistantMessage];
       messagesRef.current = completed;
       setMessages(completed);
     } catch (cause) {
+      if (cancelledRef.current) {
+        const stopped: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "Stopped", createdAt: new Date().toISOString(), durationMs: Date.now() - startedAt };
+        const updated = [...messagesRef.current, stopped];
+        messagesRef.current = updated;
+        setMessages(updated);
+        return;
+      }
       const message = cause instanceof Error ? cause.message : "The assistant request failed.";
       setError(message);
       void appendAssistantActivity([{
@@ -317,20 +409,26 @@ export function BasicAssistantChat({
         source: "Maestro", prompt: text, response: message, status: "error",
       }]).catch(() => {});
     } finally {
+      currentFetchRef.current = null;
+      activeRequestStartedAtRef.current = null;
       setLoading(false);
     }
-  }, [loading, attachment]);
+  }, [loading, attachment, thinkingBudget]);
 
   const runSelectedSurvey = useCallback(async (option: { uri: string; title: string }, menuId: string) => {
     const pending = pendingTranscode.current;
     if (!pending || loading) return;
     setError("");
+    cancelledRef.current = false;
+    const startedAt = Date.now();
+    activeRequestStartedAtRef.current = startedAt;
+    setClockNow(startedAt);
     setLoading(true);
     setSelectingSurvey(false);
     pendingTranscode.current = null;
     const prepared = messagesRef.current.map(message => {
       if (message.id === menuId) return { ...message, surveyOptions: undefined,
-        content: `Running selected survey: ${option.title}` };
+        content: `Running selected survey: ${option.title}`, runStartedAt: startedAt, runEndedAt: undefined, otcFinished: undefined };
       if (message.id === pending.messageId) return { ...message, transcode: {
         ...message.transcode!, fileName: pending.file.name,
         surveyTitle: option.title, surveyIri: option.uri,
@@ -351,6 +449,7 @@ export function BasicAssistantChat({
       form.set("prompt", pending.prompt);
       form.set("file", pending.file);
       form.set("transcoder", option.uri);
+      form.set("thinkingBudget", String(thinkingBudget));
       const streamState: { complete?: { status: number; result: unknown } } = {};
       const handleLine = (line: string) => {
         if (!line.trim()) return;
@@ -358,9 +457,11 @@ export function BasicAssistantChat({
           | { kind: "progress"; event: OtcProgressEvent }
           | { kind: "complete"; status: number; result: unknown };
         if (packet.kind === "progress") {
-          const updated = messagesRef.current.map(message => message.id === menuId ? {
-            ...message, otcProgress: [...(message.otcProgress ?? []), packet.event],
-          } : message);
+          const updated = messagesRef.current.map(message => message.id === menuId ? (
+            packet.event.live
+              ? { ...message, otcLive: packet.event.live }
+              : { ...message, otcProgress: [...(message.otcProgress ?? []), { ...packet.event, receivedAt: Date.now() }] }
+          ) : message);
           messagesRef.current = updated;
           setMessages(updated);
         } else streamState.complete = packet;
@@ -370,6 +471,7 @@ export function BasicAssistantChat({
       updateAttachmentStatus("uploading", 0);
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
+        currentOtcRef.current = xhr;
         let processed = 0;
         let buffer = "";
         let rejected = false;
@@ -423,6 +525,11 @@ export function BasicAssistantChat({
           ? "Please log in to Maestro before transcoding."
           : data.error || `Transcoding failed (HTTP ${completion.status}).`);
       }
+      // Mark the audit entry as settled even when the final event has no matching end event.
+      const settled = messagesRef.current.map(message => message.id === menuId
+        ? { ...message, otcFinished: "success" as const, runEndedAt: Date.now() } : message);
+      messagesRef.current = settled;
+      setMessages(settled);
       const completed = messagesRef.current.map(message => message.id === pending.messageId ? {
         ...message, transcode: { ...message.transcode!, inputGraph: data.inputGraph,
           rulesGraph: data.rulesGraph || message.transcode?.rulesGraph },
@@ -437,6 +544,20 @@ export function BasicAssistantChat({
       setMessages(completed);
       updateAttachmentStatus("done", 100);
     } catch (cause) {
+      if (cancelledRef.current) {
+        const stopped = messagesRef.current.map(message => message.id === menuId ? {
+          ...message, otcFinished: "stopped" as const, runEndedAt: Date.now(), content: `Stopped survey: ${option.title}`,
+          otcProgress: [...(message.otcProgress ?? []), { step: "stop" as const, status: "stopped" as const, detail: "Stopped by user" }],
+        } : message);
+        messagesRef.current = stopped;
+        setMessages(stopped);
+        updateAttachmentStatus("done");
+        return;
+      }
+      const settled = messagesRef.current.map(message => message.id === menuId
+        ? { ...message, otcFinished: "error" as const, runEndedAt: Date.now() } : message);
+      messagesRef.current = settled;
+      setMessages(settled);
       updateAttachmentStatus("error");
       const description = cause instanceof Error ? cause.message : "Transcoding failed.";
       setError(description);
@@ -445,9 +566,11 @@ export function BasicAssistantChat({
       messagesRef.current = failed;
       setMessages(failed);
     } finally {
+      currentOtcRef.current = null;
+      activeRequestStartedAtRef.current = null;
       setLoading(false);
     }
-  }, [loading]);
+  }, [loading, thinkingBudget]);
 
   useEffect(() => {
     if (!storageReady || !pendingPrompt || sentPendingIdRef.current === pendingPrompt.id) return;
@@ -474,6 +597,8 @@ export function BasicAssistantChat({
           pendingTranscode.current = null;
           setSelectingSurvey(false);
           setAttachment(null);
+          setDraft("");
+          try { window.localStorage.removeItem("maestro-chat-transcode-mode"); } catch { /* optional */ }
           setMessages([]);
           setError("");
           void clearAssistantActivity().catch(() => setError("Could not clear assistant activity history."));
@@ -514,32 +639,65 @@ export function BasicAssistantChat({
                 ].filter(Boolean).join("\n")}</pre></TraceCollapsibleContent>
               </TraceCollapsible>
             </Trace>}
-            {message.otcProgress && <Task className="mt-2 max-w-full text-xs">
-              <TraceCollapsible defaultOpen>
-                <TraceCollapsibleTrigger><TraceLine><TraceIcon><TerminalIcon className="size-4" /></TraceIcon>
-                  <TraceTitle>OTC transcoding · SHACL validation and survey</TraceTitle>
-                  <span className="text-muted-foreground">({message.otcProgress.length} events)</span>
-                </TraceLine></TraceCollapsibleTrigger>
-                <TraceCollapsibleContent><div className="max-h-80 space-y-1 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-xs" role="log" aria-label="OTC execution events">
-                  {message.otcProgress.map((event, index) => <TaskItem key={index} status={event.status} title={`${event.step.toUpperCase()}: ${event.detail}`}>
-                    <details className="pb-1">
-                    <summary className="cursor-pointer whitespace-pre-wrap break-words text-muted-foreground">
-                      Details
-                      <span className="sr-only" data-status={event.status}><span className={event.status === "error" ? "text-destructive" : event.status === "warning" ? "text-amber-600 dark:text-amber-400" : event.status === "success" ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}>
-                        {event.status === "running" ? "…" : event.status === "success" ? "✓" : event.status === "warning" ? "!" : "✕"}
-                      </span>{" "}[{event.step.toUpperCase()}] {event.detail}</span>
-                    </summary>
-                    <div className="ml-4 mt-1 space-y-1 whitespace-pre-wrap break-all text-muted-foreground">
-                      {event.rule && <div>Rule: {event.rule}</div>}
-                      {event.shape && <div>SHACL shape: {event.shape}</div>}
-                      {event.message && <div>Focus node: {event.message}</div>}
-                      {event.counts && <div>Counts: {JSON.stringify(event.counts)}</div>}
-                      {event.violations?.map((violation, i) => <div key={i} className="text-destructive">Violation: {violation}</div>)}
-                    </div>
-                  </details></TaskItem>)}
-                </div></TraceCollapsibleContent>
-              </TraceCollapsible>
-            </Task>}
+            {message.otcProgress && <Trace className="mt-2 max-w-full text-xs" role="log" aria-label="OTC transcoding steps" aria-live="polite" aria-relevant="additions">
+              <TraceLine className="border-b border-border/50">
+                <TraceIcon><Activity className="size-4" /></TraceIcon>
+                <TraceTitle>OTC transcoding</TraceTitle>
+                <TraceDescription>{message.otcProgress.length} steps{message.runStartedAt !== undefined ? ` · ${message.runEndedAt === undefined ? "Elapsed" : "Took"} ${formatElapsed((message.runEndedAt ?? clockNow) - message.runStartedAt)}` : ""}</TraceDescription>
+              </TraceLine>
+              {message.otcLive && <div className="border-b border-border/50 px-3 py-2 text-xs" aria-label="Live Qwen generation and token usage">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="font-medium">Tokens {message.otcLive.estimated ? "(estimated)" : "(provider reported)"}</span>
+                  <span className="tabular-nums">Input: {message.otcLive.input.toLocaleString()}</span>
+                  <span className="tabular-nums">Output: {message.otcLive.output.toLocaleString()}</span>
+                  {message.otcLive.reasoningTokens !== undefined && <span className="tabular-nums">Thinking: ~{message.otcLive.reasoningTokens.toLocaleString()} / {message.otcLive.thinkingBudget?.toLocaleString() ?? "unlimited"}</span>}
+                  <span className="font-semibold tabular-nums">Total: {message.otcLive.total.toLocaleString()}</span>
+                  {message.otcFinished === "success" ? <CheckCircle2 className="size-3.5 text-emerald-600" /> : message.otcFinished === "error" ? <AlertCircle className="size-3.5 text-destructive" /> : message.otcFinished === "stopped" ? <CircleDashed className="size-3.5 text-muted-foreground" /> : <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />}
+                </div>
+                {message.otcLive.reasoning && <TraceCollapsible className="mt-1" defaultOpen={false}>
+                  <TraceCollapsibleTrigger><TraceLine className="px-0 py-1"><TraceIcon><Brain className="size-3.5" /></TraceIcon><TraceTitle>Model reasoning</TraceTitle><TraceDescription>{message.otcLive.phase === "reasoning" ? "Streaming" : "Received"}</TraceDescription></TraceLine></TraceCollapsibleTrigger>
+                  <TraceCollapsibleContent className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words">{message.otcLive.reasoning}</TraceCollapsibleContent>
+                </TraceCollapsible>}
+                {message.otcLive.content && <TraceCollapsible className="mt-1" defaultOpen={false}>
+                  <TraceCollapsibleTrigger><TraceLine className="px-0 py-1"><TraceIcon><FileText className="size-3.5" /></TraceIcon><TraceTitle>Survey response</TraceTitle><TraceDescription>{message.otcFinished === "stopped" ? "Stopped" : message.otcFinished ? "Complete" : "Streaming bindings"}</TraceDescription></TraceLine></TraceCollapsibleTrigger>
+                  <TraceCollapsibleContent className="max-h-40 overflow-y-auto whitespace-pre-wrap break-all font-mono">{message.otcLive.content}</TraceCollapsibleContent>
+                </TraceCollapsible>}
+              </div>}
+              <div className="max-h-80 overflow-y-auto">
+                {message.otcProgress.map((event, index) => {
+                  const detailAvailable = Boolean(event.rule || event.shape || event.message || event.counts || event.violations?.length);
+                  const status = resolvedOtcStatus(message.otcProgress!, index, message.otcFinished);
+                  const statusIcon = status === "success"
+                    ? <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400" />
+                    : status === "error"
+                      ? <AlertCircle className="size-4 text-destructive" />
+                      : status === "warning"
+                        ? <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400" />
+                        : status === "stopped"
+                          ? <CircleDashed className="size-4 text-muted-foreground" />
+                        : <LoaderCircle className="size-4 animate-spin text-muted-foreground" />;
+                  const line = <TraceLine status={status === "stopped" ? undefined : status}>
+                    <TraceIcon>{statusIcon}</TraceIcon>
+                    <TraceTitle>{event.step === "stop" ? "Stopped" : event.step.toUpperCase()}</TraceTitle>
+                    <TraceDescription>{event.detail}</TraceDescription>
+                  </TraceLine>;
+                  return detailAvailable ? (
+                    <TraceCollapsible key={index} className="border-b border-border/40 last:border-0">
+                      <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
+                      <TraceCollapsibleContent>
+                        <div className="space-y-1 whitespace-pre-wrap break-all">
+                          {event.rule && <div>Rule: {event.rule}</div>}
+                          {event.shape && <div>SHACL shape: {event.shape}</div>}
+                          {event.message && <div>Focus node: {event.message}</div>}
+                          {event.counts && <div>Counts: {JSON.stringify(event.counts)}</div>}
+                          {event.violations?.map((violation, i) => <div key={i} className="text-destructive">Violation: {violation}</div>)}
+                        </div>
+                      </TraceCollapsibleContent>
+                    </TraceCollapsible>
+                  ) : <div key={index} className="border-b border-border/40 last:border-0">{line}</div>;
+                })}
+              </div>
+            </Trace>}
             {message.surveyOptions?.length ? <div className="mt-2 w-full max-w-md space-y-2">
               <p className="text-xs font-semibold text-muted-foreground">Choose one survey</p>
               <div className="flex w-full min-w-0 flex-col gap-2">
@@ -592,7 +750,7 @@ export function BasicAssistantChat({
             </AttachmentGroup>
           </InputGroupAddon>}
           <div className="flex min-w-0 items-start px-1">
-            {badgeDraft && <span className="ml-2 mt-3 shrink-0 rounded-full border bg-muted px-2 py-0.5 text-xs font-medium" title="Backspace or Delete at the start of the text removes transcode">transcode</span>}
+            {badgeDraft && <span className="ml-2 mt-3 inline-flex shrink-0 items-center gap-1 rounded-full border bg-muted px-2 py-0.5 text-xs font-medium" title="Transcode mode — remove to return to normal chat">transcode <button type="button" aria-label="Exit Transcode mode" title="Exit Transcode mode" onClick={() => setDraft(composerText)} className="rounded-full p-0.5 hover:bg-accent"><X className="size-3" aria-hidden="true" /></button></span>}
             <PromptInputTextarea
               ref={inputRef} value={composerText} onChange={event => updateComposer(event.currentTarget.value)}
               onKeyDown={event => {
@@ -620,10 +778,32 @@ export function BasicAssistantChat({
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
+            <div className="relative shrink-0" role="group" aria-label="Qwen thinking budget"
+              onMouseEnter={() => setThinkingExpanded(true)} onMouseLeave={() => setThinkingExpanded(false)}
+              onFocusCapture={() => setThinkingExpanded(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setThinkingExpanded(false); }}>
+              <InputGroupButton type="button" variant="ghost" size="sm" aria-expanded={thinkingExpanded}
+                aria-label={`Thinking budget: ${thinkingBudget === 0 ? "Off" : `${thinkingBudget.toLocaleString()} tokens`}`}
+                onClick={() => setThinkingExpanded(value => !value)}>
+                Thinking: {thinkingBudget === 0 ? "Off" : `${thinkingBudget.toLocaleString()}`} <ChevronDown className="size-3" />
+              </InputGroupButton>
+              {thinkingExpanded && <div className="absolute bottom-full right-0 z-50 w-60 rounded-lg border bg-popover p-3 shadow-lg">
+                <div className="mb-2 flex justify-between text-xs text-muted-foreground">
+                  <span>Thinking budget</span><span className="tabular-nums">{thinkingBudget === 0 ? "Off" : `${thinkingBudget.toLocaleString()} tokens`}</span>
+                </div>
+                <Slider min={0} max={QWEN_THINKING_BUDGETS.length - 1} step={1}
+                  value={[thinkingIndex]} onValueChange={(values) => {
+                    const selected = QWEN_THINKING_BUDGETS[values[0]];
+                    if (selected !== undefined) setThinkingBudget(selected);
+                  }} disabled={loading} aria-label="Thinking budget" />
+                <div className="mt-2 flex justify-between text-[10px] tabular-nums text-muted-foreground" aria-hidden="true">
+                  <span>Off</span><span>512</span><span>1K</span><span>4K</span><span>8K</span>
+                </div>
+              </div>}
+            </div>
             <InputGroupButton type="button" variant="outline" size="icon-sm" className="rounded-full" onClick={onShowResults} aria-label="Back to results" title="Back to results"><List className="size-4" /></InputGroupButton>
-            <PromptInputSubmit disabled={!draft.trim() || loading || !storageReady || selectingSurvey}>
-              {loading ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
-            </PromptInputSubmit>
+            {loading ? <InputGroupButton type="button" variant="default" size="icon-sm" className="rounded-full"
+              onClick={stopGeneration} title="Stop generation" aria-label="Stop generation"><Square className="size-3.5 fill-current" /></InputGroupButton>
+              : <PromptInputSubmit disabled={!draft.trim() || !storageReady || selectingSurvey}><ArrowUp className="size-4" /></PromptInputSubmit>}
           </InputGroupAddon>
         </PromptInput>
       </form>, composerHost)}

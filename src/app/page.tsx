@@ -6,6 +6,7 @@ import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { configureMaestroBrowserLogging, type BrowserLogLevel } from "@/lib/maestro-client-logging";
 import type { ReactNode, Dispatch, SetStateAction } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +31,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, Eye, EyeOff, Info } from "lucide-react";
+import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, Server, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, Eye, EyeOff, Info } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix } from "@/lib/personal-auth";
 import { cachedFetchFct, clearClientQueryCache } from "@/lib/client-query-cache";
@@ -1455,6 +1456,24 @@ function parseFctQueryXml(xml: string): FctQueryTree | null {
 
 export default function Home() {
   const [controlsSheetOpen, setControlsSheetOpen] = useState(false);
+  const [browserLogging, setBrowserLogging] = useState(false);
+  const [browserLogLevel, setBrowserLogLevel] = useState<BrowserLogLevel>("debug");
+  const [browserLogPreferencesLoaded, setBrowserLogPreferencesLoaded] = useState(false);
+  useEffect(() => {
+    void initializeMaestroStorage().then(() => {
+      setBrowserLogging(maestroStorageGet("maestro-browser-logging") === "yes");
+      const configured = maestroStorageGet("maestro-browser-log-level");
+      if (["trace", "debug", "info", "warn", "error", "fatal"].includes(configured ?? ""))
+        setBrowserLogLevel(configured as BrowserLogLevel);
+      setBrowserLogPreferencesLoaded(true);
+    });
+  }, []);
+  useEffect(() => {
+    if (!browserLogPreferencesLoaded) return;
+    configureMaestroBrowserLogging(browserLogging, browserLogLevel);
+    maestroStorageSet("maestro-browser-logging", browserLogging ? "yes" : "no");
+    maestroStorageSet("maestro-browser-log-level", browserLogLevel);
+  }, [browserLogging, browserLogLevel, browserLogPreferencesLoaded]);
   const [clearCacheDialogOpen, setClearCacheDialogOpen] = useState(false);
   const [deleteHistoryDialogOpen, setDeleteHistoryDialogOpen] = useState(false);
   const [isDeletingHistory, setIsDeletingHistory] = useState(false);
@@ -1508,7 +1527,7 @@ export default function Home() {
   const [loginOauthProfileUrl, setLoginOauthProfileUrl] = useState("");
   const [loginOauthUserName, setLoginOauthUserName] = useState("");
   const [loginWebIdUri, setLoginWebIdUri] = useState("");
-  const [loginRememberMe, setLoginRememberMe] = useState(true);
+  const loginRememberMe = true;
   const [loginTesting, setLoginTesting] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [isFetchingAvatar, setIsFetchingAvatar] = useState(false);
@@ -1953,6 +1972,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
 
   const [personalWidgets, setPersonalWidgets] = useState<PersonalWidget[]>([]);
+  // SHACL-discovered widgets use the ordinary Personal facet machinery.
+  // This set changes only the label icon, not widget query/filter behavior.
+  const [shaclFacetIds, setShaclFacetIds] = useState<Set<string>>(new Set());
   // Tutorial previews are presentation-only and never mutate or persist the query.
   const [tutorialMode, setTutorialMode] = useState(false);
   const [facetHoverPreview, setFacetHoverPreview] = useState<{
@@ -3459,6 +3481,25 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const propertyFacetQueryXml = queryWithoutPagingXml("properties");
   const classFacetQueryXml = queryWithoutPagingXml("classes", isGroupByCategory && !categoriesTreeMode, categoriesTreeMode);
   const roleFacetQueryXml = queryWithoutPagingXml("properties-in");
+  // The Alphabet system facet queries a clone of the live scope and never
+  // constrains its own counts by the currently selected letter.
+  const alphabetQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
+    type: "alphabet", index: "", indexLabels: selectedNamePropertyUris.join(" "), limit: "26", offset: "0",
+  }));
+  const currentView = (() => {
+    const seek = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
+      for (const node of nodes) {
+        if (node.name === "view") return node;
+        const child = seek(node.children);
+        if (child) return child;
+      }
+    };
+    return seek(queryTree.children);
+  })();
+  const alphabetIndex = currentView?.attributes.index || "";
+  const [alphabetCounts, setAlphabetCounts] = useState<Record<string, number>>({});
+  const [alphabetError, setAlphabetError] = useState("");
+  const [isLoadingAlphabet, setIsLoadingAlphabet] = useState(false);
   // Ask FCT for the total independently of the current results page. The
   // count view uses the same active scope and filters, but never the page offset.
   const queryCountXml = serializeFctQuery(
@@ -3481,6 +3522,48 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       (queryGraphServer === endpoint.id || queryGraphServer === endpoint.url || queryGraphServer === endpoint.label)
     ))
   );
+
+  // A-Z counts are computed over the unrestricted view, using precisely the
+  // label properties selected beside the root search field.
+  useEffect(() => {
+    if (!selectedEndpointId || !endpointReadyForQuery) return;
+    const controller = new AbortController();
+    setIsLoadingAlphabet(true);
+    setAlphabetError("");
+    void (async () => {
+      try {
+        const response = await cachedFetchFct("/proxy/api/fct", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("alphabet-facet", "AlphabetSystemFacet") },
+          body: alphabetQueryXml,
+        });
+        const payload = await readFctResponse(response);
+        const next: Record<string, number> = {};
+        for (const row of payload.rows) {
+          const key = row[0]?.value?.toUpperCase();
+          const count = Number(row[1]?.value ?? 0);
+          if (key && /^[A-Z]$/.test(key) && Number.isFinite(count)) next[key] = count;
+        }
+        if (!controller.signal.aborted) setAlphabetCounts(next);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setAlphabetCounts({});
+          setAlphabetError(error instanceof Error ? error.message : "Could not load alphabet counts.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setIsLoadingAlphabet(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [alphabetQueryXml, selectedEndpointId, endpointReadyForQuery]);
+
+  useEffect(() => {
+    // Keep the view's persisted index label predicates consistent with changes
+    // to the user's selected root search label properties.
+    if (!alphabetIndex) return;
+    const selected = selectedNamePropertyUris.join(" ");
+    if ((currentView?.attributes.indexLabels ?? "") !== selected) setNodeAttribute("query-view", "indexLabels", selected);
+  }, [alphabetIndex, currentView?.attributes.indexLabels, selectedNamePropertyUris.join(" ")]);
 
   // Keep the active request identity current for stale-response protection, but
   // do not clear widgets merely because arbitrary query state changed. The
@@ -3626,6 +3709,25 @@ useEffect(() => {
     ? (resultsPageComplete ? results.length : null)
     : Math.max(resultsTotalCount, results.length);
   const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string; direction: "property" | "property-of" }[]>([]);
+  // Graph provenance is discovered separately. The unfiltered FCT DESCRIBE remains authoritative.
+  const [recordGraphs, setRecordGraphs] = useState<string[]>([]);
+  const [selectedRecordGraph, setSelectedRecordGraph] = useState("");
+  const [selectedRecordAuthor, setSelectedRecordAuthor] = useState("");
+  const [recordGraphError, setRecordGraphError] = useState("");
+  const [loadingRecordGraphs, setLoadingRecordGraphs] = useState(false);
+  const [loadingRecordAuthors, setLoadingRecordAuthors] = useState(false);
+  const [recordAuthorError, setRecordAuthorError] = useState("");
+  // A named graph's family is its full IRI before the first fragment delimiter.
+  // Its #ID remains essential for physical named-graph selection and authorship.
+  type RecordGraphAuthor = { graph: string; author: string; predicate: string };
+  const [recordGraphAuthors, setRecordGraphAuthors] = useState<RecordGraphAuthor[]>([]);
+  const recordGraphFamily = (iri: string): string => iri.split("#", 1)[0];
+  const recordGraphOptions = Array.from(new Set(recordGraphs.map(recordGraphFamily)));
+  const graphsInSelectedFamily = recordGraphs.filter((graph) =>
+    !selectedRecordGraph || recordGraphFamily(graph) === selectedRecordGraph
+  );
+  const recordAuthors = recordGraphAuthors.filter((entry) => graphsInSelectedFamily.includes(entry.graph));
+
   type RecordPolicyOption = { uri: string; label: string; recordShape: string; templates: { uri: string; label: string }[]; template: string | null };
   const [recordPolicies, setRecordPolicies] = useState<RecordPolicyOption[]>([]);
   const [recordPolicy, setRecordPolicy] = useState<RecordPolicyOption | null>(null);
@@ -4510,6 +4612,69 @@ setGraphFacets(graphs);
   const selectedResult = visibleResultsPage.find((item) => item.uri === selectedUri);
   const selectedGroupRecord = groupValues.find((item) => item.uri === selectedUri);
 
+  // The graph membership request is independent of optional author metadata.
+  // Always send the authoritative query address; endpoint selection must not
+  // race the fct_endpoint cookie when a share URL restores a different server.
+  useEffect(() => {
+    setRecordGraphs([]);
+    setRecordGraphAuthors([]);
+    setSelectedRecordGraph("");
+    setSelectedRecordAuthor("");
+    setRecordGraphError("");
+    setRecordAuthorError("");
+    if (!selectedUri || !selectedEndpointId) { setLoadingRecordGraphs(false); return; }
+    const controller = new AbortController();
+    setLoadingRecordGraphs(true);
+    void (async () => {
+      try {
+        const response = await fetch("/proxy/api/record-graphs", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-discovery", "RecordGraphs") },
+          body: JSON.stringify({ iri: selectedUri, addr: queryTree.attributes.addr, operation: "graphs" }),
+        });
+        const data = await response.json() as { graphs?: string[]; error?: string };
+        if (!response.ok) throw new Error(data.error || "Could not discover record graphs.");
+        if (!controller.signal.aborted) setRecordGraphs(data.graphs ?? []);
+      } catch (error) {
+        if (!controller.signal.aborted) setRecordGraphError(error instanceof Error ? error.message : "Could not discover record graphs.");
+      } finally {
+        if (!controller.signal.aborted) setLoadingRecordGraphs(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [selectedUri, selectedEndpointId, queryTree.attributes.addr]);
+
+  // Load author provenance only after the user selects a graph family.
+  // Slow metadata queries must never delay the Graph dropdown.
+  useEffect(() => {
+    setRecordGraphAuthors([]);
+    setRecordAuthorError("");
+    setSelectedRecordAuthor("");
+    if (!selectedRecordGraph || !graphsInSelectedFamily.length || !selectedUri) {
+      setLoadingRecordAuthors(false);
+      return;
+    }
+    const controller = new AbortController();
+    setLoadingRecordAuthors(true);
+    void (async () => {
+      try {
+        const response = await fetch("/proxy/api/record-graphs", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-author-discovery", "RecordAuthors") },
+          body: JSON.stringify({ iri: selectedUri, addr: queryTree.attributes.addr, operation: "authors", graphs: graphsInSelectedFamily }),
+        });
+        const data = await response.json() as { authors?: RecordGraphAuthor[]; error?: string };
+        if (!response.ok) throw new Error(data.error || "Could not discover graph authors.");
+        if (!controller.signal.aborted) setRecordGraphAuthors(data.authors ?? []);
+      } catch (error) {
+        if (!controller.signal.aborted) setRecordAuthorError(error instanceof Error ? error.message : "Could not discover graph authors.");
+      } finally {
+        if (!controller.signal.aborted) setLoadingRecordAuthors(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [selectedUri, selectedRecordGraph, recordGraphs, queryTree.attributes.addr]);
+
   // Load the selected resource once through the FCT DESCRIBE view; pagination is local to
   // the returned property/value pairs and does not trigger another server query.
   useEffect(() => {
@@ -4527,6 +4692,23 @@ setGraphFacets(graphs);
     async function loadDescription() {
       try {
         const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+        let rows: { property: string; value: string; direction: "property" | "property-of" }[] = [];
+        if (selectedRecordGraph || selectedRecordAuthor) {
+          if (recordGraphs.length) {
+            const response = await fetch("/proxy/api/record-graphs", {
+              method: "POST", cache: "no-store", signal: controller.signal,
+              headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-filtered-describe", "RecordDescriptionGraph") },
+              body: JSON.stringify({ iri: selectedUri, operation: "describe", addr: queryTree.attributes.addr, graph: selectedRecordGraph, authorGraph: selectedRecordAuthor }),
+            });
+            const data = await response.json() as { rows?: { subject: string; predicate: string; object: string; objectType: string }[]; error?: string };
+            if (!response.ok) throw new Error(data.error || "Graph-filtered DESCRIBE failed.");
+            rows = (data.rows ?? []).flatMap((triple) => {
+              const direction = triple.subject === selectedUri ? "property" : triple.object === selectedUri ? "property-of" : null;
+              if (!direction) return [];
+              return [{ property: triple.predicate, value: direction === "property" ? triple.object : triple.subject, direction }];
+            });
+          }
+        } else {
         const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="30" offset="0"/></query>`;
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
@@ -4537,7 +4719,7 @@ setGraphFacets(graphs);
         });
         const data = await readFctResponse(response);
         if (!cancelled) rememberShortforms(data?.shortforms);
-        const rows = data.describe.flatMap((triple) => {
+        rows = data.describe.flatMap((triple) => {
           const property = triple.predicate.value;
           const subject = triple.subject?.value;
           const object = triple.object.termType === "bnode" ? `_:${triple.object.value}` : triple.object.value;
@@ -4548,6 +4730,7 @@ setGraphFacets(graphs);
               : null;
           return property && object && direction ? [{ property, value: object, direction }] : [];
         });
+        }
         if (!cancelled) setDescribedRecord(rows);
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
@@ -4560,7 +4743,7 @@ setGraphFacets(graphs);
     }
     void loadDescription();
     return () => { cancelled = true; controller.abort(); };
-  }, [selectedUri, selectedEndpointId, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"]]);
+  }, [selectedUri, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, recordGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"]]);
 
   // Discover a record's class policy from the personal SPARQL server after its DESCRIBE data identifies rdf:type values.
   useEffect(() => {
@@ -4683,6 +4866,61 @@ setGraphFacets(graphs);
       const payload = await response.json() as { report?: { conforms: boolean; complete: boolean; violations: { path: string; message: string; value?: string }[]; unsupportedConstraints: string[]; message: string }; error?: string };
       if (!response.ok || !payload.report) throw new Error(payload.error || `SHACL validation returned HTTP ${response.status}.`);
       setRecordValidation(payload.report);
+      // Validate is the sole trigger for ingesting SHACL-discovered Personal facets.
+      // Query clones preserve the live scope but cannot mutate its view.
+      try {
+        const candidateClasses = classFacets.map((item) => item.uri);
+        const candidateProperties = propertyFacets.map((item) => item.uri);
+        const candidateRoles = roleFacets.map((item) => item.uri);
+        const facetResponse = await fetch("/proxy/api/policies", {
+          method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-shacl-facet-ingestion", "RecordShaclFacets") },
+          body: JSON.stringify({
+            action: "facet-discover", recordShape: policyOverride.recordShape,
+            classes: candidateClasses, properties: candidateProperties, roles: candidateRoles,
+            classQuery: classFacetQueryXml, propertyQuery: propertyFacetQueryXml, roleQuery: roleFacetQueryXml,
+          }),
+        });
+        const facetPayload = await facetResponse.json() as { facets?: { uri: string; direction: "forward" | "reverse"; label: string }[]; error?: string };
+        if (!facetResponse.ok) throw new Error(facetPayload.error || `SHACL facet discovery returned HTTP ${facetResponse.status}.`);
+        // Replace only the current view's Personal filters; preserve the
+        // relationship path carrying <view>, root classes and other scopes.
+        const ids = new Set<string>();
+        const discovered = (facetPayload.facets ?? []).filter((facet) => facet.uri && (facet.direction === "forward" || facet.direction === "reverse"));
+        for (const facet of discovered) ids.add(`${facet.direction}:${facet.uri}`);
+        const activePath = getPropertyPath();
+        const currentScopeId = activePath[activePath.length - 1]?.id ?? null;
+        // First remove only filter nodes (not navigational relationships).
+        const clearScope = (nodes: FctQueryNode[]): FctQueryNode[] => nodes
+          .filter((node) => !(
+            (node.name === "property" && node.id.startsWith("property-filter-")) ||
+            (node.name === "property-of" && node.id.startsWith("role-filter-"))
+          ));
+        let nextTree: FctQueryTree;
+        if (currentScopeId) {
+          const rewrite = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => node.id === currentScopeId
+            ? { ...node, children: clearScope(node.children) }
+            : { ...node, children: rewrite(node.children) });
+          nextTree = { ...queryTree, children: rewrite(queryTree.children) };
+        } else {
+          nextTree = { ...queryTree, children: clearScope(queryTree.children) };
+        }
+        for (const facet of discovered) {
+          nextTree = facet.direction === "forward"
+            ? fctQueryTreeApi.addProperty(nextTree, facet.uri, currentScopeId)
+            : fctQueryTreeApi.setRoleFilter(nextTree, facet.uri, true);
+        }
+        replaceQueryTree(nextTree);
+        const previousScopeIds = new Set([
+          ...getActiveViewPropertyFilters(queryTree).map((node) => `forward:${node.attributes.iri}`),
+          ...getActiveViewRoleFilters(queryTree).map((node) => `reverse:${node.attributes.iri}`),
+        ]);
+        setShaclFacetIds((current) => new Set([...current].filter((id) => !previousScopeIds.has(id)).concat([...ids])));
+        if (ids.size) setDefaultLeftTab("personal");
+      } catch (facetError) {
+        console.warn("SHACL facet ingestion failed after record validation:", facetError);
+        setRecordPolicyError(facetError instanceof Error ? `Validation completed, but SHACL facet ingestion failed: ${facetError.message}` : "SHACL facet ingestion failed.");
+      }
     } catch (error) {
       setRecordPolicyError(error instanceof Error ? error.message : "Could not validate this record.");
     } finally {
@@ -6543,7 +6781,7 @@ useEffect(() => {
         className="mb-1 rounded-b-none border-b pb-1.5 text-xs font-medium text-foreground"
       >
         <span className="max-w-56 truncate">
-          {summary?.label && summary.label !== "—" ? `${isBound ? "i.e." : "e.g."} ${ellipsize(summary.label, 40).replace(/[’']s$/u, "")}’s` : "Example loading…"}
+          {summary?.label && summary.label !== "—" ? `${isBound ? "i.e." : "e.g."} ${ellipsize(summary.label, 40).replace(/[’']s$/u, "")}` : "Example loading…"}
         </span>
       </DropdownMenuItem>
     );
@@ -6895,6 +7133,7 @@ useEffect(() => {
                       else navigateIntoRelationship(widget.uri, "forward");
                     }}
                   >
+                    {shaclFacetIds.has(`forward:${widget.uri}`) && <ClipboardCheck className="mr-1 inline size-4 shrink-0" aria-label="SHACL-discovered facet" />}
                     {isGroupByFacet && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                     {widget.excluded && <CircleSlash className="mr-1 inline size-3.5 shrink-0" aria-label="Excluded" />}
                     {toLabel(widget.uri, "Property")}
@@ -8007,19 +8246,7 @@ useEffect(() => {
                 </Tabs>
               </div>
 
-              <div className="flex items-center space-x-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="personal-remember-me"
-                  name="remember"
-                  checked={loginRememberMe}
-                  onChange={(e) => setLoginRememberMe(e.target.checked)}
-                  className="size-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
-                />
-                <Label htmlFor="personal-remember-me" className="text-sm font-normal cursor-pointer">
-                  Remember me (store encrypted credentials locally)
-                </Label>
-              </div>
+              <p className="pt-1 text-xs text-muted-foreground">Maestro keeps you signed in across browser and server restarts until you log out, subject to your graph server's credential validity.</p>
 
               {loginError && (
                 <div className="rounded-md border border-destructive/20 bg-destructive/10 p-2 text-xs text-destructive">
@@ -8084,6 +8311,25 @@ useEffect(() => {
                   <p className="mt-1 text-xs text-muted-foreground">Preview facets and records on hover without changing the query.</p>
                 </div>
                 <Switch id="maestro-tutorial-mode" checked={tutorialMode} onCheckedChange={(enabled) => { setTutorialMode(enabled); if (!enabled) clearTutorialPreview(); }} aria-label="Tutorial mode" />
+              </div>
+              <div className="flex flex-col gap-3 rounded-md border p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <Label htmlFor="maestro-browser-logging">Logging</Label>
+                    <p className="mt-1 text-xs text-muted-foreground">Send proxy requests, responses and diagnostic errors to the browser Console.</p>
+                  </div>
+                  <Switch id="maestro-browser-logging" checked={browserLogging} onCheckedChange={setBrowserLogging} aria-label="Browser Console logging" />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <Label htmlFor="maestro-browser-log-level">Log level</Label>
+                  <select id="maestro-browser-log-level" value={browserLogLevel} disabled={!browserLogging}
+                    className="rounded-md border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
+                    onChange={(event) => setBrowserLogLevel(event.target.value as BrowserLogLevel)}>
+                    {(["trace", "debug", "info", "warn", "error", "fatal"] as BrowserLogLevel[]).map((level) =>
+                      <option key={level} value={level}>{level[0].toUpperCase() + level.slice(1)}</option>
+                    )}
+                  </select>
+                </div>
               </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <Label>Appearance</Label>
@@ -8421,13 +8667,13 @@ useEffect(() => {
                 <Tooltip><TooltipTrigger render={<Badge
                   variant="outline"
                   onClick={toggleBreadcrumbBadgeMode}
-                  className="flex max-w-52 items-center gap-1 whitespace-nowrap bg-background text-[10px] font-normal leading-3 cursor-pointer hover:bg-accent select-none"
+                  className={`flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3 cursor-pointer select-none ${breadcrumbBadgeMode === "classes" ? "border-blue-400/70 bg-blue-50 text-blue-800 hover:bg-blue-100 dark:border-blue-600 dark:bg-blue-950/50 dark:text-blue-200" : "bg-background hover:bg-accent"}`}
                   aria-label="Click to toggle category or record metadata"
                 >
                   <span className="max-w-32 truncate">
   <em>
   {rootUriValues.length > 0 ? "i.e." : "e.g."}{" "}
-  {ellipsize(breadcrumbPreviewSummaries["query-root"].label || "—", 28)}{rootBadgePossessive}
+  {ellipsize(breadcrumbPreviewSummaries["query-root"].label || "—", 28)}{breadcrumbBadgeMode === "classes" ? "" : rootBadgePossessive}
 </em>
 </span>
                   <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
@@ -8489,12 +8735,12 @@ useEffect(() => {
                       <Tooltip><TooltipTrigger render={<Badge
                         variant="outline"
                         onClick={toggleBreadcrumbBadgeMode}
-                        className="flex max-w-52 items-center gap-1 whitespace-nowrap bg-background text-[10px] font-normal leading-3 cursor-pointer hover:bg-accent select-none"
+                        className={`flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3 cursor-pointer select-none ${breadcrumbBadgeMode === "classes" ? "border-blue-400/70 bg-blue-50 text-blue-800 hover:bg-blue-100 dark:border-blue-600 dark:bg-blue-950/50 dark:text-blue-200" : "bg-background hover:bg-accent"}`}
                         aria-label="Click to toggle category or record metadata"
                       >
                         <span className="max-w-32 truncate">
   <em>
-  {breadcrumbBoundValues.length > 0 ? "i.e." : "e.g."} {ellipsize(summary.label || "—", 28)}{breadcrumbHasSuccessor && !summary.zeroClasses && summary.label && summary.label !== "—" ? "’s" : ""}
+  {breadcrumbBoundValues.length > 0 ? "i.e." : "e.g."} {ellipsize(summary.label || "—", 28)}{breadcrumbBadgeMode !== "classes" && breadcrumbHasSuccessor && !summary.zeroClasses && summary.label && summary.label !== "—" ? "’s" : ""}
 </em>
 </span>
                         <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
@@ -8789,13 +9035,19 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
       )
     : [];
                       const selectedKeys = new Set(selectedItems.map((item) => item.key));
+                      // On the wholly unbound root, the per-candidate count
+                      // probes cannot reliably suppress the returned facet
+                      // enumeration. Keep the actual list from FCT instead.
+                      const emptyRootFacetScope = isRootView && !queryTree.children.some((node) =>
+                        (node.name === "text" && Boolean(node.text?.trim())) ||
+                        ["class", "property", "property-of", "value"].includes(node.name));
                       const facetListStale = group === "Classes" ? isLoadingClasses : false;
                       const unselectedItems = items.filter((item) => {
                         if (selectedKeys.has(item.key)) return false;
                         if (group !== "Properties" && group !== "Roles") return true;
                         const countKind: DistinctCountKind = group === "Properties" ? "property" : "role";
                         const countQuery = distinctCountQueryFor(queryTree, countKind, item.key);
-                        return facetCandidateCounts[countQuery] !== 0;
+                        return emptyRootFacetScope || facetCandidateCounts[countQuery] !== 0;
                       });
 
                       const currentPage =
@@ -8842,6 +9094,15 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                           key={group}
                           className="mb-5"
                         >
+                          {group === "Properties" && (
+                            <button type="button"
+                              className="mb-2 ml-3 inline-flex items-center gap-1 rounded border px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
+                              aria-pressed={isFacetExcluded("Properties", RDF_TYPE_URI)}
+                              onClick={() => handleFacetShiftClick("Properties", RDF_TYPE_URI, selectedProperties.has(RDF_TYPE_URI))}
+                              title="Exclude rdf:type at the current view">
+                              <CircleSlash className="size-3.5" aria-hidden="true" /> Not rdf:type
+                            </button>
+                          )}
                           <div
                             className={`group/header flex w-full items-center gap-1 rounded-t-md border-b overflow-hidden ${group === "Properties" || group === "Roles" ? "mb-2" : ""}`}
                             style={{ backgroundColor: CONFIGURE_HEADER_BACKGROUND_COLOR, borderColor: CONFIGURE_HEADER_BORDER_COLOR }}
@@ -9359,6 +9620,7 @@ onMouseLeave={() => {
                                   onMouseLeave={clearTutorialPreview}
                                   onClick={() => navigateToPropertyPath(roleNode.id)}
                                 >
+                                  {shaclFacetIds.has(`reverse:${uri}`) && <ClipboardCheck className="mr-1 inline size-4 shrink-0" aria-label="SHACL-discovered facet" />}
                                   {isGroupByRole && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                                   {excluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                                   {label}
@@ -9532,6 +9794,7 @@ onMouseLeave={() => {
                   <span className="shrink-0 text-muted-foreground">
                     Group <strong className="font-semibold text-foreground">{isCountingResults || effectiveResultsTotalCount === null ? "…" : shortenCount(effectiveResultsTotalCount)}</strong> results by:
                   </span>
+                  <div className="relative flex min-w-[8rem] max-w-full flex-1 items-center">
                   <select
                     id="groups-property-select"
                     aria-label="Group results by property"
@@ -9542,10 +9805,12 @@ onMouseLeave={() => {
                       setGroupByPropertyUri(value);
                       setCentralTab(value ? "groups" : "results");
                     }}
-                    className="min-w-[8rem] max-w-full flex-1 rounded-md border border-input bg-background py-2 pl-3 pr-5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                    className="w-full min-w-0 appearance-none rounded-md border border-input bg-background py-2 pl-3 pr-9 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {groupByOptions.map((option) => <option key={option.key || "none"} value={option.key}>{option.label}</option>)}
                   </select>
+                  <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 size-4 text-muted-foreground" />
+                  </div>
                   <label htmlFor="results-page-size" className="shrink-0 text-muted-foreground">in pages of</label>
                   <select
                     id="results-page-size"
@@ -9598,6 +9863,26 @@ onMouseLeave={() => {
                   {selectedGroupByOption ? <><span aria-hidden="true" className="mx-1 h-6 border-l border-border" /><span className="shrink-0 text-muted-foreground">{groupValuesLoading ? "…" : `${visibleGroupValues.length} ${visibleGroupValues.length === 1 ? "group" : "groups"}`}</span></> : null}
                 </div>
               </div>
+
+              {centralTab === "results" && (
+                <div id="maestro-alphabet" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2" aria-label="Alphabetical browse by selected label properties">
+                  {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0).map((letter) => (
+                    <button key={letter} type="button" aria-pressed={alphabetIndex === letter}
+                      disabled={isLoadingAlphabet || !!alphabetError || !alphabetCounts[letter] && alphabetIndex !== letter}
+                      className={`rounded-md border px-2 py-1 text-xs hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 ${alphabetIndex === letter ? "border-primary bg-primary text-primary-foreground" : "border-border"}`}
+                      onClick={() => {
+                        setNodeAttribute("query-view", "indexLabels", selectedNamePropertyUris.join(" "));
+                        setNodeAttribute("query-view", "index", alphabetIndex === letter ? null : letter);
+                        setResultsUiPage(0); setResults([]); setResultsPage(resultsBatchSize, 0);
+                      }}>
+                      {letter} <span className="opacity-60" aria-hidden="true">|</span> {alphabetCounts[letter] ?? 0}
+                    </button>
+                  ))}
+                  {alphabetIndex && <button type="button" className="ml-1 text-xs underline underline-offset-2" onClick={() => { setNodeAttribute("query-view", "index", null); setResultsPage(resultsBatchSize, 0); }}>All</button>}
+                  {isLoadingAlphabet && <span className="text-xs text-muted-foreground">Loading letters…</span>}
+                  {alphabetError && <span className="text-xs text-destructive" title={alphabetError}>Alphabet unavailable: {alphabetError}</span>}
+                </div>
+              )}
 
               {(centralTab === "results" && effectiveResultsTotalCount !== null && effectiveResultsTotalCount > resultsPageSize || centralTab === "groups" && selectedGroupByOption && (groupValues.length > resultsPageSize || groupHasMoreBatches)) && (
                 <div className="flex min-h-[42px] shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs">
@@ -10043,16 +10328,42 @@ onMouseLeave={() => {
                 <p className="mt-1 break-all text-xs text-muted-foreground">
                   {selectedUri}
                 </p>
+                {selectedUri && <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild><button type="button" className="inline-flex max-w-64 items-center gap-1 rounded-md border px-3 py-1.5 text-xs hover:bg-accent" title={selectedRecordGraph || "All graphs"}>
+                      Graph: <span className="truncate">{selectedRecordGraph ? toLabel(selectedRecordGraph) : "All graphs"}</span><ChevronDown className="size-3.5 shrink-0" />
+                    </button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="max-h-72 w-80 overflow-auto">
+                      <DropdownMenuItem onSelect={() => { setSelectedRecordGraph(""); setRecordDescriptionPage(0); setFormattedRecordHtml(""); }}>All graphs</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {recordGraphOptions.map((graph) => <DropdownMenuItem key={graph} onSelect={() => { setSelectedRecordGraph(graph); setSelectedRecordAuthor(""); setRecordDescriptionPage(0); setFormattedRecordHtml(""); }} title={graph}>{toLabel(graph)}</DropdownMenuItem>)}
+                      {!recordGraphs.length && <DropdownMenuLabel>{loadingRecordGraphs ? "Loading graphs…" : "No named graphs found"}</DropdownMenuLabel>}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild><button type="button" disabled={!recordAuthors.length} className="inline-flex max-w-64 items-center gap-1 rounded-md border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50" title={selectedRecordAuthor || "All authors"}>
+                      Author: <span className="truncate">{selectedRecordAuthor ? toLabel(recordAuthors.find((entry) => entry.graph === selectedRecordAuthor)?.author ?? selectedRecordAuthor) : "All authors"}</span><ChevronDown className="size-3.5 shrink-0" />
+                    </button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="max-h-72 w-80 overflow-auto">
+                      <DropdownMenuItem onSelect={() => { setSelectedRecordAuthor(""); setRecordDescriptionPage(0); setFormattedRecordHtml(""); }}>All authors</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {recordAuthors.map((item) =>
+                        <DropdownMenuItem key={`${item.graph}:${item.predicate}:${item.author}`} onSelect={() => { setSelectedRecordAuthor(item.graph); setRecordDescriptionPage(0); setFormattedRecordHtml(""); }} title={`${item.author} · ${item.graph}`}>{toLabel(item.author)} <span className="ml-2 truncate text-xs text-muted-foreground">{item.graph.slice(item.graph.indexOf("#") + 1)}</span></DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  {recordGraphError && <span className="text-xs text-destructive" title={recordGraphError}>Graph discovery failed</span>}{loadingRecordAuthors && <span className="text-xs text-muted-foreground">Loading authors…</span>}{recordAuthorError && <span className="text-xs text-destructive" title={recordAuthorError}>Author metadata unavailable</span>}
+                </div>}
                 {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div id="record_button_bar" className="mt-3 flex flex-wrap items-center gap-2">
                   {recordPolicy && <>
                     <DropdownMenu>
-                      <DropdownMenuTrigger asChild><button type="button" disabled={isValidatingRecord} className="inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50">{isValidatingRecord ? "Validating…" : "Validate"}{recordPolicies.length > 1 && <ChevronDown className="size-3.5" />}</button></DropdownMenuTrigger>
+                      <DropdownMenuTrigger asChild><button type="button" disabled={isValidatingRecord} title="Validate record" aria-label="Validate record" className="inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50">{isValidatingRecord ? <LoaderCircle className="size-4 animate-spin" aria-label="Validating record" /> : <ClipboardCheck className="size-4" aria-label="Validate record" />}{recordPolicies.length > 1 && <ChevronDown className="size-3.5" />}</button></DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="w-72">
                         {recordPolicies.map((policy) => <DropdownMenuItem key={policy.uri} onSelect={() => { const templateUri = policy.templates[0]?.uri ?? ""; setRecordPolicy(policy); setSelectedRecordTemplateUri(templateUri); setRecordValidation(null); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); store?.put(policy.uri, `record-policy:${selectedUri}`); store?.put(templateUri, `record-template:${selectedUri}`); } catch (error) { console.warn("Maestro could not persist the selected record policy in IndexedDB", error); } void validateSelectedRecord(policy); }}>{policy.label}</DropdownMenuItem>)}
                       </DropdownMenuContent>
                     </DropdownMenu>
                     <DropdownMenu>
-                      <DropdownMenuTrigger asChild><button type="button" aria-pressed={recordFormatEnabled} disabled={!recordFormatPreferenceLoaded} className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}>Format<ChevronDown className="size-3.5" /></button></DropdownMenuTrigger>
+                      <DropdownMenuTrigger asChild><button type="button" aria-pressed={recordFormatEnabled} disabled={!recordFormatPreferenceLoaded} className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`} title="Format record" aria-label="Format record"><ClipboardList className="size-4" aria-hidden="true" />{recordFormatEnabled && <Eye className="size-4" aria-hidden="true" />}<ChevronDown className="size-3.5" /></button></DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="w-80">
                         <DropdownMenuItem onSelect={() => {
                           setRecordFormatEnabled(false);

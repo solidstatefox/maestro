@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { logProxyCaller } from "@/lib/proxy-debug";
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { clearQueryCache } from "@/lib/query-cache";
 import { ensureGraphDirectorySeeded, getPersonalSession, personalSparqlUrl, personalSparqlWriteUrl } from "@/lib/personal-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";

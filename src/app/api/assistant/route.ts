@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { parseQwenThinkingBudget, qwenThinkingOptions } from "@/lib/qwen-thinking";
 
 //export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -20,6 +21,9 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
   }
+
+  const thinkingBudget = parseQwenThinkingBudget(body && typeof body === "object" && "thinkingBudget" in body
+    ? (body as { thinkingBudget?: unknown }).thinkingBudget : 0);
 
   const rawMessages = body && typeof body === "object" && "messages" in body
     ? (body as { messages?: unknown }).messages
@@ -53,10 +57,9 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         model: "qwen/qwen3.8-27b",
         messages,
-        max_tokens: 2048,
-        reasoning: false,
+        ...qwenThinkingOptions(thinkingBudget, 2048),
       }),
-      signal: AbortSignal.timeout(180_000),
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(180_000)]),
       cache: "no-store",
     });
   } catch (error) {

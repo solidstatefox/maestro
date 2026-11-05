@@ -1,3 +1,4 @@
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { requirePersonalLogin } from "@/lib/personal-guard";
 import { getPersonalSession } from "@/lib/personal-sparql";
@@ -9,6 +10,7 @@ import { resolve } from "node:path";
 
 /** Read only the existing login cookie. Never connect to Personal SPARQL on this request. */
 export async function GET(request: Request) {
+  logProxyCaller(request, "otc.GET");
   return NextResponse.json({ authenticated: Boolean(getPersonalSession(request)) }, {
     headers: { "Cache-Control": "no-store" },
   });
@@ -16,6 +18,7 @@ export async function GET(request: Request) {
 
 /** Explicit OTC execution: SHACL-gated Liquid templates and up to one synchronous successor hop. */
 export async function POST(request: Request) {
+  logProxyCaller(request, "otc.POST");
   const blocked = requirePersonalLogin(request);
   if (blocked) return blocked;
   const activity: OtcLlmActivity[] = [];

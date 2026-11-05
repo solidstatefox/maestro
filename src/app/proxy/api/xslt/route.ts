@@ -1,3 +1,4 @@
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { XMLValidator, XMLParser } from "fast-xml-parser";
 import SaxonJS from "saxon-js";
@@ -69,6 +70,7 @@ function validateTemplate(source: string): void {
 }
 
 export async function POST(request: Request) {
+  logProxyCaller(request, "xslt.POST");
   const loginRequired = requirePersonalLogin(request);
   if (loginRequired) return loginRequired;
   try {

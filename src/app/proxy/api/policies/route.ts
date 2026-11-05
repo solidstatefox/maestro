@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ensureShapesGraphSeeded, getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
-import { logProxyCaller } from "@/lib/proxy-debug";
-import { describeUpstreamError } from "@/lib/upstream-error";
+import { logProxyCaller } from "@/lib/proxy-debug-server";
+import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
 import { requirePersonalLogin } from "@/lib/personal-guard";
 
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -35,6 +35,12 @@ export async function POST(request: Request) {
       recordShape?: unknown;
       template?: unknown;
       triples?: unknown;
+      classes?: unknown;
+      properties?: unknown;
+      roles?: unknown;
+      classQuery?: unknown;
+      propertyQuery?: unknown;
+      roleQuery?: unknown;
     } | null;
     if (!body || typeof body.action !== "string") {
       return NextResponse.json({ error: "A policy action is required." }, { status: 400 });
@@ -76,6 +82,51 @@ export async function POST(request: Request) {
       return NextResponse.json({ templateXslt, nextName: nextPackage.name, nextVersion: nextPackage.version });
     }
 
+    if (body.action === "facet-discover") {
+      // Discovery is explicitly triggered by the Record Validate button.
+      // The three FCT facet query clones are carried as scope provenance, while
+      // their resolved classes/properties/roles provide bounded candidate IRIs.
+      const data = body as typeof body & {
+        classes?: unknown; properties?: unknown; roles?: unknown;
+        classQuery?: unknown; propertyQuery?: unknown; roleQuery?: unknown;
+      };
+      const bounded = (value: unknown): string[] => Array.isArray(value) && value.length <= 500
+        ? [...new Set(value.filter(safeIri))] : [];
+      const classes = bounded(data.classes);
+      const forward = bounded(data.properties);
+      const reverse = bounded(data.roles);
+      const snapshots = [data.classQuery, data.propertyQuery, data.roleQuery];
+      if (snapshots.some((item) => typeof item !== "string" || item.length > 200000))
+        return NextResponse.json({ error: "The cloned FCT facet queries are required." }, { status: 400 });
+      const targets = classes.map(sparqlIri).join(" ");
+      const properties = forward.map(sparqlIri).join(" ");
+      const roles = reverse.map(sparqlIri).join(" ");
+      const graph = sparqlIri(getShapesGraph(request));
+      if (!classes.length && !forward.length && !reverse.length && !safeIri(body.recordShape))
+        return NextResponse.json({ facets: [] });
+      const recordShape = safeIri(body.recordShape) ? sparqlIri(body.recordShape) : "<urn:maestro:no-record-shape>";
+      const query = `PREFIX sh: <${SH}>\nSELECT DISTINCT ?path ?inverse ?name ?shape WHERE { GRAPH ${graph} {
+        { ?shape sh:property ?propertyShape . FILTER(?shape = ${recordShape}) }
+        ${targets ? `UNION { VALUES ?class { ${targets} } ?shape sh:targetClass ?class ; sh:property ?propertyShape . }` : ""}
+        ${properties ? `UNION { VALUES ?predicate { ${properties} } ?shape sh:targetSubjectsOf ?predicate ; sh:property ?propertyShape . }` : ""}
+        ${roles ? `UNION { VALUES ?predicate { ${roles} } ?shape sh:targetObjectsOf ?predicate ; sh:property ?propertyShape . }` : ""}
+        ?propertyShape sh:path ?rawPath .
+        OPTIONAL { ?propertyShape sh:name ?name }
+        OPTIONAL { ?rawPath sh:inversePath ?inverse }
+        OPTIONAL { FILTER(isIRI(?rawPath)) BIND(?rawPath AS ?path) }
+      } } LIMIT 300`;
+      const payload = await queryPersonalSparql(query, 20000, request);
+      const facets = [...new Map(((payload.results?.bindings ?? []) as BindingRow[])
+        .flatMap((row) => {
+          const uri = get(row, "inverse") || get(row, "path");
+          if (!safeIri(uri)) return [];
+          const direction = get(row, "inverse") ? "reverse" : "forward";
+          return [{ uri, direction, label: get(row, "name") || "", shape: get(row, "shape") }];
+        }).map((facet) => [`${facet.direction}:${facet.uri}`, facet])).values()];
+      proxyLog("info", "policies.facet-discover", { count: facets.length });
+      return NextResponse.json({ facets });
+    }
+
     if (body.action === "validate") {
       if (!safeIri(body.recordUri) || !safeIri(body.recordShape) || !Array.isArray(body.triples) || body.triples.length > 10000) {
         return NextResponse.json({ error: "A record URI, record shape, and bounded DESCRIBE triple list are required." }, { status: 400 });
@@ -83,9 +134,10 @@ export async function POST(request: Request) {
       const triples = (body.triples as RecordTriple[]).filter((triple) =>
         triple && typeof triple.subject === "string" && safeIri(triple.predicate) && typeof triple.object === "string" && triple.subject.length <= 4096 && triple.object.length <= 100000,
       );
-      const shapeQuery = `PREFIX sh: <${SH}>\nSELECT ?propertyShape ?constraint ?value WHERE { { { ${sparqlIri(body.recordShape)} ?constraint ?value . BIND(${sparqlIri(body.recordShape)} AS ?propertyShape) } UNION { ${sparqlIri(body.recordShape)} sh:property ?propertyShape . ?propertyShape ?constraint ?value } } UNION { GRAPH ?shapeGraph { { ${sparqlIri(body.recordShape)} ?constraint ?value . BIND(${sparqlIri(body.recordShape)} AS ?propertyShape) } UNION { ${sparqlIri(body.recordShape)} sh:property ?propertyShape . ?propertyShape ?constraint ?value } } } }`;
+      const shapeQuery = `PREFIX sh: <${SH}>\nSELECT ?propertyShape ?constraint ?value WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} { { ${sparqlIri(body.recordShape)} ?constraint ?value . BIND(${sparqlIri(body.recordShape)} AS ?propertyShape) } UNION { ${sparqlIri(body.recordShape)} sh:property ?propertyShape . ?propertyShape ?constraint ?value } } }`;
       const shapePayload = await queryPersonalSparql(shapeQuery, 20000, request);
       const shapeRows = (shapePayload.results?.bindings ?? []) as BindingRow[];
+      if (shapeRows.length === 0) return NextResponse.json({ error: `No SHACL statements for ${body.recordShape} were found in the configured shapes graph ${getShapesGraph(request)}.` }, { status: 404 });
       const properties = new Map<string, Record<string, string[]>>();
       const topLevel: Record<string, string[]> = {};
       for (const row of shapeRows) {
@@ -166,6 +218,6 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ error: "Unknown policy action." }, { status: 400 });
   } catch (error) {
-    return NextResponse.json({ error: describeUpstreamError(error, "Policy request failed.") }, { status: 502 });
+    return proxyFailure(request, "policies.POST", error);
   }
 }

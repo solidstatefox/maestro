@@ -1,4 +1,4 @@
-import { logProxyCaller } from "@/lib/proxy-debug";
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { getGraphFacets } from "@/lib/uri-registry";
 import { getSelectedFctEndpoint } from "@/lib/personal-sparql";

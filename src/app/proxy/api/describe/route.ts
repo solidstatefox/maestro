@@ -1,4 +1,4 @@
-import { logProxyCaller } from "@/lib/proxy-debug";
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";

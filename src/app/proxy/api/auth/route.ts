@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { logProxyCaller } from "@/lib/proxy-debug";
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { fetchWithDigestFallback } from "@/lib/digest-auth";
 import { describeUpstreamError } from "@/lib/upstream-error";
 

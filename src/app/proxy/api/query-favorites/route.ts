@@ -1,3 +1,4 @@
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
@@ -30,6 +31,7 @@ function mintedId(prefix: string): string {
 }
 /** Save Annotea bookmarks using DCMI Terms and established tagging vocabularies. */
 export async function POST(request: Request) {
+  logProxyCaller(request, "query-favorites.POST");
   const loginRequired = requirePersonalLogin(request);
   if (loginRequired) return loginRequired;
   try {
@@ -437,6 +439,7 @@ export async function POST(request: Request) {
 
 /** Read Annotea bookmarks and older favorites written by previous Maestro versions. */
 export async function GET(request: Request) {
+  logProxyCaller(request, "query-favorites.GET");
   const loginRequired = requirePersonalLogin(request);
   if (loginRequired) return loginRequired;
   try {

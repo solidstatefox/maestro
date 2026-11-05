@@ -1,5 +1,7 @@
+import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
+import { parseQwenThinkingBudget } from "@/lib/qwen-thinking";
 import { requirePersonalLogin } from "@/lib/personal-guard";
 import { graphForFile, getUserGraph, updatePersonalSparql } from "@/lib/personal-sparql";
 import { parseRdfDocument, buildInsertData } from "@/lib/rdf-to-sparql";
@@ -10,6 +12,7 @@ const MAX_UPLOAD_BYTES = 700_000;
 
 /** Menu requests only read the personal rules graph; no Qwen calls or file uploads. */
 export async function GET(request: Request) {
+  logProxyCaller(request, "chat.GET");
   const blocked = requirePersonalLogin(request);
   if (blocked) return blocked;
   try {
@@ -22,7 +25,7 @@ export async function GET(request: Request) {
 }
 
 /** Chat-only, authenticated OTC entry point. No Personal-store access before the login gate. */
-async function processPost(request: Request, report?: OtcProgressReporter) {
+async function processPost(request: Request, report?: OtcProgressReporter, cancellationSignal?: AbortSignal) {
   const blocked = requirePersonalLogin(request);
   if (blocked) return blocked;
   const activity: OtcLlmActivity[] = [];
@@ -32,6 +35,7 @@ async function processPost(request: Request, report?: OtcProgressReporter) {
     const file = form.get("file");
     const prompt = form.get("prompt");
     const selected = form.get("transcoder");
+    const thinkingBudget = parseQwenThinkingBudget(Number(form.get("thinkingBudget") ?? 0));
     if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".ttl")) {
       return NextResponse.json({ error: "Attach a Turtle (.ttl) document to transcode." }, { status: 400 });
     }
@@ -59,7 +63,7 @@ async function processPost(request: Request, report?: OtcProgressReporter) {
     // Explicit chat selection: one specialist, no root LLM dispatch and no successor surveys.
     const result = await runTranscoder(request, {
       rulesGraph, transcoder: selected, namespace, source: "personal",
-      sourceGraph: temporaryGraph, dryRun: true, instruction: prompt, followSuccessors: false,
+      sourceGraph: temporaryGraph, dryRun: true, instruction: prompt, followSuccessors: false, thinkingBudget, cancellationSignal,
     }, activity, report);
     const turtle = result.trace.flatMap(entry => entry.turtle).join("\n\n");
     return NextResponse.json({ ...result, turtle, activity, fileName: file.name,
@@ -94,21 +98,26 @@ async function processPost(request: Request, report?: OtcProgressReporter) {
 /** Opt-in newline-delimited event stream so the Chat Terminal updates during transcoding.
  * Non-streaming callers retain the original JSON API. */
 export async function POST(request: Request) {
+  logProxyCaller(request, "chat.POST");
   if (request.headers.get("Accept") !== "application/x-ndjson") return processPost(request);
   const encoder = new TextEncoder();
+  const cancellationController = new AbortController();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       const emit = (data: unknown) => controller.enqueue(encoder.encode(JSON.stringify(data) + "\n"));
       void (async () => {
         try {
-          const response = await processPost(request, (event) => emit({ kind: "progress", event }));
+          const response = await processPost(request, (event) => {
+            if (!cancellationController.signal.aborted) emit({ kind: "progress", event });
+          }, cancellationController.signal);
           const result = await response.json();
-          emit({ kind: "complete", status: response.status, result });
+          if (!cancellationController.signal.aborted) emit({ kind: "complete", status: response.status, result });
         } catch (error) {
-          emit({ kind: "complete", status: 500, result: { error: error instanceof Error ? error.message : "Transcoding failed" } });
-        } finally { controller.close(); }
+          if (!cancellationController.signal.aborted) emit({ kind: "complete", status: 500, result: { error: error instanceof Error ? error.message : "Transcoding failed" } });
+        } finally { if (!cancellationController.signal.aborted) controller.close(); }
       })();
     },
+    cancel() { cancellationController.abort(); },
   });
   return new Response(body, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" } });
 }

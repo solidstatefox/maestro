@@ -789,7 +789,9 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     // normalizes letters and displays A-Z in a fixed sequence.
     // Restrict to rdfs:label: a predicate-variable join over the full picker
     // is too expensive for this public endpoint. The active letter constraint
-    // below uses the same predicate selection.
+    // below uses the same predicate selection. Do not constrain label language
+    // here: clicking a letter accepts labels in every language, so counts must
+    // count the same eligible resources (including untagged labels).
     const name = variable("maestroLabel");
     const labelPredicate = iriTerm(DEFAULT_INDEX_LABEL);
     const letter: SparqlExpression = { kind: "function", name: "SUBSTR", args: [
@@ -799,9 +801,6 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     ] };
     const labelPatterns: SparqlPattern[] = [
       { kind: "triple", subject: target, predicate: labelPredicate, object: name },
-      { kind: "filter", expression: { kind: "function", name: "LANGMATCHES", args: [
-        { kind: "function", name: "LANG", args: [termExpr(name)] }, termExpr(literalTerm("en")),
-      ] } },
       { kind: "filter", expression: { kind: "function", name: "REGEX", args: [
         letter, termExpr(literalTerm("^[A-Za-z]$")),
       ] } },

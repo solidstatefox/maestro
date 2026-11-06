@@ -160,15 +160,35 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
   }
 }
 
+/** Request errors are a reason to recheck health, not proof the graph server is down. */
+export const MAESTRO_GRAPH_SERVER_REQUEST_FAILURE = "maestro:graph-server-request-failure";
+async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  const isDataRequest = /\/proxy\/api\/(?:fct|sparql|record-graphs|policies|xslt)(?:[/?]|$)/.test(url) &&
+    !url.includes("health=1") && !(typeof init?.body === "string" && init.body.includes('"selectEndpointId"'));
+  const report = () => {
+    if (isDataRequest && !init?.signal?.aborted && typeof window !== "undefined")
+      window.dispatchEvent(new Event(MAESTRO_GRAPH_SERVER_REQUEST_FAILURE));
+  };
+  try {
+    const response = await fetch(input, init);
+    if (response.status >= 500) report();
+    return response;
+  } catch (error) {
+    if (!(error instanceof Error && error.name === "AbortError") && !init?.signal?.aborted) report();
+    throw error;
+  }
+}
+
 /** Apply a saved per-widget deadline to non-FCT proxy requests (record graphs/policies). */
 async function maestroQueryFetchImpl(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   const source = [headers.get("x-maestro-debug-source") || "", headers.get("x-maestro-debug-component") || ""].join(" ");
   const timeoutMs = configuredTimeoutMs(source);
-  if (!timeoutMs) return fetch(input, init);
+  if (!timeoutMs) return monitoredProxyFetch(input, init);
   headers.set("x-maestro-query-timeout-ms", String(timeoutMs));
   const signal = init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
-  return fetch(input, { ...init, headers, signal });
+  return monitoredProxyFetch(input, { ...init, headers, signal });
 }
 
 /**
@@ -179,7 +199,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
   const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const isCacheableEndpoint = urlStr.includes("/proxy/api/fct") || urlStr.includes("/proxy/api/sparql");
   if (!isCacheableEndpoint) {
-    return fetch(input, init);
+    return monitoredProxyFetch(input, init);
   }
   const requestHeaders = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
   const debugSource = [requestHeaders.get("x-maestro-debug-source") || "", requestHeaders.get("x-maestro-debug-component") || ""].join(" ");
@@ -212,7 +232,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
   };
   const key = computeClientCacheKey(urlStr, init);
   if (!key) {
-    return track(await fetch(input, init));
+    return track(await monitoredProxyFetch(input, init));
   }
 
   const cached = await getClientCachedResponse(key);
@@ -220,7 +240,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
     return track(cached);
   }
 
-  const response = await fetch(input, init);
+  const response = await monitoredProxyFetch(input, init);
   if (response.ok && response.status === 200 && response.headers.get("x-maestro-incomplete") !== "true") {
     try {
       const clone = response.clone();

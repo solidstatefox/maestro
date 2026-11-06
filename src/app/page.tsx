@@ -37,7 +37,7 @@ import { Label } from "@/components/ui/label";
 import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightLeft, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, EqualApproximately, Regex, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
-import { cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
+import { MAESTRO_GRAPH_SERVER_REQUEST_FAILURE, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
 import { MAESTRO_TIMEOUT_CATEGORIES, readMaestroWidgetTimeouts, writeMaestroWidgetTimeouts, type MaestroTimeoutCategory } from "@/lib/maestro-query-timeouts";
 import { setMaestroIncompleteResults, getMaestroIncompleteResults, subscribeMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 import { initializeMaestroStorage, maestroStorageGet, maestroStorageSet, clearMaestroStorage } from "@/lib/maestro-storage";
@@ -983,10 +983,12 @@ function PersonalWidgetQueryListener({
   groupBy,
   setPersonalWidgets,
   endpointReady,
+  refreshRevision,
 }: {
   propertyUri: string;
   sortByCount: boolean;
   endpointReady: boolean;
+  refreshRevision: number;
   limit: number;
   /** When this facet is the active Group By, run the exact query the Results group pane runs. */
   groupBy?: { option: GroupByOption; limit: number };
@@ -1114,7 +1116,7 @@ function PersonalWidgetQueryListener({
       cancelled = true;
       controller.abort();
     };
-  }, [widgetQueryXml, propertyUri, setPersonalWidgets, orderLikeGroups, endpointReady]);
+  }, [widgetQueryXml, propertyUri, setPersonalWidgets, orderLikeGroups, endpointReady, refreshRevision]);
 
   return null;
 }
@@ -1130,6 +1132,7 @@ function PersonalRoleWidget({
   onGroupValueClick,
   setRoleWidgetStatuses,
   endpointReady,
+  refreshRevision,
 }: {
   tree: FctQueryTree;
   roleNode: FctQueryNode;
@@ -1141,6 +1144,7 @@ function PersonalRoleWidget({
   onGroupValueClick: (value: FctResult) => void;
   setRoleWidgetStatuses: Dispatch<SetStateAction<Record<string, RoleWidgetStatus>>>;
   endpointReady: boolean;
+  refreshRevision: number;
 }) {
   const { setRoleValue } = useFctQuery();
   const uri = roleNode.attributes.iri ?? "";
@@ -1221,7 +1225,7 @@ function PersonalRoleWidget({
     }
     void loadValues();
     return () => { cancelled = true; controller.abort(); };
-  }, [uri, widgetQueryXml, tree, roleOrderLikeGroups, endpointReady]);
+  }, [uri, widgetQueryXml, tree, roleOrderLikeGroups, endpointReady, refreshRevision]);
 
   const visibleValues = values.filter((value) => {
     const binding = groupValueBinding(value);
@@ -1657,6 +1661,7 @@ export default function Home() {
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [authRestoreIssue, setAuthRestoreIssue] = useState(false);
   const [endpointReloadRevision, setEndpointReloadRevision] = useState(0);
+  const [queryRefreshRevision, setQueryRefreshRevision] = useState(0);
   const [loginTab, setLoginTab] = useState<AuthType>("sparql-auth");
   const [loginGraphStore, setLoginGraphStore] = useState("http://demo.openlinksw.com/sparql");
   const [loginGraphPrefix, setLoginGraphPrefix] = useState("http://demo.openlinksw.com/ods/home/acme");
@@ -1703,6 +1708,45 @@ export default function Home() {
   const [endpointMenuError, setEndpointMenuError] = useState("");
   const [endpointHealthToast, setEndpointHealthToast] = useState<{ endpointId: string; message: string } | null>(null);
   const [isRefreshingFailedEndpoint, setIsRefreshingFailedEndpoint] = useState(false);
+  // A failed data request invalidates an old green badge only if a fresh
+  // health probe also fails. Coalesce simultaneous failures across panes.
+  const serverFailureProbeInFlight = useRef(false);
+  useEffect(() => {
+    const probeSelectedGraphServer = () => {
+      if (!selectedEndpointId || serverFailureProbeInFlight.current) return;
+      const endpoint = fctEndpoints.find((item) => item.id === selectedEndpointId);
+      if (!endpoint) return;
+      serverFailureProbeInFlight.current = true;
+      void (async () => {
+        try {
+          const response = await fetch(
+            `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}`,
+            { cache: "no-store", headers: proxyDebugHeaders("request-failure-health", "GraphServerStatus") },
+          );
+          const data = await response.json() as { check?: EndpointStatus };
+          const health = response.ok && data.check ? data.check : {
+            id: endpoint.id, status: response.status, state: "server-error" as const, testedUrl: endpoint.url,
+          };
+          if (health.state !== "ok" || health.status !== 200) {
+            setEndpointStatuses((current) => ({ ...current, [endpoint.id]: health }));
+            setEndpointHealthToast({ endpointId: endpoint.id,
+              message: `Graph server ${endpoint.label} is unavailable. Refresh to retry this server.` });
+          }
+        } catch {
+          setEndpointStatuses((current) => ({ ...current, [endpoint.id]: {
+            id: endpoint.id, status: null, state: "unreachable", testedUrl: endpoint.url,
+          } }));
+          setEndpointHealthToast({ endpointId: endpoint.id,
+            message: `Graph server ${endpoint.label} is unreachable. Refresh to retry this server.` });
+        } finally {
+          serverFailureProbeInFlight.current = false;
+        }
+      })();
+    };
+    window.addEventListener(MAESTRO_GRAPH_SERVER_REQUEST_FAILURE, probeSelectedGraphServer);
+    return () => window.removeEventListener(MAESTRO_GRAPH_SERVER_REQUEST_FAILURE, probeSelectedGraphServer);
+  }, [selectedEndpointId, fctEndpoints]);
+
   const [selectedFacet, setSelectedFacet] = useState<FacetName>("Properties");
   const [propertiesPage, setPropertiesPage] = useState(0);
   const [classesPage, setClassesPage] = useState(0);
@@ -2761,6 +2805,49 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       // selection is deliberately not duplicated in the URL's UI-state JSON.
       const initialParams = new URLSearchParams(window.location.search);
       const requestedUrlSelection = readGraphServerFromQueryXml(initialParams.get("q"));
+
+      // Toolbar Refresh may carry a one-time snapshot of the already-green
+      // selected graph server. Restore it BEFORE entering the server-loading
+      // state or making any endpoint-list/health-check requests.
+      try {
+        const refreshSnapshotJson = window.sessionStorage.getItem("maestro-refresh-green-server");
+        window.sessionStorage.removeItem("maestro-refresh-green-server");
+        if (refreshSnapshotJson) {
+          const snapshot: unknown = JSON.parse(refreshSnapshotJson);
+          if (snapshot && typeof snapshot === "object") {
+            const saved = snapshot as {
+              selectedId?: unknown;
+              endpoints?: unknown;
+              status?: unknown;
+            };
+            const selectedId = typeof saved.selectedId === "string" ? saved.selectedId : "";
+            const endpoints = Array.isArray(saved.endpoints) && saved.endpoints.every((item) =>
+              item && typeof item === "object" &&
+              typeof item.id === "string" && typeof item.url === "string" &&
+              typeof item.label === "string" && typeof item.group === "string"
+            ) ? saved.endpoints as EndpointOption[] : [];
+            const selected = endpoints.find((endpoint) => endpoint.id === selectedId);
+            const status = saved.status as EndpointStatus | undefined;
+            const urlMatches = !requestedUrlSelection || Boolean(selected &&
+              [selected.id, selected.url, selected.label].includes(requestedUrlSelection));
+            if (selected && urlMatches && status?.id === selectedId &&
+                status.state === "ok" && status.status === 200) {
+              if (cancelled) return;
+              setFctEndpoints(endpoints);
+              setSelectedEndpointId(selectedId);
+              setEndpointStatuses({ [selectedId]: status });
+              setEndpointMenuError("");
+              setEndpointHealthToast(null);
+              setIsCheckingEndpoints(false);
+              setEndpointChecksCompleted(0);
+              setEndpointChecksTotal(0);
+              refreshQuery();
+              return;
+            }
+          }
+        }
+      } catch { /* Invalid or unavailable snapshot: use normal startup checks. */ }
+
       setIsCheckingEndpoints(true);
       setEndpointChecksCompleted(0);
       setSelectedEndpointId("");
@@ -3146,32 +3233,33 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   useEffect(() => {
     if (resultsPageSizeStorageInitialized.current) return;
     resultsPageSizeStorageInitialized.current = true;
-    try {
-      const storedValue = window.localStorage.getItem(RESULTS_PAGE_SIZE_STORAGE_KEY);
-      const storedSize = storedValue === null ? NaN : Number(storedValue);
-      const validStoredSize = RESULTS_PAGE_SIZE_OPTIONS.find((size) => size === storedSize);
-      if (validStoredSize !== undefined) setResultsPageSize(validStoredSize);
-      else window.localStorage.setItem(RESULTS_PAGE_SIZE_STORAGE_KEY, String(DEFAULT_RESULTS_PAGE_SIZE));
-    } catch {
-      // Storage can be disabled by browser privacy settings; paging still works.
-    }
+    let active = true;
+    void initializeMaestroStorage().then(() => {
+      if (!active) return;
+      const saved = maestroStorageGet(RESULTS_PAGE_SIZE_STORAGE_KEY);
+      const valid = RESULTS_PAGE_SIZE_OPTIONS.find((size) => size === Number(saved));
+      if (saved !== null && valid !== undefined) setResultsPageSize(valid);
+      else maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(DEFAULT_RESULTS_PAGE_SIZE));
+    });
+    return () => { active = false; };
   }, []);
 
   const [leftPanelLimit, setLeftPanelLimitState] = useState<number>(DEFAULT_LEFT_PANEL_LIMIT);
   useEffect(() => {
-    try {
-      const stored = Number(window.localStorage.getItem(LEFT_PANEL_LIMIT_STORAGE_KEY));
+    let active = true;
+    void initializeMaestroStorage().then(() => {
+      if (!active) return;
+      const stored = Number(maestroStorageGet(LEFT_PANEL_LIMIT_STORAGE_KEY));
       const valid = RESULTS_BATCH_SIZE_OPTIONS.find((size) => size === stored);
       if (valid !== undefined) setLeftPanelLimitState(valid);
-    } catch {
-      // Storage can be disabled by browser privacy settings; the default limit still applies.
-    }
+    });
+    return () => { active = false; };
   }, []);
   const setLeftPanelLimit = useCallback((size: number) => {
     if (!RESULTS_BATCH_SIZE_OPTIONS.some((option) => option === size)) return;
     setLeftPanelLimitState(size);
     setGraphsPage(0);
-    try { window.localStorage.setItem(LEFT_PANEL_LIMIT_STORAGE_KEY, String(size)); } catch { /* non-fatal */ }
+    maestroStorageSet(LEFT_PANEL_LIMIT_STORAGE_KEY, String(size));
   }, []);
 
   const queryXml = serializeFctQuery(queryTree);
@@ -3806,8 +3894,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     ))
   );
 
-  // A cheap ASK first determines whether the current scope has alphabetic
-  // English labels. Only a true response reveals the pane and starts counts.
+  // A cheap ASK first determines whether the current scope has labels.
+  // Only a true response reveals the pane and starts counts.
   // Both requests share the same AbortController so navigation cannot publish
   // stale letters or reveal the pane for an earlier query.
   useEffect(() => {
@@ -3876,7 +3964,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       }
     })();
     return () => controller.abort();
-  }, [alphabetQueryXml, alphabetAskQueryXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [alphabetQueryXml, alphabetAskQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
   useEffect(() => {
     // Keep the view's persisted index label predicates consistent with changes
@@ -3998,7 +4086,72 @@ useEffect(() => {
     navigateToPropertyPath(targetId);
   }
 
-  /** Refresh by clicking the exact active breadcrumb button, including its complete click behavior. */
+  /** Toolbar Query Refresh never reloads the graph-server list or the page. */
+  async function refreshMaestroPage() {
+    const rerunCurrentQuery = () => {
+      refreshQuery();
+      setQueryRefreshRevision((revision) => revision + 1);
+      setSearchPipelineRun((revision) => revision + 1);
+    };
+    const selected = fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId);
+    if (!selected) {
+      setEndpointMenuError("Select a graph server before refreshing the query.");
+      return;
+    }
+
+    // The green icon corresponds to HTTP 200. Do not touch the server menu,
+    // health state, or its loading progress when it is already green.
+    const currentStatus = endpointStatuses[selected.id];
+    if (currentStatus?.state === "ok" && currentStatus.status === 200) {
+      rerunCurrentQuery();
+      return;
+    }
+
+    // Orange, red, grey and unknown all require a single-server health check.
+    // Invalidate the old status immediately so all query effects remain gated
+    // until this specific graph server is healthy again.
+    setEndpointStatuses((current) => {
+      const next = { ...current };
+      delete next[selected.id];
+      return next;
+    });
+    setEndpointMenuError("");
+    try {
+      const response = await fetch(
+        `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(selected.id)}`,
+        { cache: "no-store", headers: proxyDebugHeaders("toolbar-endpoint-health", `EndpointHealth:${selected.id}`) },
+      );
+      const data = await response.json();
+      rememberShortforms(data?.shortforms);
+      if (!response.ok || !data.check) throw new Error(data.error ?? "Health check failed.");
+      const health = data.check as EndpointStatus;
+      if (health.state !== "ok" || health.status !== 200) {
+        setEndpointStatuses((current) => ({ ...current, [selected.id]: health }));
+        setEndpointHealthToast({ endpointId: selected.id, message: `Graph server ${selected.label} did not pass its health check. Refresh to retry.` });
+        return;
+      }
+      // The proxy's selected server must match the query's addr. The existing
+      // selection API only updates this server; it never reloads the list.
+      const selectionResponse = await fetch("/proxy/api/fct", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("toolbar-endpoint-select", "EndpointToolbarRefresh") },
+        body: JSON.stringify({ selectEndpointId: selected.id }),
+        cache: "no-store",
+      });
+      const selectedData = await selectionResponse.json();
+      if (!selectionResponse.ok || selectedData.selectedId !== selected.id)
+        throw new Error(selectedData.error ?? "Could not select the refreshed graph server.");
+      setEndpointStatuses((current) => ({ ...current, [selected.id]: health }));
+      setEndpointHealthToast(null);
+      rerunCurrentQuery();
+    } catch (error) {
+      setEndpointStatuses((current) => ({ ...current, [selected.id]: {
+        id: selected.id, status: null, state: "unreachable", testedUrl: selected.url,
+      } }));
+      setEndpointHealthToast({ endpointId: selected.id, message: error instanceof Error ? error.message : "Graph server health check failed." });
+    }
+  }
+
   function refreshCurrentBreadcrumb() {
     const activeBreadcrumbButton = activeBreadcrumbButtonRef.current;
     if (activeBreadcrumbButton) {
@@ -4028,7 +4181,15 @@ useEffect(() => {
   const effectiveResultsTotalCount = resultsTotalCount === null
     ? (resultsPageComplete ? results.length : null)
     : Math.max(resultsTotalCount, results.length);
-  const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string; direction: "property" | "property-of" }[]>([]);
+  type RecordValueTerm = {
+    property: string;
+    value: string;
+    direction: "property" | "property-of";
+    termType: "uri" | "literal" | "bnode";
+    datatype?: string;
+    lang?: string;
+  };
+  const [describedRecord, setDescribedRecord] = useState<RecordValueTerm[]>([]);
   const [describedRecordUri, setDescribedRecordUri] = useState("");
   // One authoritative SELECT snapshot feeds both Default and graph-stored XSLT formats.
   // Keep its XML, record identity, and completion flag together to prevent stale formatting.
@@ -4175,11 +4336,11 @@ useEffect(() => {
 const describedProperties = Array.from(
   describedRecord.reduce((grouped, item) => {
     const key = `${item.direction}\u0000${item.property}`;
-    const values = grouped.get(key) ?? { property: item.property, direction: item.direction, values: [] as string[] };
-    values.values.push(item.value);
+    const values = grouped.get(key) ?? { property: item.property, direction: item.direction, values: [] as RecordValueTerm[] };
+    values.values.push(item);
     grouped.set(key, values);
     return grouped;
-  }, new Map<string, { property: string; direction: "property" | "property-of"; values: string[] }>()),
+  }, new Map<string, { property: string; direction: "property" | "property-of"; values: RecordValueTerm[] }>()),
   ([, item]) => item,
 );
 const describedPropertyPage = describedProperties.slice(
@@ -4280,7 +4441,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [resultsCountSparql, resultsCountRequestIdentity, selectedEndpointId, endpointReadyForQuery]);
+  }, [resultsCountSparql, resultsCountRequestIdentity, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
   // Hydrate from the existing Maestro IndexedDB store (not the live query XML).
   useEffect(() => {
@@ -4702,7 +4863,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
     setGroupMembers({});
     groupMemberRequestStates.current.clear();
     setGroupValuesError("");
-  }, [queryCountXml, selectedGroupByOption?.key]);
+  }, [queryCountXml, selectedGroupByOption?.key, queryRefreshRevision]);
 
   // Load group values through FCT itself. This query is a clone of the current
   // tree with the selected relationship used to enumerate its values.
@@ -4752,7 +4913,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       }
     })();
     return () => { cancelled = true; controller.abort(); };
-  }, [centralTab, search, queryCountXml, groupByPropertyUri, selectedGroupByOption?.key, groupBatchSize, groupBatchOffset]);
+  }, [centralTab, search, queryCountXml, groupByPropertyUri, selectedGroupByOption?.key, groupBatchSize, groupBatchOffset, queryRefreshRevision]);
 
   // Each group member list is another FCT request: clone the complete source
   // query, bind only this group's value to the selected relationship, and keep
@@ -4819,7 +4980,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       }
       controller.abort();
     };
-  }, [centralTab, search, queryXml, selectedGroupByOption?.key, pageGroupValues.map(groupValueKey).join("|"), resultsBatchSize]);
+  }, [centralTab, search, queryXml, selectedGroupByOption?.key, pageGroupValues.map(groupValueKey).join("|"), resultsBatchSize, queryRefreshRevision]);
 
   // Scope-wide side effects are separate from facet fetching. A facet request
   // must never cancel, wait for, or determine another facet's request lifecycle.
@@ -4846,7 +5007,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
     replaceFacetAutofillCandidates("property", []);
     replaceFacetAutofillCandidates("property-in", []);
     setFacetAutofillCandidates({ property: [], "property-in": [] });
-  }, [search, queryXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [search, queryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
   // Categories owns its own request, debounce, cancellation, data, error and
   // loading state. It does not wait for Properties or Roles.
@@ -4945,7 +5106,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       // loading indicator during cleanup. A replacement effect sets it true.
       setIsLoadingClasses(false);
     };
-  }, [search, classFacetQueryXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [search, classFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
   // The tree request supplies relationships only, never additional category items or counts.
   // Its output is intersected with the authoritative flat class list at render time.
@@ -4993,7 +5154,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       })();
     }, 250);
     return () => { cancelled = true; window.clearTimeout(timer); controller.abort(); };
-  }, [categoriesTreeMode, classFacetQueryXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [categoriesTreeMode, classFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
   // Properties has a completely separate request lifecycle from Categories and Roles.
   useEffect(() => {
@@ -5039,7 +5200,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       controller.abort();
       // The replacement request owns the loading flag; do not clear it on cancellation.
     };
-  }, [search, propertyFacetQueryXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [search, propertyFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
   // Roles has a completely separate request lifecycle from Categories and Properties.
   useEffect(() => {
@@ -5085,7 +5246,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       controller.abort();
       // The replacement request owns the loading flag; do not clear it on cancellation.
     };
-  }, [search, roleFacetQueryXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [search, roleFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
   // Fetch only the graph page the user requested; never scan the entire result set.
   useEffect(() => {
@@ -5155,7 +5316,7 @@ setGraphFacets(graphs);
     }
     void loadGraphPage();
     return () => { cancelled = true; controller.abort(); };
-  }, [graphsPage, graphSort, leftPanelLimit, queryWithoutPagingXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [graphsPage, graphSort, leftPanelLimit, queryWithoutPagingXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
 
   // Defensively merge duplicate resource rows by URI. The API normally groups
@@ -5235,7 +5396,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedEndpointId, queryTree.attributes.addr]);
+  }, [selectedUri, selectedEndpointId, queryTree.attributes.addr, queryRefreshRevision]);
 
   // Load author provenance only after the user selects a graph family.
   // Slow metadata queries must never delay the Graph dropdown.
@@ -5266,7 +5427,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedRecordGraph, recordGraphs, queryTree.attributes.addr]);
+  }, [selectedUri, selectedRecordGraph, recordGraphs, queryTree.attributes.addr, queryRefreshRevision]);
 
   // Membership discovery does not change an unfiltered DESCRIBE. Only selected
   // graph/author filters need the discovered list, avoiding a second record load.
@@ -5300,7 +5461,7 @@ setGraphFacets(graphs);
       try {
         let snapshotXml = "";
         let snapshotIncomplete = false;
-        let rows: { property: string; value: string; direction: "property" | "property-of" }[] = [];
+        let rows: RecordValueTerm[] = [];
         let snapshotTerms: { subject: string; predicate: string; object: string; objectType: string; datatype?: string; lang?: string }[] = [];
         // The authoritative Record snapshot comes from one SPARQL SELECT.
         // A bounded inner SELECT fetches triples; the outer query adds URI labels
@@ -5386,7 +5547,11 @@ setGraphFacets(graphs);
           const direction: "property" | "property-of" | null = subject.value === selectedUri
             ? "property" : object.value === selectedUri ? "property-of" : null;
           if (direction) rows.push({ property: predicate.value,
-            value: direction === "property" ? objectValue : subject.value, direction });
+            value: direction === "property" ? objectValue : subject.value, direction,
+            termType: direction === "property" ? objectType : "uri",
+            ...(direction === "property" && object.datatype ? { datatype: object.datatype } : {}),
+            ...(direction === "property" && object["xml:lang"] ? { lang: object["xml:lang"] } : {}),
+          });
           if (binding.labelResource?.type === "uri") {
             // Use only the explicit join target, never the Record's own label.
             const labelUri = binding.labelResource.value;
@@ -5404,7 +5569,7 @@ setGraphFacets(graphs);
           [term.subject, term.predicate, term.object, term.objectType, term.datatype ?? "", term.lang ?? ""].join("\u0000"), term,
         ])).values()];
         rows = [...new Map(rows.map((row) => [
-          [row.direction, row.property, row.value].join("\u0000"), row,
+          [row.direction, row.property, row.value, row.termType, row.datatype ?? "", row.lang ?? ""].join("\u0000"), row,
         ])).values()];
         // The inner SELECT limit counts triples; outer label joins may add
         // multiple rows. Judge completeness using distinct Record triples.
@@ -5443,7 +5608,7 @@ setGraphFacets(graphs);
     }
     void loadDescription();
     return () => { cancelled = true; controller.abort(); };
-  }, [selectedUri, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit]);
+  }, [selectedUri, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, queryRefreshRevision]);
 
   // The separate Record graph dropdown loader already knows which named graphs
   // contain this resource. Reuse that list for a single background label query;
@@ -6295,7 +6460,7 @@ setGraphFacets(graphs);
           const safeUrl = values[0] ?? "";
           if (/^(https?:\/\/|\/(?!\/)|\.{1,2}\/|\?|#)/i.test(safeUrl)) {
             element.setAttribute("href", safeUrl);
-            element.setAttribute("target", "_blank");
+            element.setAttribute("target", element.id === "bookmark-title-link" ? "_self" : "_blank");
             element.setAttribute("rel", "noopener noreferrer");
           } else element.removeAttribute("href");
           element.textContent = value;
@@ -6326,7 +6491,7 @@ setGraphFacets(graphs);
             element.removeAttribute("mui:href");
             if (/^(https?:\/\/|\/(?!\/)|\.{1,2}\/|\?|#)/i.test(href)) {
               element.setAttribute("href", href);
-              element.setAttribute("target", "_blank");
+              element.setAttribute("target", element.id === "bookmark-title-link" ? "_self" : "_blank");
               element.setAttribute("rel", "noopener noreferrer");
             } else {
               element.setAttribute("href", "");
@@ -6513,7 +6678,7 @@ setGraphFacets(graphs);
           element.removeAttribute("mui:href");
           if (/^(https?:\/\/|\/(?!\/)|\.{1,2}\/|\?|#)/i.test(href)) {
             element.setAttribute("href", href);
-            element.setAttribute("target", "_blank");
+            element.setAttribute("target", element.id === "bookmark-title-link" ? "_self" : "_blank");
             element.setAttribute("rel", "noopener noreferrer");
           } else {
             // Do not expose unresolved XPath expressions or retain a stale destination.
@@ -6766,10 +6931,86 @@ setGraphFacets(graphs);
         }
         return;
       }
-      const recordUriLink = target.closest("[data-maestro-record-uri]");
+      // Explicit formatter actions always win over the default hyperdata link.
+      // In particular: Bookmark's saved-query link, Movie's Year chip, custom
+      // mui:action calls, carousel controls, and ordinary external links that
+      // do not represent a value in this Record.
+      if (target.closest("#bookmark-title-link, [mui\\:href], [data-maestro-filter-property]")) return;
+
+      // A formatted Record has the same semantic default as a Results badge:
+      // navigate to the things sharing this *predicate/value*, not to the
+      // object URI itself. Derive the RDF term from the authoritative Record
+      // SELECT, not from the display label, so datatypes/languages survive.
+      const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
+      const explicitAction = target.closest("[mui\\:action]");
+      const link = explicitAction ? null : target.closest<HTMLAnchorElement>("a[href]");
+      const recordUriLink = target.closest<HTMLElement>("[data-maestro-record-uri]");
+      const linkedUri = recordUriLink?.getAttribute("data-maestro-record-uri")?.trim() ?? "";
+      const href = link?.getAttribute("href") ?? "";
+      const hrefIsResource = /^https?:\/\//i.test(href);
+      // Do not hijack external actions (shopping, source links, share links).
+      if (link && !recordUriLink && href !== "#" && !hrefIsResource) return;
+
+      const candidates = describedRecord.filter((row) => row.termType !== "bnode" &&
+        (row.direction === "property" || row.direction === "property-of"));
+      const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`;
+      const matchesFor = (text: string, explicitUri: string) => candidates.filter((row) => {
+        if (explicitUri) return row.termType === "uri" && row.value === explicitUri;
+        if (normalize(row.value) === text) return true;
+        if (row.termType !== "uri") return false;
+        const label = recordUriLabelCacheRef.current.get(`${addr}\u0000${row.value}`);
+        return (label && normalize(label) === text) ||
+          normalize((row.value.split(/[\/#]/).pop() ?? "").replace(/_/g, " ")) === text;
+      });
+      // Start with the smallest visible value element. Never treat a whole
+      // paragraph/table/section as a value merely because it contains one.
+      let clickedValue: Element | null = explicitAction ? null : recordUriLink || link || target;
+      let matches: typeof candidates = [];
+      while (clickedValue && clickedValue !== root) {
+        const name = clickedValue.tagName.toLowerCase();
+        // Leaf divs sometimes contain a literal directly; container divs are
+        // not values and must never become click targets wholesale.
+        if (["section", "article", "table", "tbody", "tr", "dl"].includes(name) ||
+            (name === "div" && clickedValue.children.length > 0)) break;
+        const display = normalize(clickedValue.textContent ?? "");
+        const valueUri = clickedValue === recordUriLink ? linkedUri :
+          clickedValue === link && hrefIsResource ? href : "";
+        if (display || valueUri) matches = matchesFor(display, valueUri);
+        if (matches.length) break;
+        clickedValue = clickedValue.parentElement;
+      }
+      // When the same lexical value occurs under multiple predicates, use
+      // the nearest property label where possible. Never guess an RDF relation.
+      if (matches.length > 1) {
+        const row = target.closest("dd, td, li");
+        const labelText = normalize(row?.previousElementSibling?.textContent ??
+          row?.parentElement?.querySelector("dt, th")?.textContent ?? "").toLowerCase();
+        if (labelText) {
+          const compact = (iri: string) => iri.split(/[\/#]/).pop()?.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]/g, " ").toLowerCase() ?? "";
+          const narrowed = matches.filter((candidate) =>
+            labelText === normalize(toLabel(candidate.property)).toLowerCase() ||
+            labelText === compact(candidate.property));
+          if (narrowed.length) matches = narrowed;
+        }
+      }
+      const unique = new Map(matches.map((row) => [
+        `${row.direction}\u0000${row.property}\u0000${row.value}\u0000${row.datatype ?? ""}\u0000${row.lang ?? ""}`, row,
+      ]));
+      if (unique.size === 1) {
+        const row = [...unique.values()][0];
+        event.preventDefault();
+        navigateResultBadge(row.property, {
+          value: row.value, type: row.termType,
+          ...(row.datatype ? { datatype: row.datatype } : {}),
+          ...(row.lang ? { lang: row.lang } : {}),
+        }, row.direction === "property-of" ? "reverse" : "forward",
+          row.direction === "property" && row.property === RDF_TYPE_URI);
+        return;
+      }
+      // Preserve the existing fallback for URI links not in the Record's
+      // predicate/value bindings. Never replace an explicit specialized action.
       if (recordUriLink) {
-        const uri = recordUriLink.getAttribute("data-maestro-record-uri") ?? "";
-        if (/^https?:\/\//i.test(uri)) { event.preventDefault(); openRecordPropertyUri(uri); }
+        if (/^https?:\/\//i.test(linkedUri)) { event.preventDefault(); openRecordPropertyUri(linkedUri); }
         return;
       }
       const actionElement = target.closest("[mui\\:action]");
@@ -6787,7 +7028,8 @@ setGraphFacets(graphs);
     };
     root.addEventListener("click", handleTemplateAction);
     return () => root.removeEventListener("click", handleTemplateAction);
-  }, [formattedRecordHtml, selectedUri, navigateResultBadge]);
+  }, [formattedRecordHtml, selectedUri, describedRecord, selectedEndpointId, queryTree.attributes.addr,
+      queryTree.attributes.graph, navigateResultBadge]);
 
   // The active scope is the property-path node that currently contains the
   // authoritative <view>; at the root, scope is represented by null.
@@ -7994,15 +8236,25 @@ useEffect(() => {
 
   const changeResultsPage = useCallback((delta: number) => {
     const nextPage = Math.max(0, resultsUiPage + delta);
-    const totalPages = effectiveResultsTotalCount === null ? 1 : Math.max(1, Math.ceil(effectiveResultsTotalCount / resultsPageSize));
-    if (nextPage >= totalPages || nextPage === resultsUiPage) return;
+    // An unknown total is not a one-page result set. Continue paging while a
+    // loaded page is available or the server has not returned a final short batch.
+    const knownTotalPages = effectiveResultsTotalCount === null
+      ? null
+      : Math.max(1, Math.ceil(effectiveResultsTotalCount / resultsPageSize));
+    const hasLoadedNextPage = results.length > nextPage * resultsPageSize;
+    const canRequestNextBatch = !resultsPageComplete && results.length > 0;
+    if (nextPage === resultsUiPage || (knownTotalPages !== null
+      ? nextPage >= knownTotalPages
+      : !hasLoadedNextPage && !canRequestNextBatch)) return;
     setResultsUiPage(nextPage);
     const requiredResultCount = (nextPage + 1) * resultsPageSize;
-    if (requiredResultCount > results.length && results.length < (effectiveResultsTotalCount ?? Number.POSITIVE_INFINITY) && !isSearching) {
+    if (requiredResultCount > results.length &&
+        results.length < (effectiveResultsTotalCount ?? Number.POSITIVE_INFINITY) &&
+        !resultsPageComplete && !isSearching && !resultsBatchRequestPending.current) {
       resultsBatchRequestPending.current = true;
       setResultsPage(resultsBatchSize, resultsOffset + Math.max(1, resultsPageMatchCount));
     }
-  }, [resultsUiPage, effectiveResultsTotalCount, resultsPageSize, results.length, isSearching, resultsBatchSize, resultsOffset, resultsPageMatchCount, setResultsPage]);
+  }, [resultsUiPage, effectiveResultsTotalCount, resultsPageSize, results.length, resultsPageComplete, isSearching, resultsBatchSize, resultsOffset, resultsPageMatchCount, setResultsPage]);
 
   useEffect(() => {
     if (centralTab !== "results") return;
@@ -9055,6 +9307,7 @@ useEffect(() => {
           groupBy={centralTab === "groups" && selectedGroupByOption && groupedPersonalFacetUri === widget.uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined}
           setPersonalWidgets={setPersonalWidgets}
           endpointReady={endpointReadyForQuery}
+          refreshRevision={queryRefreshRevision}
         />
       ))}
 
@@ -9065,7 +9318,7 @@ useEffect(() => {
             <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("backward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent className={historyActionMenu === "backward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "backward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Earlier in History · latest first · each change inverted</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "backward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
             <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("forward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent className={historyActionMenu === "forward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "forward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Later in History · earliest first</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "forward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
             </>)}
-            <Tooltip><TooltipTrigger render={<button type="button" onClick={refreshCurrentBreadcrumb} aria-label="Refresh current query scope" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25"><RotateCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Refresh current query scope using the active breadcrumb</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => void refreshMaestroPage()} aria-label="Refresh current query" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25"><RotateCw className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Refresh query (check selected graph server only if not green)</TooltipContent></Tooltip>
           </ButtonGroup>
 
           {/* One address: [graph]@[graph server], with no gap around the at-sign. */}
@@ -9714,7 +9967,14 @@ useEffect(() => {
             </form>
           </DialogContent>
         </Dialog>
-        <Sheet open={controlsSheetOpen} onOpenChange={setControlsSheetOpen}>
+        <Sheet open={controlsSheetOpen} onOpenChange={(open) => {
+          if (open) {
+            // Each Sheet opening begins with both settings groups collapsed.
+            setTimeoutEditorOpen(false);
+            setPanelLimitsOpen(false);
+          }
+          setControlsSheetOpen(open);
+        }}>
           <SheetTrigger
             render={
               <Button variant="outline" className="inline-flex shrink-0 items-center gap-2" aria-label="Open controls">
@@ -9877,7 +10137,7 @@ useEffect(() => {
                   onChange={(event) => {
                     const limit = Number(event.currentTarget.value);
                     if (!RESULTS_BATCH_SIZE_OPTIONS.includes(limit as typeof RESULTS_BATCH_SIZE_OPTIONS[number])) return;
-                    try { window.localStorage.setItem(LEFT_PANEL_LIMIT_STORAGE_KEY, String(limit)); } catch { /* non-fatal */ }
+                    maestroStorageSet(LEFT_PANEL_LIMIT_STORAGE_KEY, String(limit));
                     setPendingLeftPanelLimit(limit);
                   }}
                   className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
@@ -10969,7 +11229,7 @@ onMouseLeave={() => {
                               : shortenCount(visibleClassDisplayFacets.length)}
                         </span>} /><TooltipContent>{classFacetError || classFacetWarning || undefined}</TooltipContent></Tooltip>
                       </header>
-                      {classFacetError ? (
+                      {classFacetError && endpointReadyForQuery ? (
                         <p className="text-xs text-destructive">{classFacetError}</p>
                       ) : visibleClassDisplayFacets.length === 0 && !isLoadingClasses && !categoriesIncomplete ? (
                         <p className="text-xs text-muted-foreground">No classes found for this query.</p>
@@ -11175,7 +11435,7 @@ onMouseLeave={() => {
                                   : shortenCount(roleWidgetStatuses[roleNode.id]?.count ?? 0)}
                             </span>} /><TooltipContent>{roleWidgetStatuses[roleNode.id]?.error || undefined}</TooltipContent></Tooltip>
                           </header>
-                          {endpointReadyForQuery && <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} groupBy={centralTab === "groups" && selectedGroupByOption && groupedRoleUri === uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined} limit={leftPanelLimit} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} endpointReady={endpointReadyForQuery} />}
+                          {endpointReadyForQuery && <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} groupBy={centralTab === "groups" && selectedGroupByOption && groupedRoleUri === uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined} limit={leftPanelLimit} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} endpointReady={endpointReadyForQuery} refreshRevision={queryRefreshRevision} />}
                         </article>
                       );
                     })}
@@ -11288,7 +11548,7 @@ onMouseLeave={() => {
               <div className={`group/header shrink-0 border-b px-3 pb-3 pt-0 ${centralTab === "chat" ? "hidden" : ""}`}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm">
                   <span className="shrink-0 text-muted-foreground">
-                    <IncompleteWidgetIndicator source={centralTab === "groups" ? "groups" : "results"} /> Group <strong className="font-semibold text-foreground">{isCountingResults || effectiveResultsTotalCount === null ? "…" : shortenCount(effectiveResultsTotalCount)}</strong> results by:
+                    <IncompleteWidgetIndicator source={centralTab === "groups" ? "groups" : "results"} /> Group <strong className="font-semibold text-foreground">{effectiveResultsTotalCount !== null ? shortenCount(effectiveResultsTotalCount) : "many"}</strong> results by:
                   </span>
                   <div className="relative flex min-w-[8rem] max-w-full flex-1 items-center">
                   <select
@@ -11318,7 +11578,7 @@ onMouseLeave={() => {
                       const nextSize = Number(event.currentTarget.value);
                       if (!RESULTS_PAGE_SIZE_OPTIONS.some((size) => size === nextSize)) return;
                       try {
-                        window.localStorage.setItem(RESULTS_PAGE_SIZE_STORAGE_KEY, String(nextSize));
+                        maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(nextSize));
                       } catch {
                         // Storage can be disabled; the current selection still applies.
                       }
@@ -11390,12 +11650,17 @@ onMouseLeave={() => {
                 </div>
               )}
 
-              {(centralTab === "results" && effectiveResultsTotalCount !== null && effectiveResultsTotalCount > resultsPageSize || centralTab === "groups" && selectedGroupByOption && (groupValues.length > resultsPageSize || groupHasMoreBatches)) && (
+              {(centralTab === "results" && (resultsUiPage > 0 || results.length > resultsPageSize ||
+                (effectiveResultsTotalCount === null && !resultsPageComplete && results.length > 0) ||
+                (effectiveResultsTotalCount !== null && effectiveResultsTotalCount > resultsPageSize)) ||
+                centralTab === "groups" && selectedGroupByOption && (groupValues.length > resultsPageSize || groupHasMoreBatches)) && (
                 <div className="flex min-h-[42px] shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs">
                   <span className="text-muted-foreground" aria-live="polite">
                     {centralTab === "groups"
                       ? `Page ${groupUiPage + 1} / ${Math.max(1, Math.ceil(groupValues.length / resultsPageSize)).toLocaleString()}${groupHasMoreBatches ? "+" : ""}`
-                      : `Page ${resultsUiPage + 1} / ${Math.max(1, Math.ceil((effectiveResultsTotalCount ?? 0) / resultsPageSize)).toLocaleString()}`}
+                      : effectiveResultsTotalCount === null
+                        ? `Page ${resultsUiPage + 1}${resultsPageComplete ? ` / ${Math.max(1, Math.ceil(results.length / resultsPageSize)).toLocaleString()}` : ""}`
+                        : `Page ${resultsUiPage + 1} / ${Math.max(1, Math.ceil(effectiveResultsTotalCount / resultsPageSize)).toLocaleString()}`}
                   </span>
                   <div className="flex shrink-0 items-center gap-2">
                     <button
@@ -11421,7 +11686,11 @@ onMouseLeave={() => {
                           }
                         } else changeResultsPage(1);
                       }}
-                      disabled={isSearching || groupValuesLoading || (centralTab === "groups" ? ((groupUiPage + 1) * resultsPageSize >= groupValues.length && !groupHasMoreBatches) : resultsUiPage + 1 >= Math.ceil((effectiveResultsTotalCount ?? 0) / resultsPageSize))}
+                      disabled={isSearching || groupValuesLoading || (centralTab === "groups"
+                        ? ((groupUiPage + 1) * resultsPageSize >= groupValues.length && !groupHasMoreBatches)
+                        : effectiveResultsTotalCount === null
+                          ? (results.length <= (resultsUiPage + 1) * resultsPageSize && (resultsPageComplete || resultsBatchRequestPending.current))
+                          : resultsUiPage + 1 >= Math.ceil(effectiveResultsTotalCount / resultsPageSize))}
                     >
                       Next
                     </button>
@@ -11864,7 +12133,7 @@ onMouseLeave={() => {
                     </Tooltip>
                   </ButtonGroup>
                 </div>
-                {searchError && <p className="mt-2 text-sm text-destructive">{searchError}{searchError.includes("Could not load graphs from the personal SPARQL store") && <> Check that your <a href={personalSparqlEndpoint || undefined} target="_blank" rel="noreferrer" className="underline underline-offset-2">personal graph server</a> is online.</>}</p>}
+                {searchError && endpointReadyForQuery && <p className="mt-2 text-sm text-destructive">{searchError}{searchError.includes("Could not load graphs from the personal SPARQL store") && <> Check that your <a href={personalSparqlEndpoint || undefined} target="_blank" rel="noreferrer" className="underline underline-offset-2">personal graph server</a> is online.</>}</p>}
                 </>)}
               </div>
             </section>
@@ -11953,7 +12222,7 @@ onMouseLeave={() => {
                     </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  {recordGraphError && <span className="text-xs text-destructive" title={recordGraphError}>Graph discovery failed</span>}{loadingRecordAuthors && <span className="text-xs text-muted-foreground">Loading authors…</span>}{recordAuthorError && <span className="text-xs text-destructive" title={recordAuthorError}>Author metadata unavailable</span>}
+                  {recordGraphError && endpointReadyForQuery && <span className="text-xs text-destructive" title={recordGraphError}>Graph discovery failed</span>}{loadingRecordAuthors && <span className="text-xs text-muted-foreground">Loading authors…</span>}{recordAuthorError && <span className="text-xs text-destructive" title={recordAuthorError}>Author metadata unavailable</span>}
                 </div>}
                 {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div id="record_button_bar" className="mt-3 flex flex-wrap items-center gap-2">
                   {recordPolicy && <>
@@ -11999,7 +12268,7 @@ onMouseLeave={() => {
                   {(recordValidation.optionalMissing?.length ?? 0) > 0 && <p className="mt-2 text-xs text-muted-foreground">Optional fields not present in this Record snapshot: {Array.from(new Set(recordValidation.optionalMissing!.map((item) => item.name))).join(", ")}. These fields are not required by the selected SHACL shape.</p>}
                   {recordValidation.unsupportedConstraints.length > 0 && <p className="mt-2 break-all text-xs">Unsupported constraints: {recordValidation.unsupportedConstraints.join(", ")}</p>}
                 </div>}
-                {recordDescriptionError && <p role="alert" className="mt-2 text-sm text-destructive">{recordDescriptionError}</p>}
+                {recordDescriptionError && endpointReadyForQuery && <p role="alert" className="mt-2 text-sm text-destructive">{recordDescriptionError}</p>}
                 {recordFormatError && recordFormatError !== recordDescriptionError && <p className="mt-2 text-sm text-destructive">{recordFormatError}</p>}
                 {!isDescribing && describedRecordUri === selectedUri &&
                  recordDescriptionSnapshot?.key === currentRecordDescriptionKey && (
@@ -12066,7 +12335,22 @@ onMouseLeave={() => {
                       {describedPropertyRows.flatMap((item) => item.values.map((value, index) => (
                         <tr key={`${item.property}-${index}`} className="border-b">
                           {index === 0 && <td rowSpan={item.values.length} className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium"><button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400" title={`Open ${item.property} as a URI query`} onClick={() => openRecordPropertyUri(item.property)}>{toLabel(item.property)}</button></td>}
-                          <td className="break-all px-3 py-3 align-top" title={value}>{recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`}\u0000${value}`) ?? value}</td>
+                          <td className="break-all px-3 py-3 align-top">
+                            {value.termType === "bnode" ? (
+                              <span title={value.value}>{value.value}</span>
+                            ) : (
+                              <Tooltip><TooltipTrigger render={<button type="button"
+                                className="cursor-pointer break-all text-left font-inherit hover:underline underline-offset-2"
+                                onClick={() => navigateResultBadge(item.property, {
+                                  value: value.value, type: value.termType,
+                                  ...(value.datatype ? { datatype: value.datatype } : {}),
+                                  ...(value.lang ? { lang: value.lang } : {}),
+                                }, item.direction === "property-of" ? "reverse" : "forward")}
+                              ><span className="break-all">{value.termType === "uri"
+                                ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`}\u0000${value.value}`) ?? value.value)
+                                : value.value}</span></button>} /><TooltipContent>{`${toLabel(item.property)}${item.direction === "property-of" ? " of" : ""}: ${value.value}${value.lang ? ` @${value.lang}` : ""}${value.datatype ? `^^${value.datatype}` : ""}`}</TooltipContent></Tooltip>
+                            )}
+                          </td>
                         </tr>
                       )))}
                     </tbody>
@@ -12085,7 +12369,22 @@ onMouseLeave={() => {
                       {describedRoleRows.flatMap((item) => item.values.map((value, index) => (
                         <tr key={`${item.property}-of-${index}`} className="border-b">
                           {index === 0 && <td rowSpan={item.values.length} className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium"><button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400" title={`Open ${item.property} as a URI query`} onClick={() => openRecordPropertyUri(item.property)}>{toLabel(item.property)} of</button></td>}
-                          <td className="break-all px-3 py-3 align-top" title={value}>{recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`}\u0000${value}`) ?? value}</td>
+                          <td className="break-all px-3 py-3 align-top">
+                            {value.termType === "bnode" ? (
+                              <span title={value.value}>{value.value}</span>
+                            ) : (
+                              <Tooltip><TooltipTrigger render={<button type="button"
+                                className="cursor-pointer break-all text-left font-inherit hover:underline underline-offset-2"
+                                onClick={() => navigateResultBadge(item.property, {
+                                  value: value.value, type: value.termType,
+                                  ...(value.datatype ? { datatype: value.datatype } : {}),
+                                  ...(value.lang ? { lang: value.lang } : {}),
+                                }, item.direction === "property-of" ? "reverse" : "forward")}
+                              ><span className="break-all">{value.termType === "uri"
+                                ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`}\u0000${value.value}`) ?? value.value)
+                                : value.value}</span></button>} /><TooltipContent>{`${toLabel(item.property)}${item.direction === "property-of" ? " of" : ""}: ${value.value}${value.lang ? ` @${value.lang}` : ""}${value.datatype ? `^^${value.datatype}` : ""}`}</TooltipContent></Tooltip>
+                            )}
+                          </td>
                         </tr>
                       )))}
                     </tbody>

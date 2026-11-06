@@ -207,6 +207,55 @@ function fctColumn(term: SparqlBindingTerm | undefined, label?: string, extraAtt
   return `<fct:column${attrs}>${xmlText(term.value)}</fct:column>`;
 }
 
+/**
+ * Virtuoso FCT response metadata. The /sparql protocol exposes partial-result
+ * status and execution statistics via HTTP headers, not through the JSON rows.
+ * A missing upstream statistic stays empty rather than being fabricated.
+ * `processed` is the number of result rows in this response, NOT an
+ * unrestricted COUNT(DISTINCT ...) for the current facet scope.
+ */
+type FctExecutionMetadata = {
+  query: string;
+  elapsedMs: number;
+  complete: boolean;
+  timeoutMs: number;
+  processed: number;
+  limit: number;
+  offset: number;
+  sqlState?: string;
+  sqlMessage?: string;
+  execMilliseconds?: string;
+  execDbActivity?: string;
+};
+
+function fctExecutionMetadataXml(meta: FctExecutionMetadata): string {
+  const state = meta.sqlState?.trim() || "";
+  const message = meta.sqlMessage?.trim() || "";
+  // Original FCT fct_exec emits these seven direct children in this order.
+  // The sql-* / exec-* children are Maestro's diagnostic extensions.
+  return `<fct:sparql>${xmlText(meta.query)}</fct:sparql>`
+    + `<fct:time>${Math.max(0, Math.round(meta.elapsedMs))}</fct:time>`
+    + `<fct:complete>${meta.complete ? "yes" : "no"}</fct:complete>`
+    + `<fct:timeout>${meta.timeoutMs}</fct:timeout>`
+    + `<fct:db-activity>${xmlText(meta.execDbActivity ?? "")}</fct:db-activity>`
+    + `<fct:processed>${meta.processed}</fct:processed>`
+    + `<fct:view offset="${meta.offset}" limit="${meta.limit}"/>`
+    + `<fct:sql-state>${xmlText(state)}</fct:sql-state>`
+    + `<fct:sql-message>${xmlText(message)}</fct:sql-message>`
+    + `<fct:exec-milliseconds>${xmlText(meta.execMilliseconds ?? "")}</fct:exec-milliseconds>`
+    + (state === "S1TAT" ? `<fct:warning>${xmlText(message || "Virtuoso returned partial results because the ANYTIME timeout was reached.")}</fct:warning>` : "");
+}
+
+function fctUpstreamMetadata(response: Response, body: string): Pick<FctExecutionMetadata, "sqlState" | "sqlMessage" | "execMilliseconds" | "execDbActivity"> {
+  const anytime = isVirtuosoAnytime(response, body);
+  return {
+    sqlState: anytime ? "S1TAT" : response.headers.get("X-SQL-State") ?? "",
+    sqlMessage: anytime ? virtuosoAnytimeMessage(response, body) : response.headers.get("X-SQL-Message") ?? "",
+    execMilliseconds: response.headers.get("X-Exec-Milliseconds") ?? "",
+    execDbActivity: response.headers.get("X-Exec-DB-Activity") ?? "",
+  };
+}
+
 function fctResponseXml(args: {
   query: string; view: string; limit: number; offset: number; bindings?: Record<string, SparqlBindingTerm>[];
   vars?: string[]; elapsedMs: number; complete: boolean; timeoutMs?: number; graphOnly?: boolean; countOnly?: boolean;
@@ -233,7 +282,12 @@ function fctResponseXml(args: {
       return fctColumn(binding[name], labelFor(binding[name]), { ...(extraAttrs ?? {}), var: name });
     }).join("")}</fct:row>`;
   }).join("");
-  return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${complete ? "yes" : "no"}</fct:complete><fct:timeout>${args.timeoutMs ?? 0}</fct:timeout><fct:sql-state>${xmlText(sqlState ?? "")}</fct:sql-state><fct:sql-message>${xmlText(sqlMessage ?? "")}</fct:sql-message><fct:exec-milliseconds>${xmlText(execMilliseconds ?? "")}</fct:exec-milliseconds><fct:db-activity>${xmlText(execDbActivity ?? "")}</fct:db-activity>${sqlState === "S1TAT" ? `<fct:warning>${xmlText(sqlMessage || "Virtuoso returned partial results because the ANYTIME timeout was reached.")}</fct:warning>` : ""}<fct:processed>${bindings.length}</fct:processed><fct:view offset="${offset}" limit="${limit}"/><fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;
+  const metadata = fctExecutionMetadataXml({
+    query, elapsedMs, complete, timeoutMs: args.timeoutMs ?? 0,
+    processed: bindings.length, limit, offset,
+    sqlState, sqlMessage, execMilliseconds, execDbActivity,
+  });
+  return `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;
 }
 
 /**
@@ -249,7 +303,7 @@ async function expandListValues(args: {
   columns: Array<{ property: string; direction: "forward" | "reverse"; path?: string[] }>;
   graph: string;
   timeoutMs: number;
-}): Promise<{ rows: Record<string, SparqlBindingTerm[]>; query: string; complete: boolean }> {
+}): Promise<{ rows: Record<string, SparqlBindingTerm[]>; query: string; complete: boolean; upstream?: ReturnType<typeof fctUpstreamMetadata> }> {
   const values = [...new Set(args.page.map((row) => row.c1?.value).filter((v): v is string => typeof v === "string" && /^https?:\/\//i.test(v)))];
   const validIri = (value: string) => /^https?:\/\/[^\s<>"{}|^`\\]+$/i.test(value);
   const columns = args.columns.slice(0, 24).filter((column) => validIri(column.property));
@@ -300,7 +354,7 @@ async function expandListValues(args: {
       query, response: result.text.slice(0, 1000),
     });
   }
-  return { rows, query, complete: result.response.status === 200 && !isVirtuosoAnytime(result.response, result.text) };
+  return { rows, query, complete: result.response.status === 200 && !isVirtuosoAnytime(result.response, result.text), upstream: fctUpstreamMetadata(result.response, result.text) };
 }
 
 function listValuesXml(args: {
@@ -313,6 +367,8 @@ function listValuesXml(args: {
   offset: number;
   elapsed: number;
   complete: boolean;
+  timeoutMs: number;
+  upstream?: ReturnType<typeof fctUpstreamMetadata>;
 }): string {
   const rows = args.page.map((binding) => {
     const focus = binding.c1;
@@ -329,7 +385,12 @@ function listValuesXml(args: {
     }).join("");
     return `<fct:row>${fctColumn(focus, args.labels.get(resource), { var: "c1" })}${fctColumn({ type: "literal", value: label }, undefined, { var: "c2" })}${cells}</fct:row>`;
   }).join("");
-  return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(args.query)}</fct:sparql><fct:time>${args.elapsed}</fct:time><fct:complete>${args.complete ? "yes" : "no"}</fct:complete><fct:processed>${args.page.length}</fct:processed><fct:view offset="${args.offset}" limit="${args.limit}"/><fct:result type="${FCT_VIEW_TYPES.LIST_VALUES}">${rows}</fct:result></fct:facets>`;
+  const metadata = fctExecutionMetadataXml({
+    query: args.query, elapsedMs: args.elapsed, complete: args.complete,
+    timeoutMs: args.timeoutMs, processed: args.page.length,
+    offset: args.offset, limit: args.limit, ...args.upstream,
+  });
+  return `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.LIST_VALUES}">${rows}</fct:result></fct:facets>`;
 }
 
 function parseDescribeRdfXml(source: string): Record<string, SparqlBindingTerm>[] {
@@ -540,6 +601,7 @@ export async function POST(request: Request) {
         page, columns: compiled.valueColumns ?? [], expansion: expansion.rows,
         labels: new Map(), query: expansion.query, limit: page.length,
         offset: 0, elapsed: Date.now() - startedAt, complete: expansion.complete,
+        timeoutMs: compiled.timeoutMs, upstream: expansion.upstream,
       });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
@@ -583,7 +645,13 @@ export async function POST(request: Request) {
       const labelFor = (term: SparqlBindingTerm | undefined) => term?.type === "uri" ? labels.get(term.value) : undefined;
       const describeRows = bindings.map((binding) => `<fct:row>${fctColumn(binding.s, labelFor(binding.s))}${fctColumn(binding.p, labelFor(binding.p))}${fctColumn(binding.o, labelFor(binding.o))}</fct:row>`).join("");
       const describeComplete = !partial;
-      const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${describeComplete ? "yes" : "no"}</fct:complete><fct:timeout>${compiled.timeoutMs}</fct:timeout><fct:sql-state>${xmlText(sqlState)}</fct:sql-state><fct:sql-message>${xmlText(sqlMessage)}</fct:sql-message><fct:exec-milliseconds>${xmlText(execMilliseconds)}</fct:exec-milliseconds><fct:db-activity>${xmlText(execDbActivity)}</fct:db-activity>${sqlState === "S1TAT" ? `<fct:warning>${xmlText(sqlMessage || "Virtuoso returned partial results because the ANYTIME timeout was reached.")}</fct:warning>` : ""}<fct:processed>${bindings.length}</fct:processed><fct:view offset="${compiled.offset}" limit="${compiled.limit}"/><fct:result type="${FCT_VIEW_TYPES.DESCRIBE}">${describeRows}</fct:result></fct:facets>`;
+      const metadata = fctExecutionMetadataXml({
+        query: compiled.query, elapsedMs: Date.now() - startedAt, complete: describeComplete,
+        timeoutMs: compiled.timeoutMs, processed: bindings.length,
+        limit: compiled.limit, offset: compiled.offset,
+        ...fctUpstreamMetadata(response, text),
+      });
+      const xml = `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.DESCRIBE}">${describeRows}</fct:result></fct:facets>`;
       if (response.status === 200 && !partial) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...incompleteHeaders } });
     }
@@ -594,7 +662,12 @@ export async function POST(request: Request) {
       let askBoolean: boolean | undefined;
       try { const result = JSON.parse(text) as { boolean?: unknown }; if (typeof result.boolean === "boolean") askBoolean = result.boolean; } catch { /* invalid upstream result */ }
       if (partial || askBoolean === undefined) return fctError("Virtuoso did not complete the ASK preflight.", 502, text.slice(0, 1200));
-      const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:complete>yes</fct:complete><fct:result type="${FCT_VIEW_TYPES.ASK}"><fct:boolean>${askBoolean ? "true" : "false"}</fct:boolean></fct:result></fct:facets>`;
+      const metadata = fctExecutionMetadataXml({
+        query: compiled.query, elapsedMs, complete: true, timeoutMs: compiled.timeoutMs,
+        processed: 1, limit: compiled.limit, offset: compiled.offset,
+        ...fctUpstreamMetadata(response, text),
+      });
+      const xml = `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.ASK}"><fct:boolean>${askBoolean ? "true" : "false"}</fct:boolean></fct:result></fct:facets>`;
       if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
@@ -631,6 +704,7 @@ export async function POST(request: Request) {
         offset: compiled.offset,
         elapsed: Date.now() - startedAt,
         complete: !partial && expansion.complete,
+        timeoutMs: compiled.timeoutMs, upstream: partial ? fctUpstreamMetadata(response, text) : expansion.upstream,
       });
       if (response.status === 200 && !partial && expansion.complete)
         setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
@@ -651,7 +725,7 @@ export async function POST(request: Request) {
     const complete = !partial;
     const xml = fctResponseXml({
       query: compiled.query, view: compiled.view, limit: compiled.limit, offset: compiled.offset,
-      bindings, vars, elapsedMs, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly, labels,
+      bindings, vars, elapsedMs: Date.now() - startedAt, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly, labels,
       badgeColumns: compiled.badgeColumns,
       sqlState: anytime ? "S1TAT" : sqlState,
       sqlMessage: anytime ? virtuosoAnytimeMessage(response, text) : sqlMessage,

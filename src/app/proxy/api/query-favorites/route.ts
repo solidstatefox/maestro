@@ -2,7 +2,7 @@ import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
-import { MAESTRO_IDS_NS, getHistoryGraph, VFCT_NS, askPersonalSparql, queryPersonalSparql, updatePersonalSparql, getConfiguredFctEndpoints, personalSparqlUrl } from "@/lib/personal-sparql";
+import { MAESTRO_IDS_NS, getHistoryGraph, VFCT_NS, askPersonalSparql, queryPersonalSparql, updatePersonalSparql } from "@/lib/personal-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { describeUpstreamError } from "@/lib/upstream-error";
 import { requirePersonalLogin } from "@/lib/personal-guard";
@@ -296,27 +296,9 @@ export async function POST(request: Request) {
         if (sourceUrl.protocol !== "http:" && sourceUrl.protocol !== "https:") {
           return NextResponse.json({ error: "The bookmark state URL must use HTTP or HTTPS." }, { status: 400 });
         }
-        const escapeXml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-        let personalServerId = "personal-sparql";
-        try {
-          const endpoints = await getConfiguredFctEndpoints(request);
-          const endpointUrl = personalSparqlUrl(request);
-          const normalizeEndpointUrl = (value: string) => {
-            const u = new URL(value);
-            u.hash = "";
-            u.pathname = u.pathname.replace(/\/+$/u, "") || "/";
-            return u.toString().replace(/\/$/u, "");
-          };
-          const match = endpoints.find((ep: { id: string; url: string }) => {
-            try { return normalizeEndpointUrl(ep.url) === normalizeEndpointUrl(endpointUrl.toString()); } catch { return false; }
-          }) ?? endpoints[0];
-          if (match?.id) personalServerId = match.id;
-        } catch {
-          personalServerId = "personal-sparql";
-        }
-        const bookmarkGraphIri = `${baseGraph}#bookmarks`;
-        const shareQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="" same-as="" timeout="20000" graph="${escapeXml(bookmarkGraphIri)}" addr="${escapeXml(`${bookmarkGraphIri}@${personalServerId}`)}"><value datatype="uri">${escapeXml(historyId)}</value><view type="text" limit="30" offset="0"/></query>`;
-        sourceUrl.searchParams.set("q", shareQueryXml);
+        // A bookmark's schema:url is the share link for the original FCT query,
+        // never a query for the bookmark resource in the personal store.
+        sourceUrl.searchParams.set("q", queryXml);
         sourceUrl.searchParams.delete("history");
         sourceUrl.searchParams.delete("state");
         shareUrl = sourceUrl.toString();

@@ -179,16 +179,22 @@ function formatEntityLabel(label: string, entityType?: EntityType): string {
   return label;
 }
 
+/** Strip an RDF fragment marker from class fallback names (not from URI identifiers). */
+function classLocalLabel(label: string, entityType?: EntityType): string {
+  if (entityType !== "Class") return label;
+  return label.replace(/^#+(?=[^#\s])/u, "");
+}
+
 export function toLabel(value: string, entityType?: EntityType): string {
   const uri = value.trim();
   if (!uri) return formatEntityLabel(value, entityType);
   hydrate();
   const realLabel = uriToLabel.get(uri);
-  if (realLabel && realLabel !== uri) return formatEntityLabel(realLabel, entityType);
+  if (realLabel && realLabel !== uri) return formatEntityLabel(classLocalLabel(realLabel, entityType), entityType);
   const known = uriToShortform.get(uri);
-  if (known && known !== uri) return formatEntityLabel(known, entityType);
+  if (known && known !== uri) return formatEntityLabel(classLocalLabel(known, entityType), entityType);
   if (known === uri) uriToShortform.delete(uri);
-  if (!/^[a-z][a-z0-9+.-]*:/i.test(uri) || !/^https?:\/\//i.test(uri) && !uri.includes("/")) return formatEntityLabel(value, entityType);
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(uri) || !/^https?:\/\//i.test(uri) && !uri.includes("/")) return formatEntityLabel(classLocalLabel(value, entityType), entityType);
   const { namespace, local } = splitNamespace(uri);
   if (!namespace || !local) return formatEntityLabel(value, entityType);
   let prefix = namespaceToPrefix.get(namespace);
@@ -203,6 +209,6 @@ export function toLabel(value: string, entityType?: EntityType): string {
   const generatedLabel = `${prefix}:${decodedLocal}`;
   uriToShortform.set(uri, generatedLabel);
   persist();
-  return formatEntityLabel(generatedLabel, entityType);
+  return formatEntityLabel(classLocalLabel(generatedLabel, entityType), entityType);
 }
 

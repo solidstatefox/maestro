@@ -75,7 +75,7 @@
       <div id="bookmark-heading-group" class="space-y-2">
         <p id="bookmark-eyebrow" class="text-sm font-medium text-muted-foreground">Your collection</p>
         <div id="bookmark-title-row" class="flex min-w-0 items-center gap-2">
-          <a id="bookmark-title-link" class="inline-flex min-w-0 items-center gap-2 break-words text-2xl font-semibold tracking-tight text-primary underline-offset-4 hover:underline cursor-pointer sm:text-3xl" mui:href="xpath:/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='https://vos.openlinksw.com/owiki/wiki/VOS/https://schema.org/url']]/fct:column[last()]" target="_blank" rel="noopener noreferrer" aria-label="Open the saved query state">
+          <a id="bookmark-title-link" class="inline-flex min-w-0 items-center gap-2 break-words text-2xl font-semibold tracking-tight text-primary underline-offset-4 hover:underline cursor-pointer sm:text-3xl" mui:href="xpath:/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='https://schema.org/url']]/fct:column[last()]" target="_self" rel="noopener noreferrer" aria-label="Open the saved query state">
             <span id="bookmark-title-text" mui:data="http://purl.org/dc/terms/title"><xsl:value-of select="mui:joined-values(root(.), 'http://purl.org/dc/terms/title')"/></span>
             <svg:svg id="bookmark-title-binoculars-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="inline-block size-5 shrink-0" role="img" aria-label="Open saved query">
               <svg:path id="bookmark-title-binoculars-center" d="M10 10h4"/>

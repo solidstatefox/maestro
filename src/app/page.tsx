@@ -36,14 +36,15 @@ import { Label } from "@/components/ui/label";
 import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
-import { cachedFetchFct, clearClientQueryCache } from "@/lib/client-query-cache";
+import { cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
+import { MAESTRO_TIMEOUT_CATEGORIES, readMaestroWidgetTimeouts, writeMaestroWidgetTimeouts, type MaestroTimeoutCategory } from "@/lib/maestro-query-timeouts";
 import { setMaestroIncompleteResults, getMaestroIncompleteResults, subscribeMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 import { initializeMaestroStorage, maestroStorageGet, maestroStorageSet, clearMaestroStorage } from "@/lib/maestro-storage";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
 import { BasicAssistantChat } from "@/components/ai-elements/basic-chat";
-import { transformMaestroRecordXslt } from "@/lib/maestro-xslt";
+import { transformMaestroRecordXslt, transformMaestroQueryXslt } from "@/lib/maestro-xslt";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -131,6 +132,12 @@ const RESULTS_BATCH_SIZE_OPTIONS = [30, 100, 250, 500, 1000] as const;
 /** LIMIT applied to every left-panel widget: Categories, Personal facets, Graphs, and Configure Properties/Roles. */
 const LEFT_PANEL_LIMIT_STORAGE_KEY = "maestro-left-panel-limit";
 const DEFAULT_LEFT_PANEL_LIMIT = 30;
+const CENTER_PANEL_LIMIT_STORAGE_KEY = "maestro-center-panel-limit";
+const CENTER_GROUP_LIMIT_STORAGE_KEY = "maestro-center-group-limit";
+const RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY = "maestro-right-panel-describe-limit";
+const RIGHT_PANEL_PAGE_LIMIT_STORAGE_KEY = "maestro-right-panel-page-limit";
+const RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS = [30, 100, 250, 500, 1000, 10000] as const;
+const RIGHT_PANEL_PAGE_LIMIT_OPTIONS = [10, 20, 30, 50, 100] as const;
 /** Single inter-item gap used by all left-pane facet lists, including tree branches. */
 const FACET_ITEM_GAP_CLASS = "space-y-0.5";
 const PROPERTY_ROLE_ITEM_GAP_CLASS = "space-y-0";
@@ -306,6 +313,57 @@ type FctResult = {
   datatype?: string;
   lang?: string;
 };
+
+type ListValueProjection = { property: string; direction: "forward" | "reverse" };
+
+/** Make a derived FCT query. Projection nodes are deliberately not filters. */
+function listValuesQueryClone(xml: string, columns: ListValueProjection[]): string {
+  const document = new DOMParser().parseFromString(xml, "application/xml");
+  const view = Array.from(document.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0", "view"))[0]
+    ?? Array.from(document.getElementsByTagName("view"))[0];
+  if (!view || !view.parentElement) throw new Error("The live query has no view carrier.");
+  view.setAttribute("type", "list-values");
+  view.removeAttribute("badges");
+  const parent = view.parentElement;
+  const ns = view.namespaceURI || "http://openlinksw.com/services/facets/1.0";
+  for (const column of columns) {
+    const node = document.createElementNS(ns, column.direction === "reverse" ? "property-of" : "property");
+    node.setAttribute("iri", column.property);
+    node.setAttribute("project", "yes");
+    parent.insertBefore(node, view);
+  }
+  return new XMLSerializer().serializeToString(document);
+}
+
+/** Read the bounded, typed cells of the Maestro FCT list-values extension. */
+function parseListValuesXml(xml: string): Map<string, ScopeValue[]> {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  if (doc.querySelector("parsererror")) throw new Error("Invalid list-values FCT response XML.");
+  const root = doc.documentElement;
+  const errorNode = Array.from(root.getElementsByTagName("*")).find((node) => node.localName === "error");
+  if (errorNode) throw new Error(errorNode.textContent || "The list-values request failed.");
+  const map = new Map<string, ScopeValue[]>();
+  const rows = Array.from(root.getElementsByTagName("*")).filter((node) => node.localName === "row");
+  for (const row of rows) {
+    const cols = Array.from(row.children).filter((node) => node.localName === "column");
+    const resource = cols[0]?.textContent?.trim() ?? "";
+    if (!resource) continue;
+    const scoped = cols.slice(2).flatMap((col): ScopeValue[] => {
+      const property = col.getAttribute("property") || "";
+      if (!property) return [];
+      const direction: RelationshipDirection = col.getAttribute("direction") === "reverse" ? "reverse" : "forward";
+      const values = Array.from(col.children).filter((node) => node.localName === "value").map((node): EnrichedTerm => {
+        const datatype = node.getAttribute("datatype") || undefined;
+        const lang = node.getAttribute("xml:lang") || undefined;
+        return { value: node.textContent ?? "", type: datatype === "uri" ? "uri" : datatype === "bnode" ? "bnode" : "literal",
+          ...(datatype ? { datatype } : {}), ...(lang ? { lang } : {}) };
+      });
+      return [{ property, direction, label: toLabel(property), values: values.length ? values : [{ value: "-" }] }];
+    });
+    map.set(resource, scoped);
+  }
+  return map;
+}
 
 function escapeXmlText(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
@@ -666,7 +724,7 @@ function QueryInspectorButton({
       type="button"
       onClick={() => { setActiveTab("widget"); setOpen(true); }}
       aria-label={`${label}: ${filename}`}
-      className={`inline-flex ${toolbarButton ? "size-9" : "size-7 rounded border"} shrink-0 items-center justify-center ${toolbarButton ? "" : "opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/header:opacity-100"} ${headerTone ? "border-sky-700 bg-sky-800 text-sky-50 hover:bg-sky-700 hover:text-sky-50 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100 dark:hover:bg-sky-900" : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+      className={`inline-flex ${toolbarButton ? "size-7 rounded border" : "size-7 rounded border"} shrink-0 items-center justify-center ${toolbarButton ? "" : "opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/header:opacity-100"} ${headerTone ? "border-sky-700 bg-sky-800 text-sky-50 hover:bg-sky-700 hover:text-sky-50 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100 dark:hover:bg-sky-900" : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground"}`}
     >
       <Code2 className="size-4" aria-hidden="true" />
     </button>
@@ -1396,7 +1454,7 @@ type ShareableUiState = {
   showResultBadges?: boolean;
   /** Explicit state for the Badges toolbar toggle. */
   badgesToggle?: boolean;
-  querySourceFormat?: "xml" | "sparql" | "alphabet-xml" | "alphabet-sparql";
+  querySourceFormat?: "xml" | "sparql" | "alphabet-xml" | "alphabet-sparql" | "response";
   defaultLeftTab?: "facets" | "personal" | "community";
   focusListOrder?: "Properties" | "Roles";
   focusWidgetsSuppressed?: boolean;
@@ -2009,7 +2067,7 @@ useEffect(() => {
 
 
 
-  const [querySourceFormat, setQuerySourceFormat] = useState<"xml" | "sparql" | "alphabet-xml" | "alphabet-sparql">("xml");
+  const [querySourceFormat, setQuerySourceFormat] = useState<"xml" | "sparql" | "alphabet-xml" | "alphabet-sparql" | "response">("xml");
   const [sparqlQuery, setSparqlQuery] = useState("");
   const [isRdfLoaderOpen, setIsRdfLoaderOpen] = useState(false);
   const [rdfSourceUrl, setRdfSourceUrl] = useState("");
@@ -2229,7 +2287,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // including work enqueued just before the search field opened.
   rootSearchExpandedRef.current = rootSearchExpanded;
   const [namePropertyMenuOpen, setNamePropertyMenuOpen] = useState(false);
-  const [categoriesTreeMode, setCategoriesTreeMode] = useState(false);
+  // The Categories tree/list toggle belongs to the authoritative FCT query,
+  // so History, share links, and restored queries reproduce the same mode.
+  const categoriesTreeMode = queryTree.attributes.classTree === "true";
   // Path keys of explicitly expanded tree nodes. New trees and new branches start closed.
   const [expandedCategoryNodes, setExpandedCategoryNodes] = useState<Set<string>>(() => new Set());
   const [ontologyClassMetadata, setOntologyClassMetadata] = useState<Record<string, OntologyClassMetadata>>({});
@@ -2251,6 +2311,36 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       children: node.children.map((child) => setMainViewType(child, type)),
     };
   }
+
+  /** Navigate from a Record predicate to that predicate URI as a new root. */
+  const openRecordPropertyUri = (uri: string) => {
+    if (!uri.trim()) return;
+    // Clear all prior constraints/path but preserve graphsite@graphserver routing.
+    const findView = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
+      for (const node of nodes) {
+        if (node.name === "view") return node;
+        const nested = findView(node.children);
+        if (nested) return nested;
+      }
+      return undefined;
+    };
+    const currentView = findView(queryTree.children);
+    const rootView: FctQueryNode = currentView
+      ? { ...currentView, attributes: { ...currentView.attributes, type: "properties", offset: "0", index: "" }, children: [] }
+      : { id: "query-view", name: "view", attributes: { type: "properties", limit: "30", offset: "0" }, children: [] };
+    const freshTree = { ...queryTree, children: [rootView] };
+    const rooted = fctQueryTreeApi.setValue(freshTree, null, [{ text: uri, datatype: "uri" }], {
+      replaceExisting: true,
+      idPrefix: "query-uri-value",
+    });
+    replaceQueryTree(rooted);
+    selectedSignalModeRef.current = "uri";
+    setSelectedSignalMode("uri");
+    setSavedUriDraft(uri);
+    searchDraftRef.current = uri;
+    setSearchDraft(uri);
+    setSearchPipelineRun((current) => current + 1);
+  };
 
   const applyRecordAsRootValue = (uri: string) => {
     if (!uri.trim()) return;
@@ -2359,12 +2449,11 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       void (async () => {
         const controller = new AbortController();
         try {
-          const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
-          const response = await cachedFetchFct("/proxy/api/fct", {
+            const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
             cache: "no-store",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("uri-label-lookup", "UriLabelLookup") },
-            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="describe" limit="30" offset="0"/></query>`,
+            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : ""))}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="describe" limit="30" offset="0"/></query>`,
             signal: controller.signal,
           });
           const data = await readFctResponse(response);
@@ -2945,6 +3034,30 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   );
   const resultsOffset = Math.max(0, Number(viewNode?.attributes.offset ?? "0") || 0);
   const [resultsPageSize, setResultsPageSize] = useState<number>(DEFAULT_RESULTS_PAGE_SIZE);
+  useEffect(() => {
+    let active = true;
+    void initializeMaestroStorage().then(() => {
+      if (!active) return;
+      const savedCenter = Number(maestroStorageGet(CENTER_PANEL_LIMIT_STORAGE_KEY));
+      if (RESULTS_BATCH_SIZE_OPTIONS.some((value) => value === savedCenter)) {
+        const live = fctQueryTreeApi.getTree();
+        const node = findQueryNode(live.children, "query-view");
+        // Respect the restored/share URL's explicit view limit; the Sheet controls
+        // it only when the view is still at the default initial batch size.
+        if (node && Number(node.attributes.limit ?? 30) === 30 && savedCenter !== 30) {
+          setResultsPage(savedCenter, 0);
+        }
+      }
+      const savedGroup = Number(maestroStorageGet(CENTER_GROUP_LIMIT_STORAGE_KEY));
+      if (RESULTS_BATCH_SIZE_OPTIONS.some((value) => value === savedGroup)) setGroupBatchSize(savedGroup);
+      const savedDescribe = Number(maestroStorageGet(RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY));
+      if (RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS.some((value) => value === savedDescribe)) setRecordDescriptionQueryLimit(savedDescribe);
+      const savedPage = Number(maestroStorageGet(RIGHT_PANEL_PAGE_LIMIT_STORAGE_KEY));
+      if (RIGHT_PANEL_PAGE_LIMIT_OPTIONS.some((value) => value === savedPage)) setRecordDescriptionPageSize(savedPage);
+    });
+    return () => { active = false; };
+  }, []);
+
   const resultsPageSizeStorageInitialized = useRef(false);
 
   useEffect(() => {
@@ -3158,7 +3271,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         setBreadcrumbBadgeMode(restored.breadcrumbBadgeMode);
         maestroStorageSet("maestro-breadcrumb-badge-mode", restored.breadcrumbBadgeMode);
       }
-      if (["xml", "sparql", "alphabet-xml", "alphabet-sparql"].includes(restored.querySourceFormat ?? "")) setQuerySourceFormat(restored.querySourceFormat as "xml" | "sparql" | "alphabet-xml" | "alphabet-sparql");
+      if (["xml", "sparql", "alphabet-xml", "alphabet-sparql", "response"].includes(restored.querySourceFormat ?? "")) setQuerySourceFormat(restored.querySourceFormat as "xml" | "sparql" | "alphabet-xml" | "alphabet-sparql" | "response");
       if (["facets", "personal", "community"].includes(restored.defaultLeftTab ?? "")) setDefaultLeftTab(restored.defaultLeftTab!);
       if (restored.focusListOrder === "Properties" || restored.focusListOrder === "Roles") setFocusListOrder(restored.focusListOrder);
       if (typeof restored.focusWidgetsSuppressed === "boolean") setFocusWidgetsSuppressed(restored.focusWidgetsSuppressed);
@@ -3536,13 +3649,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // The flat Categories list is authoritative in both display modes. Tree mode only changes its arrangement.
   const classFacetQueryXml = queryWithoutPagingXml("classes", isGroupByCategory, false);
   const roleFacetQueryXml = queryWithoutPagingXml("properties-in");
-  // The alphabet indexes all name/label predicates offered by the search signal
-  // picker, not just the checkbox-selected predicates used by Name search.
-  // Also retain any additional predicate restored from a saved query.
-  const alphabetLabelUris = Array.from(new Set([
-    ...TEXT_SEARCH_NAME_PROPERTIES.map((property) => property.uri),
-    ...selectedNamePropertyUris,
-  ])).join(" ");
+  // For broad scans of large public endpoints, use the tested rdfs:label-only
+  // alphabet query. Other label predicates in the former 17-way join made the
+  // aggregation prohibitively expensive on the Virtuoso DBpedia demo.
+  const alphabetLabelUris = "http://www.w3.org/2000/01/rdf-schema#label";
   // The Alphabet system facet queries a clone of the live scope and never
   // constrains its own counts by the currently selected letter.
   const alphabetQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
@@ -3569,6 +3679,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   })();
   const alphabetIndex = currentView?.attributes.index || "";
   const [alphabetCounts, setAlphabetCounts] = useState<Record<string, number>>({});
+  const alphabetCountsQueryRef = useRef("");
   const [alphabetError, setAlphabetError] = useState("");
   const [isLoadingAlphabet, setIsLoadingAlphabet] = useState(false);
   // Ask FCT for the total independently of the current results page. The
@@ -3600,6 +3711,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   useEffect(() => {
     if (!selectedEndpointId || !endpointReadyForQuery) return;
     const controller = new AbortController();
+    if (alphabetCountsQueryRef.current !== alphabetQueryXml) {
+      alphabetCountsQueryRef.current = alphabetQueryXml;
+      setAlphabetCounts({});
+    }
     setIsLoadingAlphabet(true);
     setAlphabetError("");
     void (async () => {
@@ -3615,14 +3730,19 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         }
         const next: Record<string, number> = {};
         for (const row of payload.rows) {
-          const key = row[0]?.value?.toUpperCase();
+          // Virtuoso may report multiple term representations for the same
+          // printed letter (e.g. S and "S"). Aggregate them client-side and
+          // render the fixed A-Z strip in alphabetical order, without SPARQL
+          // ORDER BY. Only normalize the one-letter grouping value here.
+          const rawKey = (row[0]?.value ?? "").trim();
+          const match = /^(?:["']?)([A-Za-z])(?:["']?)$/.exec(rawKey);
+          const key = match?.[1].toUpperCase();
           const count = Number(row[1]?.value ?? 0);
-          if (key && /^[A-Z]$/.test(key) && Number.isFinite(count)) next[key] = count;
+          if (key && Number.isFinite(count) && count >= 0) next[key] = (next[key] ?? 0) + count;
         }
         if (!controller.signal.aborted) setAlphabetCounts(next);
       } catch (error) {
         if (!controller.signal.aborted) {
-          setAlphabetCounts({});
           setAlphabetError(error instanceof Error ? error.message : "Could not load alphabet counts.");
         }
       } finally {
@@ -3784,7 +3904,13 @@ useEffect(() => {
     : Math.max(resultsTotalCount, results.length);
   const [describedRecord, setDescribedRecord] = useState<{ property: string; value: string; direction: "property" | "property-of" }[]>([]);
   const [describedRecordUri, setDescribedRecordUri] = useState("");
-  // Graph provenance is discovered separately. The unfiltered FCT DESCRIBE remains authoritative.
+  // One authoritative SELECT snapshot feeds both Default and graph-stored XSLT formats.
+  // Keep its XML, record identity, and completion flag together to prevent stale formatting.
+  const [recordDescriptionSnapshot, setRecordDescriptionSnapshot] = useState<{
+    key: string; uri: string; xml: string; incomplete: boolean;
+  } | null>(null);
+
+  // Graph provenance is discovered separately; Record SELECT is authoritative.
   const [recordGraphs, setRecordGraphs] = useState<string[]>([]);
   const [selectedRecordGraph, setSelectedRecordGraph] = useState("");
   const [selectedRecordAuthor, setSelectedRecordAuthor] = useState("");
@@ -3826,18 +3952,62 @@ useEffect(() => {
   const [isLoadingRecordPolicy, setIsLoadingRecordPolicy] = useState(false);
   const [recordPolicyCheckedUri, setRecordPolicyCheckedUri] = useState("");
   const [recordPolicyError, setRecordPolicyError] = useState("");
-  const [recordValidation, setRecordValidation] = useState<{ conforms: boolean; complete: boolean; violations: { path: string; message: string; value?: string }[]; unsupportedConstraints: string[]; message: string } | null>(null);
+  const [recordValidation, setRecordValidation] = useState<{ conforms: boolean; complete: boolean; violations: { path: string; message: string; value?: string }[]; optionalMissing?: { path: string; name: string }[]; unsupportedConstraints: string[]; message: string } | null>(null);
   const [isValidatingRecord, setIsValidatingRecord] = useState(false);
   const [formattedRecordHtml, setFormattedRecordHtml] = useState("");
+  // URI label lookups are presentation enhancements; never block the initial card.
+  const recordUriLabelCacheRef = useRef(new Map<string, string>());
+  const [recordLabelRevision, setRecordLabelRevision] = useState(0);
   const [formattedRecordButtonsHtml, setFormattedRecordButtonsHtml] = useState<Record<string, string>>({});
   const [recordFormatPreviews, setRecordFormatPreviews] = useState<Record<string, string>>({});
   const [recordFormatMenuOpen, setRecordFormatMenuOpen] = useState(false);
+  const [recordControlsOpen, setRecordControlsOpen] = useState(true);
   const [recordFormatError, setRecordFormatError] = useState("");
   const [bookmarkQueryDebugOpen, setBookmarkQueryDebugOpen] = useState(false);
   const [bookmarkQueryDebug, setBookmarkQueryDebug] = useState({ xml: "", sparql: "", response: "", countResponse: "" });
   const formattedRecordContainerRef = useRef<HTMLDivElement>(null);
+  const [recordDebug, setRecordDebug] = useState({ xml: "", sparql: "", formatterXml: "", formatterSparql: "", policyDiscovery: "", templateLookup: "" });
+  /** Download the RDF triples in the exact DESCRIBE snapshot shown in Record. */
+  function downloadRecordDescribe() {
+    const snapshot = recordDescriptionSnapshot;
+    if (!snapshot || snapshot.key !== currentRecordDescriptionKey || snapshot.uri !== selectedUri) return;
+    const parsed = new DOMParser().parseFromString(snapshot.xml, "application/xml");
+    const ns = "http://openlinksw.com/services/facets/1.0/";
+    const toTerm = (value: string, object = false): string => {
+      if (/^_:[A-Za-z][\w-]*$/.test(value)) return value;
+      if (/^https?:\/\/[^\s<>"{}|^`\\]+$/i.test(value)) return `<${value}>`;
+      if (!object) throw new Error(`Invalid RDF subject or predicate: ${value}`);
+      return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r")}"`;
+    };
+    try {
+      const lines: string[] = [];
+      for (const row of Array.from(parsed.getElementsByTagNameNS(ns, "row"))) {
+        const cells = Array.from(row.getElementsByTagNameNS(ns, "column"));
+        if (cells.length < 3) continue;
+        const [subject, predicate, object] = cells.slice(0, 3).map((c) => c.textContent?.trim() ?? "");
+        if (subject && predicate && object) lines.push(`${toTerm(subject)} ${toTerm(predicate)} ${toTerm(object, true)} .`);
+      }
+      if (!lines.length) { toast.add({ title: "No DESCRIBE triples are available to download.", type: "error" }); return; }
+      // RDF terms from the FCT projection have been normalized for display.
+      // URI-looking objects are emitted as IRIs; all others as plain literals.
+      const file = new Blob([`# Maestro Record DESCRIBE snapshot\n# Source: ${selectedUri}\n${snapshot.incomplete ? "# WARNING: Virtuoso reported an incomplete DESCRIBE.\n" : ""}${lines.join("\n")}\n`], { type: "application/n-triples;charset=utf-8" });
+      const url = URL.createObjectURL(file);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${encodeURIComponent(selectedUri.split(/[\/#]/).pop() || "record")}-describe.nt`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      toast.add({ title: "Could not export the Record DESCRIBE", description: error instanceof Error ? error.message : "Could not export the Record DESCRIBE.", type: "error" });
+    }
+  }
   const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
-  const RECORD_DESCRIPTION_PAGE_SIZE = 20;
+  const [recordDescriptionPageSize, setRecordDescriptionPageSize] = useState<number>(20);
+  const [recordDescriptionQueryLimit, setRecordDescriptionQueryLimit] = useState<number>(10000);
+  const [panelLimitsOpen, setPanelLimitsOpen] = useState(false);
+  const RECORD_DESCRIPTION_PAGE_SIZE = recordDescriptionPageSize;
   
   // Group the DESCRIBE triples by predicate and direction: outgoing properties
 // and incoming roles (property-of) share the same paging sequence.
@@ -3863,17 +4033,24 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   const [isDescribing, setIsDescribing] = useState(false);
   const [isCountingResults, setIsCountingResults] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [resultsRawResponse, setResultsRawResponse] = useState("# No Results FCT response received yet.");
   const [searchError, setSearchError] = useState("");
   const [searchPipelineRun, setSearchPipelineRun] = useState(0);
   const [initialBrowseTriggered, setInitialBrowseTriggered] = useState(false);
-  const [timeoutSeconds, setTimeoutSeconds] = useState(0);
+  const [widgetTimeouts, setWidgetTimeouts] = useState<Record<MaestroTimeoutCategory, number>>(() => readMaestroWidgetTimeouts());
+  const [timeoutEditorOpen, setTimeoutEditorOpen] = useState(false);
+  const [recordDescribeIncomplete, setRecordDescribeIncomplete] = useState(false);
+  const currentRecordDescriptionKey = [selectedUri, selectedEndpointId, queryTree.attributes.addr ?? "",
+    queryTree.attributes.graph ?? "", queryTree.attributes.inference ?? "", queryTree.attributes["same-as"] ?? "",
+    selectedRecordGraph, selectedRecordAuthor, recordDescriptionQueryLimit].join("\u0000");
+
 
   const resultsCountSparql = buildFctCountSparql(queryTree);
   const resultsRequestXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
     type: "text",
     limit: String(resultsBatchSize),
     offset: String(resultsOffset),
-    badges: showResultBadges ? "yes" : "no",
+    badges: "no", // list-values independently enriches the paginated Results page.
     order: orderResults ? "yes" : "no",
   }));
   const resultsCountRequestIdentity = `${selectedEndpointId}\u0000${resultsCountSparql ?? ""}`;
@@ -3941,14 +4118,20 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     };
   }, [resultsCountSparql, resultsCountRequestIdentity, selectedEndpointId, endpointReadyForQuery]);
 
-  // FCT query timeout is expressed in milliseconds in the XML. Keep the slider
-  // in seconds for the UI, and sync it if the authoritative query tree changes.
+  // Hydrate from the existing Maestro IndexedDB store (not the live query XML).
   useEffect(() => {
-    const timeoutMs = Number(queryTree.attributes.timeout ?? "0");
-    setTimeoutSeconds(Number.isFinite(timeoutMs)
-      ? Math.max(0, Math.min(60, Math.round(timeoutMs / 1000)))
-      : 0);
-  }, [queryTree.attributes.timeout]);
+    let disposed = false;
+    void initializeMaestroStorage().then(() => {
+      if (!disposed) setWidgetTimeouts(readMaestroWidgetTimeouts());
+    });
+    return () => { disposed = true; };
+  }, []);
+
+  function changeWidgetTimeout(category: MaestroTimeoutCategory, seconds: number) {
+    const next = { ...widgetTimeouts, [category]: seconds };
+    setWidgetTimeouts(next);
+    writeMaestroWidgetTimeouts(next);
+  }
 
   const [isLoadingProperties, setIsLoadingProperties] = useState(false);
   const [isLoadingClasses, setIsLoadingClasses] = useState(false);
@@ -4108,6 +4291,10 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
           body: resultsRequestXml,
           signal: controller.signal,
         });
+        // Preserve the actual FCT transport response for diagnosing discrepancies
+        // between standalone SPARQL execution and Maestro's displayed records.
+        const rawResponse = await response.clone().text();
+        if (!cancelled) setResultsRawResponse(rawResponse.slice(0, 200_000));
         const data = await readFctResponse(response);
         if (cancelled) return;
         rememberShortforms(data?.shortforms);
@@ -4119,7 +4306,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
             ? { ...previous, ...item, matches: [...previous.matches, ...item.matches] }
             : { ...item, matches: [...item.matches] });
         }
-        const enrichmentScopeForPage = `${selectedEndpointId}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
+        const enrichmentScopeForPage = `list-values-v1\u0000${selectedEndpointId}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
         const nextResults = Array.from(uniqueResults.values()).map((item) => {
           const saved = showResultBadges ? resultsEnrichmentCacheRef.current.get(enrichmentScopeForPage + item.uri) : undefined;
           return saved ? { ...item, scopeValues: saved } : item;
@@ -4188,7 +4375,12 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    const selectedForward = resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000") : [];
+    // Every Results card needs rdf:type for its Category banner, regardless of
+    // which Properties the user has chosen to show as additional badges.
+    const selectedForward = [...new Set([
+      ...(showResultBadges ? [RDF_TYPE_URI] : []),
+      ...(resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000") : []),
+    ])];
     const selectedReverse = resultBadgeRolesKey ? resultBadgeRolesKey.split("\u0000") : [];
 
     if (!showResultBadges || !endpointReadyForQuery || !results.length ||
@@ -4220,7 +4412,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       })),
     ];
 
-    const enrichmentScope = `${selectedEndpointId}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
+    const enrichmentScope = `list-values-v1\u0000${selectedEndpointId}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
     const cache = resultsEnrichmentCacheRef.current;
     setResults((current) => current.map((item) => {
       const saved = cache.get(enrichmentScope + item.uri);
@@ -4237,58 +4429,34 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
 
     void (async () => {
       try {
-        const response = await cachedFetchFct("/proxy/api/sparql", {
+        const queryXml = listValuesQueryClone(serializeFctQuery(queryTree), [
+          ...selectedForward.map((property) => ({ property, direction: "forward" as const })),
+          ...selectedReverse.map((property) => ({ property, direction: "reverse" as const })),
+        ]);
+        const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
           headers: {
             "Content-Type": "application/json",
-            ...proxyDebugHeaders("results-enrichment", `ResultsEnrichment:${proxyDebugFingerprint(`${resultBadgeUrisKey}:${resultBadgePropertiesKey}:${resultBadgeRolesKey}`)}`),
+            ...proxyDebugHeaders("results-enrichment", `ResultsListValues:${proxyDebugFingerprint(`${resultBadgeUrisKey}:${resultBadgePropertiesKey}:${resultBadgeRolesKey}`)}`),
           },
-          body: JSON.stringify({ resources: resourceUris, properties: selectedForward, roles: selectedReverse }),
+          body: JSON.stringify({ queryXml, resources: resourceUris }),
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]),
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? "Could not enrich Results items.");
-
-        const facetLabel = (iri: string, _direction: RelationshipDirection) => toLabel(iri);
+        const xml = await response.text();
+        if (!response.ok) throw new Error(`list-values returned HTTP ${response.status}: ${xml.slice(0, 300)}`);
+        const parsed = parseListValuesXml(xml);
         const grouped = new Map<string, Map<string, ScopeValue>>();
         for (const item of results) {
           const resourceGroups = new Map<string, ScopeValue>();
+          const projected = parsed.get(item.uri) ?? [];
           for (const relationship of relationships) {
             const key = `${item.uri}\u0000${relationship.direction}\u0000${relationship.property}`;
-            resourceGroups.set(key, { ...relationship, values: [{ value: "-" }] });
+            resourceGroups.set(key, projected.find((v) => v.direction === relationship.direction && v.property === relationship.property) ?? {
+              ...relationship, values: [{ value: "-" }],
+            });
           }
           grouped.set(item.uri, resourceGroups);
-        }
-        const bindings = Array.isArray(data.results?.bindings) ? data.results.bindings : [];
-        for (const binding of bindings) {
-          const resource = binding.resource?.value;
-          const property = binding.property?.value;
-          const direction = binding.direction?.value === "reverse" ? "reverse" : "forward";
-          const term = binding.value;
-          if (typeof resource !== "string" || typeof property !== "string" || !term || typeof term.value !== "string") continue;
-          const key = `${resource}\u0000${direction}\u0000${property}`;
-          let resourceGroups = grouped.get(resource);
-          if (!resourceGroups) {
-            resourceGroups = new Map<string, ScopeValue>();
-            grouped.set(resource, resourceGroups);
-          }
-          let scopeValue = resourceGroups.get(key);
-          if (!scopeValue) {
-            scopeValue = { property, label: facetLabel(property, direction), direction, values: [] };
-            resourceGroups.set(key, scopeValue);
-          }
-          const nextTerm: EnrichedTerm = {
-            value: term.value,
-            ...(typeof term.type === "string" ? { type: term.type } : {}),
-            ...(typeof term.datatype === "string" ? { datatype: term.datatype } : {}),
-            ...(typeof term["xml:lang"] === "string" ? { lang: term["xml:lang"] } : {}),
-          };
-          if (scopeValue.values.length === 1 && scopeValue.values[0].value === "-") {
-            scopeValue.values = [nextTerm];
-          } else if (!scopeValue.values.some((item) => item.value === nextTerm.value && item.type === nextTerm.type && item.datatype === nextTerm.datatype && item.lang === nextTerm.lang)) {
-            scopeValue.values.push(nextTerm);
-          }
         }
         if (cancelled) return;
         for (const uri of resourceUris) {
@@ -4322,7 +4490,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
   const latestAlphabetProbeQueryRef = useRef(alphabetQueryXml);
   latestAlphabetProbeQueryRef.current = alphabetQueryXml;
   useEffect(() => {
-    if (!endpointReadyForQuery || isLoadingAlphabet || alphabetError || !results.length) return;
+    if (!endpointReadyForQuery || isLoadingAlphabet || !results.length || !alphabetError) return;
     const candidateLetters = Array.from(new Set(results.flatMap((item) =>
       [item.title, toLabel(item.uri, "Class")].map((label) => label?.trim().charAt(0).toUpperCase() ?? "")
     ))).filter((letter) => /^[A-Z]$/.test(letter) && !alphabetCounts[letter]).slice(0, 5);
@@ -4888,7 +5056,7 @@ setGraphFacets(graphs);
     setLoadingRecordGraphs(true);
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/record-graphs", {
+        const response = await maestroQueryFetch("/proxy/api/record-graphs", {
           method: "POST", cache: "no-store", signal: controller.signal,
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-discovery", "RecordGraphs") },
           body: JSON.stringify({ iri: selectedUri, addr: queryTree.attributes.addr, operation: "graphs" }),
@@ -4919,7 +5087,7 @@ setGraphFacets(graphs);
     setLoadingRecordAuthors(true);
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/record-graphs", {
+        const response = await maestroQueryFetch("/proxy/api/record-graphs", {
           method: "POST", cache: "no-store", signal: controller.signal,
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-author-discovery", "RecordAuthors") },
           body: JSON.stringify({ iri: selectedUri, addr: queryTree.attributes.addr, operation: "authors", graphs: graphsInSelectedFamily }),
@@ -4940,11 +5108,12 @@ setGraphFacets(graphs);
   // graph/author filters need the discovered list, avoiding a second record load.
   const filteredDescriptionGraphs = selectedRecordGraph || selectedRecordAuthor ? recordGraphs : null;
 
-  // Load the selected resource once through the FCT DESCRIBE view; pagination is local to
+  // Load the selected resource once through Record SELECT; pagination is local to
   // the returned property/value pairs and does not trigger another server query.
   useEffect(() => {
     if (!selectedUri || !selectedEndpointId) {
       setDescribedRecord([]);
+      setRecordDescriptionSnapshot(null);
       setRecordDescriptionPage(0);
       setIsDescribing(false);
       return;
@@ -4952,6 +5121,8 @@ setGraphFacets(graphs);
     let cancelled = false;
     const controller = new AbortController();
     setDescribedRecord([]);
+    setRecordDescriptionSnapshot(null);
+    setRecordDescribeIncomplete(false);
     setDescribedRecordUri("");
     setRecordDescriptionPage(0);
     setFormattedRecordHtml("");
@@ -4959,53 +5130,144 @@ setGraphFacets(graphs);
     setRecordFormatError("");
     setRecordPolicyCheckedUri("");
     setIsDescribing(true);
+    setRecordDebug({ xml: "", sparql: "", formatterXml: "", formatterSparql: "", policyDiscovery: "", templateLookup: "" });
     async function loadDescription() {
       try {
-        const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+        let snapshotXml = "";
+        let snapshotIncomplete = false;
         let rows: { property: string; value: string; direction: "property" | "property-of" }[] = [];
-        if (selectedRecordGraph || selectedRecordAuthor) {
-          if (filteredDescriptionGraphs?.length) {
-            const response = await fetch("/proxy/api/record-graphs", {
-              method: "POST", cache: "no-store", signal: controller.signal,
-              headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-filtered-describe", "RecordDescriptionGraph") },
-              body: JSON.stringify({ iri: selectedUri, operation: "describe", addr: queryTree.attributes.addr, graph: selectedRecordGraph, authorGraph: selectedRecordAuthor }),
-            });
-            const data = await response.json() as { rows?: { subject: string; predicate: string; object: string; objectType: string }[]; error?: string };
-            if (!response.ok) throw new Error(data.error || "Graph-filtered DESCRIBE failed.");
-            rows = (data.rows ?? []).flatMap((triple) => {
-              const direction = triple.subject === selectedUri ? "property" : triple.object === selectedUri ? "property-of" : null;
-              if (!direction) return [];
-              return [{ property: triple.predicate, value: direction === "property" ? triple.object : triple.subject, direction }];
-            });
-          }
-        } else {
-        const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="30" offset="0"/></query>`;
-        const response = await cachedFetchFct("/proxy/api/fct", {
-          method: "POST",
-          cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-description-fct", "RecordDescription") },
-          body: describeQueryXml,
-          signal: controller.signal,
-        });
-        const data = await readFctResponse(response);
-        if (!cancelled) rememberShortforms(data?.shortforms);
-        rows = data.describe.flatMap((triple) => {
-          const property = triple.predicate.value;
-          const subject = triple.subject?.value;
-          const object = triple.object.termType === "bnode" ? `_:${triple.object.value}` : triple.object.value;
-          const direction: "property" | "property-of" | null = subject === selectedUri
-            ? "property"
-            : triple.object.value === selectedUri
-              ? "property-of"
-              : null;
-          return property && object && direction ? [{ property, value: object, direction }] : [];
-        });
+        let snapshotTerms: { subject: string; predicate: string; object: string; objectType: string; datatype?: string; lang?: string }[] = [];
+        // The authoritative Record snapshot comes from one SPARQL SELECT.
+        // A bounded inner SELECT fetches triples; the outer query adds URI labels
+        // without changing the limit or duplicating Record triples.
+        const selectedGraphs = selectedRecordAuthor
+          ? [selectedRecordAuthor]
+          : selectedRecordGraph
+            ? (filteredDescriptionGraphs ?? []).filter((graph) => graph.split("#", 1)[0] === selectedRecordGraph)
+            : [];
+        if ((selectedRecordGraph || selectedRecordAuthor) && !selectedGraphs.length) {
+          throw new Error("No named graphs are available for the selected Record graph or author.");
         }
-        if (!cancelled) { setDescribedRecord(rows); setDescribedRecordUri(selectedUri); }
+        const response = await cachedFetchFct("/proxy/api/sparql", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-select-labels", "RecordDescription") },
+          body: JSON.stringify({ recordSelect: {
+            iri: selectedUri, limit: recordDescriptionQueryLimit, labelLookupVersion: 2,
+            ...(selectedRecordGraph || selectedRecordAuthor ? { graphs: selectedGraphs } : {}),
+          } }),
+        });
+        const data = await response.json() as {
+          error?: string; incomplete?: boolean; query?: string;
+          results?: { bindings?: Array<Record<string, {
+            type: string; value: string; datatype?: string; "xml:lang"?: string;
+          }>> };
+        };
+        if (!response.ok) throw new Error(data.error || "Record SELECT failed.");
+        const fetchedBindings = data.results?.bindings ?? [];
+        snapshotIncomplete = Boolean(data.incomplete);
+        if (!cancelled) {
+          setRecordDescribeIncomplete(snapshotIncomplete);
+          setRecordDebug((current) => ({ ...current,
+            xml: `POST /proxy/api/sparql\n${JSON.stringify({ recordSelect: { iri: selectedUri, limit: recordDescriptionQueryLimit, labelLookupVersion: 2, graphs: selectedGraphs } }, null, 2)}`,
+            sparql: data.query ?? "Record SELECT query unavailable.",
+          }));
+        }
+        const queryAddrForLabels = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+        const cachedLabels = recordUriLabelCacheRef.current;
+        // The previous SELECT version could have assigned a subject's label
+        // to unrelated wikiPageWikiLink objects. Replace those stale entries
+        // for the resources in this fresh SELECT response.
+        const refreshedLabelUris = new Set<string>();
+        for (const binding of fetchedBindings) {
+          if (binding.labelResource?.type === "uri") refreshedLabelUris.add(binding.labelResource.value);
+        }
+        for (const uri of refreshedLabelUris) cachedLabels.delete(`${queryAddrForLabels}\u0000${uri}`);
+        // Resolve each URI to one preferred label from the same SELECT rows.
+        // Ranking is independent of Virtuoso's row order: vocabulary first,
+        // then English ahead of untagged, then a deterministic text tie-break.
+        const labelPredicates = [
+          "http://www.w3.org/2000/01/rdf-schema#label",
+          "http://www.w3.org/2004/02/skos/core#prefLabel",
+          "http://schema.org/name", "https://schema.org/name",
+          "http://xmlns.com/foaf/0.1/name",
+          "http://purl.org/dc/terms/title",
+        ];
+        const preferredLabels = new Map<string, { rank: number; text: string }>();
+        for (const binding of fetchedBindings) {
+          const labelUri = binding.labelResource?.type === "uri" ? binding.labelResource.value : "";
+          const label = binding.label;
+          if (!labelUri || !label?.value || label.type !== "literal") continue;
+          const predicateRank = labelPredicates.indexOf(binding.labelPredicate?.value ?? "");
+          if (predicateRank < 0) continue;
+          const lang = (label["xml:lang"] ?? "").toLowerCase();
+          // Use any language when no English/untagged label exists rather than
+          // silently falling back to the URI's local name (common for schema:author).
+          const languageRank = lang === "en" || lang.startsWith("en-") ? 0 : lang === "" ? 1 : 2;
+          const rank = predicateRank * 3 + languageRank;
+          const current = preferredLabels.get(labelUri);
+          if (!current || rank < current.rank ||
+              (rank === current.rank && label.value.localeCompare(current.text) < 0)) {
+            preferredLabels.set(labelUri, { rank, text: label.value });
+          }
+        }
+        for (const binding of fetchedBindings) {
+          const subject = binding.subject, predicate = binding.predicate, object = binding.object;
+          if (!subject?.value || !predicate?.value || !object?.value) continue;
+          const objectType = object.type === "uri" ? "uri" : object.type === "bnode" ? "bnode" : "literal";
+          const objectValue = objectType === "bnode" ? `_:${object.value}` : object.value;
+          snapshotTerms.push({ subject: subject.value, predicate: predicate.value,
+            object: objectValue, objectType, ...(object.datatype ? { datatype: object.datatype } : {}),
+            ...(object["xml:lang"] ? { lang: object["xml:lang"] } : {}) });
+          const direction: "property" | "property-of" | null = subject.value === selectedUri
+            ? "property" : object.value === selectedUri ? "property-of" : null;
+          if (direction) rows.push({ property: predicate.value,
+            value: direction === "property" ? objectValue : subject.value, direction });
+          if (binding.labelResource?.type === "uri") {
+            // Use only the explicit join target, never the Record's own label.
+            const labelUri = binding.labelResource.value;
+            const expectedUri = subject.value === selectedUri && objectType === "uri"
+              ? object.value : object.value === selectedUri ? subject.value : "";
+            const preferred = preferredLabels.get(labelUri);
+            if (labelUri === expectedUri && preferred && /^https?:\/\//i.test(labelUri)) {
+              cachedLabels.set(`${queryAddrForLabels}\u0000${labelUri}`, preferred.text);
+            }
+          }
+        }
+        // Multiple labels can correspond to one URI. Keep one authoritative
+        // Record triple per term, independent of auxiliary label bindings.
+        snapshotTerms = [...new Map(snapshotTerms.map((term) => [
+          [term.subject, term.predicate, term.object, term.objectType, term.datatype ?? "", term.lang ?? ""].join("\u0000"), term,
+        ])).values()];
+        rows = [...new Map(rows.map((row) => [
+          [row.direction, row.property, row.value].join("\u0000"), row,
+        ])).values()];
+        // The inner SELECT limit counts triples; outer label joins may add
+        // multiple rows. Judge completeness using distinct Record triples.
+        snapshotIncomplete = snapshotIncomplete || snapshotTerms.length >= recordDescriptionQueryLimit;
+        if (!cancelled) setRecordDescribeIncomplete(snapshotIncomplete);
+        // Normalize the actual Default-viewer rows for both filtered and unfiltered
+        // requests. Never feed a different/raw server representation to XSLT.
+        {
+          const fctNs = "http://openlinksw.com/services/facets/1.0/";
+          const triplesXml = snapshotTerms
+            .filter((triple) => triple.subject === selectedUri || triple.object === selectedUri)
+            .map((triple) => {
+              const attrs = ` termType="${escapeXmlText(triple.objectType)}"${triple.datatype ? ` datatype="${escapeXmlText(triple.datatype)}"` : ""}${triple.lang ? ` xml:lang="${escapeXmlText(triple.lang)}"` : ""}`;
+              return `<fct:row><fct:column termType="uri">${escapeXmlText(triple.subject)}</fct:column><fct:column termType="uri">${escapeXmlText(triple.predicate)}</fct:column><fct:column${attrs}>${escapeXmlText(triple.object)}</fct:column></fct:row>`;
+            }).join("");
+          snapshotXml = `<fct:facets xmlns:fct="${fctNs}"><fct:complete>${snapshotIncomplete ? "no" : "yes"}</fct:complete><fct:result type="describe">${triplesXml}</fct:result></fct:facets>`;
+        }
+        if (!cancelled) {
+          setRecordDescriptionSnapshot({ key: currentRecordDescriptionKey, uri: selectedUri, xml: snapshotXml, incomplete: snapshotIncomplete });
+          setDescribedRecord(rows);
+          setDescribedRecordUri(selectedUri);
+        }
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
-          console.warn("FCT DESCRIBE failed:", error);
+          console.warn("Record SELECT failed:", error);
           setDescribedRecord([]);
+          setRecordDescriptionSnapshot(null);
+          setRecordDescribeIncomplete(false);
         }
       } finally {
         if (!cancelled) setIsDescribing(false);
@@ -5013,7 +5275,96 @@ setGraphFacets(graphs);
     }
     void loadDescription();
     return () => { cancelled = true; controller.abort(); };
-  }, [selectedUri, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"]]);
+  }, [selectedUri, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit]);
+
+  // The separate Record graph dropdown loader already knows which named graphs
+  // contain this resource. Reuse that list for a single background label query;
+  // never enumerate named graphs inside the initial Record SELECT or delay it.
+  useEffect(() => {
+    if (!selectedUri || describedRecordUri !== selectedUri || isDescribing ||
+        !recordGraphs.length || !describedRecord.length || !selectedEndpointId) return;
+    const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`;
+    const labelCache = recordUriLabelCacheRef.current;
+    const valueUris = [...new Set(describedRecord
+      .filter((row) => /^https?:\/\//i.test(row.value))
+      .map((row) => row.value))];
+    const missing = valueUris.filter((uri) => !labelCache.has(`${addr}\u0000${uri}`)).slice(0, 128);
+    if (!missing.length) return;
+    const graphIris = selectedRecordAuthor
+      ? [selectedRecordAuthor]
+      : selectedRecordGraph
+        ? recordGraphs.filter((graph) => graph.split("#", 1)[0] === selectedRecordGraph)
+        : recordGraphs;
+    if (!graphIris.length) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await cachedFetchFct("/proxy/api/sparql", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-value-labels", "RecordValueLabels") },
+          body: JSON.stringify({ recordValueLabels: { uris: missing, graphs: graphIris, version: 1 } }),
+        });
+        const data = await response.json() as {
+          error?: string;
+          results?: { bindings?: Array<Record<string, { type: string; value: string; "xml:lang"?: string }>> };
+        };
+        if (!response.ok) throw new Error(data.error || "Record URI label lookup failed.");
+        if (controller.signal.aborted) return;
+        const predicates = [
+          "http://www.w3.org/2000/01/rdf-schema#label",
+          "http://www.w3.org/2004/02/skos/core#prefLabel",
+          "http://schema.org/name", "https://schema.org/name",
+          "http://xmlns.com/foaf/0.1/name", "http://purl.org/dc/terms/title",
+        ];
+        const requested = new Set(missing);
+        const best = new Map<string, { rank: number; text: string }>();
+        for (const binding of data.results?.bindings ?? []) {
+          const uri = binding.labelResource?.value ?? "";
+          const label = binding.label;
+          if (!requested.has(uri) || binding.labelResource?.type !== "uri" ||
+              label?.type !== "literal" || !label.value.trim()) continue;
+          const predicate = predicates.indexOf(binding.labelPredicate?.value ?? "");
+          if (predicate < 0) continue;
+          const lang = (label["xml:lang"] ?? "").toLowerCase();
+          const rank = predicate * 3 + (lang === "en" || lang.startsWith("en-") ? 0 : !lang ? 1 : 2);
+          const current = best.get(uri);
+          if (!current || rank < current.rank ||
+              (rank === current.rank && label.value.localeCompare(current.text) < 0)) {
+            best.set(uri, { rank, text: label.value });
+          }
+        }
+        if (controller.signal.aborted) return;
+        let updated = false;
+        for (const [uri, label] of best) {
+          const key = `${addr}\u0000${uri}`;
+          if (labelCache.get(key) !== label.text) {
+            labelCache.set(key, label.text);
+            updated = true;
+          }
+        }
+        if (updated) setRecordLabelRevision((value) => value + 1);
+      } catch (error) {
+        if (!controller.signal.aborted) console.warn("Record named-graph label enrichment failed:", error);
+      }
+    })();
+    return () => controller.abort();
+  }, [selectedUri, describedRecordUri, describedRecord, isDescribing, recordGraphs,
+      selectedRecordGraph, selectedRecordAuthor, selectedEndpointId,
+      queryTree.attributes.addr, queryTree.attributes.graph]);
+
+  // The formatted card may already be on screen when named-graph labels arrive.
+  // Update only its URI link text; do not rerun SHACL, XSLT, or the Record SELECT.
+  useEffect(() => {
+    const root = formattedRecordContainerRef.current;
+    if (!root || !formattedRecordHtml) return;
+    const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`;
+    for (const element of Array.from(root.querySelectorAll<HTMLElement>("[data-maestro-record-uri]"))) {
+      const uri = element.getAttribute("data-maestro-record-uri") ?? "";
+      const label = recordUriLabelCacheRef.current.get(`${addr}\u0000${uri}`);
+      if (label) element.textContent = label;
+    }
+  }, [recordLabelRevision, formattedRecordHtml, selectedUri, selectedEndpointId,
+      queryTree.attributes.addr, queryTree.attributes.graph]);
 
   // Discover a record's class policy from the personal SPARQL server after its DESCRIBE data identifies rdf:type values.
   useEffect(() => {
@@ -5034,23 +5385,34 @@ setGraphFacets(graphs);
     // clear the prior policy during a temporary empty/loading transition.
     if (isDescribing || describedRecordUri !== selectedUri || !describedRecord.length) return;
     const rdfTypeUri = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const isBookmarkRecord = describedRecord.some((item) => item.direction === "property" && item.property === rdfTypeUri && item.value === "http://www.w3.org/2002/01/bookmark#Bookmark");
-    if (!isBookmarkRecord) {
-      setRecordPolicy(null);
-      setRecordPolicies([]);
-      setSelectedRecordTemplateUri("");
-      setRecordPolicyError("");
-      setRecordValidation(null);
-      setFormattedRecordHtml("");
-      setFormattedRecordButtonsHtml({});
-      setRecordFormatError("");
-      setIsLoadingRecordPolicy(false);
-      setRecordPolicyCheckedUri(selectedUri);
-      return;
-    }
-    const recordTypes = Array.from(new Set(describedRecord
-      .filter((item) => item.direction === "property" && item.property === rdfTypeUri && /^[a-z][a-z0-9+.-]*:/i.test(item.value))
-      .map((item) => item.value)));
+    const knownResultClassIris = (selectedResult?.uri === selectedUri || selectedGroupRecord?.uri === selectedUri)
+      ? getClassesAtNode(getPropertyPath().at(-1)?.id ?? null)
+      : [];
+    // A Work with an ISBN is an identifiable book even if the source omits
+    // dbo:Book from rdf:type. This is policy-discovery evidence only: never
+    // modify the authoritative live query or assert a new RDF triple.
+    const bookPredicates = new Set([
+      "http://dbpedia.org/ontology/isbn",
+      "http://dbpedia.org/property/isbn",
+      "http://schema.org/isbn",
+      "https://schema.org/isbn",
+      "http://purl.org/ontology/bibo/isbn",
+      "http://purl.org/ontology/bibo/isbn10",
+      "http://purl.org/ontology/bibo/isbn13",
+    ]);
+    const hasBookIdentifier = describedRecord.some((item) =>
+      item.direction === "property" && bookPredicates.has(item.property) &&
+      /[0-9Xx]{9,13}/.test(item.value.replace(/[\s-]/g, "")),
+    );
+    const recordTypes = Array.from(new Set([
+      ...describedRecord
+        .filter((item) => item.direction === "property" && item.property === rdfTypeUri && /^[a-z][a-z0-9+.-]*:/i.test(item.value))
+        .map((item) => item.value),
+      // When the partial DESCRIBE does not include rdf:type, the current
+      // Results query's class constraint still identifies this matched record.
+      ...knownResultClassIris,
+      ...(hasBookIdentifier ? ["http://dbpedia.org/ontology/Book"] : []),
+    ]));
     if (!recordTypes.length) {
       setRecordPolicy(null);
       setRecordPolicies([]);
@@ -5065,14 +5427,15 @@ setGraphFacets(graphs);
     // Retain the current selection while the next record's policy is resolved;
     // the record-keyed render guard prevents showing stale formatted HTML.
     setRecordPolicyError("");
-    fetch("/proxy/api/policies", {
+    maestroQueryFetch("/proxy/api/policies", {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-discover", "RecordPolicyDiscovery") },
       body: JSON.stringify({ action: "discover", recordTypes }),
       signal: controller.signal,
     }).then(async (response) => {
-      const payload = await response.json() as { policies?: { uri: string; label: string; recordShape: string; templates: { uri: string; label: string }[] }[]; error?: string };
+      const payload = await response.json() as { policies?: { uri: string; label: string; recordShape: string; templates: { uri: string; label: string }[] }[]; error?: string; debugSparql?: string };
+      if (!controller.signal.aborted) setRecordDebug((current) => ({ ...current, policyDiscovery: payload.debugSparql ?? `POST /proxy/api/policies\n${JSON.stringify({ action: "discover", recordTypes }, null, 2)}` }));
       if (!response.ok) throw new Error(payload.error || `Policy lookup returned HTTP ${response.status}.`);
       if (!controller.signal.aborted) {
         const hasSavedHistoryQuery = describedRecord.some((item) => item.property === "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyQueryXML" && item.value.trim().length > 0);
@@ -5116,7 +5479,53 @@ setGraphFacets(graphs);
       }
     }).finally(() => { if (!controller.signal.aborted) { setIsLoadingRecordPolicy(false); setRecordPolicyCheckedUri(selectedUri); } });
     return () => controller.abort();
-  }, [selectedUri, personalSparqlEndpoint, describedRecord, describedRecordUri, isDescribing, recordFormatPreferenceLoaded, authSession]);
+  }, [selectedUri, personalSparqlEndpoint, describedRecord, describedRecordUri, isDescribing, recordFormatPreferenceLoaded, authSession, selectedResult?.uri, selectedGroupRecord?.uri, queryXml]);
+
+  type RecordValidationReport = {
+    conforms: boolean;
+    complete: boolean;
+    violations: { path: string; message: string; value?: string }[];
+    optionalMissing?: { path: string; name: string }[];
+    unsupportedConstraints: string[];
+    message: string;
+  };
+
+  /** The validator and XSLT consume the same record/graph/author snapshot. */
+  async function validateRecordSnapshot(
+    policy: RecordPolicyOption,
+    snapshot: { key: string; uri: string; xml: string; incomplete: boolean },
+  ): Promise<RecordValidationReport> {
+    const xml = new DOMParser().parseFromString(snapshot.xml, "application/xml");
+    if (xml.querySelector("parsererror")) throw new Error("Cannot validate malformed Record DESCRIBE XML.");
+    const ns = "http://openlinksw.com/services/facets/1.0/";
+    const triples = Array.from(xml.getElementsByTagNameNS(ns, "row")).flatMap((row) => {
+      const cells = Array.from(row.getElementsByTagNameNS(ns, "column"));
+      if (cells.length < 3) return [];
+      const [subject, predicate, object] = cells.slice(0, 3).map((cell) => cell.textContent?.trim() ?? "");
+      if (!subject || !predicate) return [];
+      // The viewer snapshot is normalized text-only FCT XML. Use the value's
+      // lexical form for term-kind checks until term metadata is retained.
+      const objectType = cells[2].getAttribute("termType") || (object.startsWith("_:") ? "bnode" : /^(?:https?:|gttp:|urn:)/i.test(object) ? "uri" : "literal");
+      const datatype = cells[2].getAttribute("datatype") || undefined;
+      return [{ subject, predicate, object, objectType, ...(datatype ? { datatype } : {}) }];
+    });
+    const response = await maestroQueryFetch("/proxy/api/policies", {
+      method: "POST", cache: "no-store",
+      headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-validate", "RecordPolicyValidation") },
+      body: JSON.stringify({ action: "validate", recordUri: snapshot.uri, recordShape: policy.recordShape, triples }),
+    });
+    const payload = await response.json() as { report?: RecordValidationReport; error?: string };
+    if (!response.ok || !payload.report) throw new Error(payload.error || `SHACL validation returned HTTP ${response.status}.`);
+    // An incomplete description cannot establish full conformance: missing
+    // values may reflect LIMIT/timeout rather than actual absence in the graph.
+    if (snapshot.incomplete) return {
+      ...payload.report,
+      conforms: false,
+      complete: false,
+      message: "The Record DESCRIBE is incomplete. Increase the Right panel DESCRIBE limit or Record timeout, reload, and validate again. " + payload.report.message,
+    };
+    return payload.report;
+  }
 
   async function validateSelectedRecord(policyOverride: RecordPolicyOption | null = recordPolicy) {
     if (!selectedUri || !policyOverride) return;
@@ -5124,43 +5533,21 @@ setGraphFacets(graphs);
     setRecordValidation(null);
     setRecordPolicyError("");
     try {
-      const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
-      const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="10000" offset="0"/></query>`;
-      const describeResponse = await cachedFetchFct("/proxy/api/fct", {
-        method: "POST", cache: "no-store", headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-policy-validation-describe", "RecordPolicyValidation") }, body: describeQueryXml,
-      });
-      const describeData = await readFctResponse(describeResponse);
-      const triples = describeData.describe.map((triple) => ({
-        subject: triple.subject.value,
-        predicate: triple.predicate.value,
-        object: triple.object.value,
-        objectType: triple.object.termType === "uri" ? "uri" : triple.object.termType === "bnode" ? "bnode" : "literal",
-        ...(triple.object.datatype ? { datatype: ({
-          string: "http://www.w3.org/2001/XMLSchema#string",
-          integer: "http://www.w3.org/2001/XMLSchema#integer",
-          int: "http://www.w3.org/2001/XMLSchema#int",
-          decimal: "http://www.w3.org/2001/XMLSchema#decimal",
-          double: "http://www.w3.org/2001/XMLSchema#double",
-          float: "http://www.w3.org/2001/XMLSchema#float",
-          boolean: "http://www.w3.org/2001/XMLSchema#boolean",
-          date: "http://www.w3.org/2001/XMLSchema#date",
-          dateTime: "http://www.w3.org/2001/XMLSchema#dateTime",
-        } as Record<string, string>)[triple.object.datatype] ?? triple.object.datatype } : {}),
-      }));
-      const response = await fetch("/proxy/api/policies", {
-        method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-validate", "RecordPolicyValidation") },
-        body: JSON.stringify({ action: "validate", recordUri: selectedUri, recordShape: policyOverride.recordShape, triples }),
-      });
-      const payload = await response.json() as { report?: { conforms: boolean; complete: boolean; violations: { path: string; message: string; value?: string }[]; unsupportedConstraints: string[]; message: string }; error?: string };
-      if (!response.ok || !payload.report) throw new Error(payload.error || `SHACL validation returned HTTP ${response.status}.`);
-      setRecordValidation(payload.report);
+      // Validate the *same* immutable DESCRIBE snapshot used by the formatter.
+      // A second query would allow validation to pass a different dataset.
+      const snapshot = recordDescriptionSnapshot;
+      if (!snapshot || snapshot.key !== currentRecordDescriptionKey || snapshot.uri !== selectedUri || isDescribing) {
+        throw new Error("The record description must finish loading before validation.");
+      }
+      const report = await validateRecordSnapshot(policyOverride, snapshot);
+      setRecordValidation(report);
       // Validate is the sole trigger for ingesting SHACL-discovered Personal facets.
       // Query clones preserve the live scope but cannot mutate its view.
       try {
         const candidateClasses = classFacets.map((item) => item.uri);
         const candidateProperties = propertyFacets.map((item) => item.uri);
         const candidateRoles = roleFacets.map((item) => item.uri);
-        const facetResponse = await fetch("/proxy/api/policies", {
+        const facetResponse = await maestroQueryFetch("/proxy/api/policies", {
           method: "POST", cache: "no-store",
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-shacl-facet-ingestion", "RecordShaclFacets") },
           body: JSON.stringify({
@@ -5243,54 +5630,220 @@ setGraphFacets(graphs);
 
   // A formatter result belongs to one record and one selected template. Async
   // responses for older selections may finish later and must never repaint it.
-  const currentRecordFormatKey = `${selectedUri}\u0000${recordPolicy?.uri ?? ""}\u0000${selectedRecordTemplateUri}`;
+  const currentRecordFormatKey = `${currentRecordDescriptionKey}\u0000${recordPolicy?.uri ?? ""}\u0000${selectedRecordTemplateUri}`;
   const latestRecordFormatKeyRef = useRef(currentRecordFormatKey);
   latestRecordFormatKeyRef.current = currentRecordFormatKey;
   const activeFormatterRequestRef = useRef("");
   const [formattedRecordKey, setFormattedRecordKey] = useState("");
   const currentFormattedRecordHtml = formattedRecordKey === currentRecordFormatKey ? formattedRecordHtml : "";
 
-  async function formatSelectedRecord(templateOverride?: string, preview = false): Promise<string | null> {
+  async function formatSelectedRecord(templateOverride?: string, preview = false, enrichBookReviews = false): Promise<string | null> {
     if (!recordPolicy) return null;
     const templateUri = templateOverride || selectedRecordTemplateUri || recordPolicy.template;
     if (!templateUri) {
       if (!preview) { setRecordFormatError("This policy does not identify an XSLT template yet."); setFormattedRecordHtml(""); }
       return null;
     }
+    if (!recordDescriptionSnapshot || recordDescriptionSnapshot.uri !== selectedUri ||
+        recordDescriptionSnapshot.key !== currentRecordDescriptionKey ||
+        describedRecordUri !== selectedUri || isDescribing) return null;
     const requestKey = currentRecordFormatKey;
     const isCurrentRequest = () => latestRecordFormatKeyRef.current === requestKey;
-    if (!preview && isCurrentRequest()) { setRecordFormatError(""); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setFormattedRecordKey(""); }
+    if (!preview && !enrichBookReviews && isCurrentRequest()) { setRecordFormatError(""); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setFormattedRecordKey(""); }
     try {
-      const templateResponse = await fetch("/proxy/api/policies", {
+      if (!preview && !enrichBookReviews) {
+        const checked = await validateRecordSnapshot(recordPolicy, recordDescriptionSnapshot);
+        if (!isCurrentRequest()) return null;
+        setRecordValidation(checked);
+        if (!checked.complete || !checked.conforms) {
+          throw new Error(`The selected format was not loaded because its SHACL validation did not pass. ${checked.message} ${checked.violations.map((v) => v.message).join(" ")}`.trim());
+        }
+      }
+      const templateResponse = await maestroQueryFetch("/proxy/api/policies", {
         method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-template", "RecordPolicyTemplate") },
         body: JSON.stringify({ action: "template", template: templateUri }),
       });
-      const templatePayload = await templateResponse.json() as { templateXslt?: string; nextName?: string; nextVersion?: string; error?: string };
+      const templatePayload = await templateResponse.json() as { templateXslt?: string; nextName?: string; nextVersion?: string; error?: string; debugSparql?: string };
+      if (!preview && isCurrentRequest()) setRecordDebug((current) => ({ ...current, templateLookup: templatePayload.debugSparql ?? `POST /proxy/api/policies\n${JSON.stringify({ action: "template", template: templateUri }, null, 2)}` }));
       if (!templateResponse.ok || typeof templatePayload.templateXslt !== "string") throw new Error(templatePayload.error || `Template reload returned HTTP ${templateResponse.status}.`);
-      const dataCache = new Map<string, Promise<XMLDocument>>();
-      const describeDocument = (uri: string): Promise<XMLDocument> => {
-        const cached = dataCache.get(uri);
-        if (cached) return cached;
-        const promise = (async () => {
-          const queryAddr = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
-          const describeQueryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryAddr)}"><value datatype="uri">${escapeXmlText(uri)}</value><view type="describe" limit="10000" offset="0"/></query>`;
-          const response = await cachedFetchFct("/proxy/api/fct", {
+      // Formatting never issues a second DESCRIBE. The snapshot is exactly the
+      // data the default Record table received, including its completion status.
+      // Do not transform a previous resource/graph selection while the new one loads.
+      const snapshot = recordDescriptionSnapshot;
+      if (!snapshot || snapshot.uri !== selectedUri || snapshot.key !== currentRecordDescriptionKey ||
+          describedRecordUri !== selectedUri || isDescribing) {
+        if (!preview && isCurrentRequest()) setRecordFormatError("The record description is not ready yet.");
+        return null;
+      }
+      const sourceXml = new DOMParser().parseFromString(snapshot.xml, "application/xml");
+      if (sourceXml.querySelector("parsererror") || sourceXml.documentElement.localName !== "facets") {
+        throw new Error("The Record viewer's DESCRIBE snapshot is not valid FCT XML.");
+      }
+      if (!preview && isCurrentRequest()) {
+        setRecordDebug((current) => ({ ...current,
+          formatterXml: current.xml,
+          formatterSparql: current.sparql,
+        }));
+      }
+      const sourceRows = Array.from(sourceXml.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0/", "row"));
+      const sourceValues = (predicate: string): string[] => sourceRows.flatMap((row) => {
+        const columns = Array.from(row.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0/", "column"));
+        if (columns.length < 3 || columns[1].textContent?.trim() !== predicate) return [];
+        const value = columns[2].textContent?.trim() ?? "";
+        return value ? [value] : [];
+      });
+      const isPersonTemplate = templateUri.includes("DbpediaPersonRecordTemplate");
+      const subjectUris = isPersonTemplate ? Array.from(new Set([
+        ...sourceValues("http://purl.org/dc/terms/subject"),
+        ...describedRecord.filter((row) => row.property === "http://purl.org/dc/terms/subject").map((row) => row.value),
+      ])) : [];
+      // Like the Bookmark XSLT results slot, expand linked resources through the
+      // existing bounded FCT sandbox, never through a custom unrestricted SPARQL
+      // request. This XML is formatter-only; the validated Record snapshot stays
+      // untouched. A Review's reviewRating is itself a separate RDF resource.
+      if (templateUri.includes("DbpediaBookRecordTemplate") && !preview && enrichBookReviews) {
+        const reviewPredicates = new Set([
+          "http://schema.org/review", "https://schema.org/review",
+          "http://schema.org/reviews", "https://schema.org/reviews",
+        ]);
+        const bookReviewPredicates = sourceRows.flatMap((row) => {
+          const columns = Array.from(row.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0/", "column"));
+          const property = columns[1]?.textContent?.trim() ?? "";
+          return columns[0]?.textContent?.trim() === selectedUri && reviewPredicates.has(property) ? [property] : [];
+        });
+        if (bookReviewPredicates.length) {
+          // Execute the Book policy's graph-stored XSLT 3.0 pivot with the
+          // same server-side SaxonJS sandbox used by the Bookmark formatter.
+          // No browser XSLTProcessor or inline browser stylesheet is involved.
+          const pivotTemplateUri = "gttp://ggg.maestro.ecosys/shacl/template#DbpediaBookReviewQueryPivot";
+          const pivotTemplateResponse = await fetch("/proxy/api/policies", {
             method: "POST", cache: "no-store",
-            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-binding-describe", "RecordTemplateBinding") },
-            body: describeQueryXml,
+            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-book-review-xslt", "BookReviewPivotTemplate") },
+            body: JSON.stringify({ action: "template", template: pivotTemplateUri }),
           });
-          const xml = await response.text();
-          if (!response.ok) throw new Error(`Record DESCRIBE returned HTTP ${response.status}: ${xml.slice(0, 500)}`);
-          const parsed = new DOMParser().parseFromString(xml, "application/xml");
-          if (parsed.querySelector("parsererror") || parsed.documentElement.localName !== "facets") throw new Error("Record DESCRIBE did not return a valid fct:facets XML document.");
-          return parsed;
-        })();
-        dataCache.set(uri, promise);
-        return promise;
-      };
+          const pivotTemplatePayload = await pivotTemplateResponse.json() as { templateXslt?: string; error?: string };
+          if (!pivotTemplateResponse.ok || !pivotTemplatePayload.templateXslt) {
+            throw new Error(pivotTemplatePayload.error || `Book review pivot XSLT unavailable (${pivotTemplateResponse.status}).`);
+          }
+          const reviewQueryDoc = await transformMaestroQueryXslt(
+            pivotTemplatePayload.templateXslt, sourceXml, serializeFctQuery(queryTree), selectedUri,
+          );
+          const reviewRoot = reviewQueryDoc.documentElement;
+          if (!reviewRoot || reviewRoot.localName !== "query") throw new Error("Book review pivot did not produce an FCT query.");
+          const activeGraph = selectedRecordAuthor || (selectedRecordGraph
+            ? recordGraphs.find((uri) => uri.split("#", 1)[0] === selectedRecordGraph) ?? selectedRecordGraph
+            : recordGraphs[0]);
+          const originalAddr = reviewRoot.getAttribute("addr") || queryTree.attributes.addr || "";
+          const delimiter = originalAddr.indexOf("@");
+          if (activeGraph && delimiter >= 0) reviewRoot.setAttribute("addr", `${activeGraph}@${originalAddr.slice(delimiter + 1)}`);
+          // ASK preflight: the Book card is already on screen, but its Reviews
+          // section is deliberately absent until existence is established.
+          const askDoc = reviewQueryDoc.cloneNode(true) as Document;
+          const askView = Array.from(askDoc.getElementsByTagName("*")).find((node) => node.localName === "view");
+          if (!askView) throw new Error("The Review pivot has no FCT view.");
+          askView.setAttribute("type", "ask");
+          askView.removeAttribute("offset");
+          askView.removeAttribute("limit");
+          const askResponse = await cachedFetchFct("/proxy/api/fct", {
+            method: "POST", cache: "no-store", signal: AbortSignal.timeout(12000),
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-book-review-ask", "RecordBookReviewAsk") },
+            body: new XMLSerializer().serializeToString(askDoc),
+          });
+          const askXml = await askResponse.text();
+          if (!askResponse.ok) throw new Error(`Book review ASK returned HTTP ${askResponse.status}: ${askXml.slice(0, 300)}`);
+          const askResult = new DOMParser().parseFromString(askXml, "application/xml");
+          if (askResult.querySelector("parsererror")) throw new Error("Invalid Book review ASK response XML.");
+          const askBoolean = Array.from(askResult.getElementsByTagName("*")).find((node) => node.localName === "boolean")?.textContent?.trim();
+          if (askBoolean !== "true" && askBoolean !== "false") throw new Error("The Book review ASK response has no valid boolean.");
+          if (askBoolean === "false") return null;
+          if (!isCurrentRequest()) return null;
+          setFormattedRecordHtml((previous) => {
+            if (!previous) return previous;
+            const html = new DOMParser().parseFromString(previous, "text/html");
+            const target = html.getElementById("maestro-record-viewer");
+            if (!target) return previous;
+            const section = html.createElement("section");
+            section.id = "book-reviews-ratings";
+            section.className = "border-t border-[#c5b59d]/60 bg-[#f1ece3] px-6 py-7 dark:border-stone-700 dark:bg-[#29251f] sm:px-9";
+            const heading = html.createElement("h3");
+            heading.id = "book-reviews-title";
+            heading.className = "mb-4 font-serif text-2xl font-semibold";
+            heading.textContent = "Reviews & ratings";
+            const loading = html.createElement("p");
+            loading.id = "book-review-loading";
+            loading.className = "text-sm text-muted-foreground";
+            loading.textContent = "Loading...";
+            section.append(heading, loading);
+            // Keep Reviews in its original Book-card position before shopping links.
+            const bookLinks = html.getElementById("book-links");
+            if (bookLinks?.parentElement === target) target.insertBefore(section, bookLinks);
+            else target.appendChild(section);
+            return html.body.innerHTML;
+          });
+          const reviewQueryXml = new XMLSerializer().serializeToString(reviewQueryDoc);
+          const response = await cachedFetchFct("/proxy/api/fct", {
+            method: "POST", cache: "no-store", signal: AbortSignal.timeout(12000),
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-book-review-sandbox", "RecordBookReviewListValues") },
+            body: reviewQueryXml,
+          });
+          const responseXml = await response.text();
+          if (!response.ok) throw new Error(`Book review list-values returned HTTP ${response.status}: ${responseXml.slice(0, 300)}`);
+          const fetched = new DOMParser().parseFromString(responseXml, "application/xml");
+          if (fetched.querySelector("parsererror")) throw new Error("Invalid list-values Book review XML.");
+          const namespace = "http://openlinksw.com/services/facets/1.0/";
+          const targetResult = Array.from(sourceXml.getElementsByTagNameNS(namespace, "result"))
+            .find((element) => element.getAttribute("type") === "describe");
+          if (targetResult) {
+            const insertTriple = (subject: string, predicate: string, object: Element) => {
+              if (!subject || !predicate || !object.textContent?.trim()) return;
+              const row = sourceXml.createElementNS(namespace, "fct:row");
+              const colSubject = sourceXml.createElementNS(namespace, "fct:column");
+              colSubject.setAttribute("datatype", "uri"); colSubject.textContent = subject;
+              const colPredicate = sourceXml.createElementNS(namespace, "fct:column");
+              colPredicate.setAttribute("datatype", "uri"); colPredicate.textContent = predicate;
+              const colObject = sourceXml.createElementNS(namespace, "fct:column");
+              for (const attribute of Array.from(object.attributes)) colObject.setAttribute(attribute.name, attribute.value);
+              colObject.textContent = object.textContent;
+              row.append(colSubject, colPredicate, colObject);
+              targetResult.appendChild(row);
+            };
+            const reviewRows = Array.from(fetched.getElementsByTagNameNS(namespace, "row")).slice(0, 5);
+            // A linked review must yield focus rows. Never silently present a
+            // header-only table when the sandbox query returned no reviews.
+            if (!reviewRows.length) {
+              throw new Error("The Book review list-values query returned no Review rows. Inspect RecordBookReviewListValues in Network for its generated SPARQL and graph scope.");
+            }
+            for (const row of reviewRows) {
+              const columns = Array.from(row.children).filter((node) => node.localName === "column");
+              const reviewUri = columns[0]?.textContent?.trim() || "";
+              if (!reviewUri) continue;
+              const byPath = new Map<string, Element[]>();
+              for (const column of columns.slice(2)) {
+                const path = column.getAttribute("path") || "";
+                if (!path) continue;
+                byPath.set(path, Array.from(column.children).filter((node) => node.localName === "value"));
+              }
+              for (const [path, values] of byPath) {
+                const segments = path.split(/\s+/);
+                if (segments.length !== 1) continue;
+                for (const value of values) insertTriple(reviewUri, segments[0], value);
+              }
+              for (const [path, values] of byPath) {
+                const segments = path.split(/\s+/);
+                if (segments.length !== 2) continue;
+                const parentUris = byPath.get(segments[0])?.map((node) => node.textContent?.trim() ?? "").filter(Boolean) ?? [];
+                // A nested projected predicate belongs to its linked Rating
+                // or Author resource, not to the Review itself.
+                for (const parentUri of parentUris) for (const value of values)
+                  insertTriple(parentUri, segments[1], value);
+              }
+            }
+          }
+        }
+      }
       const document = await transformMaestroRecordXslt(
         templatePayload.templateXslt,
-        await describeDocument(selectedUri),
+        sourceXml,
         serializeFctQuery(queryTree),
         selectedUri,
       );
@@ -5314,6 +5867,177 @@ setGraphFacets(graphs);
           : actualVersion[2] < requiredVersion[2];
       if (actualVersion[0] !== requiredVersion[0] || versionIsOlder) {
         throw new Error(`This template requires ${frameworkRequirement}; the installed version is ${templatePayload.nextVersion}.`);
+      }
+      // A DBpedia Person often has dbp:/schema:/FOAF properties absent from
+      // the starter stylesheet's small dbo: field list. Preserve those values
+      // in a supplemental section of the *same* formatted card/snapshot.
+      if (isPersonTemplate && !preview) {
+        const reserved = new Set([
+          "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+          "http://www.w3.org/2000/01/rdf-schema#label",
+          "http://xmlns.com/foaf/0.1/depiction",
+          "http://dbpedia.org/ontology/thumbnail",
+          "http://purl.org/dc/terms/subject",
+        ]);
+        const supplementary = new Map<string, string[]>();
+        // Work directly from the exact XML document passed to the XSLT.
+        // describedRecord is another React state value and may lag behind
+        // recordDescriptionSnapshot during an automatic format transition.
+        for (const row of sourceRows) {
+          const columns = Array.from(row.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0/", "column"));
+          if (columns.length < 3) continue;
+          const subject = columns[0].textContent?.trim() ?? "";
+          const property = columns[1].textContent?.trim() ?? "";
+          const value = columns[2].textContent?.trim() ?? "";
+          if (subject !== selectedUri || !property || !value || reserved.has(property)) continue;
+          const values = supplementary.get(property) ?? [];
+          if (!values.includes(value)) values.push(value);
+          supplementary.set(property, values);
+        }
+        if (supplementary.size) {
+          const section = document.createElement("section");
+          section.id = "maestro-person-additional-fields";
+          section.className = "border-t px-5 py-4";
+          const heading = document.createElement("h3");
+          heading.id = "maestro-person-additional-heading";
+          heading.className = "mb-3 text-sm font-semibold";
+          heading.textContent = "Additional details";
+          section.appendChild(heading);
+          const list = document.createElement("dl");
+          list.id = "maestro-person-additional-list";
+          list.className = "space-y-2";
+          Array.from(supplementary.entries()).slice(0, 80).forEach(([property, values], index) => {
+            const row = document.createElement("div"); row.id = `maestro-person-extra-${index}`;
+            row.className = "grid grid-cols-[minmax(7rem,35%)_1fr] gap-2 text-sm";
+            const term = document.createElement("dt"); term.id = `maestro-person-extra-term-${index}`;
+            term.className = "break-words text-muted-foreground"; term.textContent = toLabel(property);
+            const description = document.createElement("dd"); description.id = `maestro-person-extra-value-${index}`;
+            description.className = "break-words";
+            values.slice(0, 20).forEach((value, valueIndex) => {
+              if (valueIndex) {
+                const separator = document.createElement("span"); separator.id = `maestro-person-extra-sep-${index}-${valueIndex}`;
+                separator.textContent = " · "; description.appendChild(separator);
+              }
+              if (/^https?:\/\//i.test(value)) {
+                const link = document.createElement("a"); link.id = `maestro-person-extra-link-${index}-${valueIndex}`;
+                link.setAttribute("href", "#"); link.setAttribute("data-maestro-record-uri", value);
+                link.textContent = value; description.appendChild(link);
+              } else {
+                const literal = document.createElement("span"); literal.id = `maestro-person-extra-literal-${index}-${valueIndex}`;
+                literal.textContent = value; description.appendChild(literal);
+              }
+            });
+            row.append(term, description); list.appendChild(row);
+          });
+          section.appendChild(list);
+          templateRoot.querySelector("#record-footer")?.before(section);
+          if (!section.parentElement) templateRoot.appendChild(section);
+        }
+      }
+      // Older loaded Person templates may omit subject badges or depictions.
+      // Reconcile their output with the SAME authoritative DESCRIBE snapshot.
+      if (isPersonTemplate && !preview) {
+        const subjects = Array.from(new Set(subjectUris.filter(Boolean)));
+        if (subjects.length && !templateRoot.querySelector("#record-subject-badges")) {
+          const badges = document.createElement("div");
+          badges.id = "record-subject-badges";
+          badges.className = "flex flex-wrap gap-1.5 border-t px-5 py-3";
+          subjects.forEach((value, index) => {
+            const item = document.createElement(/^https?:\/\//i.test(value) ? "a" : "span");
+            item.id = `record-subject-${index + 1}`;
+            item.className = "inline-flex rounded-full border bg-secondary px-2.5 py-1 text-xs text-secondary-foreground hover:bg-accent";
+            item.textContent = /^https?:\/\//i.test(value) ? toLabel(value) : value;
+            if (item.tagName === "A") {
+              item.setAttribute("href", "#");
+              item.setAttribute("data-maestro-record-uri", value);
+            }
+            badges.appendChild(item);
+          });
+          (templateRoot.querySelector("#record-footer") ?? templateRoot.lastElementChild)?.before(badges);
+        }
+        const picturePredicates = ["http://xmlns.com/foaf/0.1/depiction", "http://dbpedia.org/ontology/thumbnail", "http://dbpedia.org/ontology/depiction", "http://schema.org/image", "https://schema.org/image"];
+        const pictures = Array.from(new Set(picturePredicates.flatMap(sourceValues).filter((value) => /^https?:\/\//i.test(value))));
+        if (pictures.length && !templateRoot.querySelector("#record-depictions")) {
+          const gallery = document.createElement("section");
+          gallery.id = "record-depictions";
+          gallery.className = "border-b bg-muted/20 p-3";
+          const track = document.createElement("div");
+          track.id = "record-carousel-track";
+          track.className = "mx-auto flex max-w-xs snap-x snap-mandatory gap-2 overflow-x-auto scroll-smooth rounded-lg";
+          pictures.forEach((uri, index) => {
+            const img = document.createElement("img");
+            img.id = `record-photo-${index + 1}`;
+            img.src = uri;
+            img.alt = `Depiction ${index + 1} of ${pictures.length}`;
+            img.loading = "lazy";
+            img.referrerPolicy = "no-referrer";
+            img.className = "h-56 min-w-full shrink-0 snap-center rounded-md object-contain";
+            track.appendChild(img);
+          });
+          gallery.appendChild(track);
+          if (pictures.length > 1) {
+            const controls = document.createElement("div");
+            controls.id = "record-carousel-controls";
+            controls.className = "mt-2 flex items-center justify-between gap-2";
+            for (const [direction, title] of [["previous", "Previous"], ["next", "Next"]] as const) {
+              const button = document.createElement("button");
+              button.id = `record-carousel-${direction}`;
+              button.type = "button";
+              button.setAttribute("data-maestro-carousel", direction);
+              button.className = "rounded-md border px-3 py-1 text-xs hover:bg-accent";
+              button.textContent = title;
+              controls.appendChild(button);
+            }
+            gallery.appendChild(controls);
+          }
+          (templateRoot.querySelector("#record-header") ?? templateRoot.firstElementChild)?.after(gallery);
+        }
+      }
+      // Resolve URI-valued card fields to RDF labels using the same graph server,
+      // while preserving the URI for Maestro's root-value navigation.
+      // Some older templates emit URI objects as plain <dd> text. Promote
+      // those individual values to URI-aware links instead of requiring every
+      // graph-stored stylesheet to be rewritten for Maestro navigation.
+      for (const field of Array.from(document.body.querySelectorAll<HTMLElement>("dd[id]"))) {
+        if (field.querySelector("[data-maestro-record-uri]")) continue;
+        const text = (field.textContent ?? "").trim();
+        if (!/^https?:\/\//i.test(text)) continue;
+        const values = text.split(/,\s+(?=https?:\/\/)/i).filter(Boolean);
+        if (!values.every((value) => /^https?:\/\//i.test(value))) continue;
+        field.replaceChildren(...values.flatMap((value, index) => {
+          const anchor = document.createElement("a");
+          anchor.id = `${field.id}-link-${index + 1}`;
+          anchor.setAttribute("data-maestro-record-uri", value);
+          anchor.setAttribute("href", "#");
+          anchor.textContent = value;
+          if (index === 0) return [anchor];
+          const separator = document.createElement("span");
+          separator.id = `${field.id}-separator-${index + 1}`;
+          separator.textContent = " · ";
+          return [separator, anchor];
+        }));
+      }
+      const uriTargets = Array.from(document.body.querySelectorAll<HTMLElement>("[data-maestro-record-uri]"));
+      // URI labels are already returned in the Record SELECT response and cached
+      // before formatting; no follow-up FCT DESCRIBE requests are required.
+      const queryAddrForLabels = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+      const cachedLabels = recordUriLabelCacheRef.current;
+      for (const target of uriTargets) {
+        const uri = target.getAttribute("data-maestro-record-uri") ?? "";
+        if (!uri) continue;
+        target.textContent = cachedLabels.get(`${queryAddrForLabels}\u0000${uri}`) ?? toLabel(uri);
+        target.setAttribute("title", uri);
+        target.setAttribute("href", "#");
+        target.classList.add("cursor-pointer", "text-sky-700", "hover:underline", "dark:text-sky-400");
+      }
+      // Both views share this snapshot. Surface partial DESCRIBE responses rather
+      // than imply that an omitted profile field was absent from the graph.
+      if (recordDescriptionSnapshot.incomplete) {
+        const warning = document.createElement("p");
+        warning.id = "maestro-record-partial-warning";
+        warning.className = "border-t bg-muted/40 px-5 py-2 text-xs text-muted-foreground";
+        warning.textContent = "This record description is incomplete. Some fields may be missing.";
+        templateRoot.querySelector("#record-fields")?.insertAdjacentElement("afterend", warning);
       }
       const sourceIds = new Set<string>();
       for (const element of Array.from(document.body.querySelectorAll("*"))) {
@@ -5424,6 +6148,9 @@ setGraphFacets(graphs);
         const parentId = (button.getAttribute("mui:parent") ?? "").trim();
         button.removeAttribute("mui:parent");
         if (!parentId) throw new Error("A template control with mui:parent must name its target element id.");
+        if (parentId === "record_title_icon" && (button.localName !== "svg" || button.namespaceURI !== "http://www.w3.org/2000/svg")) {
+          throw new Error("The Record title icon slot only accepts SVG artwork.");
+        }
         sanitize(button);
         (templateButtonsByParent[parentId] ??= []).push(button.outerHTML);
         button.remove();
@@ -5478,7 +6205,9 @@ setGraphFacets(graphs);
           clone.setAttribute("data-result-uri", result.uri);
           clone.setAttribute("data-maestro-query-instance", "true");
           makeInstanceIdsUnique(clone);
-          bindValues(clone, await describeDocument(result.uri));
+          // The removed per-resource DESCRIBE helper is not available here.
+          // Bind from the already loaded Record snapshot instead.
+          bindValues(clone, sourceXml);
           sanitize(clone);
           replacements.push(clone);
         }
@@ -5487,7 +6216,7 @@ setGraphFacets(graphs);
       }
 
       // Evaluate XPath bindings against the actual fct:facets XML returned by DESCRIBE.
-      const currentDocument = await describeDocument(selectedUri);
+      const currentDocument = sourceXml;
       // Run the exact saved FCT query with a five-row window, then clone that XML
       // and change only the view type to count so the count uses identical filters.
       const historyQueryXml = xpathValues(currentDocument, "/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyQueryXML']]/fct:column[last()]" )[0];
@@ -5725,17 +6454,70 @@ setGraphFacets(graphs);
       }
       if (!isCurrentRequest()) return null;
       setFormattedRecordButtonsHtml(Object.fromEntries(Object.entries(templateButtonsByParent).map(([parentId, buttons]) => [parentId, buttons.join("")])));
-      setFormattedRecordHtml(document.body.innerHTML);
+      // Review rows in the initial XSLT are only placeholders until the
+      // asynchronous ASK/list-values pipeline has verified and loaded them.
+      // Keep the rest of the Book card visible immediately.
+      if (templateUri.includes("DbpediaBookRecordTemplate") && !enrichBookReviews) {
+        document.getElementById("book-reviews-ratings")?.remove();
+      }
+      const initialRecordHtml = document.body.innerHTML;
+      setFormattedRecordHtml(initialRecordHtml);
       setFormattedRecordKey(requestKey);
-      return document.body.innerHTML;
+      setRecordControlsOpen(false);
+      return initialRecordHtml;
     } catch (error) {
-      if (!preview && isCurrentRequest()) { setRecordFormatError(error instanceof Error ? error.message : "Could not format this record."); setFormattedRecordHtml(""); setFormattedRecordKey(""); setFormattedRecordButtonsHtml({}); }
+      if (!preview && !enrichBookReviews && isCurrentRequest()) { setRecordFormatError(error instanceof Error ? error.message : "Could not format this record."); setFormattedRecordHtml(""); setFormattedRecordKey(""); setFormattedRecordButtonsHtml({}); }
+      if (enrichBookReviews) {
+        console.warn("Book review enrichment failed; original Book card is preserved.", error);
+        // Deferred enrichment must not erase the already formatted Book. Give
+        // users a visible failure instead of leaving a deceptively empty table.
+        if (isCurrentRequest()) {
+          const message = error instanceof Error ? error.message : "The Review query could not be completed.";
+          setFormattedRecordHtml((previous) => {
+            if (!previous) return previous;
+            const html = new DOMParser().parseFromString(previous, "text/html");
+            const tableBody = html.getElementById("book-review-table-body");
+            const pending = html.getElementById("book-review-loading");
+            if (pending) {
+              pending.id = "book-review-load-error";
+              pending.className = "text-sm text-destructive";
+              pending.textContent = `Reviews could not be loaded: ${message}`;
+              return html.body.innerHTML;
+            }
+            if (!tableBody) return previous;
+            const row = html.createElement("tr");
+            row.id = "book-review-load-error-row";
+            const cell = html.createElement("td");
+            cell.id = "book-review-load-error";
+            cell.colSpan = 3;
+            cell.className = "px-4 py-3 text-sm text-destructive";
+            cell.textContent = `Reviews could not be loaded: ${message}`;
+            row.appendChild(cell);
+            tableBody.replaceChildren(row);
+            return html.body.innerHTML;
+          });
+        }
+      }
       return null;
     }
   }
 
+  // Render the validated Book card first. Linked reviews and ratings are optional
+  // enrichment: run a second sandbox pass only after the initial card is visible.
+  // One attempt per record/template avoids repeated network work on rerenders.
+  const attemptedBookReviewEnrichmentRef = useRef("");
   useEffect(() => {
-    if (!recordFormatMenuOpen || !recordPolicy || !selectedUri || recordPolicyCheckedUri !== selectedUri || recordPolicy.templates.length < 2) { setRecordFormatPreviews({}); return; }
+    if (!currentFormattedRecordHtml || !selectedRecordTemplateUri.includes("DbpediaBookRecordTemplate") ||
+        !recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey ||
+        !selectedUri || isDescribing) return;
+    const key = currentRecordFormatKey;
+    if (attemptedBookReviewEnrichmentRef.current === key) return;
+    attemptedBookReviewEnrichmentRef.current = key;
+    void formatSelectedRecord(undefined, false, true);
+  }, [currentFormattedRecordHtml, currentRecordFormatKey, selectedRecordTemplateUri, recordDescriptionSnapshot, currentRecordDescriptionKey, selectedUri, isDescribing]);
+
+  useEffect(() => {
+    if (!recordFormatMenuOpen || !recordPolicy || !selectedUri || recordPolicyCheckedUri !== selectedUri || recordPolicies.flatMap((policy) => policy.templates).length < 1) { setRecordFormatPreviews({}); return; }
     let cancelled = false;
     void (async () => {
       const previews: Record<string, string> = {};
@@ -5747,17 +6529,17 @@ setGraphFacets(graphs);
       if (!cancelled) setRecordFormatPreviews(previews);
     })();
     return () => { cancelled = true; };
-  }, [recordFormatMenuOpen, recordPolicy?.uri, recordPolicy?.templates.map((template) => template.uri).join("|"), selectedUri, personalSparqlEndpoint, recordPolicyCheckedUri]);
+  }, [recordFormatMenuOpen, recordPolicy?.uri, recordPolicies.map((policy) => `${policy.uri}:${policy.templates.map((template) => template.uri).join(",")}`).join("|"), selectedUri, personalSparqlEndpoint, recordPolicyCheckedUri]);
 
   useEffect(() => {
-    if (!recordFormatPreferenceLoaded || !recordFormatEnabled || !recordPolicy || !selectedUri || isDescribing || isLoadingRecordPolicy || recordPolicyCheckedUri !== selectedUri || currentFormattedRecordHtml) return;
+    if (!recordFormatPreferenceLoaded || !recordFormatEnabled || !recordPolicy || !selectedUri || isDescribing || isLoadingRecordPolicy || recordPolicyCheckedUri !== selectedUri || currentFormattedRecordHtml || !recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || describedRecordUri !== selectedUri) return;
     const requestKey = currentRecordFormatKey;
     if (activeFormatterRequestRef.current === requestKey) return;
     activeFormatterRequestRef.current = requestKey;
     void formatSelectedRecord().finally(() => {
       if (activeFormatterRequestRef.current === requestKey) activeFormatterRequestRef.current = "";
     });
-  }, [recordFormatPreferenceLoaded, recordFormatEnabled, recordPolicy?.uri, selectedRecordTemplateUri, selectedUri, isDescribing, isLoadingRecordPolicy, recordPolicyCheckedUri, currentFormattedRecordHtml]);
+  }, [recordFormatPreferenceLoaded, recordFormatEnabled, recordPolicy?.uri, selectedRecordTemplateUri, selectedUri, isDescribing, isLoadingRecordPolicy, recordPolicyCheckedUri, currentFormattedRecordHtml, recordDescriptionSnapshot, currentRecordDescriptionKey, describedRecordUri]);
 
   // Template actions are parsed as a restricted API-call grammar, then dispatched through Maestro's existing query-update API.
   useEffect(() => {
@@ -5766,6 +6548,23 @@ setGraphFacets(graphs);
     const handleTemplateAction = (event: Event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      const carouselButton = target.closest("[data-maestro-carousel]");
+      if (carouselButton) {
+        event.preventDefault();
+        const carousel = carouselButton.closest("#record-carousel");
+        const track = carousel?.querySelector<HTMLElement>("#record-carousel-track");
+        if (track) {
+          const direction = carouselButton.getAttribute("data-maestro-carousel") === "previous" ? -1 : 1;
+          track.scrollBy({ left: track.clientWidth * direction, behavior: "smooth" });
+        }
+        return;
+      }
+      const recordUriLink = target.closest("[data-maestro-record-uri]");
+      if (recordUriLink) {
+        const uri = recordUriLink.getAttribute("data-maestro-record-uri") ?? "";
+        if (/^https?:\/\//i.test(uri)) { event.preventDefault(); openRecordPropertyUri(uri); }
+        return;
+      }
       const actionElement = target.closest("[mui\\:action]");
       if (!actionElement) return;
       event.preventDefault();
@@ -8801,22 +9600,35 @@ useEffect(() => {
                   className="shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
                 >Reset Auto</button>} /><TooltipContent>{"Reset Auto-configure learning history and saved candidates"}</TooltipContent></Tooltip>
               </div>
-              <div className="flex flex-col gap-3 rounded-md border p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <Label htmlFor="fct-query-timeout">Query timeout</Label>
-                  <output htmlFor="fct-query-timeout" className="text-sm tabular-nums">{timeoutSeconds}s</output>
-                </div>
-                <Slider
-                  id="fct-query-timeout"
-                  aria-label="Query timeout in seconds"
-                  min={0}
-                  max={60}
-                  step={1}
-                  value={[timeoutSeconds]}
-                  onValueChange={(values) => setTimeoutSeconds(values[0] ?? 0)}
-                  onValueCommit={(values) => setQueryAttribute("timeout", String((values[0] ?? 0) * 1000))}
-                />
-              </div>
+              <Collapsible open={timeoutEditorOpen} onOpenChange={setTimeoutEditorOpen} className="rounded-md border">
+                <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-accent/40">
+                  <Label className="cursor-pointer">Query timeouts</Label>
+                  {timeoutEditorOpen ? <ChevronsDownUp className="size-4 text-muted-foreground" /> : <ChevronsUpDown className="size-4 text-muted-foreground" />}
+                </CollapsibleTrigger>
+                <CollapsibleContent className="space-y-4 border-t px-3 pb-4 pt-3">
+                  <p className="text-xs text-muted-foreground">Per-widget upstream time limits. 0 uses the existing query/server default. Saved in IndexedDB.</p>
+                  {MAESTRO_TIMEOUT_CATEGORIES.map(({ key, label }) => (
+                    <div key={key} className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <Label htmlFor={`widget-timeout-${key}`} className="text-xs">{label}</Label>
+                        <output htmlFor={`widget-timeout-${key}`} className="text-xs tabular-nums text-muted-foreground">{widgetTimeouts[key] ? `${widgetTimeouts[key]}s` : "Default"}</output>
+                      </div>
+                      <Slider id={`widget-timeout-${key}`} aria-label={`${label} query timeout in seconds`} min={0} max={120} step={5}
+                        value={[widgetTimeouts[key]]}
+                        onValueChange={(values) => setWidgetTimeouts((current) => ({ ...current, [key]: values[0] ?? 0 }))}
+                        onValueCommit={(values) => changeWidgetTimeout(key, values[0] ?? 0)} />
+                    </div>
+                  ))}
+                </CollapsibleContent>
+              </Collapsible>
+              <Collapsible open={panelLimitsOpen} onOpenChange={setPanelLimitsOpen} className="rounded-md border">
+                <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-accent/40">
+                  <Label className="cursor-pointer">Panel limits</Label>
+                  {panelLimitsOpen ? <ChevronsDownUp className="size-4 text-muted-foreground" /> : <ChevronsUpDown className="size-4 text-muted-foreground" />}
+                </CollapsibleTrigger>
+                <CollapsibleContent className="space-y-4 border-t px-3 pb-4 pt-3">
+                  <section className="space-y-3">
+                    <h3 className="text-xs font-semibold text-muted-foreground">Left panel</h3>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <Label htmlFor="left-panel-limit">Left panel limit</Label>
@@ -8832,6 +9644,71 @@ useEffect(() => {
                   {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
                 </select>
               </div>
+                  </section>
+                  <section className="space-y-3 border-t pt-3">
+                    <h3 className="text-xs font-semibold text-muted-foreground">Center panel</h3>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="center-results-limit">Results batch LIMIT</Label>
+                    <select id="center-results-limit" aria-label="Center Results server batch limit" value={resultsBatchSize} disabled={isSearching}
+                      onChange={(event) => {
+                        const limit = Number(event.currentTarget.value);
+                        if (!RESULTS_BATCH_SIZE_OPTIONS.some((size) => size === limit)) return;
+                        maestroStorageSet(CENTER_PANEL_LIMIT_STORAGE_KEY, String(limit));
+                        setResultsUiPage(0);
+                        setResults([]);
+                        resultsLoadedQueryIdentityRef.current = "";
+                        setResultsPage(limit, 0);
+                      }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+                      {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="center-group-limit">Groups batch LIMIT</Label>
+                    <select id="center-group-limit" aria-label="Center Groups server batch limit" value={groupBatchSize} disabled={groupValuesLoading}
+                      onChange={(event) => {
+                        const limit = Number(event.currentTarget.value);
+                        if (!RESULTS_BATCH_SIZE_OPTIONS.some((size) => size === limit)) return;
+                        maestroStorageSet(CENTER_GROUP_LIMIT_STORAGE_KEY, String(limit));
+                        setGroupBatchSize(limit); setGroupBatchOffset(0); setGroupUiPage(0);
+                        setGroupHasMoreBatches(false); setGroupValues([]);
+                      }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+                      {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
+                    </select>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Server-side LIMITs; the Results and Groups page-size selector still controls visible pages. Saved in IndexedDB.</p>
+                  </section>
+                  <section className="space-y-3 border-t pt-3">
+                    <h3 className="text-xs font-semibold text-muted-foreground">Right panel</h3>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="right-describe-limit">Record SELECT LIMIT</Label>
+                    <select id="right-describe-limit" aria-label="Right Record DESCRIBE query limit" value={recordDescriptionQueryLimit} disabled={isDescribing}
+                      onChange={(event) => {
+                        const limit = Number(event.currentTarget.value);
+                        if (!RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS.some((size) => size === limit)) return;
+                        maestroStorageSet(RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY, String(limit));
+                        setRecordDescriptionQueryLimit(limit);
+                      }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+                      {RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="right-record-page-limit">Record properties per page</Label>
+                    <select id="right-record-page-limit" aria-label="Right Record table properties per page" value={recordDescriptionPageSize}
+                      onChange={(event) => {
+                        const limit = Number(event.currentTarget.value);
+                        if (!RIGHT_PANEL_PAGE_LIMIT_OPTIONS.some((size) => size === limit)) return;
+                        maestroStorageSet(RIGHT_PANEL_PAGE_LIMIT_STORAGE_KEY, String(limit));
+                        setRecordDescriptionPageSize(limit); setRecordDescriptionPage(0);
+                      }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+                      {RIGHT_PANEL_PAGE_LIMIT_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
+                    </select>
+                  </div>
+                  <p className="text-xs text-muted-foreground">SELECT controls the shared Default/formatter snapshot and loads URI labels. Table paging is local. Saved in IndexedDB.</p>
+                  </section>
+                </CollapsibleContent>
+              </Collapsible>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <Label htmlFor="fct-query-same-as">Aliases</Label>
@@ -9510,16 +10387,17 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                             className={`group/header flex w-full items-center gap-1 rounded-t-md border-b overflow-hidden ${group === "Properties" || group === "Roles" ? "mb-2" : ""}`}
                             style={{ backgroundColor: CONFIGURE_HEADER_BACKGROUND_COLOR, borderColor: CONFIGURE_HEADER_BORDER_COLOR }}
                           >
-                            <h2 className="min-w-0">
+                            <div className="min-w-0">
                               <button
                                 type="button"
-                                className="flex min-w-0 items-center px-3 py-2 text-left text-sm font-medium text-white hover:brightness-90"
+                                className="flex min-w-0 items-center gap-1 px-3 py-2 text-left text-white hover:brightness-90"
                                 style={{ backgroundColor: CONFIGURE_HEADER_BACKGROUND_COLOR }}
                                 onClick={() => setSelectedFacet(group)}
                               >
-                                <IncompleteWidgetIndicator source={group === "Properties" ? "properties" : group === "Roles" ? "roles" : "graphs"} /><span className="truncate">{group}</span>
+                                <IncompleteWidgetIndicator source={group === "Properties" ? "properties" : group === "Roles" ? "roles" : "graphs"} />
+                                <h2 className="truncate text-sm font-semibold">{group}</h2>
                               </button>
-                            </h2>
+                            </div>
                             {group === "Properties" && (
                               <QueryInspectorButton
                                 query={`${queryWithoutPagingXml("properties")}\n<!-- FCT API option: view=properties -->`}
@@ -9819,7 +10697,7 @@ onMouseLeave={() => {
                         <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes", false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /><Tooltip><TooltipTrigger render={<button
                           type="button"
                           aria-pressed={categoriesTreeMode}
-                          onClick={() => { setCategoriesTreeMode((current) => !current); setExpandedCategoryNodes(new Set()); setClassesPage(0); }}
+                          onClick={() => { setQueryAttribute("classTree", categoriesTreeMode ? "false" : "true"); setExpandedCategoryNodes(new Set()); setClassesPage(0); }}
                           className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${categoriesTreeMode ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`}
                           aria-label={categoriesTreeMode ? "Show categories as a flat list" : "Show categories as a superclass tree"}
                         >{categoriesTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{categoriesTreeMode ? "Show flat category list" : "Show category tree (superclass path of each category, up to the root)"}</TooltipContent></Tooltip>{categoriesTreeMode && <Tooltip><TooltipTrigger render={<button
@@ -9892,7 +10770,7 @@ onMouseLeave={() => {
                                       >
                                         {isFacetExcluded("Classes", item.uri) && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                                         {toLabel(item.uri, "Class")}
-                                      </button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri, "Class")}` : `Show results for class ${toLabel(item.uri, "Class")}`}</TooltipContent></Tooltip>
+                                      </button>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
                                       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{count === null ? "—" : shortenCount(count)}</span>
                                     </div>
                                   );
@@ -9936,7 +10814,7 @@ onMouseLeave={() => {
                                         <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50" style={depth ? { paddingLeft: `${8 + depth * 14}px` } : undefined}>
                                           <input type="checkbox" checked={selectedClasses.has(item.uri)} onChange={(event) => toggleClass(item.uri, event.target.checked)} aria-label={`Filter by class ${toLabel(item.uri, "Class")}`} className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} />
                                           <div className="flex min-w-0 flex-1 items-center gap-1">
-                                            <Tooltip><TooltipTrigger render={<button type="button" className={`min-w-0 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`} onClick={() => { if (isGroupByCategory) scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri, "Class"), matches: [], termType: "uri" }); else { if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true); showClassResults(item.uri, activeLeafId); } }}>{toLabel(item.uri, "Class")}</button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri, "Class")}` : `Show results for class ${toLabel(item.uri, "Class")}`}</TooltipContent></Tooltip>
+                                            <Tooltip><TooltipTrigger render={<button type="button" className={`min-w-0 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`} onClick={() => { if (isGroupByCategory) scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri, "Class"), matches: [], termType: "uri" }); else { if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true); showClassResults(item.uri, activeLeafId); } }}>{toLabel(item.uri, "Class")}</button>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
                                             {node.children.length > 0 && <CollapsibleTrigger aria-label={`${isExpanded ? "Collapse" : "Expand"} ${toLabel(item.uri, "Class")}`} className="inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground">{isExpanded ? <ChevronDown className="size-3.5" aria-hidden="true" /> : <ChevronRight className="size-3.5" aria-hidden="true" />}</CollapsibleTrigger>}
                                           </div>
                                           <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{shortenCount(item.count)}</span>
@@ -9972,7 +10850,7 @@ onMouseLeave={() => {
                                     }}
                                   >
                                     {toLabel(item.uri, "Class")}
-                                  </button>} /><TooltipContent>{isGroupByCategory ? `Scroll to group ${toLabel(item.uri, "Class")}` : `Show results for class ${toLabel(item.uri, "Class")}`}</TooltipContent></Tooltip>
+                                  </button>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
                                   <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{shortenCount(item.count)}</span>
                                 </div>
                                 );
@@ -10229,12 +11107,14 @@ onMouseLeave={() => {
                       const nextSize = Number(event.currentTarget.value);
                       if (!RESULTS_BATCH_SIZE_OPTIONS.some((size) => size === nextSize)) return;
                       if (centralTab === "groups" && selectedGroupByOption) {
+                        maestroStorageSet(CENTER_GROUP_LIMIT_STORAGE_KEY, String(nextSize));
                         setGroupBatchSize(nextSize);
                         setGroupBatchOffset(0);
                         setGroupUiPage(0);
                         setGroupHasMoreBatches(false);
                         setGroupValues([]);
                       } else {
+                        maestroStorageSet(CENTER_PANEL_LIMIT_STORAGE_KEY, String(nextSize));
                         setResultsUiPage(0);
                         setResults([]);
                         resultsLoadedQueryIdentityRef.current = "";
@@ -10251,12 +11131,12 @@ onMouseLeave={() => {
                 </div>
               </div>
 
-              {centralTab === "results" && (
+              {centralTab === "results" && Object.values(alphabetCounts).some((count) => count > 0) && (
                 <div id="maestro-alphabet" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2" aria-label="Alphabetical browse by selected label properties">
                   <IncompleteWidgetIndicator source="alphabet" />
                   {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0).map((letter) => (
                     <button key={letter} type="button" title={`Letter ${letter}`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={alphabetIndex === letter}
-                      disabled={isLoadingAlphabet || !!alphabetError || !alphabetCounts[letter] && alphabetIndex !== letter}
+                      disabled={isLoadingAlphabet || (!alphabetCounts[letter] && alphabetIndex !== letter)}
                       className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${alphabetIndex === letter ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
                       onClick={() => {
                         setNodeAttribute("query-view", "indexLabels", alphabetLabelUris);
@@ -10269,7 +11149,7 @@ onMouseLeave={() => {
                     </button>
                   ))}
                   {isLoadingAlphabet && <span className="text-xs text-muted-foreground">Locating letters...</span>}
-                  {alphabetError && <span className="text-xs text-destructive" title={alphabetError}>Alphabet unavailable</span>}
+                  {alphabetError && <span className="text-xs text-destructive" title={alphabetError}>{Object.values(alphabetCounts).some((count) => count > 0) ? "Alphabet partial" : "Alphabet unavailable"}</span>}
                 </div>
               )}
 
@@ -10529,19 +11409,22 @@ onMouseLeave={() => {
                       <Toggle pressed={querySourceFormat === "sparql"} onPressedChange={(pressed) => { if (pressed) setQuerySourceFormat("sparql"); }} className="rounded-none border-0 px-3 py-1.5 text-xs">SPARQL</Toggle>
                       <Toggle pressed={querySourceFormat === "alphabet-xml"} onPressedChange={(pressed) => { if (pressed) setQuerySourceFormat("alphabet-xml"); }} className="rounded-none border-0 px-3 py-1.5 text-xs">Alphabet XML</Toggle>
                       <Toggle pressed={querySourceFormat === "alphabet-sparql"} onPressedChange={(pressed) => { if (pressed) setQuerySourceFormat("alphabet-sparql"); }} className="rounded-none border-0 px-3 py-1.5 text-xs">Alphabet SPARQL</Toggle>
+                      <Toggle pressed={querySourceFormat === "response"} onPressedChange={(pressed) => { if (pressed) setQuerySourceFormat("response"); }} className="rounded-none border-0 px-3 py-1.5 text-xs">FCT response</Toggle>
                     </ButtonGroup>
                     <button type="button" onClick={() => { setCentralTab(groupByPropertyUri ? "groups" : "results"); setQueryTreeOpen(true); }} className="shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent">Back to Query</button>
                   </div>
                   <CodeBlock
                     className="h-full min-h-0"
-                    language={querySourceFormat === "xml" || querySourceFormat === "alphabet-xml" ? "xml" : "sparql"}
+                    language={querySourceFormat === "xml" || querySourceFormat === "alphabet-xml" || querySourceFormat === "response" ? "xml" : "sparql"}
                     code={querySourceFormat === "xml" ? prettyQueryXml
                       : querySourceFormat === "sparql" ? sourceSparql
                       : querySourceFormat === "alphabet-xml" ? xmlFormat(alphabetQueryXml, { indentation: "  " })
+                      : querySourceFormat === "response" ? resultsRawResponse
                       : alphabetSparql}
                     filename={querySourceFormat === "xml" ? "fct-query.xml"
                       : querySourceFormat === "sparql" ? "query.sparql"
                       : querySourceFormat === "alphabet-xml" ? "alphabet-query.xml"
+                      : querySourceFormat === "response" ? "results-fct-response.xml"
                       : "alphabet-query.sparql"}
                   />
                 </div>
@@ -10721,8 +11604,16 @@ onMouseLeave={() => {
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize={30} minSize={18} className="min-w-0">
             <section className="flex h-full min-h-0 min-w-0 flex-col">
-              <div className="border-b p-4">
-                <h2 className="text-base font-semibold">
+              <Collapsible open={recordControlsOpen} onOpenChange={setRecordControlsOpen} className="shrink-0 border-b">
+                <div className="group/record-header flex items-center gap-2 px-4 py-3">
+                  <CollapsibleTrigger aria-label={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} title={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
+                    {recordControlsOpen ? <ChevronDown className="size-4" aria-hidden="true" /> : <ChevronRight className="size-4" aria-hidden="true" />}
+                  </CollapsibleTrigger>
+                  <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
+                  {recordFormatEnabled && Boolean(currentFormattedRecordHtml) && formattedRecordButtonsHtml.record_title_icon && (
+                    <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_title_icon }} />
+                  )}
+                  {recordDescribeIncomplete && <Tooltip><TooltipTrigger render={<span role="img" tabIndex={0} aria-label="Incomplete record description" className="inline-flex shrink-0"><CircleFadingCheck className="size-4" /></span>} /><TooltipContent>Virtuoso returned an incomplete DESCRIBE for this record.</TooltipContent></Tooltip>}
                   {selectedUri ? (
                     <Tooltip><TooltipTrigger render={<button
                       type="button"
@@ -10732,14 +11623,44 @@ onMouseLeave={() => {
                       onMouseLeave={clearTutorialPreview}
                     >{selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri))}</button>} /><TooltipContent>{`Set ${selectedUri} as the root record value`}</TooltipContent></Tooltip>
                   ) : "Record"}
-                </h2>
+                  </h2>
+                  {!recordControlsOpen && <div className="ml-auto flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                    <Separator orientation="vertical" className="h-4 shrink-0" />
+                    <span className="truncate" title={selectedRecordGraph || "All graphs"}>{selectedRecordGraph ? toLabel(selectedRecordGraph) : "All graphs"}</span>
+                  </div>}
+                  {recordControlsOpen && selectedUri && <div className="ml-auto inline-flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/record-header:opacity-100 focus-within:opacity-100">
+                    <QueryInspectorButton
+                      query={recordDebug.xml || `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" addr="${escapeXmlText(queryTree.attributes.addr ?? "")}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="30" offset="0"/></query>`}
+                      filename="record-describe.xml" label="Record queries" toolbarButton
+                      extraQueries={[
+                        { id: "record-describe-sparql", label: "Record SELECT SPARQL", query: recordDebug.sparql || "Record SELECT has not executed.", filename: "record-select.sparql", language: "sparql" },
+                        { id: "formatter-describe-xml", label: "Shared Record DESCRIBE XML", query: recordDebug.formatterXml || "The formatter DESCRIBE has not run for this record.", filename: "record-formatter-describe.xml", language: "xml" },
+                        { id: "formatter-describe-sparql", label: "Shared Record DESCRIBE SPARQL", query: recordDebug.formatterSparql || "The formatter DESCRIBE SPARQL is not yet available.", filename: "record-formatter-describe.sparql", language: "sparql" },
+                        { id: "record-policy-discovery", label: "Policy discovery SPARQL", query: recordDebug.policyDiscovery || "Policy discovery has not run for this record.", filename: "record-policy-discovery.sparql", language: "sparql" },
+                        { id: "record-template-lookup", label: "Format lookup SPARQL", query: recordDebug.templateLookup || "No format has been loaded for this record.", filename: "record-template-lookup.sparql", language: "sparql" },
+                      ]}
+                    />
+                    <Tooltip>
+                      <TooltipTrigger render={<button type="button" onClick={downloadRecordDescribe}
+                        disabled={!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || isDescribing}
+                        aria-label="Download Record DESCRIBE RDF" title="Download Record DESCRIBE RDF"
+                        className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:opacity-100 disabled:pointer-events-none disabled:opacity-40">
+                        <Download className="size-4" aria-hidden="true" />
+                      </button>} />
+                      <TooltipContent>Download DESCRIBE RDF</TooltipContent>
+                    </Tooltip>
+                  </div>}
+                </div>
+                <CollapsibleContent className="px-4 pb-3">
                 <p className="mt-1 break-all text-xs text-muted-foreground">
                   {selectedUri}
                 </p>
                 {selectedUri && <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild><button type="button" className="inline-flex max-w-64 items-center gap-1 rounded-md border px-3 py-1.5 text-xs hover:bg-accent" title={selectedRecordGraph || "All graphs"}>
-                      Graph: <span className="truncate">{selectedRecordGraph ? toLabel(selectedRecordGraph) : "All graphs"}</span><ChevronDown className="size-3.5 shrink-0" />
+                  <div className="inline-flex min-w-0 items-stretch overflow-hidden rounded-md border text-xs">
+                    <span className="inline-flex shrink-0 items-center border-r bg-muted/40 px-2 text-muted-foreground">Graphs</span>
+                    <DropdownMenu>
+                    <DropdownMenuTrigger asChild><button type="button" className="inline-flex min-w-0 max-w-64 items-center gap-1 px-3 py-1.5 hover:bg-accent" title={selectedRecordGraph || "All graphs"}>
+                      <span className="truncate">{selectedRecordGraph ? toLabel(selectedRecordGraph) : "All graphs"}</span><ChevronDown className="size-3.5 shrink-0" />
                     </button></DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="max-h-72 w-80 overflow-auto">
                       <DropdownMenuItem onSelect={() => { setSelectedRecordGraph(""); setRecordDescriptionPage(0); setFormattedRecordHtml(""); }}>All graphs</DropdownMenuItem>
@@ -10748,9 +11669,12 @@ onMouseLeave={() => {
                       {!recordGraphs.length && <DropdownMenuLabel>{loadingRecordGraphs ? "Loading graphs…" : "No named graphs found"}</DropdownMenuLabel>}
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild><button type="button" disabled={!recordAuthors.length} className="inline-flex max-w-64 items-center gap-1 rounded-md border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50" title={selectedRecordAuthor || "All authors"}>
-                      Author: <span className="truncate">{selectedRecordAuthor ? toLabel(recordAuthors.find((entry) => entry.graph === selectedRecordAuthor)?.author ?? selectedRecordAuthor) : "All authors"}</span><ChevronDown className="size-3.5 shrink-0" />
+                  </div>
+                  <div className="inline-flex min-w-0 items-stretch overflow-hidden rounded-md border text-xs">
+                    <span className="inline-flex shrink-0 items-center border-r bg-muted/40 px-2 text-muted-foreground">Authors</span>
+                    <DropdownMenu>
+                    <DropdownMenuTrigger asChild><button type="button" disabled={!recordAuthors.length} className="inline-flex min-w-0 max-w-64 items-center gap-1 px-3 py-1.5 hover:bg-accent disabled:opacity-50" title={selectedRecordAuthor || "All authors"}>
+                      <span className="truncate">{selectedRecordAuthor ? toLabel(recordAuthors.find((entry) => entry.graph === selectedRecordAuthor)?.author ?? selectedRecordAuthor) : "All authors"}</span><ChevronDown className="size-3.5 shrink-0" />
                     </button></DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="max-h-72 w-80 overflow-auto">
                       <DropdownMenuItem onSelect={() => { setSelectedRecordAuthor(""); setRecordDescriptionPage(0); setFormattedRecordHtml(""); }}>All authors</DropdownMenuItem>
@@ -10759,7 +11683,8 @@ onMouseLeave={() => {
                         <DropdownMenuItem key={`${item.graph}:${item.predicate}:${item.author}`} onSelect={() => { setSelectedRecordAuthor(item.graph); setRecordDescriptionPage(0); setFormattedRecordHtml(""); }} title={`${item.author} · ${item.graph}`}>{toLabel(item.author)} <span className="ml-2 truncate text-xs text-muted-foreground">{item.graph.slice(item.graph.indexOf("#") + 1)}</span></DropdownMenuItem>
                       )}
                     </DropdownMenuContent>
-                  </DropdownMenu>
+                    </DropdownMenu>
+                  </div>
                   {recordGraphError && <span className="text-xs text-destructive" title={recordGraphError}>Graph discovery failed</span>}{loadingRecordAuthors && <span className="text-xs text-muted-foreground">Loading authors…</span>}{recordAuthorError && <span className="text-xs text-destructive" title={recordAuthorError}>Author metadata unavailable</span>}
                 </div>}
                 {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div id="record_button_bar" className="mt-3 flex flex-wrap items-center gap-2">
@@ -10785,11 +11710,11 @@ onMouseLeave={() => {
                             <span className="border-b pb-1 text-[9px] font-semibold">Name　 Value</span>
                             <span className="h-2 rounded-sm bg-muted" /><span className="h-2 rounded-sm bg-muted/70" /><span className="h-2 rounded-sm bg-muted/50" />
                           </span>
-                          <span className="min-w-0"><span className="block font-medium">Default</span><span className="block text-xs text-muted-foreground">Property/value table and roles</span></span>
+                          <span className="min-w-0 flex-1"><span className="flex items-center gap-2 font-medium">Default{!recordFormatEnabled && <Check className="size-4 text-primary" aria-label="Selected format" />}</span><span className="block text-xs text-muted-foreground">Property/value table and roles</span></span>
                         </DropdownMenuItem>
-                        {recordPolicy.templates.map((template) => <DropdownMenuItem key={template.uri} onSelect={() => { setSelectedRecordTemplateUri(template.uri); setFormattedRecordHtml(""); setRecordFormatError(""); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(recordPolicy.uri, policyKey); if (templateKey) store?.put(template.uri, templateKey); } catch (error) { console.warn("Maestro could not persist the selected record format in IndexedDB", error); } if (!recordFormatEnabled) setRecordFormatEnabled(true); }} className="flex items-start gap-3 py-3">
-                          <span className="mt-0.5 block h-24 w-24 shrink-0 overflow-hidden rounded border bg-background"><span className="pointer-events-none block h-24 w-44 origin-top-left scale-[0.5] overflow-hidden" dangerouslySetInnerHTML={{ __html: recordFormatPreviews[template.uri] ?? "<div class=\"p-2 text-xs text-muted-foreground\">Preparing preview…</div>" }} /></span>
-                          <span className="min-w-0"><span className="block font-medium">{template.label}</span><span className="block break-all text-xs text-muted-foreground">{template.uri}</span></span>
+                        {recordPolicies.flatMap((policy) => policy.templates.map((template) => ({ policy, template }))).map(({ policy, template }) => <DropdownMenuItem key={`${policy.uri}:${template.uri}`} onSelect={() => { setRecordPolicy(policy); setSelectedRecordTemplateUri(template.uri); setRecordValidation(null); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setRecordFormatError(""); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(template.uri, templateKey); } catch (error) { console.warn("Maestro could not persist the selected record format in IndexedDB", error); } if (!recordFormatEnabled) setRecordFormatEnabled(true); }} className="flex items-start gap-3 py-3">
+                          <span className="mt-0.5 block h-24 w-24 shrink-0 overflow-hidden rounded border bg-background"><span className="pointer-events-none block h-24 w-44 origin-top-left scale-[0.5] overflow-hidden" dangerouslySetInnerHTML={{ __html: (policy.uri === recordPolicy.uri ? recordFormatPreviews[template.uri] : undefined) ?? "<div class=\"p-2 text-xs text-muted-foreground\">Preview available after selection</div>" }} /></span>
+                          <span className="min-w-0 flex-1"><span className="flex items-center gap-2 font-medium">{template.label}{recordFormatEnabled && recordPolicy.uri === policy.uri && selectedRecordTemplateUri === template.uri && <Check className="size-4 shrink-0 text-primary" aria-label="Selected format" />}</span><span className="block break-all text-xs text-muted-foreground">{template.uri}</span></span>
                         </DropdownMenuItem>)}
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -10799,14 +11724,17 @@ onMouseLeave={() => {
                   {formattedRecordButtonsHtml.record_button_bar && <div className="contents" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_button_bar }} />}
                 </div>}
                 {recordValidation && <div className={`mt-3 rounded-md border p-3 text-sm ${recordValidation.conforms ? "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200" : "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"}`}>
+                  <button type="button" onClick={() => setRecordValidation(null)} title="Dismiss validation report" aria-label="Dismiss validation report" className="float-right ml-2 inline-flex size-7 items-center justify-center rounded-md hover:bg-black/10 dark:hover:bg-white/10"><X className="size-4" aria-hidden="true" /></button>
                   <p className="font-semibold">{recordValidation.complete ? (recordValidation.conforms ? "SHACL validation passed" : "SHACL validation failed") : "Partial SHACL validation"}</p>
                   <p className="mt-1">{recordValidation.message}</p>
                   {recordValidation.violations.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-5">{recordValidation.violations.map((violation, index) => <li key={`${violation.path}-${index}`}>{violation.message}</li>)}</ul>}
+                  {(recordValidation.optionalMissing?.length ?? 0) > 0 && <p className="mt-2 text-xs text-muted-foreground">Optional fields not present in this Record snapshot: {Array.from(new Set(recordValidation.optionalMissing!.map((item) => item.name))).join(", ")}. These fields are not required by the selected SHACL shape.</p>}
                   {recordValidation.unsupportedConstraints.length > 0 && <p className="mt-2 break-all text-xs">Unsupported constraints: {recordValidation.unsupportedConstraints.join(", ")}</p>}
                 </div>}
                 {recordFormatError && <p className="mt-2 text-sm text-destructive">{recordFormatError}</p>}
-              </div>
-              <div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
+                {!isDescribing && describedRecordUri === selectedUri &&
+                 recordDescriptionSnapshot?.key === currentRecordDescriptionKey && (
+                <div className="mt-3 flex shrink-0 items-center justify-between gap-2 border-t pt-3">
                 {describedRecord.length > 0 ? (
                   <span className="text-xs text-muted-foreground">
                     {[
@@ -10846,8 +11774,11 @@ onMouseLeave={() => {
     </button>
   </div>
 )}
-              </div>
-              {recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && !currentFormattedRecordHtml && !recordFormatError)) ? (
+                </div>
+                )}
+                </CollapsibleContent>
+              </Collapsible>
+              {recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && (!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || (!currentFormattedRecordHtml && !recordFormatError)))) ? (
                 <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status">Loading formatted record…</div>
               ) : currentFormattedRecordHtml ? (
                 <div ref={formattedRecordContainerRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
@@ -10865,8 +11796,8 @@ onMouseLeave={() => {
                     <tbody>
                       {describedPropertyRows.flatMap((item) => item.values.map((value, index) => (
                         <tr key={`${item.property}-${index}`} className="border-b">
-                          {index === 0 && <td rowSpan={item.values.length} className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium">{toLabel(item.property)}</td>}
-                          <td className="break-all px-3 py-3 align-top">{value}</td>
+                          {index === 0 && <td rowSpan={item.values.length} className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium"><button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400" title={`Open ${item.property} as a URI query`} onClick={() => openRecordPropertyUri(item.property)}>{toLabel(item.property)}</button></td>}
+                          <td className="break-all px-3 py-3 align-top" title={value}>{recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`}\u0000${value}`) ?? value}</td>
                         </tr>
                       )))}
                     </tbody>
@@ -10884,8 +11815,8 @@ onMouseLeave={() => {
                     <tbody>
                       {describedRoleRows.flatMap((item) => item.values.map((value, index) => (
                         <tr key={`${item.property}-of-${index}`} className="border-b">
-                          {index === 0 && <td rowSpan={item.values.length} className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium">{toLabel(item.property)} of</td>}
-                          <td className="break-all px-3 py-3 align-top">{value}</td>
+                          {index === 0 && <td rowSpan={item.values.length} className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium"><button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400" title={`Open ${item.property} as a URI query`} onClick={() => openRecordPropertyUri(item.property)}>{toLabel(item.property)} of</button></td>}
+                          <td className="break-all px-3 py-3 align-top" title={value}>{recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`}\u0000${value}`) ?? value}</td>
                         </tr>
                       )))}
                     </tbody>

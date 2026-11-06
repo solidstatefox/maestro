@@ -1,4 +1,5 @@
 import { setMaestroIncompleteResults } from "./maestro-incomplete-results";
+import { applyFctQueryTimeout, configuredTimeoutMs } from "./maestro-query-timeouts";
 /**
  * Client-side query cache persisted to IndexedDB.
  * Duplicates proxy cache on the client to avoid eating network bandwidth,
@@ -129,6 +130,17 @@ export async function clearClientQueryCache(): Promise<void> {
   }
 }
 
+/** Apply a saved per-widget deadline to non-FCT proxy requests (record graphs/policies). */
+export async function maestroQueryFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  const source = [headers.get("x-maestro-debug-source") || "", headers.get("x-maestro-debug-component") || ""].join(" ");
+  const timeoutMs = configuredTimeoutMs(source);
+  if (!timeoutMs) return fetch(input, init);
+  headers.set("x-maestro-query-timeout-ms", String(timeoutMs));
+  const signal = init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+  return fetch(input, { ...init, headers, signal });
+}
+
 /**
  * Transparent fetch wrapper that checks client-side IndexedDB cache
  * for /proxy/api/fct and /proxy/api/sparql queries before making a network request.
@@ -140,6 +152,25 @@ export async function cachedFetchFct(input: RequestInfo | URL, init?: RequestIni
     return fetch(input, init);
   }
   const requestHeaders = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+  const debugSource = [requestHeaders.get("x-maestro-debug-source") || "", requestHeaders.get("x-maestro-debug-component") || ""].join(" ");
+  const timeoutMs = configuredTimeoutMs(debugSource);
+  if (timeoutMs) requestHeaders.set("x-maestro-query-timeout-ms", String(timeoutMs));
+  // Apply per-widget timeout before computing the cache key; distinct timeouts
+  // must not accidentally reuse a completed response for another setting.
+  if (init && typeof init.body === "string" && urlStr.includes("/proxy/api/fct")) {
+    const body = init.body.trimStart().startsWith("{")
+      ? (() => {
+          try {
+            const object = JSON.parse(init.body as string) as Record<string, unknown>;
+            if (typeof object.queryXml === "string") object.queryXml = applyFctQueryTimeout(debugSource, object.queryXml);
+            return JSON.stringify(object);
+          } catch { return init.body as string; }
+        })()
+      : applyFctQueryTimeout(debugSource, init.body);
+    init = { ...init, body, headers: requestHeaders };
+  } else {
+    init = { ...init, headers: requestHeaders };
+  }
   // Component identity is distinct from the operation/source. Several widgets
   // share `facet-load`; do not collapse their incomplete states into one entry.
   const source = requestHeaders.get("x-maestro-debug-component") || requestHeaders.get("x-maestro-debug-source") || urlStr;

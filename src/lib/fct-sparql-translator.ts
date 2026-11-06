@@ -8,7 +8,7 @@ type XmlNode = {
   children: XmlNode[];
 };
 
-export type FctSparqlView = "text" | "properties" | "properties-in" | "classes" | "list" | "list-count" | "alphabet" | "geo" | "years" | "months" | "weeks" | "describe" | "graphs";
+export type FctSparqlView = "text" | "properties" | "properties-in" | "classes" | "list" | "list-values" | "ask" | "list-count" | "alphabet" | "geo" | "years" | "months" | "weeks" | "describe" | "graphs";
 export type CompiledFctQuery = {
   query: string;
   view: FctSparqlView;
@@ -19,6 +19,7 @@ export type CompiledFctQuery = {
   graphOnly: boolean;
   countOnly: boolean;
   badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse" }>;
+  valueColumns?: Array<{ property: string; direction: "forward" | "reverse"; path?: string[] }>; 
 };
 
 /*
@@ -54,7 +55,7 @@ type SparqlProjection = { expression: SparqlExpression; as?: SparqlTerm };
 type SparqlOrder = { expression: SparqlExpression; direction: "ASC" | "DESC" };
 type SparqlDirective = { name: "input:inference" | "input:same-as"; value: string };
 type SparqlSelectQuery = {
-  kind: "select" | "describe";
+  kind: "select" | "describe" | "ask";
   describe?: SparqlTerm;
   directives: SparqlDirective[];
   distinct?: boolean;
@@ -159,6 +160,8 @@ function serializeSparqlQuery(document: SparqlDocument): string {
   if (query.kind === "describe") {
     if (!query.describe) throw new Error("A DESCRIBE query requires a target term.");
     lines.push(`DESCRIBE ${serializeTerm(query.describe)}`);
+  } else if (query.kind === "ask") {
+    lines.push("ASK");
   } else {
     lines.push(`SELECT${query.distinct ? " DISTINCT" : ""} ${projection}`);
   }
@@ -223,7 +226,11 @@ function searchTerms(searchText: string): SparqlTerm | null {
     const token = terms[0].replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     return literalTerm(`"${token}"`);
   }
-  return literalTerm(`(${terms.map((term) => term.toUpperCase()).join(" AND ")})`);
+  // Quote every operand, not only one-word searches. An unquoted numeric
+  // operand such as 2 in "Terminator 2: Judgement Day" can make Virtuoso's
+  // free-text parser reject an otherwise valid Boolean expression (XM029).
+  // Retain AND semantics while treating each token as a lexical search term.
+  return literalTerm(`(${terms.map((term) => `"${term.toUpperCase()}"`).join(" AND ")})`);
 }
 
 /** Entity-rank ordering from the Virtuoso faceted-views documentation: ORDER BY DESC ( <LONG::IRI_RANK> (?s) ). Requires the Facet (fct) VAD. */
@@ -266,6 +273,9 @@ function compileConstraints(
     } else if (node.name === "text") {
       continue;
     } else if (node.name === "property" || node.name === "property-of") {
+      // list-values projections are descriptive, not required query filters.
+      // They must never alter pagination or exclude resources with missing values.
+      if (node.attributes.project === "yes") continue;
       const predicate = iri(node.attributes.iri ?? "");
       if (!predicate) {
         errors.push(`The FCT <${node.name}> node has a missing or invalid IRI.`);
@@ -349,6 +359,10 @@ function queryDirectives(root: XmlNode): SparqlDirective[] {
   return result;
 }
 
+function buildAskQuery(directives: SparqlDirective[], where: SparqlPattern[]): string {
+  return new SparqlQueryDocument({ kind: "ask", directives, projections: [], where }).toString();
+}
+
 function buildSelectQuery(args: {
   directives: SparqlDirective[];
   projections: SparqlProjection[];
@@ -393,9 +407,35 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     return null;
   };
   const viewNode = findView(root.children);
+  // Only explicitly projected relationships are read as value columns. Preserve
+  // sibling order exactly as authored in the cloned XML query.
+  const findViewParent = (node: XmlNode): XmlNode | null => {
+    if (node.children.includes(viewNode as XmlNode)) return node;
+    for (const child of node.children) {
+      const found = findViewParent(child);
+      if (found) return found;
+    }
+    return null;
+  };
+  const viewParent = viewNode ? findViewParent(root) : null;
+  const valueColumns: Array<{ property: string; direction: "forward" | "reverse"; path?: string[] }> = [];
+  const collectProjected = (nodes: XmlNode[], path: string[] = [], nested = false) => {
+    for (const node of nodes) {
+      if (node.name !== "property" && node.name !== "property-of") continue;
+      // Immediate siblings belong to the scope even when they are filters.
+      // Nested traversals are projected only when explicitly marked, so a
+      // constraint's deeper path isn't mistaken for an extra output column.
+      if (nested && node.attributes.project !== "yes") continue;
+      const property = node.attributes.iri ?? "";
+      const nextPath = [...path, property];
+      valueColumns.push({ property, direction: node.name === "property" ? "forward" : "reverse", path: nextPath });
+      collectProjected(node.children, nextPath, true);
+    }
+  };
+  collectProjected(viewParent?.children ?? []);
   const rawView = requestedView || viewNode?.attributes.type || "text";
   graphOnly = graphOnly || rawView === "graphs";
-  if (!["text", "properties", "properties-in", "classes", "list", "list-count", "alphabet", "geo", "years", "months", "weeks", "describe", "graphs"].includes(rawView)) {
+  if (!["text", "properties", "properties-in", "classes", "list", "list-values", "ask", "list-count", "alphabet", "geo", "years", "months", "weeks", "describe", "graphs"].includes(rawView)) {
     throw new Error(`The '${rawView}' view is not supported by the SPARQL translator.`);
   }
   const view = rawView as FctSparqlView;
@@ -477,7 +517,9 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
   const directives = queryDirectives(root);
   const countProjection = (term: SparqlTerm): SparqlProjection => ({ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(term) }, as: variable("n") });
   let query: string;
-  if (graphOnly) {
+  if (view === "ask" && !graphOnly && !countOnly) {
+    query = buildAskQuery(directives, scopedWhere);
+  } else if (graphOnly) {
     /*
     // OLD GRAPHS QUERY — retained for reference.
     let graphWhere: SparqlPattern[];
@@ -702,24 +744,27 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
     ], where: scopedWhere, groupBy: [termExpr(target)], orderBy: shouldOrder ? [{ expression: termExpr(variable("n")), direction: "DESC" }] : undefined, limit, offset });
   } else if (view === "alphabet") {
-    // Alphabet is a label-based system facet. Its counts always ignore the
-    // selected index letter so the other A-Z choices remain visible.
-    const props = indexLabelPredicates(viewNode);
-    const namePredicate = variable("maestroLabelPredicate");
+    // The large DBpedia Virtuoso graph fails with SR319 for UCASE(SUBSTR(...))
+    // grouping, and 26 VALUES prefix tests are much slower. Use the empirically
+    // faster expression-based grouping without UCASE or ORDER BY; the client
+    // normalizes letters and displays A-Z in a fixed sequence.
+    // Restrict to rdfs:label: a predicate-variable join over the full picker
+    // is too expensive for this public endpoint. The active letter constraint
+    // below uses the same predicate selection.
     const name = variable("maestroLabel");
-    const letter: SparqlExpression = { kind: "function", name: "UCASE", args: [
-      { kind: "function", name: "SUBSTR", args: [
-        { kind: "function", name: "STR", args: [termExpr(name)] },
-        termExpr({ kind: "raw-term", value: "1" }),
-        termExpr({ kind: "raw-term", value: "1" }),
-      ] },
+    const labelPredicate = iriTerm(DEFAULT_INDEX_LABEL);
+    const letter: SparqlExpression = { kind: "function", name: "SUBSTR", args: [
+      { kind: "function", name: "STR", args: [termExpr(name)] },
+      termExpr({ kind: "raw-term", value: "1" }),
+      termExpr({ kind: "raw-term", value: "1" }),
     ] };
     const labelPatterns: SparqlPattern[] = [
-      { kind: "triple", subject: target, predicate: namePredicate, object: name },
-      { kind: "filter", expression: { kind: "in", value: termExpr(namePredicate), options: props.map(iriTerm) } },
-      { kind: "filter", expression: { kind: "function", name: "isLiteral", args: [termExpr(name)] } },
+      { kind: "triple", subject: target, predicate: labelPredicate, object: name },
+      { kind: "filter", expression: { kind: "function", name: "LANGMATCHES", args: [
+        { kind: "function", name: "LANG", args: [termExpr(name)] }, termExpr(literalTerm("en")),
+      ] } },
       { kind: "filter", expression: { kind: "function", name: "REGEX", args: [
-        { kind: "function", name: "STR", args: [termExpr(name)] }, termExpr(literalTerm("^[A-Za-z]")),
+        letter, termExpr(literalTerm("^[A-Za-z]$")),
       ] } },
     ];
     const alphabetWhere: SparqlPattern[] = graphTerm
@@ -728,7 +773,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     query = buildSelectQuery({ directives, projections: [
       { expression: letter, as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(target) }, as: variable("n") },
-    ], where: alphabetWhere, groupBy: [letter], orderBy: [{ expression: letter, direction: "ASC" }], limit: 26, offset: 0 });
+    ], where: alphabetWhere, groupBy: [letter], limit: 256, offset: 0 });
   } else if (view === "years" || view === "months" || view === "weeks") {
     const functionName = view === "years" ? "sql::year" : view === "months" ? "sql::round_month" : "sql::round_week";
     const bucket: SparqlExpression = { kind: "function", name: functionName, args: [termExpr(target)] };
@@ -788,7 +833,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       ? [entityRankOrder(target)]
       : undefined;
     query = buildSelectQuery({ directives, distinct: true, projections, where: indexedWhere, orderBy: orderByList, limit, offset });
-  } else if (view === "list") {
+  } else if (view === "list" || view === "list-values") {
     // Virtuoso FCT list view selects the RDF term. Its SQL/XML response
     // wrapper resolves the human-readable label; do not call the SQL-only
     // fct_label procedure from inside SPARQL. For an explicitly count-sorted
@@ -833,6 +878,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     graphOnly,
     countOnly,
     badgeColumns: state.badgeColumns?.map(({ colName, property, direction }) => ({ colName, property, direction })),
+    ...(view === "list-values" ? { valueColumns } : {}),
   };
 }
 

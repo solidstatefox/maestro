@@ -75,17 +75,24 @@ export async function POST(request: Request) {
   if (loginRequired) return loginRequired;
   try {
     if (Number(request.headers.get("content-length") || 0) > 1200000) return NextResponse.json({ error: "XSLT request too large." }, { status: 413 });
-    const body = await request.json() as { stylesheetText?: unknown; sourceXml?: unknown; recordUri?: unknown };
-    const { stylesheetText, sourceXml, recordUri } = body;
+    const body = await request.json() as { stylesheetText?: unknown; sourceXml?: unknown; recordUri?: unknown; outputMode?: unknown };
+    const { stylesheetText, sourceXml, recordUri, outputMode } = body;
     if (typeof stylesheetText !== "string" || typeof sourceXml !== "string" || typeof recordUri !== "string" || sourceXml.length > 850000 || recordUri.length > 4096) {
       return NextResponse.json({ error: "Invalid XSLT transformation parameters." }, { status: 400 });
     }
+    if (outputMode !== undefined && outputMode !== "xml") return NextResponse.json({ error: "Unsupported XSLT output mode." }, { status: 400 });
     validateTemplate(stylesheetText);
     if (XMLValidator.validate(sourceXml) !== true || !sourceXml.includes("mctx:context")) throw new Error("Invalid FCT context envelope.");
     // fn:transform compiles and executes the supplied stylesheet in-process.
     // SaxonJS 2.7 does not expose a stable public compile-to-SEF API.
     const html = transformStylesheet(stylesheetText, sourceXml, recordUri);
     if (typeof html !== "string" || html.length > 1000000) throw new Error("The XSLT output was invalid or too large.");
+    if (outputMode === "xml") {
+      if (html.length > 100000 || XMLValidator.validate(html) !== true) {
+        throw new Error("Invalid XSLT query-pivot XML result.");
+      }
+      return NextResponse.json({ xml: html }, { headers: { "Cache-Control": "no-store" } });
+    }
     return NextResponse.json({ html }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     // Compiler/transform failures can contain internal server paths and stacks.

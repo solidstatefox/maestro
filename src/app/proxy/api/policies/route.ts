@@ -64,7 +64,7 @@ export async function POST(request: Request) {
         if (template && !item.templates.some((entry) => entry.uri === template)) item.templates.push({ uri: template, label: get(row, "templateLabel") || template.split(/[\/#]/).filter(Boolean).pop() || template });
         grouped.set(uri, item);
       }
-      return NextResponse.json({ policies: [...grouped.values()] });
+      return NextResponse.json({ policies: [...grouped.values()], debugSparql: query });
     }
 
     if (body.action === "template") {
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       // Resolve the actual installed runtime version instead of trusting a version copied into the template.
       const nextPackage = JSON.parse(await readFile(resolve(process.cwd(), "node_modules/next/package.json"), "utf8")) as { name?: unknown; version?: unknown };
       if (nextPackage.name !== "next" || typeof nextPackage.version !== "string") throw new Error("Could not determine the installed Next.js package name and version.");
-      return NextResponse.json({ templateXslt, nextName: nextPackage.name, nextVersion: nextPackage.version });
+      return NextResponse.json({ templateXslt, nextName: nextPackage.name, nextVersion: nextPackage.version, debugSparql: query });
     }
 
     if (body.action === "facet-discover") {
@@ -111,18 +111,20 @@ export async function POST(request: Request) {
       // Inverse paths are blank nodes carrying sh:inversePath; ordinary paths
       // are IRI-valued sh:path terms. Neither needs a computed SPARQL binding.
       const shapesGraph = getShapesGraph(request);
-      const query = `PREFIX sh: <${SH}>\nSELECT DISTINCT ?propertyShape ?rawPath ?inverse ?name WHERE { GRAPH ${sparqlIri(shapesGraph)} {
+      const query = `PREFIX sh: <${SH}>\nPREFIX rdf: <${RDF}>\nSELECT DISTINCT ?propertyShape ?rawPath ?inverse ?alternative ?name WHERE { GRAPH ${sparqlIri(shapesGraph)} {
         ${sparqlIri(body.recordShape)} sh:property ?propertyShape .
         ?propertyShape sh:path ?rawPath .
         OPTIONAL { ?propertyShape sh:name ?name }
         OPTIONAL { ?rawPath sh:inversePath ?inverse }
+        OPTIONAL { ?rawPath sh:alternativePath/rdf:rest*/rdf:first ?alternative }
       } } LIMIT 300`;
       const payload = await queryPersonalSparql(query, 20000, request);
       const rows = (payload.results?.bindings ?? []) as BindingRow[];
       const facets = [...new Map(rows.flatMap((row) => {
         const inverse = row.inverse?.type === "uri" ? get(row, "inverse") : "";
         const direct = row.rawPath?.type === "uri" ? get(row, "rawPath") : "";
-        const uri = inverse || direct;
+        const alternative = row.alternative?.type === "uri" ? get(row, "alternative") : "";
+        const uri = inverse || alternative || direct;
         // Categories already own rdf:type, so it must not become a Personal facet.
         if (!safeIri(uri) || uri === `${RDF}type`) return [];
         const direction: "forward" | "reverse" = inverse ? "reverse" : "forward";
@@ -168,13 +170,31 @@ export async function POST(request: Request) {
         target[predicate].push(value);
         if (node !== body.recordShape) properties.set(node, target);
       }
-      const supported = new Set([`${RDF}type`, `${SH}property`, `${SH}targetClass`, `${SH}path`, `${SH}name`, `${SH}description`, `${SH}order`, `${SH}group`, `${SH}minCount`, `${SH}maxCount`, `${SH}datatype`, `${SH}class`, `${SH}nodeKind`, `${SH}pattern`, `${SH}severity`, `${SH}message`]);
+      // Resolve sh:alternativePath RDF lists explicitly. The ordinary constraint
+      // query only sees the blank-node path, not its list members. Each member
+      // is a property IRI and all members contribute values to one field.
+      const alternativeQuery = `PREFIX sh: <${SH}>\nPREFIX rdf: <${RDF}>\nSELECT DISTINCT ?propertyShape ?alternative WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} {
+        ${sparqlIri(body.recordShape)} sh:property ?propertyShape .
+        ?propertyShape sh:path/sh:alternativePath/rdf:rest*/rdf:first ?alternative .
+      } } LIMIT 300`;
+      const alternativePayload = await queryPersonalSparql(alternativeQuery, 20000, request);
+      const alternativePaths = new Map<string, string[]>();
+      for (const row of (alternativePayload.results?.bindings ?? []) as BindingRow[]) {
+        const propertyShape = get(row, "propertyShape");
+        const alternative = get(row, "alternative");
+        if (!propertyShape || row.alternative?.type !== "uri" || !safeIri(alternative)) continue;
+        const paths = alternativePaths.get(propertyShape) ?? [];
+        if (!paths.includes(alternative)) paths.push(alternative);
+        alternativePaths.set(propertyShape, paths);
+      }
+      const supported = new Set([`${RDF}type`, `${SH}property`, `${SH}targetClass`, `${SH}path`, `${SH}name`, `${SH}description`, `${SH}order`, `${SH}group`, `${SH}minCount`, `${SH}maxCount`, `${SH}minLength`, `${SH}datatype`, `${SH}class`, `${SH}nodeKind`, `${SH}pattern`, `${SH}severity`, `${SH}message`]);
       const unsupportedConstraints = new Set<string>();
       for (const row of shapeRows) {
         const predicate = get(row, "constraint");
         if (predicate.startsWith(SH) && !supported.has(predicate)) unsupportedConstraints.add(predicate);
       }
       const violations: { path: string; message: string; value?: string }[] = [];
+      const optionalMissing: { path: string; name: string }[] = [];
       const topLevelSupported = new Set([`${RDF}type`, `${SH}property`, `${SH}targetClass`, `${SH}class`, `${SH}nodeKind`, `${SH}name`, `${SH}description`, `${SH}message`, `${SH}severity`, `${SH}deactivated`]);
       for (const predicate of Object.keys(topLevel)) {
         if (predicate.startsWith(SH) && !topLevelSupported.has(predicate)) unsupportedConstraints.add(`${predicate} (node-shape constraint)`);
@@ -190,14 +210,30 @@ export async function POST(request: Request) {
       for (const [shapeNode, constraints] of properties) {
         const path = constraints[`${SH}path`]?.[0];
         if (!path) continue;
-        if (!safeIri(path)) { unsupportedConstraints.add(`${SH}path (non-IRI path on ${shapeNode})`); continue; }
-        const values = triples.filter((triple) => triple.subject === body.recordUri && triple.predicate === path);
+        const alternatives = alternativePaths.get(shapeNode) ?? [];
+        if (!alternatives.length && !safeIri(path)) { unsupportedConstraints.add(`${SH}path (unsupported path on ${shapeNode})`); continue; }
+        const paths = alternatives.length ? alternatives : [path];
+        const values = triples.filter((triple) => triple.subject === body.recordUri && paths.includes(triple.predicate));
         const minCount = Number(constraints[`${SH}minCount`]?.[0] ?? 0);
         const maxCountText = constraints[`${SH}maxCount`]?.[0];
         const maxCount = maxCountText === undefined ? Number.POSITIVE_INFINITY : Number(maxCountText);
         const name = constraints[`${SH}name`]?.[0] ?? path;
+        if (values.length === 0 && minCount === 0) optionalMissing.push({ path, name });
         if (values.length < minCount) violations.push({ path, message: `${name}: expected at least ${minCount} value(s), found ${values.length}.` });
         if (values.length > maxCount) violations.push({ path, message: `${name}: expected at most ${maxCount} value(s), found ${values.length}.` });
+        const minLengthText = constraints[`${SH}minLength`]?.[0];
+        if (minLengthText !== undefined) {
+          const minLength = Number(minLengthText);
+          if (!Number.isSafeInteger(minLength) || minLength < 0) {
+            unsupportedConstraints.add(`${SH}minLength (invalid non-negative integer on ${shapeNode})`);
+          } else {
+            for (const value of values) {
+              if (Array.from(value.object).length < minLength) {
+                violations.push({ path, value: value.object, message: `${name}: expected at least ${minLength} character(s).` });
+              }
+            }
+          }
+        }
         const datatype = constraints[`${SH}datatype`]?.[0];
         if (datatype) for (const value of values) {
           if (value.objectType === "uri" || value.objectType === "bnode" || value.datatype !== datatype) violations.push({ path, value: value.object, message: `${name}: value does not have datatype ${datatype}.` });
@@ -227,6 +263,7 @@ export async function POST(request: Request) {
         conforms: violations.length === 0 && unsupportedConstraints.size === 0,
         complete: unsupportedConstraints.size === 0,
         violations,
+        optionalMissing,
         unsupportedConstraints: [...unsupportedConstraints],
         message: unsupportedConstraints.size
           ? `Partial validation: ${unsupportedConstraints.size} SHACL constraint type(s) are not implemented by this initial validator.`

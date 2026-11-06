@@ -1,30 +1,18 @@
+@prefix bookmark: <http://www.w3.org/2002/01/bookmark#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
-@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
-@prefix bookmark: <http://www.w3.org/2002/01/bookmark#> .
 @prefix vfct: <https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#> .
-@prefix schema: <https://schema.org/> .
-@prefix dcterms: <http://purl.org/dc/terms/> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
-
-# Initial Record viewer policies. This file is uploaded into the graph named by SITE_SHAPES.
-# Extend these shapes and templates as the Record viewer's presentation vocabulary evolves.
 
 <gttp://ggg.maestro.ecosys/shacl/policy/bookmark> a mui:ClassPolicy ;
     rdfs:label "Bookmark record policy"@en ;
     mui:forClass bookmark:Bookmark ;
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape> ;
-    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate>,
-                     <gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate> .
-
-<gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape> a sh:NodeShape ;
-    rdfs:label "Bookmark record shape"@en ;
-    sh:targetClass bookmark:Bookmark ;
-    sh:property [ a sh:PropertyShape ; sh:path rdf:type ; sh:name "Type" ; sh:order 0 ] ;
-    sh:property [ a sh:PropertyShape ; sh:path rdfs:label ; sh:name "Label" ; sh:order 1 ] ;
-    sh:property [ a sh:PropertyShape ; sh:path dcterms:title ; sh:name "Title" ; sh:order 2 ] ;
-    sh:property [ a sh:PropertyShape ; sh:path bookmark:recalls ; sh:name "Bookmarked resource" ; sh:nodeKind sh:IRI ; sh:order 3 ] .
+    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate>,
+        <gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> .
 
 <gttp://ggg.maestro.ecosys/shacl/policy/query-history-visit> a mui:ClassPolicy ;
     rdfs:label "Query history bookmark policy"@en ;
@@ -32,14 +20,51 @@
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#QueryHistoryVisitRecordShape> ;
     mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> .
 
-<gttp://ggg.maestro.ecosys/shacl/shape#QueryHistoryVisitRecordShape> a sh:NodeShape ;
-    sh:targetClass vfct:QueryHistoryVisit ;
-    sh:property [ a sh:PropertyShape ; sh:path rdf:type ; sh:name "Type" ; sh:order 0 ] ;
-    sh:property [ a sh:PropertyShape ; sh:path rdfs:label ; sh:name "Label" ; sh:order 1 ] ;
-    sh:property [ a sh:PropertyShape ; sh:path vfct:historyStateUrl ; sh:name "Query URL" ; sh:order 2 ] ;
-    sh:property [ a sh:PropertyShape ; sh:path vfct:historyCreated ; sh:name "Created" ; sh:order 3 ] .
+<gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape> a sh:NodeShape ;
+    rdfs:label "Bookmark record shape"@en ;
+    sh:property [ a sh:PropertyShape ;
+            sh:name "Type" ;
+            sh:order 0 ;
+            sh:path rdf:type ],
+        [ a sh:PropertyShape ;
+            sh:name "Label" ;
+            sh:order 1 ;
+            sh:path rdfs:label ],
+        [ a sh:PropertyShape ;
+            sh:name "Title" ;
+            sh:order 2 ;
+            sh:path dcterms:title ],
+        [ a sh:PropertyShape ;
+            sh:name "Bookmarked resource" ;
+            sh:nodeKind sh:IRI ;
+            sh:order 3 ;
+            sh:path bookmark:recalls ] ;
+    sh:targetClass bookmark:Bookmark .
 
-<gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> rdf:value """<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:svg="http://www.w3.org/2000/svg" xmlns:xs="http://www.w3.org/2001/XMLSchema" version="3.0" exclude-result-prefixes="xs fct mctx"><xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/><xsl:param name="recordUri"/><xsl:mode on-no-match="shallow-copy"/><xsl:function name="mui:joined-values" as="xs:string"><xsl:param name="context" as="node()"/><xsl:param name="predicate" as="xs:string"/><xsl:try><xsl:sequence select="string-join($context/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.=$predicate]]/fct:column[last()] ! string(.), ', ')"/><xsl:catch><xsl:sequence select="''"/></xsl:catch></xsl:try></xsl:function><xsl:template match="/"><section id="maestro-record-viewer" data-slot="card" class="mx-auto flex w-full max-w-2xl flex-col gap-6 p-1" mui:framework="next@^16.4.0">
+<gttp://ggg.maestro.ecosys/shacl/shape#QueryHistoryVisitRecordShape> a sh:NodeShape ;
+    sh:property [ a sh:PropertyShape ;
+            sh:name "Type" ;
+            sh:order 0 ;
+            sh:path rdf:type ],
+        [ a sh:PropertyShape ;
+            sh:name "Label" ;
+            sh:order 1 ;
+            sh:path rdfs:label ],
+        [ a sh:PropertyShape ;
+            sh:name "Query URL" ;
+            sh:order 2 ;
+            sh:path vfct:historyStateUrl ],
+        [ a sh:PropertyShape ;
+            sh:name "Created" ;
+            sh:order 3 ;
+            sh:path vfct:historyCreated ] ;
+    sh:targetClass vfct:QueryHistoryVisit .
+
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate> rdfs:label "Bookmark with query results"@en ;
+    rdf:value "<xsl:stylesheet xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\" xmlns:fct=\"http://openlinksw.com/services/facets/1.0/\" xmlns:mui=\"gttp://ggg.maestro.ecosys/ns/ui#\" xmlns:mctx=\"gttp://ggg.maestro.ecosys/ns/xslt/context#\" xmlns:svg=\"http://www.w3.org/2000/svg\" xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" version=\"3.0\" exclude-result-prefixes=\"xs fct mctx\"><xsl:output method=\"html\" encoding=\"UTF-8\" omit-xml-declaration=\"yes\"/><xsl:param name=\"recordUri\"/><xsl:mode on-no-match=\"shallow-copy\"/><xsl:function name=\"mui:joined-values\" as=\"xs:string\"><xsl:param name=\"context\" as=\"node()\"/><xsl:param name=\"predicate\" as=\"xs:string\"/><xsl:try><xsl:sequence select=\"string-join($context/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.=$predicate]]/fct:column[last()] ! string(.), ', ')\"/><xsl:catch><xsl:sequence select=\"''\"/></xsl:catch></xsl:try></xsl:function><xsl:template match=\"/\"><section id=\"maestro-record-viewer\" class=\"mx-auto flex w-full max-w-2xl flex-col gap-4 p-1\" mui:framework=\"next@^16.4.0\"><article id=\"bookmark-query-results-card\" class=\"rounded-xl border p-5\"><p id=\"bookmark-query-results-kicker\" class=\"text-xs font-semibold uppercase tracking-wide text-muted-foreground\">Saved query</p><h2 id=\"bookmark-query-results-title\" class=\"mt-2 text-xl font-semibold\" mui:data=\"http://www.w3.org/2000/01/rdf-schema#label\"><xsl:value-of select=\"mui:joined-values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')\"/></h2><p id=\"bookmark-query-results-description\" class=\"mt-2 text-sm text-muted-foreground\" mui:data=\"http://purl.org/dc/terms/description\"><xsl:value-of select=\"mui:joined-values(root(.), 'http://purl.org/dc/terms/description')\"/></p><section id=\"bookmark-query-results-section\" class=\"mt-5 rounded-lg bg-muted/40 p-4\"><h3 id=\"bookmark-query-results-heading\" class=\"font-semibold\">Results from the saved query</h3><p id=\"bookmark-query-results-count\" class=\"mt-1 text-sm text-muted-foreground\" mui:history-query-count=\"true\">Loading count…</p><ol id=\"bookmark-query-results-list\" class=\"mt-3 list-decimal space-y-2 pl-5\" mui:history-query-results=\"true\"><li id=\"bookmark-query-result-item\" class=\"break-words text-sm\"/></ol></section><p id=\"bookmark-query-results-created\" class=\"mt-4 text-xs text-muted-foreground\" mui:data=\"http://purl.org/dc/terms/created\"><xsl:value-of select=\"mui:joined-values(root(.), 'http://purl.org/dc/terms/created')\"/></p></article><button id=\"bookmark-template-delete-button\" type=\"button\" mui:parent=\"record_button_bar\" class=\"inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent\"><svg:svg id=\"bookmark-template-delete-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"size-4\"><svg:path id=\"bookmark-template-delete-can\" d=\"M3 6h18\"/><svg:path id=\"bookmark-template-delete-lid\" d=\"M8 6V4h8v2\"/><svg:path id=\"bookmark-template-delete-body\" d=\"m19 6-1 14H6L5 6\"/><svg:path id=\"bookmark-template-delete-lines\" d=\"M10 11v5m4-5v5\"/></svg:svg> Delete Bookmark</button><button id=\"bookmark-template-code-button\" type=\"button\" mui:parent=\"record_button_bar\" class=\"inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent\"><svg:svg id=\"bookmark-template-code-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"size-4\"><svg:path id=\"bookmark-template-code-left\" d=\"m16 18 6-6-6-6\"/><svg:path id=\"bookmark-template-code-right\" d=\"m8 6-6 6 6 6\"/><svg:path id=\"bookmark-template-code-slash\" d=\"m14 4-4 16\"/></svg:svg> Code Block</button><svg:svg id=\"maestro-bookmarkqueryresultstemplate-heading-icon\" viewBox=\"0 0 24 24\" width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"size-5\" aria-hidden=\"true\" mui:parent=\"record_title_icon\"><svg:path id=\"maestro-bookmarkqueryresultstemplate-icon-0\" d=\"M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3\"/><svg:path id=\"maestro-bookmarkqueryresultstemplate-icon-1\" d=\"M16 3h5v5\"/><svg:path id=\"maestro-bookmarkqueryresultstemplate-icon-2\" d=\"m10 14 11-11\"/></svg:svg></section></xsl:template></xsl:stylesheet>" .
+
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> rdfs:label "Bookmark card"@en ;
+    rdf:value """<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:svg="http://www.w3.org/2000/svg" xmlns:xs="http://www.w3.org/2001/XMLSchema" version="3.0" exclude-result-prefixes="xs fct mctx"><xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/><xsl:param name="recordUri"/><xsl:mode on-no-match="shallow-copy"/><xsl:function name="mui:joined-values" as="xs:string"><xsl:param name="context" as="node()"/><xsl:param name="predicate" as="xs:string"/><xsl:try><xsl:sequence select="string-join($context/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.=$predicate]]/fct:column[last()] ! string(.), ', ')"/><xsl:catch><xsl:sequence select="''"/></xsl:catch></xsl:try></xsl:function><xsl:template match="/"><section id="maestro-record-viewer" data-slot="card" class="mx-auto flex w-full max-w-2xl flex-col gap-6 p-1" mui:framework="next@^16.4.0">
   <div id="bookmark-hero" data-slot="card" class="relative overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm">
     <div id="bookmark-hero-glow" aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-sky-500 via-violet-500 to-fuchsia-500"/>
     <div id="bookmark-hero-content" class="relative space-y-5 p-6 sm:p-8">
@@ -51,7 +76,7 @@
         <p id="bookmark-eyebrow" class="text-sm font-medium text-muted-foreground">Your collection</p>
         <div id="bookmark-title-row" class="flex min-w-0 items-center gap-2">
           <a id="bookmark-title-link" class="inline-flex min-w-0 items-center gap-2 break-words text-2xl font-semibold tracking-tight text-primary underline-offset-4 hover:underline cursor-pointer sm:text-3xl" mui:href="xpath:/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.='https://vos.openlinksw.com/owiki/wiki/VOS/https://schema.org/url']]/fct:column[last()]" target="_blank" rel="noopener noreferrer" aria-label="Open the saved query state">
-            <span id="bookmark-title-text" mui:data="http://purl.org/dc/terms/title"><xsl:value-of select="mui:joined-values(root(.), &apos;http://purl.org/dc/terms/title&apos;)"/></span>
+            <span id="bookmark-title-text" mui:data="http://purl.org/dc/terms/title"><xsl:value-of select="mui:joined-values(root(.), 'http://purl.org/dc/terms/title')"/></span>
             <svg:svg id="bookmark-title-binoculars-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="inline-block size-5 shrink-0" role="img" aria-label="Open saved query">
               <svg:path id="bookmark-title-binoculars-center" d="M10 10h4"/>
               <svg:path id="bookmark-title-binoculars-right-stem" d="M19 7V4a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v3"/>
@@ -62,11 +87,11 @@
             </svg:svg>
           </a>
         </div>
-        <p id="bookmark-title-detail" class="break-words text-sm leading-6 text-muted-foreground" mui:data="http://purl.org/dc/terms/created"><xsl:value-of select="mui:joined-values(root(.), &apos;http://purl.org/dc/terms/created&apos;)"/></p>
+        <p id="bookmark-title-detail" class="break-words text-sm leading-6 text-muted-foreground" mui:data="http://purl.org/dc/terms/created"><xsl:value-of select="mui:joined-values(root(.), 'http://purl.org/dc/terms/created')"/></p>
       </div>
       <div id="bookmark-description-section" class="space-y-2 rounded-lg bg-muted/40 p-4">
         <h3 id="bookmark-description-heading" class="text-sm font-semibold">Description</h3>
-        <p id="bookmark-description" class="whitespace-pre-wrap break-words text-sm leading-7 text-muted-foreground" mui:data="http://purl.org/dc/terms/description"><xsl:value-of select="mui:joined-values(root(.), &apos;http://purl.org/dc/terms/description&apos;)"/></p>
+        <p id="bookmark-description" class="whitespace-pre-wrap break-words text-sm leading-7 text-muted-foreground" mui:data="http://purl.org/dc/terms/description"><xsl:value-of select="mui:joined-values(root(.), 'http://purl.org/dc/terms/description')"/></p>
       </div>
       <div id="bookmark-tags-section" class="space-y-2">
         <h3 id="bookmark-tags-heading" class="text-sm font-semibold">Tags</h3>
@@ -75,7 +100,7 @@
       <div id="bookmark-metadata" class="grid gap-3 rounded-lg border p-4 sm:grid-cols-2">
         <div id="bookmark-hash-field" class="min-w-0 space-y-1">
           <p id="bookmark-hash-label" class="text-xs font-medium text-muted-foreground">Bookmark hash</p>
-          <p id="bookmark-hash" class="break-all font-mono text-xs leading-5" mui:data="https://schema.org/identifier"><xsl:value-of select="mui:joined-values(root(.), &apos;https://schema.org/identifier&apos;)"/></p>
+          <p id="bookmark-hash" class="break-all font-mono text-xs leading-5" mui:data="https://schema.org/identifier"><xsl:value-of select="mui:joined-values(root(.), 'https://schema.org/identifier')"/></p>
         </div>
 
       </div>
@@ -86,11 +111,8 @@
       <span id="bookmark-footer-note">Rendered from the record's linked data</span>
     </div>
   </div>
-</section>
+<svg:svg id="maestro-bookmarkrecordtemplate-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"><svg:path id="maestro-bookmarkrecordtemplate-icon-0" d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg:svg></section>
 </xsl:template></xsl:stylesheet>""" .
 
-<gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> rdf:value """<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:svg="http://www.w3.org/2000/svg" xmlns:xs="http://www.w3.org/2001/XMLSchema" version="3.0" exclude-result-prefixes="xs fct mctx"><xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/><xsl:param name="recordUri"/><xsl:mode on-no-match="shallow-copy"/><xsl:function name="mui:joined-values" as="xs:string"><xsl:param name="context" as="node()"/><xsl:param name="predicate" as="xs:string"/><xsl:try><xsl:sequence select="string-join($context/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.=$predicate]]/fct:column[last()] ! string(.), ', ')"/><xsl:catch><xsl:sequence select="''"/></xsl:catch></xsl:try></xsl:function><xsl:template match="/"><section id="maestro-record-viewer" class="mx-auto flex w-full max-w-2xl flex-col gap-4 p-1" mui:framework="next@^16.4.0"><article id="history-record"><h2 id="history-title" mui:data="http://www.w3.org/2000/01/rdf-schema#label"><xsl:value-of select="mui:joined-values(root(.), &apos;http://www.w3.org/2000/01/rdf-schema#label&apos;)"/></h2><p id="history-type-label">Query history bookmark</p><p id="history-state-url" mui:data="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyStateUrl"><xsl:value-of select="mui:joined-values(root(.), &apos;https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyStateUrl&apos;)"/></p><p id="history-created" mui:data="https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated"><xsl:value-of select="mui:joined-values(root(.), &apos;https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated&apos;)"/></p></article></section></xsl:template></xsl:stylesheet>""" .
+<gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> rdf:value "<xsl:stylesheet xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\" xmlns:fct=\"http://openlinksw.com/services/facets/1.0/\" xmlns:mui=\"gttp://ggg.maestro.ecosys/ns/ui#\" xmlns:mctx=\"gttp://ggg.maestro.ecosys/ns/xslt/context#\" xmlns:svg=\"http://www.w3.org/2000/svg\" xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" version=\"3.0\" exclude-result-prefixes=\"xs fct mctx\"><xsl:output method=\"html\" encoding=\"UTF-8\" omit-xml-declaration=\"yes\"/><xsl:param name=\"recordUri\"/><xsl:mode on-no-match=\"shallow-copy\"/><xsl:function name=\"mui:joined-values\" as=\"xs:string\"><xsl:param name=\"context\" as=\"node()\"/><xsl:param name=\"predicate\" as=\"xs:string\"/><xsl:try><xsl:sequence select=\"string-join($context/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.=$predicate]]/fct:column[last()] ! string(.), ', ')\"/><xsl:catch><xsl:sequence select=\"''\"/></xsl:catch></xsl:try></xsl:function><xsl:template match=\"/\"><section id=\"maestro-record-viewer\" class=\"mx-auto flex w-full max-w-2xl flex-col gap-4 p-1\" mui:framework=\"next@^16.4.0\"><article id=\"history-record\"><h2 id=\"history-title\" mui:data=\"http://www.w3.org/2000/01/rdf-schema#label\"><xsl:value-of select=\"mui:joined-values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')\"/></h2><p id=\"history-type-label\">Query history bookmark</p><p id=\"history-state-url\" mui:data=\"https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyStateUrl\"><xsl:value-of select=\"mui:joined-values(root(.), 'https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyStateUrl')\"/></p><p id=\"history-created\" mui:data=\"https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated\"><xsl:value-of select=\"mui:joined-values(root(.), 'https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated')\"/></p></article><svg:svg id=\"maestro-queryhistoryvisitrecordtemplate-heading-icon\" viewBox=\"0 0 24 24\" width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"size-5\" aria-hidden=\"true\" mui:parent=\"record_title_icon\"><svg:path id=\"maestro-queryhistoryvisitrecordtemplate-icon-0\" d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\"/><svg:path id=\"maestro-queryhistoryvisitrecordtemplate-icon-1\" d=\"M3 3v5h5\"/><svg:path id=\"maestro-queryhistoryvisitrecordtemplate-icon-2\" d=\"M12 7v5l4 2\"/></svg:svg></section></xsl:template></xsl:stylesheet>" .
 
-<gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> rdfs:label "Bookmark card"@en .
-<gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate> rdfs:label "Bookmark with query results"@en ;
-    rdf:value """<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:svg="http://www.w3.org/2000/svg" xmlns:xs="http://www.w3.org/2001/XMLSchema" version="3.0" exclude-result-prefixes="xs fct mctx"><xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/><xsl:param name="recordUri"/><xsl:mode on-no-match="shallow-copy"/><xsl:function name="mui:joined-values" as="xs:string"><xsl:param name="context" as="node()"/><xsl:param name="predicate" as="xs:string"/><xsl:try><xsl:sequence select="string-join($context/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[.=$predicate]]/fct:column[last()] ! string(.), ', ')"/><xsl:catch><xsl:sequence select="''"/></xsl:catch></xsl:try></xsl:function><xsl:template match="/"><section id="maestro-record-viewer" class="mx-auto flex w-full max-w-2xl flex-col gap-4 p-1" mui:framework="next@^16.4.0"><article id="bookmark-query-results-card" class="rounded-xl border p-5"><p id="bookmark-query-results-kicker" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Saved query</p><h2 id="bookmark-query-results-title" class="mt-2 text-xl font-semibold" mui:data="http://www.w3.org/2000/01/rdf-schema#label"><xsl:value-of select="mui:joined-values(root(.), &apos;http://www.w3.org/2000/01/rdf-schema#label&apos;)"/></h2><p id="bookmark-query-results-description" class="mt-2 text-sm text-muted-foreground" mui:data="http://purl.org/dc/terms/description"><xsl:value-of select="mui:joined-values(root(.), &apos;http://purl.org/dc/terms/description&apos;)"/></p><section id="bookmark-query-results-section" class="mt-5 rounded-lg bg-muted/40 p-4"><h3 id="bookmark-query-results-heading" class="font-semibold">Results from the saved query</h3><p id="bookmark-query-results-count" class="mt-1 text-sm text-muted-foreground" mui:history-query-count="true">Loading count…</p><ol id="bookmark-query-results-list" class="mt-3 list-decimal space-y-2 pl-5" mui:history-query-results="true"><li id="bookmark-query-result-item" class="break-words text-sm"/></ol></section><p id="bookmark-query-results-created" class="mt-4 text-xs text-muted-foreground" mui:data="http://purl.org/dc/terms/created"><xsl:value-of select="mui:joined-values(root(.), &apos;http://purl.org/dc/terms/created&apos;)"/></p></article><button id="bookmark-template-delete-button" type="button" mui:parent="record_button_bar" class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent"><svg:svg id="bookmark-template-delete-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><svg:path id="bookmark-template-delete-can" d="M3 6h18"/><svg:path id="bookmark-template-delete-lid" d="M8 6V4h8v2"/><svg:path id="bookmark-template-delete-body" d="m19 6-1 14H6L5 6"/><svg:path id="bookmark-template-delete-lines" d="M10 11v5m4-5v5"/></svg:svg> Delete Bookmark</button><button id="bookmark-template-code-button" type="button" mui:parent="record_button_bar" class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent"><svg:svg id="bookmark-template-code-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><svg:path id="bookmark-template-code-left" d="m16 18 6-6-6-6"/><svg:path id="bookmark-template-code-right" d="m8 6-6 6 6 6"/><svg:path id="bookmark-template-code-slash" d="m14 4-4 16"/></svg:svg> Code Block</button></section></xsl:template></xsl:stylesheet>""" .

@@ -235,6 +235,102 @@ function fctResponseXml(args: {
   return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${complete ? "yes" : "no"}</fct:complete><fct:timeout>${args.timeoutMs ?? 0}</fct:timeout><fct:sql-state>${xmlText(sqlState ?? "")}</fct:sql-state><fct:sql-message>${xmlText(sqlMessage ?? "")}</fct:sql-message><fct:exec-milliseconds>${xmlText(execMilliseconds ?? "")}</fct:exec-milliseconds><fct:db-activity>${xmlText(execDbActivity ?? "")}</fct:db-activity>${sqlState === "S1TAT" ? `<fct:warning>${xmlText(sqlMessage || "Virtuoso returned partial results because the ANYTIME timeout was reached.")}</fct:warning>` : ""}<fct:processed>${bindings.length}</fct:processed><fct:view offset="${offset}" limit="${limit}"/><fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;
 }
 
+/**
+ * Maestro list-values extension. The first query has already selected the page.
+ * This second query only retrieves projected triples for those page resources.
+ * It never joins two projected properties, so multivalued fields cannot cause
+ * cross-products or displace a resource from the page. Every returned cell is
+ * bounded to three distinct RDF terms in the proxy response.
+ */
+async function expandListValues(args: {
+  endpoint: string;
+  page: Record<string, SparqlBindingTerm>[];
+  columns: Array<{ property: string; direction: "forward" | "reverse"; path?: string[] }>;
+  graph: string;
+  timeoutMs: number;
+}): Promise<{ rows: Record<string, SparqlBindingTerm[]>; query: string; complete: boolean }> {
+  const values = [...new Set(args.page.map((row) => row.c1?.value).filter((v): v is string => typeof v === "string" && /^https?:\/\//i.test(v)))];
+  const validIri = (value: string) => /^https?:\/\/[^\s<>"{}|^`\\]+$/i.test(value);
+  const columns = args.columns.slice(0, 24).filter((column) => validIri(column.property));
+  if (!values.length || !columns.length) return { rows: {}, query: "", complete: true };
+  if (!values.every(validIri) || (args.graph && !validIri(args.graph)))
+    throw new Error("Invalid RDF IRI in list-values projection.");
+  // Bind the paginated resources inside every UNION branch. This avoids an
+  // unbound ?resource in branches that some Virtuoso versions otherwise
+  // evaluate separately, and guarantees that every projected value remains
+  // associated with a member of the selected Results page.
+  const subjectValues = values.map((value) => `<${value}>`).join(" ");
+  const branches = columns.map((column, index) => {
+    const path = column.path?.length ? column.path : [column.property];
+    if (path.some((predicate) => !validIri(predicate))) throw new Error("Invalid list-values property path.");
+    const predicatePath = path.map((predicate) => `<${predicate}>`).join("/");
+    const triple = column.direction === "reverse"
+      ? `?value ${predicatePath} ?resource .`
+      : `?resource ${predicatePath} ?value .`;
+    const source = args.graph ? `GRAPH <${args.graph}> { ${triple} }` : triple;
+    // VALUES is deliberately used instead of BIND for the column index:
+    // it is a normal bound solution term on every row of this UNION branch.
+    return `{ VALUES ?resource { ${subjectValues} } VALUES ?column { ${index} } ${source} }`;
+  });
+  // Do not LIMIT the enrichment globally: a multivalued resource must never
+  // starve another resource. The proxy retains three distinct values per cell.
+  const query = `SELECT ?resource ?column ?value WHERE { ${branches.join(" UNION ")} }`;
+  const result = await executeSparql(args.endpoint, query, undefined, args.timeoutMs);
+  if (!result.response.ok && !isVirtuosoAnytime(result.response, result.text)) {
+    throw new Error(`list-values enrichment returned HTTP ${result.response.status}`);
+  }
+  const parsed = parseResults(result.text);
+  const rows: Record<string, SparqlBindingTerm[]> = {};
+  for (const row of parsed?.results?.bindings ?? []) {
+    const resource = row.resource?.value;
+    const position = Number(row.column?.value);
+    const value = row.value;
+    if (!resource || !values.includes(resource) || !Number.isInteger(position) || position < 0 || position >= columns.length || !value) continue;
+    const key = `${resource}\u0000${position}`;
+    const existing = rows[key] ?? (rows[key] = []);
+    if (existing.length >= 3) continue;
+    if (existing.some((term) => term.value === value.value && term.type === value.type && term.datatype === value.datatype && term["xml:lang"] === value["xml:lang"])) continue;
+    existing.push(value);
+  }
+  if (result.response.status === 200) setQueryCache(result.key, result.text);
+  if (!Object.keys(rows).length && !isVirtuosoAnytime(result.response, result.text)) {
+    proxyLog("warn", "fct.list-values-no-projected-bindings", {
+      endpoint: args.endpoint, resources: values.length, columns: columns.length,
+      query, response: result.text.slice(0, 1000),
+    });
+  }
+  return { rows, query, complete: result.response.status === 200 && !isVirtuosoAnytime(result.response, result.text) };
+}
+
+function listValuesXml(args: {
+  page: Record<string, SparqlBindingTerm>[];
+  columns: Array<{ property: string; direction: "forward" | "reverse"; path?: string[] }>;
+  expansion: Record<string, SparqlBindingTerm[]>;
+  labels: Map<string, string>;
+  query: string;
+  limit: number;
+  offset: number;
+  elapsed: number;
+  complete: boolean;
+}): string {
+  const rows = args.page.map((binding) => {
+    const focus = binding.c1;
+    const resource = focus?.value ?? "";
+    const label = args.labels.get(resource) ?? (focus?.type === "uri" ? uriFallbackLabel(resource) : resource);
+    const cells = args.columns.map((column, i) => {
+      const terms = args.expansion[`${resource}\u0000${i}`] ?? [];
+      // Each property cell contains zero to three typed RDF values. Preserve
+      // the projection's XML order even for empty fields.
+      return `<fct:column property="${xmlText(column.property)}" direction="${column.direction}" path="${xmlText((column.path ?? [column.property]).join(" "))}" var="value_${i + 1}">${terms.map((term) => {
+        const datatype = term.type === "uri" ? "uri" : term.type === "bnode" ? "bnode" : term.datatype;
+        return `<fct:value${datatype ? ` datatype="${xmlText(datatype)}"` : ""}${term["xml:lang"] ? ` xml:lang="${xmlText(term["xml:lang"])}"` : ""}>${xmlText(term.value)}</fct:value>`;
+      }).join("")}</fct:column>`;
+    }).join("");
+    return `<fct:row>${fctColumn(focus, args.labels.get(resource), { var: "c1" })}${fctColumn({ type: "literal", value: label }, undefined, { var: "c2" })}${cells}</fct:row>`;
+  }).join("");
+  return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(args.query)}</fct:sparql><fct:time>${args.elapsed}</fct:time><fct:complete>${args.complete ? "yes" : "no"}</fct:complete><fct:processed>${args.page.length}</fct:processed><fct:view offset="${args.offset}" limit="${args.limit}"/><fct:result type="list-values">${rows}</fct:result></fct:facets>`;
+}
+
 function parseDescribeRdfXml(source: string): Record<string, SparqlBindingTerm>[] {
   const parsed = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", removeNSPrefix: false, parseTagValue: false, trimValues: true }).parse(source) as Record<string, unknown>;
   const rootKey = Object.keys(parsed).find((key) => key === "rdf:RDF" || key.endsWith(":RDF") || key === "RDF");
@@ -421,6 +517,31 @@ export async function POST(request: Request) {
       endpoint.url,
       JSON.stringify([queryXml, view ?? null, graphOnly, countOnly, request.headers.get("accept-language") ?? ""]),
     );
+    // A client that already has its paginated Results page may supply exactly
+    // those resources. This is the second stage of list-values, not a second
+    // pagination query. The request remains an FCT XML clone with explicit
+    // projected siblings, and the proxy still owns all SPARQL construction.
+    const suppliedResources = Array.isArray(body?.resources) && compiled.view === "list-values"
+      ? [...new Set(body.resources.filter((value): value is string => typeof value === "string"))]
+      : null;
+    if (suppliedResources && (suppliedResources.length > 100 || suppliedResources.some((value) => !/^https?:\/\/[^\s<>"{}|^`\\]+$/i.test(value))))
+      return fctError("list-values resources must contain at most 100 valid URI values.", 400);
+    if (suppliedResources) {
+      const startedAt = Date.now();
+      const page = suppliedResources.map((value) => ({ c1: { type: "uri", value } as SparqlBindingTerm }));
+      const address = queryXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
+      const graph = address.includes("@") ? address.slice(0, address.indexOf("@")) : "";
+      const expansion = await expandListValues({
+        endpoint: endpoint.url, page, columns: compiled.valueColumns ?? [], graph,
+        timeoutMs: compiled.timeoutMs,
+      });
+      const xml = listValuesXml({
+        page, columns: compiled.valueColumns ?? [], expansion: expansion.rows,
+        labels: new Map(), query: expansion.query, limit: page.length,
+        offset: 0, elapsed: Date.now() - startedAt, complete: expansion.complete,
+      });
+      return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
+    }
     const cachedResponse = getQueryCache<{ body: string; contentType: string; status: number }>(responseCacheKey);
     if (cachedResponse) {
       return new Response(cachedResponse.body, {
@@ -466,6 +587,16 @@ export async function POST(request: Request) {
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...incompleteHeaders } });
     }
 
+    if (compiled.view === "ask" && !countOnly && !graphOnly) {
+      // ASK returns a SPARQL Results boolean, never a SELECT bindings array.
+      // A timeout/error must not be interpreted as a negative existence test.
+      let askBoolean: boolean | undefined;
+      try { const result = JSON.parse(text) as { boolean?: unknown }; if (typeof result.boolean === "boolean") askBoolean = result.boolean; } catch { /* invalid upstream result */ }
+      if (partial || askBoolean === undefined) return fctError("Virtuoso did not complete the ASK preflight.", 502, text.slice(0, 1200));
+      const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:complete>yes</fct:complete><fct:result type="ask"><fct:boolean>${askBoolean ? "true" : "false"}</fct:boolean></fct:result></fct:facets>`;
+      if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+      return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
+    }
     const parsed = parseResults(text);
     if (!parsed && !anytime) return fctError("Virtuoso SPARQL endpoint returned an invalid SPARQL Results JSON document", 502, text.slice(0, 1500));
     // An ANYTIME timeout can arrive with an error-only body and no result rows.
@@ -474,9 +605,36 @@ export async function POST(request: Request) {
     let bindings = parsed?.results?.bindings ?? [];
     let vars = parsed?.head?.vars ?? [];
     if (response.status === 200 && !partial) setQueryCache(key, text);
-    const labels = countOnly
+    const labels = countOnly || compiled.view === "list-values"
       ? new Map<string, string>()
       : await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
+    if (compiled.view === "list-values" && !countOnly && !graphOnly) {
+      const address = queryXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
+      const graph = address.includes("@") ? address.slice(0, address.indexOf("@")) : "";
+      // Labels only for the selected focus resources; the second query returns
+      // all projected values without another label round-trip.
+      const expansion = await expandListValues({
+        endpoint: endpoint.url,
+        page: bindings,
+        columns: compiled.valueColumns ?? [],
+        graph,
+        timeoutMs: compiled.timeoutMs,
+      });
+      const xml = listValuesXml({
+        page: bindings,
+        columns: compiled.valueColumns ?? [],
+        expansion: expansion.rows,
+        labels,
+        query: [compiled.query, expansion.query].filter(Boolean).join("\n\n"),
+        limit: compiled.limit,
+        offset: compiled.offset,
+        elapsed: Date.now() - startedAt,
+        complete: !partial && expansion.complete,
+      });
+      if (response.status === 200 && !partial && expansion.complete)
+        setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+      return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
+    }
     if (compiled.view === "list" && !countOnly && !graphOnly) {
       bindings = bindings.map((binding) => {
         const uri = binding.c1?.type === "uri" ? binding.c1.value : "";

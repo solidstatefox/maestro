@@ -2,6 +2,8 @@
   "dataserver-seed.ttl": "/graph",
   "maestro-shacl-policies.ttl": "/shacl/policies",
   "maestro-shacl-policies.rdf": "/shacl/policies",
+  "maestro-dbpedia-policies.ttl": "/shacl/policies",
+  "maestro-dbpedia-policies.rdf": "/shacl/policies",
   "maestro-ui-ontology.ttl": "/ontology-cache",
   "maestro-history-bookmark-schema.ttl": "/ontology-cache",
   "otc-transcoders.rdf": "/otc/transcoders"

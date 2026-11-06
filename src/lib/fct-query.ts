@@ -425,7 +425,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
     const uniqueValues = new Map<string, FctValueInput>();
     for (const value of inputValues) {
       const normalized = normalizeFctValue(value);
-      if (!normalized.text.trim()) continue;
+      if (!normalized.text.trim() && !(normalized.attributes?.rangeStart || normalized.attributes?.rangeEnd)) continue;
       uniqueValues.set(fctValueKey(value), value);
     }
 

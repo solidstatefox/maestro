@@ -130,8 +130,38 @@ export async function clearClientQueryCache(): Promise<void> {
   }
 }
 
+/** In-flight Maestro query operations, shared by query listeners and the Refresh/Abort control. */
+const pendingQueryControllers = new Set<AbortController>();
+const pendingQueryListeners = new Set<(count: number) => void>();
+function notifyPendingQueries() {
+  for (const listener of pendingQueryListeners) listener(pendingQueryControllers.size);
+}
+export function subscribePendingMaestroQueries(listener: (count: number) => void): () => void {
+  pendingQueryListeners.add(listener);
+  listener(pendingQueryControllers.size);
+  return () => { pendingQueryListeners.delete(listener); };
+}
+export function abortPendingMaestroQueries(): void {
+  for (const controller of [...pendingQueryControllers]) controller.abort();
+}
+async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
+  operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  pendingQueryControllers.add(controller);
+  notifyPendingQueries();
+  try {
+    const result = await operation(combinedSignal);
+    if (combinedSignal.aborted) throw new DOMException("Maestro query aborted", "AbortError");
+    return result;
+  } finally {
+    pendingQueryControllers.delete(controller);
+    notifyPendingQueries();
+  }
+}
+
 /** Apply a saved per-widget deadline to non-FCT proxy requests (record graphs/policies). */
-export async function maestroQueryFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+async function maestroQueryFetchImpl(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   const source = [headers.get("x-maestro-debug-source") || "", headers.get("x-maestro-debug-component") || ""].join(" ");
   const timeoutMs = configuredTimeoutMs(source);
@@ -145,7 +175,7 @@ export async function maestroQueryFetch(input: RequestInfo | URL, init?: Request
  * Transparent fetch wrapper that checks client-side IndexedDB cache
  * for /proxy/api/fct and /proxy/api/sparql queries before making a network request.
  */
-export async function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const isCacheableEndpoint = urlStr.includes("/proxy/api/fct") || urlStr.includes("/proxy/api/sparql");
   if (!isCacheableEndpoint) {
@@ -202,4 +232,20 @@ export async function cachedFetchFct(input: RequestInfo | URL, init?: RequestIni
     }
   }
   return track(response);
+}
+
+/** Track query requests so a live FCT change or user Abort cancels outstanding work. */
+export function maestroQueryFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return trackMaestroQuery(init?.signal, (signal) => maestroQueryFetchImpl(input, { ...init, signal }));
+}
+export function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  // Endpoint selection, health checks, and other control-plane requests must
+  // not be aborted merely because the live query changes.
+  const body = typeof init?.body === "string" ? init.body : "";
+  if (!/\/proxy\/api\/(?:fct|sparql|policies|xslt)/.test(url) ||
+      body.includes('"selectEndpointId"') || body.includes('"health"')) {
+    return cachedFetchFctImpl(input, init);
+  }
+  return trackMaestroQuery(init?.signal, (signal) => cachedFetchFctImpl(input, { ...init, signal }));
 }

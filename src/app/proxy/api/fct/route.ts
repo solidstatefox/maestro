@@ -1,3 +1,4 @@
+import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
@@ -218,7 +219,7 @@ function fctResponseXml(args: {
   const vars = args.vars ?? [];
   const bindings = args.bindings ?? [];
   const badgeMap = new Map((args.badgeColumns ?? []).map((b) => [b.colName, b]));
-  let resultType = args.graphOnly ? "graphs" : args.countOnly ? "count" : view;
+  let resultType = args.graphOnly ? FCT_VIEW_TYPES.GRAPHS : args.countOnly ? "count" : view;
   const labelFor = (term: SparqlBindingTerm | undefined) =>
     term?.type === "uri" ? args.labels?.get(term.value) : undefined;
   const rows = bindings.map((binding) => {
@@ -328,7 +329,7 @@ function listValuesXml(args: {
     }).join("");
     return `<fct:row>${fctColumn(focus, args.labels.get(resource), { var: "c1" })}${fctColumn({ type: "literal", value: label }, undefined, { var: "c2" })}${cells}</fct:row>`;
   }).join("");
-  return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(args.query)}</fct:sparql><fct:time>${args.elapsed}</fct:time><fct:complete>${args.complete ? "yes" : "no"}</fct:complete><fct:processed>${args.page.length}</fct:processed><fct:view offset="${args.offset}" limit="${args.limit}"/><fct:result type="list-values">${rows}</fct:result></fct:facets>`;
+  return `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(args.query)}</fct:sparql><fct:time>${args.elapsed}</fct:time><fct:complete>${args.complete ? "yes" : "no"}</fct:complete><fct:processed>${args.page.length}</fct:processed><fct:view offset="${args.offset}" limit="${args.limit}"/><fct:result type="${FCT_VIEW_TYPES.LIST_VALUES}">${rows}</fct:result></fct:facets>`;
 }
 
 function parseDescribeRdfXml(source: string): Record<string, SparqlBindingTerm>[] {
@@ -459,7 +460,7 @@ export async function POST(request: Request) {
     if (!queryXml && typeof body?.text === "string") {
       const fallbackEndpoint = selectConfiguredFctEndpoint(request, endpoints);
       if (!fallbackEndpoint) return fctError(`No graph servers are configured in the personal SPARQL store graph ${getDataserversGraph(request)}.`, 503);
-      queryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="" same-as="" addr="@${xmlEscape(fallbackEndpoint.id)}"><text>${xmlEscape(body.text.trim())}</text><view type="text" limit="30" offset="0"/></query>`;
+      queryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="" same-as="" addr="@${xmlEscape(fallbackEndpoint.id)}"><text>${xmlEscape(body.text.trim())}</text><view type="${FCT_VIEW_TYPES.TEXT}" limit="30" offset="0"/></query>`;
     }
     if (!queryXml) return fctError("An FCT query XML document is required.", 400);
 
@@ -511,7 +512,7 @@ export async function POST(request: Request) {
     const graphOnly = body?.graphOnly === true;
     const countOnly = body?.countOnly === true;
     const compiled = compileFctXmlToSparql(queryXml, view, graphOnly, countOnly);
-    const isDescribe = compiled.view === "describe";
+    const isDescribe = compiled.view === FCT_VIEW_TYPES.DESCRIBE;
     const responseCacheKey = queryCacheKey(
       "fct-response",
       endpoint.url,
@@ -521,7 +522,7 @@ export async function POST(request: Request) {
     // those resources. This is the second stage of list-values, not a second
     // pagination query. The request remains an FCT XML clone with explicit
     // projected siblings, and the proxy still owns all SPARQL construction.
-    const suppliedResources = Array.isArray(body?.resources) && compiled.view === "list-values"
+    const suppliedResources = Array.isArray(body?.resources) && compiled.view === FCT_VIEW_TYPES.LIST_VALUES
       ? [...new Set(body.resources.filter((value): value is string => typeof value === "string"))]
       : null;
     if (suppliedResources && (suppliedResources.length > 100 || suppliedResources.some((value) => !/^https?:\/\/[^\s<>"{}|^`\\]+$/i.test(value))))
@@ -582,18 +583,18 @@ export async function POST(request: Request) {
       const labelFor = (term: SparqlBindingTerm | undefined) => term?.type === "uri" ? labels.get(term.value) : undefined;
       const describeRows = bindings.map((binding) => `<fct:row>${fctColumn(binding.s, labelFor(binding.s))}${fctColumn(binding.p, labelFor(binding.p))}${fctColumn(binding.o, labelFor(binding.o))}</fct:row>`).join("");
       const describeComplete = !partial;
-      const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${describeComplete ? "yes" : "no"}</fct:complete><fct:timeout>${compiled.timeoutMs}</fct:timeout><fct:sql-state>${xmlText(sqlState)}</fct:sql-state><fct:sql-message>${xmlText(sqlMessage)}</fct:sql-message><fct:exec-milliseconds>${xmlText(execMilliseconds)}</fct:exec-milliseconds><fct:db-activity>${xmlText(execDbActivity)}</fct:db-activity>${sqlState === "S1TAT" ? `<fct:warning>${xmlText(sqlMessage || "Virtuoso returned partial results because the ANYTIME timeout was reached.")}</fct:warning>` : ""}<fct:processed>${bindings.length}</fct:processed><fct:view offset="${compiled.offset}" limit="${compiled.limit}"/><fct:result type="describe">${describeRows}</fct:result></fct:facets>`;
+      const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:time>${elapsedMs}</fct:time><fct:complete>${describeComplete ? "yes" : "no"}</fct:complete><fct:timeout>${compiled.timeoutMs}</fct:timeout><fct:sql-state>${xmlText(sqlState)}</fct:sql-state><fct:sql-message>${xmlText(sqlMessage)}</fct:sql-message><fct:exec-milliseconds>${xmlText(execMilliseconds)}</fct:exec-milliseconds><fct:db-activity>${xmlText(execDbActivity)}</fct:db-activity>${sqlState === "S1TAT" ? `<fct:warning>${xmlText(sqlMessage || "Virtuoso returned partial results because the ANYTIME timeout was reached.")}</fct:warning>` : ""}<fct:processed>${bindings.length}</fct:processed><fct:view offset="${compiled.offset}" limit="${compiled.limit}"/><fct:result type="${FCT_VIEW_TYPES.DESCRIBE}">${describeRows}</fct:result></fct:facets>`;
       if (response.status === 200 && !partial) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...incompleteHeaders } });
     }
 
-    if (compiled.view === "ask" && !countOnly && !graphOnly) {
+    if (compiled.view === FCT_VIEW_TYPES.ASK && !countOnly && !graphOnly) {
       // ASK returns a SPARQL Results boolean, never a SELECT bindings array.
       // A timeout/error must not be interpreted as a negative existence test.
       let askBoolean: boolean | undefined;
       try { const result = JSON.parse(text) as { boolean?: unknown }; if (typeof result.boolean === "boolean") askBoolean = result.boolean; } catch { /* invalid upstream result */ }
       if (partial || askBoolean === undefined) return fctError("Virtuoso did not complete the ASK preflight.", 502, text.slice(0, 1200));
-      const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:complete>yes</fct:complete><fct:result type="ask"><fct:boolean>${askBoolean ? "true" : "false"}</fct:boolean></fct:result></fct:facets>`;
+      const xml = `<fct:facets xmlns:fct="${FCT_NS}"><fct:sparql>${xmlText(compiled.query)}</fct:sparql><fct:complete>yes</fct:complete><fct:result type="${FCT_VIEW_TYPES.ASK}"><fct:boolean>${askBoolean ? "true" : "false"}</fct:boolean></fct:result></fct:facets>`;
       if (response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
@@ -605,10 +606,10 @@ export async function POST(request: Request) {
     let bindings = parsed?.results?.bindings ?? [];
     let vars = parsed?.head?.vars ?? [];
     if (response.status === 200 && !partial) setQueryCache(key, text);
-    const labels = countOnly || compiled.view === "list-values"
+    const labels = countOnly || compiled.view === FCT_VIEW_TYPES.LIST_VALUES
       ? new Map<string, string>()
       : await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
-    if (compiled.view === "list-values" && !countOnly && !graphOnly) {
+    if (compiled.view === FCT_VIEW_TYPES.LIST_VALUES && !countOnly && !graphOnly) {
       const address = queryXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
       const graph = address.includes("@") ? address.slice(0, address.indexOf("@")) : "";
       // Labels only for the selected focus resources; the second query returns
@@ -635,7 +636,7 @@ export async function POST(request: Request) {
         setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
-    if (compiled.view === "list" && !countOnly && !graphOnly) {
+    if (compiled.view === FCT_VIEW_TYPES.LIST && !countOnly && !graphOnly) {
       bindings = bindings.map((binding) => {
         const uri = binding.c1?.type === "uri" ? binding.c1.value : "";
         if (!uri) return binding;

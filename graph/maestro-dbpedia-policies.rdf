@@ -5,100 +5,6 @@
    xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
    xmlns:sh="http://www.w3.org/ns/shacl#"
 >
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b62">
-    <rdf:first rdf:resource="http://schema.org/datePublished"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b63"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b4">
-    <rdf:first rdf:resource="http://dbpedia.org/property/author"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b5"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b82">
-    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
-    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
-    <sh:name>Label</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b63">
-    <rdf:first rdf:resource="https://schema.org/datePublished"/>
-    <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-person">
-    <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
-    <rdfs:label xml:lang="en">DBpedia Person policy</rdfs:label>
-    <mui:forClass rdf:resource="http://dbpedia.org/ontology/Person"/>
-    <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaPersonRecordShape"/>
-    <mui:xsltTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#DbpediaPersonRecordTemplate"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b77">
-    <sh:name>DBpedia Place field</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://www.w3.org/2003/01/geo/wgs84_pos#lat"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-organisation">
-    <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
-    <rdfs:label xml:lang="en">DBpedia Organisation policy</rdfs:label>
-    <mui:forClass rdf:resource="http://dbpedia.org/ontology/Organisation"/>
-    <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaOrganisationRecordShape"/>
-    <mui:xsltTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#DbpediaOrganisationRecordTemplate"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaFilmRecordShape">
-    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
-    <rdfs:label xml:lang="en">DBpedia Film validator</rdfs:label>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b64"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b65"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b66"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b67"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b68"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b69"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b70"/>
-    <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Film"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b15">
-    <rdf:first rdf:resource="https://schema.org/headline"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b16"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b72">
-    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
-    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
-    <sh:name>Label</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b29">
-    <rdf:first rdf:resource="http://schema.org/thumbnailUrl"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b30"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b76">
-    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
-    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
-    <sh:name>Label</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-work">
-    <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
-    <rdfs:label xml:lang="en">DBpedia Work policy</rdfs:label>
-    <mui:forClass rdf:resource="http://dbpedia.org/ontology/Work"/>
-    <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaWorkRecordShape"/>
-    <mui:xsltTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#DbpediaWorkRecordTemplate"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b78">
-    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
-    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
-    <sh:name>Label</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b30">
-    <rdf:first rdf:resource="https://schema.org/thumbnailUrl"/>
-    <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b26">
-    <rdf:first rdf:resource="http://dbpedia.org/ontology/depiction"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b27"/>
-  </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-film">
     <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
     <rdfs:label xml:lang="en">DBpedia Film policy</rdfs:label>
@@ -106,14 +12,21 @@
     <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaFilmRecordShape"/>
     <mui:xsltTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#DbpediaFilmRecordTemplate"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b44">
-    <rdf:first rdf:resource="http://dbpedia.org/ontology/isbn"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b45"/>
+  <rdf:Description rdf:nodeID="Nc1b2e5e3d5674cc58c804f5833560897">
+    <rdf:first rdf:resource="http://schema.org/thumbnailUrl"/>
+    <rdf:rest rdf:nodeID="Ne205d5ed6c89474da41447985f7bb10d"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b65">
-    <sh:name xml:lang="en">IMDb identifier</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://dbpedia.org/ontology/imdbId"/>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaFilmRecordShape">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
+    <rdfs:label xml:lang="en">DBpedia Film validator</rdfs:label>
+    <sh:property rdf:nodeID="N6001a31f86a24a15b9068b10f2279d3d"/>
+    <sh:property rdf:nodeID="Na9edbb79e56a4168b1f19488e31085b0"/>
+    <sh:property rdf:nodeID="Nbeeda85adee64273854ca5ea72df474a"/>
+    <sh:property rdf:nodeID="N658b1f6701364ba09662455f2dbc0bb6"/>
+    <sh:property rdf:nodeID="N43e34e1062f14a818fb4cb2cab78a6a6"/>
+    <sh:property rdf:nodeID="Na5cfaa5f3f7e435a99588aff2b20f4b9"/>
+    <sh:property rdf:nodeID="N33a7529480c040f1ac95081329904bf4"/>
+    <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Film"/>
   </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-book">
     <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
@@ -124,117 +37,28 @@
     <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaBookRecordShape"/>
     <mui:xsltTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#DbpediaBookRecordTemplate"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b73">
-    <sh:name xml:lang="en">Abstract</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://dbpedia.org/ontology/abstract"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b25">
-    <rdf:first rdf:resource="http://dbpedia.org/ontology/thumbnail"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b26"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b40">
-    <rdf:first rdf:resource="https://schema.org/description"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b41"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaPersonRecordShape">
-    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
-    <rdfs:label xml:lang="en">DBpedia Person validator</rdfs:label>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b73"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b74"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b75"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b76"/>
-    <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Person"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b81">
-    <sh:name>DBpedia Work field</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://dbpedia.org/ontology/releaseDate"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b54">
-    <rdf:first rdf:resource="http://dbpedia.org/property/publisher"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b55"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b11">
-    <rdf:first rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b12"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaSpeciesRecordShape">
-    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
-    <rdfs:label xml:lang="en">DBpedia Species validator</rdfs:label>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b79"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b80"/>
-    <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Species"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b80">
-    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
-    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
-    <sh:name>Label</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b69">
-    <sh:name xml:lang="en">Director</sh:name>
-    <sh:path rdf:resource="http://dbpedia.org/ontology/director"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b79">
-    <sh:name>DBpedia Species field</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://dbpedia.org/ontology/scientificName"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b61">
-    <rdf:first rdf:resource="http://dbpedia.org/property/published"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b62"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b71">
-    <sh:name>DBpedia Organisation field</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://dbpedia.org/ontology/foundingDate"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b20">
-    <rdf:first rdf:resource="http://dbpedia.org/ontology/language"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b21"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b53">
-    <rdf:first rdf:resource="http://dbpedia.org/ontology/publisher"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b54"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b9">
-    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
-    <sh:name xml:lang="en">Title</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b10"/>
-  </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaBookRecordShape">
     <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
     <rdfs:label xml:lang="en">DBpedia Book validator</rdfs:label>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b1"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b9"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b18"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b23"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b31"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b36"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b42"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b51"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b57"/>
+    <sh:property rdf:nodeID="Nfceb9ebc8f2a46e7a331e6a60ac12f38"/>
+    <sh:property rdf:nodeID="N1866a0e1444845d885ab317ed4c989bb"/>
+    <sh:property rdf:nodeID="Nc55b1891f3ed45fa8015658c7dc97c61"/>
+    <sh:property rdf:nodeID="N4100cd42ce234eeeb598c8a074e21ce8"/>
+    <sh:property rdf:nodeID="N5eee3b1676484411b7f65477ab76ffb4"/>
+    <sh:property rdf:nodeID="N287dd61fac114b71b9fcab462277eb16"/>
+    <sh:property rdf:nodeID="N3082eb7229354f10b5b12903c5c58626"/>
+    <sh:property rdf:nodeID="N266c0250579542f6b7c19dddd85afd81"/>
+    <sh:property rdf:nodeID="Na587c695c31c485abeb924031b574cfa"/>
     <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Book"/>
     <sh:targetClass rdf:resource="http://schema.org/Book"/>
     <sh:targetClass rdf:resource="https://schema.org/Book"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b33">
-    <rdf:first rdf:resource="http://dbpedia.org/property/pages"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b34"/>
+  <rdf:Description rdf:nodeID="N008cfac6eab146609e7e49ed83c39ccf">
+    <rdf:first rdf:resource="http://schema.org/image"/>
+    <rdf:rest rdf:nodeID="N7869c465bcf24fc1afc6a6ddf723791e"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b3">
-    <rdf:first rdf:resource="http://dbpedia.org/ontology/author"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b4"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b13">
-    <rdf:first rdf:resource="https://schema.org/name"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b14"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaPlaceRecordTemplate">
-    <rdfs:label xml:lang="en">Place profile card</rdfs:label>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaWorkRecordTemplate">
+    <rdfs:label xml:lang="en">Creative work card</rdfs:label>
     <rdf:value>&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/dbpedia#" version="3.0" exclude-result-prefixes="xs fct mctx m"&gt;
 &lt;xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/&gt;&lt;xsl:param name="recordUri"/&gt;
 &lt;xsl:function name="m:values" as="xs:string"&gt;
@@ -243,13 +67,12 @@
 &lt;xsl:variable name="rows" select="$ctx/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] = $predicate or tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()] = $localName]"/&gt;
 &lt;xsl:sequence select="string-join(distinct-values($rows/fct:column[3] ! normalize-space(string(.)))[. != ''], ', ')"/&gt;
 &lt;/xsl:function&gt;
-&lt;xsl:template match="/"&gt;&lt;section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" class="mx-auto w-full max-w-2xl p-1"&gt;&lt;article id="record-card" class="rounded-xl border bg-card text-card-foreground shadow-sm"&gt;&lt;header id="record-header" class="border-b bg-muted/40 px-5 py-4"&gt;&lt;p id="record-category" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground"&gt;DBpedia · Place&lt;/p&gt;&lt;h2 id="record-title" class="mt-1 break-words text-xl font-semibold"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label') != ''"&gt;&lt;xsl:value-of select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;xsl:value-of select="$recordUri"/&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;/h2&gt;&lt;/header&gt;&lt;dl id="record-fields" class="px-5 py-2"&gt;      &lt;xsl:variable name="v0" select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;
-      &lt;xsl:if test="$v0 != ''"&gt;&lt;div id="record-row-0" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-0" class="text-xs font-medium text-muted-foreground"&gt;Name&lt;/dt&gt;&lt;dd id="record-value-0" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v0"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v1" select="m:values(root(.), 'http://dbpedia.org/ontology/country')"/&gt;
-      &lt;xsl:if test="$v1 != ''"&gt;&lt;div id="record-row-1" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-1" class="text-xs font-medium text-muted-foreground"&gt;Country&lt;/dt&gt;&lt;dd id="record-value-1" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v1"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v2" select="m:values(root(.), 'http://dbpedia.org/ontology/region')"/&gt;
-      &lt;xsl:if test="$v2 != ''"&gt;&lt;div id="record-row-2" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-2" class="text-xs font-medium text-muted-foreground"&gt;Region&lt;/dt&gt;&lt;dd id="record-value-2" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v2"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v3" select="m:values(root(.), 'http://dbpedia.org/ontology/areaTotal')"/&gt;
-      &lt;xsl:if test="$v3 != ''"&gt;&lt;div id="record-row-3" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-3" class="text-xs font-medium text-muted-foreground"&gt;Area&lt;/dt&gt;&lt;dd id="record-value-3" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v3"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v4" select="m:values(root(.), 'http://www.w3.org/2003/01/geo/wgs84_pos#lat')"/&gt;
-      &lt;xsl:if test="$v4 != ''"&gt;&lt;div id="record-row-4" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-4" class="text-xs font-medium text-muted-foreground"&gt;Latitude&lt;/dt&gt;&lt;dd id="record-value-4" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v4"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v5" select="m:values(root(.), 'http://www.w3.org/2003/01/geo/wgs84_pos#long')"/&gt;
-      &lt;xsl:if test="$v5 != ''"&gt;&lt;div id="record-row-5" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-5" class="text-xs font-medium text-muted-foreground"&gt;Longitude&lt;/dt&gt;&lt;dd id="record-value-5" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v5"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;&lt;/dl&gt;&lt;xsl:variable name="allPropertyRows" select="root(.)/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] and fct:column[3] and not(fct:column[2] = ('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', 'http://www.w3.org/2000/01/rdf-schema#label', 'http://purl.org/dc/terms/subject', 'http://dbpedia.org/ontology/abstract', 'http://xmlns.com/foaf/0.1/depiction', 'http://dbpedia.org/ontology/thumbnail'))]"/&gt;
+&lt;xsl:template match="/"&gt;&lt;section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" class="mx-auto w-full max-w-2xl p-1"&gt;&lt;article id="record-card" class="rounded-xl border bg-card text-card-foreground shadow-sm"&gt;&lt;header id="record-header" class="border-b bg-muted/40 px-5 py-4"&gt;&lt;p id="record-category" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground"&gt;DBpedia · Work&lt;/p&gt;&lt;h2 id="record-title" class="mt-1 break-words text-xl font-semibold"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label') != ''"&gt;&lt;xsl:value-of select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;xsl:value-of select="$recordUri"/&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;/h2&gt;&lt;/header&gt;&lt;dl id="record-fields" class="px-5 py-2"&gt;      &lt;xsl:variable name="v0" select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;
+      &lt;xsl:if test="$v0 != ''"&gt;&lt;div id="record-row-0" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-0" class="text-xs font-medium text-muted-foreground"&gt;Title&lt;/dt&gt;&lt;dd id="record-value-0" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v0"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v1" select="m:values(root(.), 'http://dbpedia.org/ontology/author')"/&gt;
+      &lt;xsl:if test="$v1 != ''"&gt;&lt;div id="record-row-1" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-1" class="text-xs font-medium text-muted-foreground"&gt;Creator&lt;/dt&gt;&lt;dd id="record-value-1" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v1"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v2" select="m:values(root(.), 'http://dbpedia.org/ontology/releaseDate')"/&gt;
+      &lt;xsl:if test="$v2 != ''"&gt;&lt;div id="record-row-2" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-2" class="text-xs font-medium text-muted-foreground"&gt;Release date&lt;/dt&gt;&lt;dd id="record-value-2" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v2"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v3" select="m:values(root(.), 'http://dbpedia.org/ontology/genre')"/&gt;
+      &lt;xsl:if test="$v3 != ''"&gt;&lt;div id="record-row-3" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-3" class="text-xs font-medium text-muted-foreground"&gt;Genre&lt;/dt&gt;&lt;dd id="record-value-3" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v3"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v4" select="m:values(root(.), 'http://dbpedia.org/ontology/language')"/&gt;
+      &lt;xsl:if test="$v4 != ''"&gt;&lt;div id="record-row-4" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-4" class="text-xs font-medium text-muted-foreground"&gt;Language&lt;/dt&gt;&lt;dd id="record-value-4" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v4"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;&lt;/dl&gt;&lt;xsl:variable name="allPropertyRows" select="root(.)/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] and fct:column[3] and not(fct:column[2] = ('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', 'http://www.w3.org/2000/01/rdf-schema#label', 'http://purl.org/dc/terms/subject', 'http://dbpedia.org/ontology/abstract', 'http://xmlns.com/foaf/0.1/depiction', 'http://dbpedia.org/ontology/thumbnail'))]"/&gt;
 &lt;xsl:if test="exists($allPropertyRows)"&gt;
 &lt;section id="record-additional-section" class="border-t px-5 py-4"&gt;
 &lt;h3 id="record-additional-title" class="mb-2 text-sm font-semibold"&gt;Additional details&lt;/h3&gt;
@@ -267,7 +90,11 @@
 &lt;/xsl:for-each&gt;
 &lt;/dd&gt;&lt;/div&gt;
 &lt;/xsl:for-each-group&gt;
-&lt;/dl&gt;&lt;/section&gt;&lt;/xsl:if&gt;&lt;footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground"&gt;DBpedia record · Maestro formatter&lt;/footer&gt;&lt;/article&gt;&lt;svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-place-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"&gt;&lt;svg:path id="dbpedia-place-record-icon-1" d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/&gt;&lt;svg:circle id="dbpedia-place-record-icon-2" cx="12" cy="10" r="2"/&gt;&lt;/svg:svg&gt;&lt;/section&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</rdf:value>
+&lt;/dl&gt;&lt;/section&gt;&lt;/xsl:if&gt;&lt;footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground"&gt;DBpedia record · Maestro formatter&lt;/footer&gt;&lt;/article&gt;&lt;svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-work-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"&gt;&lt;svg:path id="dbpedia-work-record-icon-1" d="M12 7v14"/&gt;&lt;svg:path id="dbpedia-work-record-icon-2" d="M3 18V5a2 2 0 0 1 2-2h3a4 4 0 0 1 4 4 4 4 0 0 1 4-4h3a2 2 0 0 1 2 2v13a1 1 0 0 1-1 1h-4a4 4 0 0 0-4 2 4 4 0 0 0-4-2H4a1 1 0 0 1-1-1Z"/&gt;&lt;/svg:svg&gt;&lt;/section&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</rdf:value>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Nff983a74467342d1882f00c2693165d9">
+    <rdf:first rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
+    <rdf:rest rdf:nodeID="Ne3e8e543b5e24672a551b175e5870d37"/>
   </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-species">
     <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
@@ -276,193 +103,155 @@
     <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaSpeciesRecordShape"/>
     <mui:xsltTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#DbpediaSpeciesRecordTemplate"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b58">
-    <sh:alternativePath rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b59"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b74">
-    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
-    <sh:name xml:lang="en">Subject categories</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#IRI"/>
-    <sh:path rdf:resource="http://purl.org/dc/terms/subject"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b42">
-    <sh:name xml:lang="en">ISBN</sh:name>
+  <rdf:Description rdf:nodeID="Nbeeda85adee64273854ca5ea72df474a">
+    <sh:name xml:lang="en">IMDb ID</sh:name>
     <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b43"/>
+    <sh:path rdf:resource="http://dbpedia.org/property/imdbId"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b48">
-    <rdf:first rdf:resource="http://purl.org/ontology/bibo/isbn"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b49"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b50">
-    <rdf:first rdf:resource="http://purl.org/ontology/bibo/isbn13"/>
-    <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b31">
-    <sh:name xml:lang="en">Pages</sh:name>
-    <sh:path rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b32"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b28">
-    <rdf:first rdf:resource="https://schema.org/image"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b29"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b68">
-    <sh:name xml:lang="en">Genre</sh:name>
-    <sh:path rdf:resource="http://dbpedia.org/ontology/genre"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaOrganisationRecordTemplate">
-    <rdfs:label xml:lang="en">Organisation profile card</rdfs:label>
-    <rdf:value>&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/dbpedia#" version="3.0" exclude-result-prefixes="xs fct mctx m"&gt;
-&lt;xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/&gt;&lt;xsl:param name="recordUri"/&gt;
-&lt;xsl:function name="m:values" as="xs:string"&gt;
-&lt;xsl:param name="ctx" as="node()"/&gt;&lt;xsl:param name="predicate" as="xs:string"/&gt;
-&lt;xsl:variable name="localName" select="tokenize($predicate, '[/#]')[last()]"/&gt;
-&lt;xsl:variable name="rows" select="$ctx/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] = $predicate or tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()] = $localName]"/&gt;
-&lt;xsl:sequence select="string-join(distinct-values($rows/fct:column[3] ! normalize-space(string(.)))[. != ''], ', ')"/&gt;
-&lt;/xsl:function&gt;
-&lt;xsl:template match="/"&gt;&lt;section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" class="mx-auto w-full max-w-2xl p-1"&gt;&lt;article id="record-card" class="rounded-xl border bg-card text-card-foreground shadow-sm"&gt;&lt;header id="record-header" class="border-b bg-muted/40 px-5 py-4"&gt;&lt;p id="record-category" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground"&gt;DBpedia · Organisation&lt;/p&gt;&lt;h2 id="record-title" class="mt-1 break-words text-xl font-semibold"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label') != ''"&gt;&lt;xsl:value-of select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;xsl:value-of select="$recordUri"/&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;/h2&gt;&lt;/header&gt;&lt;dl id="record-fields" class="px-5 py-2"&gt;      &lt;xsl:variable name="v0" select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;
-      &lt;xsl:if test="$v0 != ''"&gt;&lt;div id="record-row-0" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-0" class="text-xs font-medium text-muted-foreground"&gt;Name&lt;/dt&gt;&lt;dd id="record-value-0" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v0"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v1" select="m:values(root(.), 'http://dbpedia.org/ontology/foundingDate')"/&gt;
-      &lt;xsl:if test="$v1 != ''"&gt;&lt;div id="record-row-1" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-1" class="text-xs font-medium text-muted-foreground"&gt;Founded&lt;/dt&gt;&lt;dd id="record-value-1" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v1"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v2" select="m:values(root(.), 'http://dbpedia.org/ontology/headquarter')"/&gt;
-      &lt;xsl:if test="$v2 != ''"&gt;&lt;div id="record-row-2" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-2" class="text-xs font-medium text-muted-foreground"&gt;Headquarters&lt;/dt&gt;&lt;dd id="record-value-2" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v2"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v3" select="m:values(root(.), 'http://dbpedia.org/ontology/location')"/&gt;
-      &lt;xsl:if test="$v3 != ''"&gt;&lt;div id="record-row-3" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-3" class="text-xs font-medium text-muted-foreground"&gt;Location&lt;/dt&gt;&lt;dd id="record-value-3" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v3"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v4" select="m:values(root(.), 'http://dbpedia.org/ontology/industry')"/&gt;
-      &lt;xsl:if test="$v4 != ''"&gt;&lt;div id="record-row-4" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-4" class="text-xs font-medium text-muted-foreground"&gt;Industry&lt;/dt&gt;&lt;dd id="record-value-4" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v4"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;&lt;/dl&gt;&lt;xsl:variable name="allPropertyRows" select="root(.)/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] and fct:column[3] and not(fct:column[2] = ('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', 'http://www.w3.org/2000/01/rdf-schema#label', 'http://purl.org/dc/terms/subject', 'http://dbpedia.org/ontology/abstract', 'http://xmlns.com/foaf/0.1/depiction', 'http://dbpedia.org/ontology/thumbnail'))]"/&gt;
-&lt;xsl:if test="exists($allPropertyRows)"&gt;
-&lt;section id="record-additional-section" class="border-t px-5 py-4"&gt;
-&lt;h3 id="record-additional-title" class="mb-2 text-sm font-semibold"&gt;Additional details&lt;/h3&gt;
-&lt;dl id="record-additional-list" class="divide-y"&gt;
-&lt;xsl:for-each-group select="$allPropertyRows" group-by="normalize-space(string(fct:column[2]))"&gt;
-&lt;xsl:variable name="predicate" select="current-grouping-key()"/&gt;&lt;xsl:variable name="groupIndex" select="position()"/&gt;
-&lt;div id="record-extra-{position()}" class="grid gap-1 py-2 sm:grid-cols-[9rem_1fr]"&gt;
-&lt;dt id="record-extra-key-{position()}" class="break-all text-xs font-medium text-muted-foreground" title="{$predicate}"&gt;&lt;xsl:value-of select="tokenize($predicate, '[/#]')[last()]"/&gt;&lt;/dt&gt;
-&lt;dd id="record-extra-value-{position()}" class="break-words text-sm"&gt;
-&lt;xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']"&gt;
-&lt;xsl:choose&gt;
-&lt;xsl:when test="matches(., '^https?://')"&gt;&lt;a id="record-extra-uri-{position()}-{$groupIndex}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"&gt;&lt;xsl:value-of select="tokenize(., '[/#]')[last()]"/&gt;&lt;/a&gt;&lt;/xsl:when&gt;
-&lt;xsl:otherwise&gt;&lt;span id="record-extra-text-{position()}-{$groupIndex}"&gt;&lt;xsl:value-of select="."/&gt;&lt;/span&gt;&lt;/xsl:otherwise&gt;
-&lt;/xsl:choose&gt;&lt;xsl:if test="position() ne last()"&gt;&lt;span id="record-extra-separator-{position()}-{$groupIndex}"&gt; · &lt;/span&gt;&lt;/xsl:if&gt;
-&lt;/xsl:for-each&gt;
-&lt;/dd&gt;&lt;/div&gt;
-&lt;/xsl:for-each-group&gt;
-&lt;/dl&gt;&lt;/section&gt;&lt;/xsl:if&gt;&lt;footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground"&gt;DBpedia record · Maestro formatter&lt;/footer&gt;&lt;/article&gt;&lt;svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-organisation-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"&gt;&lt;svg:rect id="dbpedia-organisation-record-icon-1" x="4" y="2" width="16" height="20" rx="2"/&gt;&lt;svg:path id="dbpedia-organisation-record-icon-2" d="M9 22v-4h6v4M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M16 14h.01M8 10h.01M8 14h.01"/&gt;&lt;/svg:svg&gt;&lt;/section&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</rdf:value>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b49">
-    <rdf:first rdf:resource="http://purl.org/ontology/bibo/isbn10"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b50"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b64">
-    <sh:name xml:lang="en">Release date</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://dbpedia.org/ontology/releaseDate"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b67">
-    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
-    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
-    <sh:name xml:lang="en">Label</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaWorkRecordShape">
-    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
-    <rdfs:label xml:lang="en">DBpedia Work validator</rdfs:label>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b81"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b82"/>
-    <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Work"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b21">
-    <rdf:first rdf:resource="http://schema.org/inLanguage"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b22"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b5">
-    <rdf:first rdf:resource="http://schema.org/author"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b6"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b14">
-    <rdf:first rdf:resource="http://schema.org/headline"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b15"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaOrganisationRecordShape">
-    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
-    <rdfs:label xml:lang="en">DBpedia Organisation validator</rdfs:label>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b71"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b72"/>
-    <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Organisation"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b7">
-    <rdf:first rdf:resource="http://schema.org/creator"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b8"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b24">
-    <sh:alternativePath rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b25"/>
-  </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaBookReviewQueryPivot">
-    <rdfs:label xml:lang="en">Book review query pivot</rdfs:label>
-    <rdf:value>&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
-  xmlns:xs="http://www.w3.org/2001/XMLSchema"
-  xmlns:fct="http://openlinksw.com/services/facets/1.0/"
-  xmlns:fctq="http://openlinksw.com/services/facets/1.0"
-  xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#"
-  version="3.0" exclude-result-prefixes="xs fct fctq mctx"&gt;
-  &lt;xsl:output method="xml" encoding="UTF-8" omit-xml-declaration="yes"/&gt;
-  &lt;xsl:param name="recordUri" as="xs:string"/&gt;
-  &lt;xsl:template match="/"&gt;
-    &lt;xsl:variable name="live" select="/mctx:context/mctx:live-query/fctq:query"/&gt;
-    &lt;xsl:variable name="reviewPredicate" as="xs:string"
-      select="string((/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[
-        fct:column[1] = $recordUri and
-        fct:column[2] = ('http://schema.org/review','https://schema.org/review',
-          'http://schema.org/reviews','https://schema.org/reviews')
-      ]/fct:column[2])[1])"/&gt;
-    &lt;xsl:variable name="schemaNamespace" as="xs:string"
-      select="if (starts-with($reviewPredicate, 'https:')) then 'https://schema.org/' else 'http://schema.org/'"/&gt;
-    &lt;query xmlns="http://openlinksw.com/services/facets/1.0"&gt;
-      &lt;xsl:copy-of select="$live/@*"/&gt;
-      &lt;value datatype="uri"&gt;&lt;xsl:value-of select="$recordUri"/&gt;&lt;/value&gt;
-      &lt;property iri="{$reviewPredicate}"&gt;
-        &lt;view type="list-values" limit="5" offset="0"/&gt;
-        &lt;property iri="{$schemaNamespace}author" project="yes"&gt;
-          &lt;property iri="{$schemaNamespace}name" project="yes"/&gt;
-        &lt;/property&gt;
-        &lt;property iri="{$schemaNamespace}reviewBody" project="yes"/&gt;
-        &lt;property iri="{$schemaNamespace}reviewRating" project="yes"&gt;
-          &lt;property iri="{$schemaNamespace}ratingValue" project="yes"/&gt;
-          &lt;property iri="{$schemaNamespace}bestRating" project="yes"/&gt;
-        &lt;/property&gt;
-      &lt;/property&gt;
-    &lt;/query&gt;
-  &lt;/xsl:template&gt;
-&lt;/xsl:stylesheet&gt;</rdf:value>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b1">
-    <sh:name xml:lang="en">Author</sh:name>
-    <sh:path rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b2"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b70">
-    <sh:name xml:lang="en">Synopsis</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://dbpedia.org/ontology/abstract"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b2">
-    <sh:alternativePath rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b3"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b60">
-    <rdf:first rdf:resource="http://dbpedia.org/ontology/releaseDate"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b61"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b45">
-    <rdf:first rdf:resource="http://dbpedia.org/property/isbn"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b46"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b36">
-    <sh:name xml:lang="en">Description</sh:name>
-    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b37"/>
+  <rdf:Description rdf:nodeID="N382bc9e3cf58455f80e16d968655329c">
+    <rdf:first rdf:resource="https://schema.org/author"/>
+    <rdf:rest rdf:nodeID="N7877904cd2524b81ab218209802f1c01"/>
   </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaPlaceRecordShape">
     <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
     <rdfs:label xml:lang="en">DBpedia Place validator</rdfs:label>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b77"/>
-    <sh:property rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b78"/>
+    <sh:property rdf:nodeID="Ne4af1e488a484555bba397dd0d588949"/>
+    <sh:property rdf:nodeID="Ne59bb6e520694a729e149549f0374eec"/>
     <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Place"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Na84e96f291a74b368a7822ac0ebb4b72">
+    <rdf:first rdf:resource="https://schema.org/description"/>
+    <rdf:rest rdf:nodeID="N6cc6fec5f3f24e8b8d513a7a0505f942"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N24ee16d037994f06be4949f044e8b3f7">
+    <rdf:first rdf:resource="http://dbpedia.org/ontology/abstract"/>
+    <rdf:rest rdf:nodeID="N70b0377d4fc04226bd5a27f96f939cea"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N69eb9dc349984c11969352f3192eb8ba">
+    <sh:name>DBpedia Species field</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://dbpedia.org/ontology/scientificName"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N22e3bc9bea8c4e3785f4a85cf1989002">
+    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
+    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
+    <sh:name>Label</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N4100cd42ce234eeeb598c8a074e21ce8">
+    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
+    <sh:name xml:lang="en">Title</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:nodeID="Nb872f352c0b94734a0d28de7478c8575"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N8f7fbac554d34b9bbd3f7ffbb077874b">
+    <sh:name>DBpedia Work field</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://dbpedia.org/ontology/releaseDate"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaPersonRecordShape">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
+    <rdfs:label xml:lang="en">DBpedia Person validator</rdfs:label>
+    <sh:property rdf:nodeID="N5cd9439a22e447bf8bf02d720c23aa16"/>
+    <sh:property rdf:nodeID="N13620bb160f54e449c58207c51e4f122"/>
+    <sh:property rdf:nodeID="N1916ed7dcf1346d79a8c9bbbc7ab0e01"/>
+    <sh:property rdf:nodeID="Nac4ab8b66da4408eba82a98abce6f877"/>
+    <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Person"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N9eac758a5a164b43bd72c5b07661fde6">
+    <sh:alternativePath rdf:nodeID="N24ee16d037994f06be4949f044e8b3f7"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Nd8c1fe550314469b92c72ab3e2f4a2e1">
+    <rdf:first rdf:resource="http://schema.org/datePublished"/>
+    <rdf:rest rdf:nodeID="Na6b7b0004ecf45f38bec5426853c6aa1"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaFilmRecordTemplate">
+    <rdfs:label xml:lang="en">Film cinematic card</rdfs:label>
+    <rdf:value>&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/commerce#" version="3.0" exclude-result-prefixes="xs fct mctx m"&gt;
+&lt;xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/&gt;
+&lt;xsl:param name="recordUri" as="xs:string" select="''"/&gt;
+&lt;xsl:variable name="rows" select="/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row"/&gt;
+&lt;xsl:function name="m:values" as="xs:string*"&gt;&lt;xsl:param name="names" as="xs:string*"/&gt;
+&lt;xsl:sequence select="distinct-values($rows[lower-case(tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()]) = $names]/fct:column[3] ! normalize-space(string(.)))[. ne '']"/&gt;
+&lt;/xsl:function&gt;
+&lt;xsl:function name="m:first" as="xs:string"&gt;&lt;xsl:param name="names" as="xs:string*"/&gt;&lt;xsl:sequence select="string((m:values($names))[1])"/&gt;&lt;/xsl:function&gt;
+&lt;xsl:function name="m:pretty" as="xs:string"&gt;&lt;xsl:param name="uri" as="xs:string"/&gt;&lt;xsl:sequence select="replace(tokenize($uri, '[/#]')[last()], '_', ' ')"/&gt;&lt;/xsl:function&gt;
+&lt;xsl:function name="m:is-uri" as="xs:boolean"&gt;&lt;xsl:param name="value" as="xs:string"/&gt;&lt;xsl:sequence select="matches($value, '^https?://')"/&gt;&lt;/xsl:function&gt;
+&lt;xsl:template name="m:field"&gt;&lt;xsl:param name="key" as="xs:string"/&gt;&lt;xsl:param name="names" as="xs:string*"/&gt;&lt;xsl:param name="n" as="xs:string"/&gt;
+&lt;xsl:variable name="values" select="m:values($names)"/&gt;
+&lt;xsl:if test="exists($values)"&gt;&lt;div id="field-{$n}" class="flex flex-col gap-1 border-b border-border/60 py-3 sm:grid sm:grid-cols-[7.5rem_1fr] sm:gap-4"&gt;&lt;dt id="field-label-{$n}" class="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground"&gt;&lt;xsl:value-of select="$key"/&gt;&lt;/dt&gt;&lt;dd id="field-data-{$n}" class="min-w-0 text-sm leading-relaxed text-foreground"&gt;&lt;xsl:for-each select="$values"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="m:is-uri(.)"&gt;&lt;a id="field-link-{$n}-{position()}" class="text-primary underline-offset-4 hover:underline" data-maestro-record-uri="{.}" href="#"&gt;&lt;xsl:value-of select="m:pretty(.)"/&gt;&lt;/a&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;span id="field-text-{$n}-{position()}"&gt;&lt;xsl:value-of select="."/&gt;&lt;/span&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;xsl:if test="position() ne last()"&gt;&lt;span id="field-separator-{$n}-{position()}" class="text-muted-foreground"&gt; · &lt;/span&gt;&lt;/xsl:if&gt;&lt;/xsl:for-each&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;
+&lt;/xsl:template&gt;
+&lt;xsl:template name="m:extras"&gt;&lt;xsl:param name="excluded" as="xs:string*"/&gt;
+&lt;xsl:variable name="other" select="$rows[fct:column[2] and fct:column[3] and not(lower-case(tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()]) = $excluded)]"/&gt;
+&lt;xsl:if test="exists($other)"&gt;&lt;section id="record-additional-section" class="border-t border-border/70 px-6 py-5"&gt;&lt;h3 id="record-additional-title" class="mb-3 text-xs font-semibold uppercase tracking-[.18em] text-muted-foreground"&gt;Additional details&lt;/h3&gt;&lt;dl id="record-additional-list" class="divide-y divide-border/50"&gt;&lt;xsl:for-each-group select="$other" group-by="normalize-space(string(fct:column[2]))"&gt;&lt;xsl:variable name="idx" select="position()"/&gt;&lt;xsl:variable name="prop" select="current-grouping-key()"/&gt;&lt;div id="record-extra-{$idx}" class="grid gap-1 py-2 text-sm sm:grid-cols-[8rem_1fr]"&gt;&lt;dt id="record-extra-label-{$idx}" class="text-xs font-medium text-muted-foreground" title="{$prop}"&gt;&lt;xsl:value-of select="m:pretty($prop)"/&gt;&lt;/dt&gt;&lt;dd id="record-extra-values-{$idx}" class="min-w-0 break-words"&gt;&lt;xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. ne '']"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="m:is-uri(.)"&gt;&lt;a id="record-extra-link-{$idx}-{position()}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"&gt;&lt;xsl:value-of select="m:pretty(.)"/&gt;&lt;/a&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;span id="record-extra-value-{$idx}-{position()}"&gt;&lt;xsl:value-of select="."/&gt;&lt;/span&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;xsl:if test="position() ne last()"&gt;&lt;span id="record-extra-sep-{$idx}-{position()}"&gt; · &lt;/span&gt;&lt;/xsl:if&gt;&lt;/xsl:for-each&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:for-each-group&gt;&lt;/dl&gt;&lt;/section&gt;&lt;/xsl:if&gt;
+&lt;/xsl:template&gt;
+&lt;xsl:template match="/"&gt;
+&lt;xsl:variable name="title" select="(m:values(('label','title','name'))[not(m:is-uri(.))], m:pretty($recordUri))[1]"/&gt;
+&lt;xsl:variable name="summary" select="m:first(('abstract','description','plot','synopsis'))"/&gt;
+&lt;xsl:variable name="poster" select="(m:values(('thumbnail','depiction','poster','image','cover'))[m:is-uri(.)])[1]"/&gt;
+&lt;xsl:variable name="dateRow" select="($rows[lower-case(tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()]) = ('releasedate','publicationdate','datepublished','year')])[1]"/&gt;
+&lt;xsl:variable name="date" select="normalize-space(string($dateRow/fct:column[3]))"/&gt;
+&lt;xsl:variable name="dateProperty" select="normalize-space(string($dateRow/fct:column[2]))"/&gt;
+&lt;xsl:variable name="imdbRaw" select="m:values(('imdbid','imdb'))"/&gt;
+&lt;xsl:variable name="imdb" select="(for $v in $imdbRaw return if (matches($v, 'tt[0-9]+')) then replace($v, '^.*?(tt[0-9]+).*$', '$1') else '')[. ne ''][1]"/&gt;
+&lt;xsl:variable name="lookup" select="concat($title, ' film ', substring($date,1,4))"/&gt;
+&lt;section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" class="mx-auto w-full max-w-5xl p-1"&gt;
+&lt;article id="record-card" class="overflow-hidden rounded-2xl border border-slate-700 bg-[#0b101b] text-white shadow-2xl"&gt;
+&lt;div id="film-hero" class="relative overflow-hidden bg-gradient-to-br from-[#273b55] via-[#101725] to-[#080b12] px-6 py-8 sm:px-9 sm:py-11"&gt;
+&lt;div id="film-hero-grid" class="relative grid gap-7 sm:grid-cols-[minmax(0,1fr)_minmax(0,12rem)] sm:items-center"&gt;
+&lt;div id="film-copy" class="min-w-0"&gt;&lt;p id="film-eyebrow" class="mb-3 text-[10px] font-semibold uppercase tracking-[.35em] text-sky-200"&gt;MAESTRO PREMIERE · DBPEDIA FILM&lt;/p&gt;
+&lt;h2 id="film-title" class="max-w-2xl break-words text-3xl font-bold tracking-tight sm:text-5xl"&gt;&lt;xsl:value-of select="$title"/&gt;&lt;/h2&gt;
+&lt;div id="film-highlights" class="mt-4 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-300"&gt;
+&lt;xsl:if test="$date and $dateProperty"&gt;&lt;button type="button" id="film-year" class="cursor-pointer rounded-full border border-white/20 bg-white/10 px-3 py-1 hover:bg-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-300" data-maestro-filter-property="{$dateProperty}" data-maestro-filter-value="{substring($date,1,4)}" data-maestro-filter-op="contains" title="Find films whose release date contains this year"&gt;&lt;xsl:value-of select="substring($date,1,4)"/&gt;&lt;/button&gt;&lt;/xsl:if&gt;
+&lt;xsl:for-each select="m:values(('genre'))[position() le 2]"&gt;&lt;span id="film-genre-chip-{position()}" class="rounded-full border border-white/20 bg-white/10 px-3 py-1"&gt;&lt;xsl:value-of select="if (m:is-uri(.)) then m:pretty(.) else ."/&gt;&lt;/span&gt;&lt;/xsl:for-each&gt;
+&lt;xsl:variable name="runtimeRow" select="($rows[lower-case(tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()]) = ('filmruntime','runtime','duration')])[1]"/&gt;
+&lt;xsl:variable name="runtime" select="normalize-space(string($runtimeRow/fct:column[3]))"/&gt;
+&lt;xsl:variable name="runtimeProperty" select="normalize-space(string($runtimeRow/fct:column[2]))"/&gt;
+&lt;xsl:variable name="runtimeLabel" select="if ($runtimeProperty = ('http://dbpedia.org/ontology/runtime','http://dbpedia.org/ontology/filmRuntime') and $runtime castable as xs:double) then concat(format-number(xs:double($runtime) div 60, '0.#'), ' min') else if ($runtimeProperty = 'http://dbpedia.org/ontology/Work/runtime' and $runtime castable as xs:double) then concat($runtime, ' min') else if (matches($runtime, '^PT[0-9]+M$')) then concat(replace($runtime, '^PT([0-9]+)M$', '$1'), ' min') else $runtime"/&gt;
+&lt;xsl:if test="$runtime"&gt;&lt;span id="film-runtime" class="rounded-full border border-white/20 bg-white/10 px-3 py-1"&gt;&lt;xsl:value-of select="$runtimeLabel"/&gt;&lt;/span&gt;&lt;/xsl:if&gt;
+&lt;/div&gt;
+&lt;xsl:if test="$summary"&gt;&lt;p id="film-synopsis" class="mt-6 max-w-2xl text-sm leading-7 text-slate-200 sm:text-base"&gt;&lt;xsl:value-of select="$summary"/&gt;&lt;/p&gt;&lt;/xsl:if&gt;
+&lt;div id="film-action-row" class="mt-7 flex flex-wrap gap-3"&gt;
+&lt;a id="film-google-search" href="{concat('https://www.google.com/search?q=', encode-for-uri($lookup))}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center rounded-full bg-white px-5 py-3 text-xs font-semibold text-slate-950 shadow-md transition hover:bg-sky-100"&gt;Search Google ↗&lt;/a&gt;
+&lt;a id="film-imdb" href="{if ($imdb) then concat('https://www.imdb.com/title/', $imdb, '/') else concat('https://www.imdb.com/find/?q=', encode-for-uri($lookup), '&amp;amp;s=tt')}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 rounded-full border border-white/30 bg-white/10 px-5 py-3 text-xs font-semibold text-white hover:bg-white/20"&gt;IMDb &lt;xsl:choose&gt;&lt;xsl:when test="$imdb"&gt;↗&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;search ↗&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;/a&gt;
+&lt;/div&gt;&lt;/div&gt;
+&lt;div id="film-poster-frame" class="mx-auto flex aspect-[2/3] w-full max-w-48 items-center justify-center overflow-hidden rounded-xl border border-white/20 bg-slate-800 shadow-[0_14px_35px_rgba(0,0,0,.6)]"&gt;
+&lt;xsl:choose&gt;&lt;xsl:when test="$poster"&gt;&lt;img id="film-poster" src="{$poster}" alt="Film artwork" class="h-full w-full object-cover" loading="lazy" referrerpolicy="no-referrer"/&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;span id="film-poster-placeholder" class="px-4 text-center text-xl font-semibold tracking-wide text-slate-400"&gt;MAESTRO CINEMA&lt;/span&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;
+&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;section id="film-availability" class="border-t border-white/10 bg-[#0f1623] px-6 py-7 sm:px-9"&gt;&lt;div id="film-availability-head" class="mb-5 flex flex-wrap items-end justify-between gap-3"&gt;&lt;h3 id="film-availability-title" class="text-lg font-bold tracking-tight"&gt;Find where to watch&lt;/h3&gt;&lt;p id="film-availability-note" class="text-xs text-slate-400"&gt;Search links only · availability not verified&lt;/p&gt;&lt;/div&gt;
+&lt;div id="film-service-grid" class="grid grid-cols-2 gap-3 sm:grid-cols-3"&gt;
+&lt;a id="film-service-netflix" href="{concat('https://www.netflix.com/search?q=', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-netflix-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-netflix-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/netflix.svg" alt="Netflix logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-netflix-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;Netflix&lt;/span&gt;&lt;/a&gt;
+&lt;a id="film-service-primevideo" href="{concat('https://www.amazon.com/s?i=instant-video&amp;amp;k=', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-primevideo-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-primevideo-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/primevideo.svg" alt="Prime Video logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-primevideo-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;Prime Video&lt;/span&gt;&lt;/a&gt;
+&lt;a id="film-service-disneyplus" href="{concat('https://www.disneyplus.com/search/', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-disneyplus-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-disneyplus-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/disneyplus.svg" alt="Disney+ logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-disneyplus-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;Disney+&lt;/span&gt;&lt;/a&gt;
+&lt;a id="film-service-appletv" href="{concat('https://tv.apple.com/search?term=', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-appletv-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-appletv-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/appletv.svg" alt="Apple TV logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-appletv-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;Apple TV&lt;/span&gt;&lt;/a&gt;
+&lt;a id="film-service-hulu" href="{concat('https://www.hulu.com/search?q=', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-hulu-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-hulu-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/hulu.svg" alt="Hulu logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-hulu-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;Hulu&lt;/span&gt;&lt;/a&gt;
+&lt;a id="film-service-youtube" href="{concat('https://www.youtube.com/results?search_query=', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-youtube-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-youtube-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/youtube.svg" alt="YouTube logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-youtube-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;YouTube&lt;/span&gt;&lt;/a&gt;
+&lt;/div&gt;&lt;/section&gt;
+&lt;section id="film-details" class="border-t border-white/10 bg-[#111827] px-6 py-6 sm:px-9"&gt;&lt;h3 id="film-details-heading" class="mb-2 text-xs font-semibold uppercase tracking-[.2em] text-sky-200"&gt;Behind the scenes&lt;/h3&gt;&lt;dl id="film-details-list" class="grid gap-x-6 sm:grid-cols-2"&gt;
+&lt;xsl:call-template name="m:field"&gt;&lt;xsl:with-param name="key" select="'Director'"/&gt;&lt;xsl:with-param name="names" select="('director')"/&gt;&lt;xsl:with-param name="n" select="'director'"/&gt;&lt;/xsl:call-template&gt;
+&lt;xsl:call-template name="m:field"&gt;&lt;xsl:with-param name="key" select="'Cast'"/&gt;&lt;xsl:with-param name="names" select="('starring','actor')"/&gt;&lt;xsl:with-param name="n" select="'cast'"/&gt;&lt;/xsl:call-template&gt;
+&lt;xsl:call-template name="m:field"&gt;&lt;xsl:with-param name="key" select="'Country'"/&gt;&lt;xsl:with-param name="names" select="('country')"/&gt;&lt;xsl:with-param name="n" select="'country'"/&gt;&lt;/xsl:call-template&gt;
+&lt;xsl:call-template name="m:field"&gt;&lt;xsl:with-param name="key" select="'Language'"/&gt;&lt;xsl:with-param name="names" select="('language')"/&gt;&lt;xsl:with-param name="n" select="'language'"/&gt;&lt;/xsl:call-template&gt;
+&lt;xsl:call-template name="m:field"&gt;&lt;xsl:with-param name="key" select="'Production'"/&gt;&lt;xsl:with-param name="names" select="('producer','productioncompany','distributor')"/&gt;&lt;xsl:with-param name="n" select="'production'"/&gt;&lt;/xsl:call-template&gt;
+&lt;/dl&gt;&lt;/section&gt;
+&lt;xsl:call-template name="m:extras"&gt;&lt;xsl:with-param name="excluded" select="('type','label','title','name','abstract','description','plot','synopsis','thumbnail','depiction','poster','image','cover','releasedate','publicationdate','datepublished','year','genre','runtime','duration','imdbid','imdb','director','starring','actor','country','language','producer','productioncompany','distributor')"/&gt;&lt;/xsl:call-template&gt;
+&lt;footer id="film-footer" class="border-t border-white/10 px-6 py-4 text-center text-[10px] uppercase tracking-[.25em] text-slate-400"&gt;Film metadata · DBpedia · Maestro&lt;/footer&gt;
+&lt;/article&gt;&lt;svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-film-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"&gt;&lt;svg:rect id="dbpedia-film-record-icon-1" x="2" y="2" width="20" height="20" rx="2.18"/&gt;&lt;svg:path id="dbpedia-film-record-icon-2" d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 7h5M17 17h5"/&gt;&lt;/svg:svg&gt;&lt;/section&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</rdf:value>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N4280096a4b904cf9ab8a611727d4fad1">
+    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
+    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
+    <sh:name>Label</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N7869c465bcf24fc1afc6a6ddf723791e">
+    <rdf:first rdf:resource="https://schema.org/image"/>
+    <rdf:rest rdf:nodeID="Nc1b2e5e3d5674cc58c804f5833560897"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Nffec2bb76a3445628a84df271ac31d60">
+    <sh:alternativePath rdf:nodeID="N01f768dd48d34a2191d8bd93aae6f179"/>
   </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-place">
     <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
@@ -471,53 +260,44 @@
     <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaPlaceRecordShape"/>
     <mui:xsltTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#DbpediaPlaceRecordTemplate"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b17">
-    <rdf:first rdf:resource="http://dbpedia.org/property/title"/>
-    <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+  <rdf:Description rdf:nodeID="Necde2b4bd48f4f6db4758bb670fc4f13">
+    <sh:alternativePath rdf:nodeID="Na3ea23c5691c4be69673adeaffff9015"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b6">
-    <rdf:first rdf:resource="https://schema.org/author"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b7"/>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaSpeciesRecordShape">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
+    <rdfs:label xml:lang="en">DBpedia Species validator</rdfs:label>
+    <sh:property rdf:nodeID="N69eb9dc349984c11969352f3192eb8ba"/>
+    <sh:property rdf:nodeID="N4280096a4b904cf9ab8a611727d4fad1"/>
+    <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Species"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b57">
-    <sh:name xml:lang="en">Publication date</sh:name>
-    <sh:path rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b58"/>
+  <rdf:Description rdf:nodeID="N43e34e1062f14a818fb4cb2cab78a6a6">
+    <sh:name xml:lang="en">Genre</sh:name>
+    <sh:path rdf:resource="http://dbpedia.org/ontology/genre"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b34">
-    <rdf:first rdf:resource="http://schema.org/numberOfPages"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b35"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b51">
-    <sh:name xml:lang="en">Publisher</sh:name>
-    <sh:path rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b52"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b75">
-    <sh:name>DBpedia Person field</sh:name>
+  <rdf:Description rdf:nodeID="N73481c76dbef480fb09f3286895bd9b6">
+    <sh:name>DBpedia Organisation field</sh:name>
     <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://dbpedia.org/ontology/birthDate"/>
+    <sh:path rdf:resource="http://dbpedia.org/ontology/foundingDate"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b37">
-    <sh:alternativePath rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b38"/>
+  <rdf:Description rdf:nodeID="N0cd19dfe0aec410cbc08123ae5310af8">
+    <rdf:first rdf:resource="https://schema.org/name"/>
+    <rdf:rest rdf:nodeID="Nc583566fbbd84fb28bea4b396299664d"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b12">
-    <rdf:first rdf:resource="http://schema.org/name"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b13"/>
+  <rdf:Description rdf:nodeID="N0b25e8394512428facffed9e5a2461ba">
+    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
+    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
+    <sh:name>Label</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b27">
-    <rdf:first rdf:resource="http://schema.org/image"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b28"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b18">
+  <rdf:Description rdf:nodeID="N5eee3b1676484411b7f65477ab76ffb4">
     <sh:name xml:lang="en">Language</sh:name>
-    <sh:path rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b19"/>
+    <sh:path rdf:nodeID="Naa4d094250574f529dae9dddb03a0157"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b23">
-    <sh:name xml:lang="en">Cover</sh:name>
-    <sh:path rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b24"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b47">
-    <rdf:first rdf:resource="https://schema.org/isbn"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b48"/>
+  <rdf:Description rdf:nodeID="N5cd9439a22e447bf8bf02d720c23aa16">
+    <sh:name xml:lang="en">Abstract</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://dbpedia.org/ontology/abstract"/>
   </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaPersonRecordTemplate">
     <rdfs:label xml:lang="en">Person profile card</rdfs:label>
@@ -564,23 +344,58 @@
 &lt;/xsl:for-each-group&gt;
 &lt;/dl&gt;&lt;/section&gt;&lt;/xsl:if&gt;&lt;footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground"&gt;DBpedia record · Maestro formatter&lt;/footer&gt;&lt;/article&gt;&lt;svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-person-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"&gt;&lt;svg:circle id="dbpedia-person-record-icon-1" cx="12" cy="8" r="5"/&gt;&lt;svg:path id="dbpedia-person-record-icon-2" d="M20 21a8 8 0 0 0-16 0"/&gt;&lt;/svg:svg&gt;&lt;/section&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</rdf:value>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b35">
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaWorkRecordShape">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
+    <rdfs:label xml:lang="en">DBpedia Work validator</rdfs:label>
+    <sh:property rdf:nodeID="N8f7fbac554d34b9bbd3f7ffbb077874b"/>
+    <sh:property rdf:nodeID="N22e3bc9bea8c4e3785f4a85cf1989002"/>
+    <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Work"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Nac4ab8b66da4408eba82a98abce6f877">
+    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
+    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
+    <sh:name>Label</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Ne3f55a5693d04aca92ed3c8c4c84cc82">
+    <rdf:first rdf:resource="http://schema.org/numberOfPages"/>
+    <rdf:rest rdf:nodeID="N101badefb9bc49bba894fc1c5c292d77"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-work">
+    <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
+    <rdfs:label xml:lang="en">DBpedia Work policy</rdfs:label>
+    <mui:forClass rdf:resource="http://dbpedia.org/ontology/Work"/>
+    <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaWorkRecordShape"/>
+    <mui:xsltTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#DbpediaWorkRecordTemplate"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N101badefb9bc49bba894fc1c5c292d77">
     <rdf:first rdf:resource="https://schema.org/numberOfPages"/>
     <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b22">
-    <rdf:first rdf:resource="https://schema.org/inLanguage"/>
-    <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+  <rdf:Description rdf:nodeID="Na9edbb79e56a4168b1f19488e31085b0">
+    <sh:name xml:lang="en">IMDb identifier</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://dbpedia.org/ontology/imdbId"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b10">
-    <sh:alternativePath rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b11"/>
+  <rdf:Description rdf:nodeID="N1916ed7dcf1346d79a8c9bbbc7ab0e01">
+    <sh:name>DBpedia Person field</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://dbpedia.org/ontology/birthDate"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b16">
-    <rdf:first rdf:resource="http://dbpedia.org/ontology/title"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b17"/>
+  <rdf:Description rdf:nodeID="N4d759ea5dafa473f8847958928371297">
+    <rdf:first rdf:resource="http://dbpedia.org/ontology/releaseDate"/>
+    <rdf:rest rdf:nodeID="Naf128058e97d4447af35585609d3b318"/>
   </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaWorkRecordTemplate">
-    <rdfs:label xml:lang="en">Creative work card</rdfs:label>
+  <rdf:Description rdf:nodeID="Ncdb2f347c1d7470aad9b2a0955518714">
+    <rdf:first rdf:resource="http://schema.org/isbn"/>
+    <rdf:rest rdf:nodeID="N5d11d3a5610640749ef7ffb22039a717"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N19a01bd444924b4c81fc0347a0fafbc9">
+    <sh:alternativePath rdf:nodeID="N203057d1b9074c32a1d37cab961e5c19"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaOrganisationRecordTemplate">
+    <rdfs:label xml:lang="en">Organisation profile card</rdfs:label>
     <rdf:value>&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/dbpedia#" version="3.0" exclude-result-prefixes="xs fct mctx m"&gt;
 &lt;xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/&gt;&lt;xsl:param name="recordUri"/&gt;
 &lt;xsl:function name="m:values" as="xs:string"&gt;
@@ -589,12 +404,12 @@
 &lt;xsl:variable name="rows" select="$ctx/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] = $predicate or tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()] = $localName]"/&gt;
 &lt;xsl:sequence select="string-join(distinct-values($rows/fct:column[3] ! normalize-space(string(.)))[. != ''], ', ')"/&gt;
 &lt;/xsl:function&gt;
-&lt;xsl:template match="/"&gt;&lt;section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" class="mx-auto w-full max-w-2xl p-1"&gt;&lt;article id="record-card" class="rounded-xl border bg-card text-card-foreground shadow-sm"&gt;&lt;header id="record-header" class="border-b bg-muted/40 px-5 py-4"&gt;&lt;p id="record-category" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground"&gt;DBpedia · Work&lt;/p&gt;&lt;h2 id="record-title" class="mt-1 break-words text-xl font-semibold"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label') != ''"&gt;&lt;xsl:value-of select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;xsl:value-of select="$recordUri"/&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;/h2&gt;&lt;/header&gt;&lt;dl id="record-fields" class="px-5 py-2"&gt;      &lt;xsl:variable name="v0" select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;
-      &lt;xsl:if test="$v0 != ''"&gt;&lt;div id="record-row-0" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-0" class="text-xs font-medium text-muted-foreground"&gt;Title&lt;/dt&gt;&lt;dd id="record-value-0" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v0"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v1" select="m:values(root(.), 'http://dbpedia.org/ontology/author')"/&gt;
-      &lt;xsl:if test="$v1 != ''"&gt;&lt;div id="record-row-1" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-1" class="text-xs font-medium text-muted-foreground"&gt;Creator&lt;/dt&gt;&lt;dd id="record-value-1" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v1"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v2" select="m:values(root(.), 'http://dbpedia.org/ontology/releaseDate')"/&gt;
-      &lt;xsl:if test="$v2 != ''"&gt;&lt;div id="record-row-2" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-2" class="text-xs font-medium text-muted-foreground"&gt;Release date&lt;/dt&gt;&lt;dd id="record-value-2" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v2"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v3" select="m:values(root(.), 'http://dbpedia.org/ontology/genre')"/&gt;
-      &lt;xsl:if test="$v3 != ''"&gt;&lt;div id="record-row-3" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-3" class="text-xs font-medium text-muted-foreground"&gt;Genre&lt;/dt&gt;&lt;dd id="record-value-3" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v3"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v4" select="m:values(root(.), 'http://dbpedia.org/ontology/language')"/&gt;
-      &lt;xsl:if test="$v4 != ''"&gt;&lt;div id="record-row-4" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-4" class="text-xs font-medium text-muted-foreground"&gt;Language&lt;/dt&gt;&lt;dd id="record-value-4" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v4"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;&lt;/dl&gt;&lt;xsl:variable name="allPropertyRows" select="root(.)/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] and fct:column[3] and not(fct:column[2] = ('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', 'http://www.w3.org/2000/01/rdf-schema#label', 'http://purl.org/dc/terms/subject', 'http://dbpedia.org/ontology/abstract', 'http://xmlns.com/foaf/0.1/depiction', 'http://dbpedia.org/ontology/thumbnail'))]"/&gt;
+&lt;xsl:template match="/"&gt;&lt;section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" class="mx-auto w-full max-w-2xl p-1"&gt;&lt;article id="record-card" class="rounded-xl border bg-card text-card-foreground shadow-sm"&gt;&lt;header id="record-header" class="border-b bg-muted/40 px-5 py-4"&gt;&lt;p id="record-category" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground"&gt;DBpedia · Organisation&lt;/p&gt;&lt;h2 id="record-title" class="mt-1 break-words text-xl font-semibold"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label') != ''"&gt;&lt;xsl:value-of select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;xsl:value-of select="$recordUri"/&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;/h2&gt;&lt;/header&gt;&lt;dl id="record-fields" class="px-5 py-2"&gt;      &lt;xsl:variable name="v0" select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;
+      &lt;xsl:if test="$v0 != ''"&gt;&lt;div id="record-row-0" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-0" class="text-xs font-medium text-muted-foreground"&gt;Name&lt;/dt&gt;&lt;dd id="record-value-0" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v0"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v1" select="m:values(root(.), 'http://dbpedia.org/ontology/foundingDate')"/&gt;
+      &lt;xsl:if test="$v1 != ''"&gt;&lt;div id="record-row-1" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-1" class="text-xs font-medium text-muted-foreground"&gt;Founded&lt;/dt&gt;&lt;dd id="record-value-1" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v1"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v2" select="m:values(root(.), 'http://dbpedia.org/ontology/headquarter')"/&gt;
+      &lt;xsl:if test="$v2 != ''"&gt;&lt;div id="record-row-2" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-2" class="text-xs font-medium text-muted-foreground"&gt;Headquarters&lt;/dt&gt;&lt;dd id="record-value-2" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v2"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v3" select="m:values(root(.), 'http://dbpedia.org/ontology/location')"/&gt;
+      &lt;xsl:if test="$v3 != ''"&gt;&lt;div id="record-row-3" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-3" class="text-xs font-medium text-muted-foreground"&gt;Location&lt;/dt&gt;&lt;dd id="record-value-3" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v3"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v4" select="m:values(root(.), 'http://dbpedia.org/ontology/industry')"/&gt;
+      &lt;xsl:if test="$v4 != ''"&gt;&lt;div id="record-row-4" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-4" class="text-xs font-medium text-muted-foreground"&gt;Industry&lt;/dt&gt;&lt;dd id="record-value-4" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v4"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;&lt;/dl&gt;&lt;xsl:variable name="allPropertyRows" select="root(.)/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] and fct:column[3] and not(fct:column[2] = ('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', 'http://www.w3.org/2000/01/rdf-schema#label', 'http://purl.org/dc/terms/subject', 'http://dbpedia.org/ontology/abstract', 'http://xmlns.com/foaf/0.1/depiction', 'http://dbpedia.org/ontology/thumbnail'))]"/&gt;
 &lt;xsl:if test="exists($allPropertyRows)"&gt;
 &lt;section id="record-additional-section" class="border-t px-5 py-4"&gt;
 &lt;h3 id="record-additional-title" class="mb-2 text-sm font-semibold"&gt;Additional details&lt;/h3&gt;
@@ -612,52 +427,221 @@
 &lt;/xsl:for-each&gt;
 &lt;/dd&gt;&lt;/div&gt;
 &lt;/xsl:for-each-group&gt;
-&lt;/dl&gt;&lt;/section&gt;&lt;/xsl:if&gt;&lt;footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground"&gt;DBpedia record · Maestro formatter&lt;/footer&gt;&lt;/article&gt;&lt;svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-work-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"&gt;&lt;svg:path id="dbpedia-work-record-icon-1" d="M12 7v14"/&gt;&lt;svg:path id="dbpedia-work-record-icon-2" d="M3 18V5a2 2 0 0 1 2-2h3a4 4 0 0 1 4 4 4 4 0 0 1 4-4h3a2 2 0 0 1 2 2v13a1 1 0 0 1-1 1h-4a4 4 0 0 0-4 2 4 4 0 0 0-4-2H4a1 1 0 0 1-1-1Z"/&gt;&lt;/svg:svg&gt;&lt;/section&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</rdf:value>
+&lt;/dl&gt;&lt;/section&gt;&lt;/xsl:if&gt;&lt;footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground"&gt;DBpedia record · Maestro formatter&lt;/footer&gt;&lt;/article&gt;&lt;svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-organisation-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"&gt;&lt;svg:rect id="dbpedia-organisation-record-icon-1" x="4" y="2" width="16" height="20" rx="2"/&gt;&lt;svg:path id="dbpedia-organisation-record-icon-2" d="M9 22v-4h6v4M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M16 14h.01M8 10h.01M8 14h.01"/&gt;&lt;/svg:svg&gt;&lt;/section&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</rdf:value>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b46">
-    <rdf:first rdf:resource="http://schema.org/isbn"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b47"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b19">
-    <sh:alternativePath rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b20"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b38">
-    <rdf:first rdf:resource="http://dbpedia.org/ontology/abstract"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b39"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b43">
-    <sh:alternativePath rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b44"/>
-  </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b66">
-    <sh:name xml:lang="en">IMDb ID</sh:name>
+  <rdf:Description rdf:nodeID="Ne59bb6e520694a729e149549f0374eec">
+    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
+    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
+    <sh:name>Label</sh:name>
     <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
-    <sh:path rdf:resource="http://dbpedia.org/property/imdbId"/>
+    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b52">
-    <sh:alternativePath rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b53"/>
+  <rdf:Description rdf:nodeID="Na587c695c31c485abeb924031b574cfa">
+    <sh:name xml:lang="en">ISBN</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:nodeID="Necde2b4bd48f4f6db4758bb670fc4f13"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b8">
+  <rdf:Description rdf:nodeID="N3ae5c109e612421ea6a2f56a3edff996">
+    <rdf:first rdf:resource="https://schema.org/headline"/>
+    <rdf:rest rdf:nodeID="N3669648ed65c495ea3345d93b7c68489"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaPlaceRecordTemplate">
+    <rdfs:label xml:lang="en">Place profile card</rdfs:label>
+    <rdf:value>&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/dbpedia#" version="3.0" exclude-result-prefixes="xs fct mctx m"&gt;
+&lt;xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/&gt;&lt;xsl:param name="recordUri"/&gt;
+&lt;xsl:function name="m:values" as="xs:string"&gt;
+&lt;xsl:param name="ctx" as="node()"/&gt;&lt;xsl:param name="predicate" as="xs:string"/&gt;
+&lt;xsl:variable name="localName" select="tokenize($predicate, '[/#]')[last()]"/&gt;
+&lt;xsl:variable name="rows" select="$ctx/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] = $predicate or tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()] = $localName]"/&gt;
+&lt;xsl:sequence select="string-join(distinct-values($rows/fct:column[3] ! normalize-space(string(.)))[. != ''], ', ')"/&gt;
+&lt;/xsl:function&gt;
+&lt;xsl:template match="/"&gt;&lt;section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" class="mx-auto w-full max-w-2xl p-1"&gt;&lt;article id="record-card" class="rounded-xl border bg-card text-card-foreground shadow-sm"&gt;&lt;header id="record-header" class="border-b bg-muted/40 px-5 py-4"&gt;&lt;p id="record-category" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground"&gt;DBpedia · Place&lt;/p&gt;&lt;h2 id="record-title" class="mt-1 break-words text-xl font-semibold"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label') != ''"&gt;&lt;xsl:value-of select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;xsl:value-of select="$recordUri"/&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;/h2&gt;&lt;/header&gt;&lt;dl id="record-fields" class="px-5 py-2"&gt;      &lt;xsl:variable name="v0" select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/&gt;
+      &lt;xsl:if test="$v0 != ''"&gt;&lt;div id="record-row-0" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-0" class="text-xs font-medium text-muted-foreground"&gt;Name&lt;/dt&gt;&lt;dd id="record-value-0" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v0"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v1" select="m:values(root(.), 'http://dbpedia.org/ontology/country')"/&gt;
+      &lt;xsl:if test="$v1 != ''"&gt;&lt;div id="record-row-1" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-1" class="text-xs font-medium text-muted-foreground"&gt;Country&lt;/dt&gt;&lt;dd id="record-value-1" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v1"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v2" select="m:values(root(.), 'http://dbpedia.org/ontology/region')"/&gt;
+      &lt;xsl:if test="$v2 != ''"&gt;&lt;div id="record-row-2" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-2" class="text-xs font-medium text-muted-foreground"&gt;Region&lt;/dt&gt;&lt;dd id="record-value-2" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v2"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v3" select="m:values(root(.), 'http://dbpedia.org/ontology/areaTotal')"/&gt;
+      &lt;xsl:if test="$v3 != ''"&gt;&lt;div id="record-row-3" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-3" class="text-xs font-medium text-muted-foreground"&gt;Area&lt;/dt&gt;&lt;dd id="record-value-3" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v3"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v4" select="m:values(root(.), 'http://www.w3.org/2003/01/geo/wgs84_pos#lat')"/&gt;
+      &lt;xsl:if test="$v4 != ''"&gt;&lt;div id="record-row-4" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-4" class="text-xs font-medium text-muted-foreground"&gt;Latitude&lt;/dt&gt;&lt;dd id="record-value-4" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v4"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;      &lt;xsl:variable name="v5" select="m:values(root(.), 'http://www.w3.org/2003/01/geo/wgs84_pos#long')"/&gt;
+      &lt;xsl:if test="$v5 != ''"&gt;&lt;div id="record-row-5" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"&gt;&lt;dt id="record-key-5" class="text-xs font-medium text-muted-foreground"&gt;Longitude&lt;/dt&gt;&lt;dd id="record-value-5" class="break-words text-sm"&gt;&lt;xsl:value-of select="$v5"/&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;&lt;/dl&gt;&lt;xsl:variable name="allPropertyRows" select="root(.)/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] and fct:column[3] and not(fct:column[2] = ('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', 'http://www.w3.org/2000/01/rdf-schema#label', 'http://purl.org/dc/terms/subject', 'http://dbpedia.org/ontology/abstract', 'http://xmlns.com/foaf/0.1/depiction', 'http://dbpedia.org/ontology/thumbnail'))]"/&gt;
+&lt;xsl:if test="exists($allPropertyRows)"&gt;
+&lt;section id="record-additional-section" class="border-t px-5 py-4"&gt;
+&lt;h3 id="record-additional-title" class="mb-2 text-sm font-semibold"&gt;Additional details&lt;/h3&gt;
+&lt;dl id="record-additional-list" class="divide-y"&gt;
+&lt;xsl:for-each-group select="$allPropertyRows" group-by="normalize-space(string(fct:column[2]))"&gt;
+&lt;xsl:variable name="predicate" select="current-grouping-key()"/&gt;&lt;xsl:variable name="groupIndex" select="position()"/&gt;
+&lt;div id="record-extra-{position()}" class="grid gap-1 py-2 sm:grid-cols-[9rem_1fr]"&gt;
+&lt;dt id="record-extra-key-{position()}" class="break-all text-xs font-medium text-muted-foreground" title="{$predicate}"&gt;&lt;xsl:value-of select="tokenize($predicate, '[/#]')[last()]"/&gt;&lt;/dt&gt;
+&lt;dd id="record-extra-value-{position()}" class="break-words text-sm"&gt;
+&lt;xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']"&gt;
+&lt;xsl:choose&gt;
+&lt;xsl:when test="matches(., '^https?://')"&gt;&lt;a id="record-extra-uri-{position()}-{$groupIndex}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"&gt;&lt;xsl:value-of select="tokenize(., '[/#]')[last()]"/&gt;&lt;/a&gt;&lt;/xsl:when&gt;
+&lt;xsl:otherwise&gt;&lt;span id="record-extra-text-{position()}-{$groupIndex}"&gt;&lt;xsl:value-of select="."/&gt;&lt;/span&gt;&lt;/xsl:otherwise&gt;
+&lt;/xsl:choose&gt;&lt;xsl:if test="position() ne last()"&gt;&lt;span id="record-extra-separator-{position()}-{$groupIndex}"&gt; · &lt;/span&gt;&lt;/xsl:if&gt;
+&lt;/xsl:for-each&gt;
+&lt;/dd&gt;&lt;/div&gt;
+&lt;/xsl:for-each-group&gt;
+&lt;/dl&gt;&lt;/section&gt;&lt;/xsl:if&gt;&lt;footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground"&gt;DBpedia record · Maestro formatter&lt;/footer&gt;&lt;/article&gt;&lt;svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-place-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"&gt;&lt;svg:path id="dbpedia-place-record-icon-1" d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/&gt;&lt;svg:circle id="dbpedia-place-record-icon-2" cx="12" cy="10" r="2"/&gt;&lt;/svg:svg&gt;&lt;/section&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</rdf:value>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N13620bb160f54e449c58207c51e4f122">
+    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
+    <sh:name xml:lang="en">Subject categories</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#IRI"/>
+    <sh:path rdf:resource="http://purl.org/dc/terms/subject"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Ndf39a730d6dc48b1bb473fd6187368ab">
+    <rdf:first rdf:resource="https://schema.org/inLanguage"/>
+    <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N569ff9c46c33467d9f429eda16c2b03a">
+    <rdf:first rdf:resource="http://dbpedia.org/ontology/thumbnail"/>
+    <rdf:rest rdf:nodeID="Nf8314e2a67ff4bb8bef7c7fbe3132e9c"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N266c0250579542f6b7c19dddd85afd81">
+    <sh:name xml:lang="en">Description</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:nodeID="N9eac758a5a164b43bd72c5b07661fde6"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N5d11d3a5610640749ef7ffb22039a717">
+    <rdf:first rdf:resource="https://schema.org/isbn"/>
+    <rdf:rest rdf:nodeID="N816b54263b484c4a90c71d4fed4fee21"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N60928b68f00f4da485de36842a81e1e8">
     <rdf:first rdf:resource="https://schema.org/creator"/>
     <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b55">
-    <rdf:first rdf:resource="http://schema.org/publisher"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b56"/>
+  <rdf:Description rdf:nodeID="Na9308713222c4741bc4ec883505cedc9">
+    <rdf:first rdf:resource="http://dbpedia.org/property/author"/>
+    <rdf:rest rdf:nodeID="Na22e542fb62343ebb632222f352f0129"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b56">
+  <rdf:Description rdf:nodeID="N443afa8b01214a73811cfa2529cab2dd">
+    <rdf:first rdf:resource="http://purl.org/ontology/bibo/isbn13"/>
+    <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-person">
+    <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
+    <rdfs:label xml:lang="en">DBpedia Person policy</rdfs:label>
+    <mui:forClass rdf:resource="http://dbpedia.org/ontology/Person"/>
+    <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaPersonRecordShape"/>
+    <mui:xsltTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#DbpediaPersonRecordTemplate"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Nc583566fbbd84fb28bea4b396299664d">
+    <rdf:first rdf:resource="http://schema.org/headline"/>
+    <rdf:rest rdf:nodeID="N3ae5c109e612421ea6a2f56a3edff996"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N6001a31f86a24a15b9068b10f2279d3d">
+    <sh:name xml:lang="en">Release date</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://dbpedia.org/ontology/releaseDate"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Nb872f352c0b94734a0d28de7478c8575">
+    <sh:alternativePath rdf:nodeID="Nff983a74467342d1882f00c2693165d9"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Naf128058e97d4447af35585609d3b318">
+    <rdf:first rdf:resource="http://dbpedia.org/property/published"/>
+    <rdf:rest rdf:nodeID="Nd8c1fe550314469b92c72ab3e2f4a2e1"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N2bc43041547b43e3befa8752d2d5c050">
+    <rdf:first rdf:resource="http://dbpedia.org/property/pages"/>
+    <rdf:rest rdf:nodeID="Ne3f55a5693d04aca92ed3c8c4c84cc82"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N7895c4bea6d44e12a7f7b6464299b734">
+    <rdf:first rdf:resource="http://schema.org/inLanguage"/>
+    <rdf:rest rdf:nodeID="Ndf39a730d6dc48b1bb473fd6187368ab"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Nd81edf4bab714b6cb14807a833b02865">
+    <rdf:first rdf:resource="http://dbpedia.org/property/title"/>
+    <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Nd213c1f0aa3548998a25738850c9ade2">
+    <rdf:first rdf:resource="http://dbpedia.org/ontology/publicationDate"/>
+    <rdf:rest rdf:nodeID="N4d759ea5dafa473f8847958928371297"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N0f72b56abdd54ab9806bd3cb3648d531">
+    <rdf:first rdf:resource="http://schema.org/publisher"/>
+    <rdf:rest rdf:nodeID="Naafd3b25c2a44a9d881af38844642496"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N3082eb7229354f10b5b12903c5c58626">
+    <sh:name xml:lang="en">Pages</sh:name>
+    <sh:path rdf:nodeID="N9aa535aebd8b4941a06e6042e878e600"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N9aa535aebd8b4941a06e6042e878e600">
+    <sh:alternativePath rdf:nodeID="N2bc43041547b43e3befa8752d2d5c050"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N042cf40c099a4c83978e7d22913d6f2e">
+    <rdf:first rdf:resource="http://dbpedia.org/property/publisher"/>
+    <rdf:rest rdf:nodeID="N0f72b56abdd54ab9806bd3cb3648d531"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N7877904cd2524b81ab218209802f1c01">
+    <rdf:first rdf:resource="http://schema.org/creator"/>
+    <rdf:rest rdf:nodeID="N60928b68f00f4da485de36842a81e1e8"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Naa4d094250574f529dae9dddb03a0157">
+    <sh:alternativePath rdf:nodeID="Naf3ccc3971bf499c9619c3cba85aa667"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-organisation">
+    <rdf:type rdf:resource="gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy"/>
+    <rdfs:label xml:lang="en">DBpedia Organisation policy</rdfs:label>
+    <mui:forClass rdf:resource="http://dbpedia.org/ontology/Organisation"/>
+    <mui:recordShape rdf:resource="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaOrganisationRecordShape"/>
+    <mui:xsltTemplate rdf:resource="gttp://ggg.maestro.ecosys/shacl/template#DbpediaOrganisationRecordTemplate"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N658b1f6701364ba09662455f2dbc0bb6">
+    <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
+    <sh:minLength rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minLength>
+    <sh:name xml:lang="en">Label</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://www.w3.org/2000/01/rdf-schema#label"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N6cc6fec5f3f24e8b8d513a7a0505f942">
+    <rdf:first rdf:resource="http://www.w3.org/2000/01/rdf-schema#comment"/>
+    <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N3669648ed65c495ea3345d93b7c68489">
+    <rdf:first rdf:resource="http://dbpedia.org/ontology/title"/>
+    <rdf:rest rdf:nodeID="Nd81edf4bab714b6cb14807a833b02865"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Ne3e8e543b5e24672a551b175e5870d37">
+    <rdf:first rdf:resource="http://schema.org/name"/>
+    <rdf:rest rdf:nodeID="N0cd19dfe0aec410cbc08123ae5310af8"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N816b54263b484c4a90c71d4fed4fee21">
+    <rdf:first rdf:resource="http://purl.org/ontology/bibo/isbn"/>
+    <rdf:rest rdf:nodeID="Na1370a40a0b642cabac20c46de58a5d8"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Na22e542fb62343ebb632222f352f0129">
+    <rdf:first rdf:resource="http://schema.org/author"/>
+    <rdf:rest rdf:nodeID="N382bc9e3cf58455f80e16d968655329c"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Na6b7b0004ecf45f38bec5426853c6aa1">
+    <rdf:first rdf:resource="https://schema.org/datePublished"/>
+    <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Naafd3b25c2a44a9d881af38844642496">
     <rdf:first rdf:resource="https://schema.org/publisher"/>
     <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b32">
-    <sh:alternativePath rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b33"/>
+  <rdf:Description rdf:nodeID="Naf3ccc3971bf499c9619c3cba85aa667">
+    <rdf:first rdf:resource="http://dbpedia.org/ontology/language"/>
+    <rdf:rest rdf:nodeID="N7895c4bea6d44e12a7f7b6464299b734"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b59">
-    <rdf:first rdf:resource="http://dbpedia.org/ontology/publicationDate"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b60"/>
+  <rdf:Description rdf:nodeID="Ne4af1e488a484555bba397dd0d588949">
+    <sh:name>DBpedia Place field</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://www.w3.org/2003/01/geo/wgs84_pos#lat"/>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b39">
-    <rdf:first rdf:resource="http://schema.org/description"/>
-    <rdf:rest rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b40"/>
+  <rdf:Description rdf:nodeID="N01f768dd48d34a2191d8bd93aae6f179">
+    <rdf:first rdf:resource="http://dbpedia.org/ontology/author"/>
+    <rdf:rest rdf:nodeID="Na9308713222c4741bc4ec883505cedc9"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N2769d3a877da479ebcb5cc68b7f6f81c">
+    <rdf:first rdf:resource="http://dbpedia.org/property/isbn"/>
+    <rdf:rest rdf:nodeID="Ncdb2f347c1d7470aad9b2a0955518714"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/shape#DbpediaOrganisationRecordShape">
+    <rdf:type rdf:resource="http://www.w3.org/ns/shacl#NodeShape"/>
+    <rdfs:label xml:lang="en">DBpedia Organisation validator</rdfs:label>
+    <sh:property rdf:nodeID="N73481c76dbef480fb09f3286895bd9b6"/>
+    <sh:property rdf:nodeID="N0b25e8394512428facffed9e5a2461ba"/>
+    <sh:targetClass rdf:resource="http://dbpedia.org/ontology/Organisation"/>
   </rdf:Description>
   <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaBookRecordTemplate">
     <rdfs:label xml:lang="en">Book literary card</rdfs:label>
@@ -739,7 +723,7 @@
 &lt;xsl:variable name="starIndex" select="."/&gt;
 &lt;xsl:variable name="goldWidth" select="if ($stars ge $starIndex) then 24 else if ($stars ge $starIndex - 0.5) then 12 else 0"/&gt;
 &lt;svg xmlns="http://www.w3.org/2000/svg" id="book-rating-star-{$ratingIndex}-{$starIndex}" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" class="shrink-0"&gt;
-&lt;defs id="book-rating-defs-{$ratingIndex}-{$starIndex}"&gt;&lt;clipPath id="book-rating-star-clip-{$ratingIndex}-{$starIndex}"&gt;&lt;rect id="book-rating-star-cliprect-{$ratingIndex}-{$starIndex}" x="0" y="0" width="{$goldWidth}" height="24"/&gt;&lt;/clipPath&gt;&lt;/defs&gt;
+&lt;defs&gt;&lt;clipPath id="book-rating-star-clip-{$ratingIndex}-{$starIndex}"&gt;&lt;rect id="book-rating-star-cliprect-{$ratingIndex}-{$starIndex}" x="0" y="0" width="{$goldWidth}" height="24"/&gt;&lt;/clipPath&gt;&lt;/defs&gt;
 &lt;path id="book-rating-star-muted-{$ratingIndex}-{$starIndex}" d="m12 2 3.09 6.26 6.91 1-5 4.87 1.18 6.89L12 17.77l-6.18 3.25L7 14.13l-5-4.87 6.91-1L12 2Z" fill="currentColor" class="text-stone-300 dark:text-stone-600"/&gt;
 &lt;path id="book-rating-star-gold-{$ratingIndex}-{$starIndex}" d="m12 2 3.09 6.26 6.91 1-5 4.87 1.18 6.89L12 17.77l-6.18 3.25L7 14.13l-5-4.87 6.91-1L12 2Z" fill="#eab308" clip-path="url(#book-rating-star-clip-{$ratingIndex}-{$starIndex})"/&gt;
 &lt;/svg&gt;
@@ -784,7 +768,7 @@
 &lt;td id="book-review-stars-cell-{$index}" class="px-4 py-4"&gt;
 &lt;xsl:choose&gt;&lt;xsl:when test="$ratingValue castable as xs:decimal"&gt;&lt;div id="book-review-stars-{$index}" class="flex items-center gap-0.5" role="img" aria-label="{concat($ratingValue, ' of ', $maximum)}"&gt;
 &lt;xsl:for-each select="1 to $slots"&gt;&lt;xsl:variable name="star" select="."/&gt;&lt;xsl:variable name="width" select="if ($filled ge $star) then 24 else if ($filled ge $star - 0.5) then 12 else 0"/&gt;
-&lt;svg xmlns="http://www.w3.org/2000/svg" id="book-review-star-{$index}-{$star}" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"&gt;&lt;defs id="book-review-defs-{$index}-{$star}"&gt;&lt;clipPath id="book-review-star-clip-{$index}-{$star}"&gt;&lt;rect id="book-review-star-clip-rect-{$index}-{$star}" x="0" y="0" width="{$width}" height="24"/&gt;&lt;/clipPath&gt;&lt;/defs&gt;&lt;path id="book-review-star-muted-{$index}-{$star}" d="m12 2 3.09 6.26 6.91 1-5 4.87 1.18 6.89L12 17.77l-6.18 3.25L7 14.13l-5-4.87 6.91-1L12 2Z" fill="#a8a29e"/&gt;&lt;path id="book-review-star-gold-{$index}-{$star}" d="m12 2 3.09 6.26 6.91 1-5 4.87 1.18 6.89L12 17.77l-6.18 3.25L7 14.13l-5-4.87 6.91-1L12 2Z" fill="#eab308" clip-path="url(#book-review-star-clip-{$index}-{$star})"/&gt;&lt;/svg&gt;
+&lt;svg xmlns="http://www.w3.org/2000/svg" id="book-review-star-{$index}-{$star}" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"&gt;&lt;defs&gt;&lt;clipPath id="book-review-star-clip-{$index}-{$star}"&gt;&lt;rect id="book-review-star-clip-rect-{$index}-{$star}" x="0" y="0" width="{$width}" height="24"/&gt;&lt;/clipPath&gt;&lt;/defs&gt;&lt;path id="book-review-star-muted-{$index}-{$star}" d="m12 2 3.09 6.26 6.91 1-5 4.87 1.18 6.89L12 17.77l-6.18 3.25L7 14.13l-5-4.87 6.91-1L12 2Z" fill="#a8a29e"/&gt;&lt;path id="book-review-star-gold-{$index}-{$star}" d="m12 2 3.09 6.26 6.91 1-5 4.87 1.18 6.89L12 17.77l-6.18 3.25L7 14.13l-5-4.87 6.91-1L12 2Z" fill="#eab308" clip-path="url(#book-review-star-clip-{$index}-{$star})"/&gt;&lt;/svg&gt;
 &lt;/xsl:for-each&gt;&lt;/div&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;span id="book-review-no-rating-{$index}" class="text-stone-500"&gt;Not rated&lt;/span&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;
 &lt;/td&gt;
 &lt;td id="book-review-body-{$index}" class="max-w-lg whitespace-pre-line break-words px-4 py-4 leading-6"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="$body ne ''"&gt;&lt;xsl:value-of select="$body"/&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;a id="book-review-body-link-{$index}" href="#" data-maestro-record-uri="{$reviewUri}" class="text-primary hover:underline"&gt;Open review&lt;/a&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;/td&gt;
@@ -842,75 +826,59 @@
 &lt;/xsl:for-each-group&gt;
 &lt;/dl&gt;&lt;/section&gt;&lt;/xsl:if&gt;&lt;footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground"&gt;DBpedia record · Maestro formatter&lt;/footer&gt;&lt;/article&gt;&lt;svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-species-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"&gt;&lt;svg:path id="dbpedia-species-record-icon-1" d="M11 20A7 7 0 0 1 4 13C4 5 16 3 21 3c0 5-2 17-10 17Z"/&gt;&lt;svg:path id="dbpedia-species-record-icon-2" d="M3 21c0-6 6-12 12-12"/&gt;&lt;/svg:svg&gt;&lt;/section&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</rdf:value>
   </rdf:Description>
-  <rdf:Description rdf:nodeID="n244e658cbb2b469f8f0357046671bf74b41">
-    <rdf:first rdf:resource="http://www.w3.org/2000/01/rdf-schema#comment"/>
+  <rdf:Description rdf:nodeID="N1866a0e1444845d885ab317ed4c989bb">
+    <sh:name xml:lang="en">Publisher</sh:name>
+    <sh:path rdf:nodeID="N19a01bd444924b4c81fc0347a0fafbc9"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N287dd61fac114b71b9fcab462277eb16">
+    <sh:name xml:lang="en">Cover</sh:name>
+    <sh:path rdf:nodeID="N2205884e47824322bc4c0eff07f68de8"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N1dfc6148201c497fa1c279f36c27aa65">
+    <sh:alternativePath rdf:nodeID="Nd213c1f0aa3548998a25738850c9ade2"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N70b0377d4fc04226bd5a27f96f939cea">
+    <rdf:first rdf:resource="http://schema.org/description"/>
+    <rdf:rest rdf:nodeID="Na84e96f291a74b368a7822ac0ebb4b72"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Na5cfaa5f3f7e435a99588aff2b20f4b9">
+    <sh:name xml:lang="en">Director</sh:name>
+    <sh:path rdf:resource="http://dbpedia.org/ontology/director"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Na1370a40a0b642cabac20c46de58a5d8">
+    <rdf:first rdf:resource="http://purl.org/ontology/bibo/isbn10"/>
+    <rdf:rest rdf:nodeID="N443afa8b01214a73811cfa2529cab2dd"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Ne205d5ed6c89474da41447985f7bb10d">
+    <rdf:first rdf:resource="https://schema.org/thumbnailUrl"/>
     <rdf:rest rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
   </rdf:Description>
-  <rdf:Description rdf:about="gttp://ggg.maestro.ecosys/shacl/template#DbpediaFilmRecordTemplate">
-    <rdfs:label xml:lang="en">Film cinematic card</rdfs:label>
-    <rdf:value>&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/commerce#" version="3.0" exclude-result-prefixes="xs fct mctx m"&gt;
-&lt;xsl:output method="html" encoding="UTF-8" omit-xml-declaration="yes"/&gt;
-&lt;xsl:param name="recordUri" as="xs:string" select="''"/&gt;
-&lt;xsl:variable name="rows" select="/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row"/&gt;
-&lt;xsl:function name="m:values" as="xs:string*"&gt;&lt;xsl:param name="names" as="xs:string*"/&gt;
-&lt;xsl:sequence select="distinct-values($rows[lower-case(tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()]) = $names]/fct:column[3] ! normalize-space(string(.)))[. ne '']"/&gt;
-&lt;/xsl:function&gt;
-&lt;xsl:function name="m:first" as="xs:string"&gt;&lt;xsl:param name="names" as="xs:string*"/&gt;&lt;xsl:sequence select="string((m:values($names))[1])"/&gt;&lt;/xsl:function&gt;
-&lt;xsl:function name="m:pretty" as="xs:string"&gt;&lt;xsl:param name="uri" as="xs:string"/&gt;&lt;xsl:sequence select="replace(tokenize($uri, '[/#]')[last()], '_', ' ')"/&gt;&lt;/xsl:function&gt;
-&lt;xsl:function name="m:is-uri" as="xs:boolean"&gt;&lt;xsl:param name="value" as="xs:string"/&gt;&lt;xsl:sequence select="matches($value, '^https?://')"/&gt;&lt;/xsl:function&gt;
-&lt;xsl:template name="m:field"&gt;&lt;xsl:param name="key" as="xs:string"/&gt;&lt;xsl:param name="names" as="xs:string*"/&gt;&lt;xsl:param name="n" as="xs:string"/&gt;
-&lt;xsl:variable name="values" select="m:values($names)"/&gt;
-&lt;xsl:if test="exists($values)"&gt;&lt;div id="field-{$n}" class="flex flex-col gap-1 border-b border-border/60 py-3 sm:grid sm:grid-cols-[7.5rem_1fr] sm:gap-4"&gt;&lt;dt id="field-label-{$n}" class="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground"&gt;&lt;xsl:value-of select="$key"/&gt;&lt;/dt&gt;&lt;dd id="field-data-{$n}" class="min-w-0 text-sm leading-relaxed text-foreground"&gt;&lt;xsl:for-each select="$values"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="m:is-uri(.)"&gt;&lt;a id="field-link-{$n}-{position()}" class="text-primary underline-offset-4 hover:underline" data-maestro-record-uri="{.}" href="#"&gt;&lt;xsl:value-of select="m:pretty(.)"/&gt;&lt;/a&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;span id="field-text-{$n}-{position()}"&gt;&lt;xsl:value-of select="."/&gt;&lt;/span&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;xsl:if test="position() ne last()"&gt;&lt;span id="field-separator-{$n}-{position()}" class="text-muted-foreground"&gt; · &lt;/span&gt;&lt;/xsl:if&gt;&lt;/xsl:for-each&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:if&gt;
-&lt;/xsl:template&gt;
-&lt;xsl:template name="m:extras"&gt;&lt;xsl:param name="excluded" as="xs:string*"/&gt;
-&lt;xsl:variable name="other" select="$rows[fct:column[2] and fct:column[3] and not(lower-case(tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()]) = $excluded)]"/&gt;
-&lt;xsl:if test="exists($other)"&gt;&lt;section id="record-additional-section" class="border-t border-border/70 px-6 py-5"&gt;&lt;h3 id="record-additional-title" class="mb-3 text-xs font-semibold uppercase tracking-[.18em] text-muted-foreground"&gt;Additional details&lt;/h3&gt;&lt;dl id="record-additional-list" class="divide-y divide-border/50"&gt;&lt;xsl:for-each-group select="$other" group-by="normalize-space(string(fct:column[2]))"&gt;&lt;xsl:variable name="idx" select="position()"/&gt;&lt;xsl:variable name="prop" select="current-grouping-key()"/&gt;&lt;div id="record-extra-{$idx}" class="grid gap-1 py-2 text-sm sm:grid-cols-[8rem_1fr]"&gt;&lt;dt id="record-extra-label-{$idx}" class="text-xs font-medium text-muted-foreground" title="{$prop}"&gt;&lt;xsl:value-of select="m:pretty($prop)"/&gt;&lt;/dt&gt;&lt;dd id="record-extra-values-{$idx}" class="min-w-0 break-words"&gt;&lt;xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. ne '']"&gt;&lt;xsl:choose&gt;&lt;xsl:when test="m:is-uri(.)"&gt;&lt;a id="record-extra-link-{$idx}-{position()}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"&gt;&lt;xsl:value-of select="m:pretty(.)"/&gt;&lt;/a&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;span id="record-extra-value-{$idx}-{position()}"&gt;&lt;xsl:value-of select="."/&gt;&lt;/span&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;xsl:if test="position() ne last()"&gt;&lt;span id="record-extra-sep-{$idx}-{position()}"&gt; · &lt;/span&gt;&lt;/xsl:if&gt;&lt;/xsl:for-each&gt;&lt;/dd&gt;&lt;/div&gt;&lt;/xsl:for-each-group&gt;&lt;/dl&gt;&lt;/section&gt;&lt;/xsl:if&gt;
-&lt;/xsl:template&gt;
-&lt;xsl:template match="/"&gt;
-&lt;xsl:variable name="title" select="(m:values(('label','title','name'))[not(m:is-uri(.))], m:pretty($recordUri))[1]"/&gt;
-&lt;xsl:variable name="summary" select="m:first(('abstract','description','plot','synopsis'))"/&gt;
-&lt;xsl:variable name="poster" select="(m:values(('thumbnail','depiction','poster','image','cover'))[m:is-uri(.)])[1]"/&gt;
-&lt;xsl:variable name="date" select="m:first(('releasedate','publicationdate','datepublished','year'))"/&gt;
-&lt;xsl:variable name="imdbRaw" select="m:values(('imdbid','imdb'))"/&gt;
-&lt;xsl:variable name="imdb" select="(for $v in $imdbRaw return if (matches($v, 'tt[0-9]+')) then replace($v, '^.*?(tt[0-9]+).*$', '$1') else '')[. ne ''][1]"/&gt;
-&lt;xsl:variable name="lookup" select="concat($title, ' film ', substring($date,1,4))"/&gt;
-&lt;section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" class="mx-auto w-full max-w-5xl p-1"&gt;
-&lt;article id="record-card" class="overflow-hidden rounded-2xl border border-slate-700 bg-[#0b101b] text-white shadow-2xl"&gt;
-&lt;div id="film-hero" class="relative overflow-hidden bg-gradient-to-br from-[#273b55] via-[#101725] to-[#080b12] px-6 py-8 sm:px-9 sm:py-11"&gt;
-&lt;div id="film-hero-grid" class="relative grid gap-7 sm:grid-cols-[minmax(0,1fr)_minmax(0,12rem)] sm:items-center"&gt;
-&lt;div id="film-copy" class="min-w-0"&gt;&lt;p id="film-eyebrow" class="mb-3 text-[10px] font-semibold uppercase tracking-[.35em] text-sky-200"&gt;MAESTRO PREMIERE · DBPEDIA FILM&lt;/p&gt;
-&lt;h2 id="film-title" class="max-w-2xl break-words text-3xl font-bold tracking-tight sm:text-5xl"&gt;&lt;xsl:value-of select="$title"/&gt;&lt;/h2&gt;
-&lt;div id="film-highlights" class="mt-4 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-300"&gt;
-&lt;xsl:if test="$date"&gt;&lt;span id="film-year" class="rounded-full border border-white/20 bg-white/10 px-3 py-1"&gt;&lt;xsl:value-of select="substring($date,1,4)"/&gt;&lt;/span&gt;&lt;/xsl:if&gt;
-&lt;xsl:for-each select="m:values(('genre'))[position() le 2]"&gt;&lt;span id="film-genre-chip-{position()}" class="rounded-full border border-white/20 bg-white/10 px-3 py-1"&gt;&lt;xsl:value-of select="if (m:is-uri(.)) then m:pretty(.) else ."/&gt;&lt;/span&gt;&lt;/xsl:for-each&gt;
-&lt;xsl:variable name="runtime" select="m:first(('runtime','duration'))"/&gt;&lt;xsl:if test="$runtime"&gt;&lt;span id="film-runtime" class="rounded-full border border-white/20 bg-white/10 px-3 py-1"&gt;&lt;xsl:value-of select="$runtime"/&gt;&lt;/span&gt;&lt;/xsl:if&gt;
-&lt;/div&gt;
-&lt;xsl:if test="$summary"&gt;&lt;p id="film-synopsis" class="mt-6 max-w-2xl text-sm leading-7 text-slate-200 sm:text-base"&gt;&lt;xsl:value-of select="$summary"/&gt;&lt;/p&gt;&lt;/xsl:if&gt;
-&lt;div id="film-action-row" class="mt-7 flex flex-wrap gap-3"&gt;
-&lt;a id="film-google-search" href="{concat('https://www.google.com/search?q=', encode-for-uri($lookup))}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center rounded-full bg-white px-5 py-3 text-xs font-semibold text-slate-950 shadow-md transition hover:bg-sky-100"&gt;Search Google ↗&lt;/a&gt;
-&lt;a id="film-imdb" href="{if ($imdb) then concat('https://www.imdb.com/title/', $imdb, '/') else concat('https://www.imdb.com/find/?q=', encode-for-uri($lookup), '&amp;amp;s=tt')}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 rounded-full border border-white/30 bg-white/10 px-5 py-3 text-xs font-semibold text-white hover:bg-white/20"&gt;IMDb &lt;xsl:choose&gt;&lt;xsl:when test="$imdb"&gt;↗&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;search ↗&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;&lt;/a&gt;
-&lt;/div&gt;&lt;/div&gt;
-&lt;div id="film-poster-frame" class="mx-auto flex aspect-[2/3] w-full max-w-48 items-center justify-center overflow-hidden rounded-xl border border-white/20 bg-slate-800 shadow-[0_14px_35px_rgba(0,0,0,.6)]"&gt;
-&lt;xsl:choose&gt;&lt;xsl:when test="$poster"&gt;&lt;img id="film-poster" src="{$poster}" alt="Film artwork" class="h-full w-full object-cover" loading="lazy" referrerpolicy="no-referrer"/&gt;&lt;/xsl:when&gt;&lt;xsl:otherwise&gt;&lt;span id="film-poster-placeholder" class="px-4 text-center text-xl font-semibold tracking-wide text-slate-400"&gt;MAESTRO CINEMA&lt;/span&gt;&lt;/xsl:otherwise&gt;&lt;/xsl:choose&gt;
-&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;
-&lt;section id="film-availability" class="border-t border-white/10 bg-[#0f1623] px-6 py-7 sm:px-9"&gt;&lt;div id="film-availability-head" class="mb-5 flex flex-wrap items-end justify-between gap-3"&gt;&lt;h3 id="film-availability-title" class="text-lg font-bold tracking-tight"&gt;Find where to watch&lt;/h3&gt;&lt;p id="film-availability-note" class="text-xs text-slate-400"&gt;Search links only · availability not verified&lt;/p&gt;&lt;/div&gt;
-&lt;div id="film-service-grid" class="grid grid-cols-2 gap-3 sm:grid-cols-3"&gt;
-&lt;a id="film-service-netflix" href="{concat('https://www.netflix.com/search?q=', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-netflix-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-netflix-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/netflix.svg" alt="Netflix logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-netflix-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;Netflix&lt;/span&gt;&lt;/a&gt;
-&lt;a id="film-service-primevideo" href="{concat('https://www.amazon.com/s?i=instant-video&amp;amp;k=', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-primevideo-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-primevideo-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/primevideo.svg" alt="Prime Video logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-primevideo-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;Prime Video&lt;/span&gt;&lt;/a&gt;
-&lt;a id="film-service-disneyplus" href="{concat('https://www.disneyplus.com/search/', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-disneyplus-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-disneyplus-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/disneyplus.svg" alt="Disney+ logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-disneyplus-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;Disney+&lt;/span&gt;&lt;/a&gt;
-&lt;a id="film-service-appletv" href="{concat('https://tv.apple.com/search?term=', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-appletv-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-appletv-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/appletv.svg" alt="Apple TV logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-appletv-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;Apple TV&lt;/span&gt;&lt;/a&gt;
-&lt;a id="film-service-hulu" href="{concat('https://www.hulu.com/search?q=', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-hulu-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-hulu-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/hulu.svg" alt="Hulu logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-hulu-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;Hulu&lt;/span&gt;&lt;/a&gt;
-&lt;a id="film-service-youtube" href="{concat('https://www.youtube.com/results?search_query=', encode-for-uri($title))}" target="_blank" rel="noopener noreferrer" class="flex min-h-16 items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-3 text-left transition hover:border-sky-300/60 hover:bg-white/15"&gt;&lt;span id="film-service-youtube-logo-frame" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5"&gt;&lt;img id="film-service-youtube-logo" src="https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/youtube.svg" alt="YouTube logo" class="h-full w-full object-contain" loading="lazy"/&gt;&lt;/span&gt;&lt;span id="film-service-youtube-label" class="min-w-0 text-xs font-semibold text-slate-100"&gt;YouTube&lt;/span&gt;&lt;/a&gt;
-&lt;/div&gt;&lt;/section&gt;
-&lt;section id="film-details" class="border-t border-white/10 bg-[#111827] px-6 py-6 sm:px-9"&gt;&lt;h3 id="film-details-heading" class="mb-2 text-xs font-semibold uppercase tracking-[.2em] text-sky-200"&gt;Behind the scenes&lt;/h3&gt;&lt;dl id="film-details-list" class="grid gap-x-6 sm:grid-cols-2"&gt;
-&lt;xsl:call-template name="m:field"&gt;&lt;xsl:with-param name="key" select="'Director'"/&gt;&lt;xsl:with-param name="names" select="('director')"/&gt;&lt;xsl:with-param name="n" select="'director'"/&gt;&lt;/xsl:call-template&gt;
-&lt;xsl:call-template name="m:field"&gt;&lt;xsl:with-param name="key" select="'Cast'"/&gt;&lt;xsl:with-param name="names" select="('starring','actor')"/&gt;&lt;xsl:with-param name="n" select="'cast'"/&gt;&lt;/xsl:call-template&gt;
-&lt;xsl:call-template name="m:field"&gt;&lt;xsl:with-param name="key" select="'Country'"/&gt;&lt;xsl:with-param name="names" select="('country')"/&gt;&lt;xsl:with-param name="n" select="'country'"/&gt;&lt;/xsl:call-template&gt;
-&lt;xsl:call-template name="m:field"&gt;&lt;xsl:with-param name="key" select="'Language'"/&gt;&lt;xsl:with-param name="names" select="('language')"/&gt;&lt;xsl:with-param name="n" select="'language'"/&gt;&lt;/xsl:call-template&gt;
-&lt;xsl:call-template name="m:field"&gt;&lt;xsl:with-param name="key" select="'Production'"/&gt;&lt;xsl:with-param name="names" select="('producer','productioncompany','distributor')"/&gt;&lt;xsl:with-param name="n" select="'production'"/&gt;&lt;/xsl:call-template&gt;
-&lt;/dl&gt;&lt;/section&gt;
-&lt;xsl:call-template name="m:extras"&gt;&lt;xsl:with-param name="excluded" select="('type','label','title','name','abstract','description','plot','synopsis','thumbnail','depiction','poster','image','cover','releasedate','publicationdate','datepublished','year','genre','runtime','duration','imdbid','imdb','director','starring','actor','country','language','producer','productioncompany','distributor')"/&gt;&lt;/xsl:call-template&gt;
-&lt;footer id="film-footer" class="border-t border-white/10 px-6 py-4 text-center text-[10px] uppercase tracking-[.25em] text-slate-400"&gt;Film metadata · DBpedia · Maestro&lt;/footer&gt;
-&lt;/article&gt;&lt;svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-film-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"&gt;&lt;svg:rect id="dbpedia-film-record-icon-1" x="2" y="2" width="20" height="20" rx="2.18"/&gt;&lt;svg:path id="dbpedia-film-record-icon-2" d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 7h5M17 17h5"/&gt;&lt;/svg:svg&gt;&lt;/section&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</rdf:value>
+  <rdf:Description rdf:nodeID="Nc55b1891f3ed45fa8015658c7dc97c61">
+    <sh:name xml:lang="en">Publication date</sh:name>
+    <sh:path rdf:nodeID="N1dfc6148201c497fa1c279f36c27aa65"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Nf8314e2a67ff4bb8bef7c7fbe3132e9c">
+    <rdf:first rdf:resource="http://dbpedia.org/ontology/depiction"/>
+    <rdf:rest rdf:nodeID="N008cfac6eab146609e7e49ed83c39ccf"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N203057d1b9074c32a1d37cab961e5c19">
+    <rdf:first rdf:resource="http://dbpedia.org/ontology/publisher"/>
+    <rdf:rest rdf:nodeID="N042cf40c099a4c83978e7d22913d6f2e"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N33a7529480c040f1ac95081329904bf4">
+    <sh:name xml:lang="en">Synopsis</sh:name>
+    <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#Literal"/>
+    <sh:path rdf:resource="http://dbpedia.org/ontology/abstract"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Nfceb9ebc8f2a46e7a331e6a60ac12f38">
+    <sh:name xml:lang="en">Author</sh:name>
+    <sh:path rdf:nodeID="Nffec2bb76a3445628a84df271ac31d60"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="Na3ea23c5691c4be69673adeaffff9015">
+    <rdf:first rdf:resource="http://dbpedia.org/ontology/isbn"/>
+    <rdf:rest rdf:nodeID="N2769d3a877da479ebcb5cc68b7f6f81c"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="N2205884e47824322bc4c0eff07f68de8">
+    <sh:alternativePath rdf:nodeID="N569ff9c46c33467d9f429eda16c2b03a"/>
   </rdf:Description>
 </rdf:RDF>

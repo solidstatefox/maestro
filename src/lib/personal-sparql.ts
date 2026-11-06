@@ -416,14 +416,16 @@ export function getSeedFctEndpoints(): Promise<FctEndpoint[]> {
   return promise;
 }
 
-/** Logged in: seed the registry once, then load endpoint records and groups from its configured RDF graph. Logged out: use the local seed file only. */
+/** Logged in: read endpoint records from the existing personal RDF registry without mutating it.
+ * Graph uploads happen explicitly on login via /proxy/api/graph-seed, never during
+ * normal FCT refresh, endpoint discovery, or query execution. Logged-out
+ * visitors use the local seed file only. */
 export async function getConfiguredFctEndpoints(request?: Request): Promise<FctEndpoint[]> {
   if (!getPersonalSession(request)) {
     const seeded = await getSeedFctEndpoints();
     // A locally seeded Personal SPARQL entry must never be selected or probed by visitors.
     return seeded.filter((endpoint) => endpoint.id !== "personal-sparql" && endpoint.label.trim().toLowerCase() !== "personal sparql");
   }
-  await ensureGraphDirectorySeeded(request);
   const dataserversGraph = getDataserversGraph(request);
   const legacyNs = `${dataserversGraph}#`;
   const query = `PREFIX rdf: <${RDF_NS}>\nPREFIX rdfs: <${RDFS_NS}>\nPREFIX dcterms: <${DCTERMS_NS}>\nPREFIX skos: <${SKOS_NS}>\nPREFIX schema: <${SCHEMA_NS}>\nSELECT DISTINCT ?server ?name ?url ?groupName ?groupOrder ?serverOrder WHERE { GRAPH <${dataserversGraph}> { { ?server rdf:type schema:EntryPoint ; rdfs:label ?name ; schema:url ?url . OPTIONAL { ?server schema:position ?serverOrder } OPTIONAL { ?server dcterms:isPartOf ?group . ?group rdf:type skos:Collection ; rdfs:label ?groupName . OPTIONAL { ?group schema:position ?groupOrder } } } UNION { ?server rdf:type <${legacyNs}Dataserver> ; <${legacyNs}serverName> ?name ; <${legacyNs}serverURL> ?url . OPTIONAL { ?server <${legacyNs}serverOrder> ?serverOrder } OPTIONAL { ?server <${legacyNs}inGroup> ?group . ?group <${legacyNs}groupName> ?groupName . OPTIONAL { ?group <${legacyNs}groupOrder> ?groupOrder } } } } } ORDER BY COALESCE(?groupOrder, 9999) COALESCE(?serverOrder, 9999) STR(?name)`;

@@ -1,3 +1,4 @@
+import { FCT_VIEW_TYPES, isFctViewType, type FctViewType } from "./fct-view-types";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { normalizeFctValue } from "./fct-value-policy";
 
@@ -8,7 +9,7 @@ type XmlNode = {
   children: XmlNode[];
 };
 
-export type FctSparqlView = "text" | "properties" | "properties-in" | "classes" | "list" | "list-values" | "ask" | "list-count" | "alphabet" | "geo" | "years" | "months" | "weeks" | "describe" | "graphs";
+export type FctSparqlView = FctViewType;
 export type CompiledFctQuery = {
   query: string;
   view: FctSparqlView;
@@ -46,6 +47,7 @@ type SparqlPattern =
   | { kind: "full-text"; value: SparqlTerm; search: SparqlTerm }
   | { kind: "filter"; expression: SparqlExpression }
   | { kind: "group"; patterns: SparqlPattern[] }
+  | { kind: "union"; branches: SparqlPattern[][] }
   | { kind: "not-exists"; patterns: SparqlPattern[] }
   | { kind: "optional"; patterns: SparqlPattern[] }
   | { kind: "graph"; graph: SparqlTerm; patterns: SparqlPattern[] }
@@ -144,6 +146,7 @@ function serializePattern(pattern: SparqlPattern, depth = 0): string {
     case "full-text": return `${indent}${serializeTerm(pattern.value)} bif:contains ${serializeTerm(pattern.search)} .`;
     case "filter": return `${indent}FILTER ${serializeExpression(pattern.expression)}`;
     case "group": return `${indent}{\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
+    case "union": return pattern.branches.map((branch) => `${indent}{\n${branch.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`).join("\n" + indent + "UNION\n");
     case "not-exists": return `${indent}FILTER NOT EXISTS {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "optional": return `${indent}OPTIONAL {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "graph": return `${indent}GRAPH ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
@@ -213,7 +216,9 @@ function valueTerm(node: XmlNode): SparqlTerm | null {
   if (language && !/^[A-Za-z]+(?:-[A-Za-z0-9]+)*$/.test(language)) return null;
   if (language) return literalTerm(value, language);
   if (!datatype || ["string", "literal", "plainstring", "http://www.openlinksw.com/schemas/facets/dtp/plainstring"].includes(datatype.toLowerCase())) return literalTerm(value);
-  const datatypeIri = iri(datatype);
+  // Native FCT datatype shortcuts are XSD types, not absolute IRIs.
+  const xsdLocalTypes = new Set(["string", "boolean", "decimal", "integer", "int", "long", "short", "byte", "double", "float", "date", "dateTime", "time", "gYear", "gYearMonth", "nonNegativeInteger", "positiveInteger", "unsignedLong", "unsignedInt"]);
+  const datatypeIri = xsdLocalTypes.has(datatype) ? iri(`http://www.w3.org/2001/XMLSchema#${datatype}`) : iri(datatype);
   return datatypeIri ? literalTerm(value, undefined, datatypeIri) : null;
 }
 
@@ -329,12 +334,34 @@ function compileConstraints(
       }
       compileConstraints(node.children, subject, patterns, errors, state);
     } else if (node.name === "value") {
+      const op = (node.attributes.op ?? "=").trim().toLowerCase();
+      const start = node.attributes.rangeStart?.trim();
+      const end = node.attributes.rangeEnd?.trim();
+      if (start !== undefined || end !== undefined) {
+        const datatype = (node.attributes.datatype ?? "").trim();
+        const allowed = new Set(["decimal", "integer", "int", "long", "short", "byte", "double", "float", "date", "dateTime", "time", "gYear", "gYearMonth", "nonNegativeInteger", "positiveInteger", "unsignedLong", "unsignedInt"]);
+        if (!allowed.has(datatype)) { errors.push("FCT value ranges require an XSD numeric or date datatype."); continue; }
+        const isNumeric = !["date", "dateTime", "time", "gYear", "gYearMonth"].includes(datatype);
+        if (isNumeric && [start, end].some((value) => value !== undefined && (value === "" || !Number.isFinite(Number(value))))) {
+          errors.push("Numeric FCT range bounds must be finite numbers."); continue;
+        }
+        if (start !== undefined && end !== undefined && (isNumeric ? Number(start) > Number(end) : start > end)) {
+          errors.push("The FCT rangeStart must not exceed rangeEnd."); continue;
+        }
+        for (const [bound, symbol] of [[start, ">="], [end, "<="]] as const) {
+          if (bound === undefined) continue;
+          if (!bound) { errors.push("Range bounds cannot be blank."); continue; }
+          const typedBound = valueTerm({ ...node, text: bound });
+          if (!typedBound) { errors.push("Invalid range bound."); continue; }
+          patterns.push({ kind: "filter", expression: binary(symbol, termExpr(subject), termExpr(typedBound)) });
+        }
+        continue;
+      }
       const term = valueTerm(node);
       if (!term) {
         errors.push("An FCT value cannot be represented safely as a SPARQL term.");
         continue;
       }
-      const op = (node.attributes.op ?? "=").trim().toLowerCase();
       const operators: Record<string, string> = { "": "=", "=": "=", eq: "=", equal: "=", "!=": "!=", ne: "!=", "<>": "!=", ">": ">", gt: ">", ">=": ">=", gte: ">=", "<": "<", lt: "<", "<=": "<=", lte: "<=" };
       if (operators[op]) patterns.push({ kind: "filter", expression: binary(operators[op], termExpr(subject), termExpr(term)) });
       else if (["contains", "starts-with", "starts_with", "ends-with", "ends_with"].includes(op)) {
@@ -342,6 +369,11 @@ function compileConstraints(
         patterns.push({ kind: "filter", expression: { kind: "function", name: fn, args: [
           { kind: "function", name: "LCASE", args: [{ kind: "function", name: "STR", args: [termExpr(subject)] }] },
           { kind: "function", name: "LCASE", args: [{ kind: "function", name: "STR", args: [termExpr(term)] }] },
+        ] } });
+      } else if (op === "regex") {
+        patterns.push({ kind: "filter", expression: { kind: "function", name: "REGEX", args: [
+          { kind: "function", name: "STR", args: [termExpr(subject)] },
+          termExpr(literalTerm(node.text)),
         ] } });
       } else errors.push(`The FCT value operator '${op}' is not supported.`);
     } else {
@@ -433,12 +465,12 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     }
   };
   collectProjected(viewParent?.children ?? []);
-  const rawView = requestedView || viewNode?.attributes.type || "text";
-  graphOnly = graphOnly || rawView === "graphs";
-  if (!["text", "properties", "properties-in", "classes", "list", "list-values", "ask", "list-count", "alphabet", "geo", "years", "months", "weeks", "describe", "graphs"].includes(rawView)) {
+  const rawView = requestedView || viewNode?.attributes.type || FCT_VIEW_TYPES.TEXT;
+  graphOnly = graphOnly || rawView === FCT_VIEW_TYPES.GRAPHS;
+  if (!isFctViewType(rawView)) {
     throw new Error(`The '${rawView}' view is not supported by the SPARQL translator.`);
   }
-  const view = rawView as FctSparqlView;
+  const view: FctSparqlView = rawView;
   const parsePage = (raw: string | undefined, fallback: number, max: number) => {
     const value = Number(raw ?? fallback);
     return Number.isSafeInteger(value) && value >= 0 ? Math.min(value, max) : fallback;
@@ -489,17 +521,22 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
 );
 
 const viewSuppliesTriple =
-  view === "properties" ||
-  view === "properties-in" ||
-  view === "classes";
+  view === FCT_VIEW_TYPES.PROPERTIES ||
+  view === FCT_VIEW_TYPES.PROPERTIES_IN ||
+  view === FCT_VIEW_TYPES.CLASSES;
 
 if (!hasBindingPattern && !viewSuppliesTriple) {
-  where.unshift({
-    kind: "triple",
-    subject: variable("s1"),
-    predicate: variable("p0"),
-    object: variable("o0"),
-  });
+  // A root-bound URI may have *only incoming* links. A triple pattern in
+  // either direction makes a root list valid without inventing a relationship
+  // in the authoritative FCT XML. This is Maestro's extension to native FCT.
+  const isRootUri = root.children.some((child) =>
+    child.name === "value" && child.attributes.datatype === "uri");
+  where.unshift(isRootUri
+    ? { kind: "union", branches: [
+        [{ kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") }],
+        [{ kind: "triple", subject: variable("incoming0"), predicate: variable("p1"), object: variable("s1") }],
+      ] }
+    : { kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") });
 }
 
 
@@ -517,7 +554,9 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
   const directives = queryDirectives(root);
   const countProjection = (term: SparqlTerm): SparqlProjection => ({ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(term) }, as: variable("n") });
   let query: string;
-  if (view === "ask" && !graphOnly && !countOnly) {
+  if (view === FCT_VIEW_TYPES.ASK && !graphOnly && !countOnly) {
+    // The ASK query uses the cloned FCT scope unchanged. Clients can add
+    // a label relationship as an ordinary <property> condition in that clone.
     query = buildAskQuery(directives, scopedWhere);
   } else if (graphOnly) {
     /*
@@ -644,29 +683,29 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
 	} else if (countOnly) {
     let counted: SparqlTerm;
     let countWhere = scopedWhere;
-    if (view === "properties") {
+    if (view === FCT_VIEW_TYPES.PROPERTIES) {
       counted = variable("p");
       countWhere = [...scopedWhere, { kind: "triple", subject: target, predicate: variable("p"), object: variable("o") },
         { kind: "filter", expression: binary("!=", termExpr(variable("p")), termExpr(iriTerm(RDF_TYPE))) }];
-    } else if (view === "classes") {
+    } else if (view === FCT_VIEW_TYPES.CLASSES) {
       counted = variable("c");
       countWhere = [...scopedWhere, { kind: "triple", subject: target, predicate: iriTerm(RDF_TYPE), object: variable("c") }];
-    } else if (view === "properties-in") {
+    } else if (view === FCT_VIEW_TYPES.PROPERTIES_IN) {
       counted = variable("p");
       countWhere = [...scopedWhere, { kind: "triple", subject: variable("related"), predicate: variable("p"), object: target }];
     } else counted = target;
     query = buildSelectQuery({ directives, projections: [countProjection(counted)], where: countWhere });
-  } else if (view === "properties" || view === "classes" || view === "properties-in") {
-    const facet = variable(view === "classes" ? "c" : "p");
-    const sampleClasses = view === "classes" && ["yes", "true", "1"].includes((viewNode?.attributes.sample ?? "").trim().toLowerCase());
-    const subject = view === "properties-in" ? variable("related") : target;
-    const predicate = view === "classes" ? iriTerm(RDF_TYPE) : view === "properties-in" ? facet : facet;
-    const object = view === "properties-in" ? target : view === "classes" ? facet : variable("o");
+  } else if (view === FCT_VIEW_TYPES.PROPERTIES || view === FCT_VIEW_TYPES.CLASSES || view === FCT_VIEW_TYPES.PROPERTIES_IN) {
+    const facet = variable(view === FCT_VIEW_TYPES.CLASSES ? "c" : "p");
+    const sampleClasses = view === FCT_VIEW_TYPES.CLASSES && ["yes", "true", "1"].includes((viewNode?.attributes.sample ?? "").trim().toLowerCase());
+    const subject = view === FCT_VIEW_TYPES.PROPERTIES_IN ? variable("related") : target;
+    const predicate = view === FCT_VIEW_TYPES.CLASSES ? iriTerm(RDF_TYPE) : view === FCT_VIEW_TYPES.PROPERTIES_IN ? facet : facet;
+    const object = view === FCT_VIEW_TYPES.PROPERTIES_IN ? target : view === FCT_VIEW_TYPES.CLASSES ? facet : variable("o");
     // <view type="classes" tree="yes">: list every class of the result set AND all of its superclasses up
     // to the root (rdf:type/rdfs:subClassOf*), one row per (class, immediate parent). A class with several
     // parents therefore appears once per parent; a root has no parent column value. The count is still the
     // number of distinct result resources that are instances of the class (directly or via a subclass).
-    const classTree = view === "classes" && ["yes", "true", "1", "on"].includes((viewNode?.attributes.tree ?? "").trim().toLowerCase());
+    const classTree = view === FCT_VIEW_TYPES.CLASSES && ["yes", "true", "1", "on"].includes((viewNode?.attributes.tree ?? "").trim().toLowerCase());
     const parent = variable("parent");
     const treePath: SparqlTerm = { kind: "raw-term", value: `<${RDF_TYPE}>/<${RDFS_SUBCLASS_OF}>*` };
     const facetWhere: SparqlPattern[] = classTree
@@ -684,20 +723,20 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
           ...scopedWhere,
           { kind: "triple", subject, predicate, object } satisfies SparqlPattern,
           // rdf:type belongs to Categories. It is not an available forward property.
-          ...(view === "properties" ? [{ kind: "filter", expression: binary("!=", termExpr(facet), termExpr(iriTerm(RDF_TYPE))) } satisfies SparqlPattern] : []),
+          ...(view === FCT_VIEW_TYPES.PROPERTIES ? [{ kind: "filter", expression: binary("!=", termExpr(facet), termExpr(iriTerm(RDF_TYPE))) } satisfies SparqlPattern] : []),
         ];
     const projections: SparqlProjection[] = [
       { expression: termExpr(facet), as: variable("c1") },
-      countProjection(view === "properties-in" ? variable("related") : target),
+      countProjection(view === FCT_VIEW_TYPES.PROPERTIES_IN ? variable("related") : target),
     ];
     if (classTree) {
       projections.push({ expression: termExpr(parent) });
-    } else if (view === "properties") {
+    } else if (view === FCT_VIEW_TYPES.PROPERTIES) {
       projections.push({
         expression: { kind: "aggregate", name: "SAMPLE", distinct: false, expression: termExpr(variable("o")) },
         as: variable("sampleVal"),
       });
-    } else if (view === "properties-in") {
+    } else if (view === FCT_VIEW_TYPES.PROPERTIES_IN) {
       projections.push({
         expression: { kind: "aggregate", name: "SAMPLE", distinct: false, expression: termExpr(variable("related")) },
         as: variable("sampleVal"),
@@ -738,12 +777,12 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       limit,
       offset,
     });
-  } else if (view === "list-count") {
+  } else if (view === FCT_VIEW_TYPES.LIST_COUNT) {
     query = buildSelectQuery({ directives, projections: [
       { expression: termExpr(target), as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
     ], where: scopedWhere, groupBy: [termExpr(target)], orderBy: shouldOrder ? [{ expression: termExpr(variable("n")), direction: "DESC" }] : undefined, limit, offset });
-  } else if (view === "alphabet") {
+  } else if (view === FCT_VIEW_TYPES.ALPHABET) {
     // The large DBpedia Virtuoso graph fails with SR319 for UCASE(SUBSTR(...))
     // grouping, and 26 VALUES prefix tests are much slower. Use the empirically
     // faster expression-based grouping without UCASE or ORDER BY; the client
@@ -774,14 +813,14 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       { expression: letter, as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(target) }, as: variable("n") },
     ], where: alphabetWhere, groupBy: [letter], limit: 256, offset: 0 });
-  } else if (view === "years" || view === "months" || view === "weeks") {
-    const functionName = view === "years" ? "sql::year" : view === "months" ? "sql::round_month" : "sql::round_week";
+  } else if (view === FCT_VIEW_TYPES.YEARS || view === FCT_VIEW_TYPES.MONTHS || view === FCT_VIEW_TYPES.WEEKS) {
+    const functionName = view === FCT_VIEW_TYPES.YEARS ? "sql::year" : view === FCT_VIEW_TYPES.MONTHS ? "sql::round_month" : "sql::round_week";
     const bucket: SparqlExpression = { kind: "function", name: functionName, args: [termExpr(target)] };
     query = buildSelectQuery({ directives, projections: [
       { expression: bucket, as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
     ], where: scopedWhere, groupBy: [bucket], orderBy: shouldOrder ? [{ expression: bucket, direction: "ASC" }] : undefined, limit, offset });
-  } else if (view === "geo") {
+  } else if (view === FCT_VIEW_TYPES.GEO) {
     const lat = variable("lat"); const long = variable("long");
     const geoWhere: SparqlPattern[] = [...scopedWhere,
       { kind: "triple", subject: target, predicate: iriTerm("http://www.w3.org/2003/01/geo/wgs84_pos#lat"), object: lat },
@@ -792,10 +831,10 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       { expression: termExpr(long), as: variable("c2") },
       { expression: termExpr(target), as: variable("c3") },
     ], where: geoWhere, orderBy: shouldOrder ? [entityRankOrder(target)] : undefined, limit, offset });
-  } else if (view === "describe") {
+  } else if (view === FCT_VIEW_TYPES.DESCRIBE) {
     const document = new SparqlQueryDocument({ kind: "describe", describe: target, directives, projections: [], where: scopedWhere, limit, offset });
     query = document.toString();
-  } else if (view === "text") {
+  } else if (view === FCT_VIEW_TYPES.TEXT) {
     // The view-level alphabet index constrains label values, not URI initials.
     // Every label property selected beside the root search input is eligible.
     const selectedLetter = (viewNode?.attributes.index ?? "").trim();
@@ -833,7 +872,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       ? [entityRankOrder(target)]
       : undefined;
     query = buildSelectQuery({ directives, distinct: true, projections, where: indexedWhere, orderBy: orderByList, limit, offset });
-  } else if (view === "list" || view === "list-values") {
+  } else if (view === FCT_VIEW_TYPES.LIST || view === FCT_VIEW_TYPES.LIST_VALUES) {
     // Virtuoso FCT list view selects the RDF term. Its SQL/XML response
     // wrapper resolves the human-readable label; do not call the SQL-only
     // fct_label procedure from inside SPARQL. For an explicitly count-sorted
@@ -878,7 +917,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     graphOnly,
     countOnly,
     badgeColumns: state.badgeColumns?.map(({ colName, property, direction }) => ({ colName, property, direction })),
-    ...(view === "list-values" ? { valueColumns } : {}),
+    ...(view === FCT_VIEW_TYPES.LIST_VALUES ? { valueColumns } : {}),
   };
 }
 

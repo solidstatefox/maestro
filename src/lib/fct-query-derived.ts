@@ -1,5 +1,6 @@
 "use client";
 
+import { FCT_VIEW_TYPES } from "./fct-view-types";
 import { attachViewToPropertyInQueryTree } from "./fct-query";
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
 
@@ -103,7 +104,7 @@ export function createPropertyWidgetQuery(
           ...node,
           attributes,
           children: node.children.map((child) => child.id === "query-view"
-            ? { ...copyNode(child), attributes: { ...child.attributes, type: "list", offset: "0" }, children: [] }
+            ? { ...copyNode(child), attributes: { ...child.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0" }, children: [] }
             : copyNode(child)),
         };
       }
@@ -158,7 +159,7 @@ export function createPropertyWidgetQuery(
     if (node.id === "query-view") {
       const ephemeralView: FctQueryNode = {
         ...copyNode(node),
-        attributes: { ...node.attributes, type: "list", offset: "0" },
+        attributes: { ...node.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0" },
         children: [],
       };
       return [ephemeralView];
@@ -210,7 +211,7 @@ export function createGroupValuesQuery(
   const viewAttributes = (type: string) => ({ type, sort: "count", limit: String(paging.limit), offset: String(paging.offset) });
 
   if (option.direction === "forward" && option.uri === RDF_TYPE_URI) {
-    return setQueryViewAttributes(sourceClone, viewAttributes("classes"));
+    return setQueryViewAttributes(sourceClone, viewAttributes(FCT_VIEW_TYPES.CLASSES));
   }
 
   if (option.direction === "reverse") {
@@ -224,13 +225,13 @@ export function createGroupValuesQuery(
     const unconstrained: FctQueryTree = { ...sourceClone, children: stripRoleValues(sourceClone.children) };
     return setQueryViewAttributes(
       createPropertyWidgetQuery(unconstrained, option.uri, "reverse", option.nodeId, true),
-      viewAttributes("list"),
+      viewAttributes(FCT_VIEW_TYPES.LIST),
     );
   }
 
   return setQueryViewAttributes(
     createPropertyWidgetQuery(sourceClone, option.uri, "forward", undefined, true),
-    viewAttributes("list"),
+    viewAttributes(FCT_VIEW_TYPES.LIST),
   );
 }
 
@@ -370,7 +371,7 @@ export function createDistinctCountQuery(
   uri: string,
   propertyUri?: string,
   candidateValue?: QueryResultValue,
-  viewType: "list-count" | "text" | "properties" | "properties-in" | "classes" = "list-count",
+  viewType: typeof FCT_VIEW_TYPES.LIST_COUNT | typeof FCT_VIEW_TYPES.TEXT | typeof FCT_VIEW_TYPES.PROPERTIES | typeof FCT_VIEW_TYPES.PROPERTIES_IN | typeof FCT_VIEW_TYPES.CLASSES = FCT_VIEW_TYPES.LIST_COUNT,
 ): FctQueryTree {
   let tree: FctQueryTree = {
     ...sourceTree,
@@ -582,12 +583,12 @@ export function setQueryViewAttributes(
 /** Construct record-description requests through the same query-tree serializer. */
 export function createRecordDescriptionQuery(
   subjectUri: string,
-  viewType: "properties" | "list",
+  viewType: typeof FCT_VIEW_TYPES.PROPERTIES | typeof FCT_VIEW_TYPES.LIST,
   propertyUri?: string,
 ): FctQueryTree {
   const textNode: FctQueryNode = { id: "record-description-text", name: "text", attributes: {}, text: "", children: [] };
   const subjectNode: FctQueryNode = { id: "record-description-subject", name: "value", attributes: { datatype: "uri" }, text: `[${subjectUri}]`, children: [] };
-  const viewNode: FctQueryNode = { id: "query-view", name: "view", attributes: { type: viewType, limit: viewType === "properties" ? "1000" : "100", offset: "0" }, children: [] };
+  const viewNode: FctQueryNode = { id: "query-view", name: "view", attributes: { type: viewType, limit: viewType === FCT_VIEW_TYPES.PROPERTIES ? "1000" : "100", offset: "0" }, children: [] };
   const scopeNode: FctQueryNode[] = propertyUri
     ? [{ id: `record-description-property-${encodeURIComponent(propertyUri)}`, name: "property", attributes: { iri: propertyUri }, children: [viewNode] }]
     : [viewNode];

@@ -162,10 +162,15 @@ function splitNamespace(uri: string): { namespace: string; local: string } {
 export type EntityType = "Class" | "Property" | "Role" | "OBJECT";
 
 function formatEntityLabel(label: string, entityType?: EntityType): string {
+  // Preserve local-name casing, but make vocabulary prefixes consistent.
+  label = label.replace(/^([A-Za-z][A-Za-z0-9_.-]*):([^/].*)$/, (_whole, prefix: string, local: string) =>
+    `${prefix.toLowerCase()}:${local}`);
   if (!entityType || entityType === "OBJECT") return label;
   if (entityType === "Class") {
-    // Capitalize each word in the class label (preserving prefix like 'schema:')
-    return label.replace(/\b[a-zA-Z]/g, (match) => match.toUpperCase());
+    // Capitalize class words, never the QName prefix.
+    const match = /^([a-z][a-z0-9_.-]*:)([^/].*)$/.exec(label);
+    if (match) return match[1] + match[2].replace(/\b[a-zA-Z]/g, (part) => part.toUpperCase());
+    return label.replace(/\b[a-zA-Z]/g, (part) => part.toUpperCase());
   }
   if (entityType === "Property" || entityType === "Role") {
     // Lowercase each word

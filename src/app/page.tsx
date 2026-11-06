@@ -1,5 +1,6 @@
 "use client";
 
+import { FCT_VIEW_TYPES, type FctViewType } from "@/lib/fct-view-types";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { rememberNamespaceMetadata, rememberShortforms, toLabel } from "@/lib/uri-labels";
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
@@ -33,7 +34,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info } from "lucide-react";
+import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightLeft, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, EqualApproximately, Regex, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
 import { cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
@@ -322,7 +323,7 @@ function listValuesQueryClone(xml: string, columns: ListValueProjection[]): stri
   const view = Array.from(document.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0", "view"))[0]
     ?? Array.from(document.getElementsByTagName("view"))[0];
   if (!view || !view.parentElement) throw new Error("The live query has no view carrier.");
-  view.setAttribute("type", "list-values");
+  view.setAttribute("type", FCT_VIEW_TYPES.LIST_VALUES);
   view.removeAttribute("badges");
   const parent = view.parentElement;
   const ns = view.namespaceURI || "http://openlinksw.com/services/facets/1.0";
@@ -484,7 +485,7 @@ const dbActivity = getText("db-activity");
     if (!first) return [];
     const second = columns[1];
     const third = columns[2];
-    const isText = resultType === "text";
+    const isText = resultType === FCT_VIEW_TYPES.TEXT;
     const excerpt = isText ? (second?.value ?? "") : "";
     // A label column is any later column that is not a count. Count-sorted list
     // views (Group By) put the integer COUNT in column 2 and the label, if any,
@@ -537,19 +538,19 @@ const dbActivity = getText("db-activity");
       matches: excerpt ? [{ excerpt, columns: columns.slice(1) }] : [],
       ...(parsedScopeValues.length > 0 ? { scopeValues: parsedScopeValues } : {}),
     };
-    if (resultType === "list-count" && second) item.columns = columns;
-    if (third && resultType === "text") item.matches = [{ excerpt: third.value, columns: columns.slice(2) }];
+    if (resultType === FCT_VIEW_TYPES.LIST_COUNT && second) item.columns = columns;
+    if (third && resultType === FCT_VIEW_TYPES.TEXT) item.matches = [{ excerpt: third.value, columns: columns.slice(2) }];
     return [item];
   });
   const facetItems = rowColumns.flatMap((columns) => {
     if (!columns[0]) return [];
-    const labelKind = resultType === "classes" ? "Class" : resultType === "properties-in" ? "Role" : resultType === "properties" ? "Property" : undefined;
-    const exampleColumn = resultType === "properties" || resultType === "properties-in" ? columns[2] : undefined;
+    const labelKind = resultType === FCT_VIEW_TYPES.CLASSES ? "Class" : resultType === FCT_VIEW_TYPES.PROPERTIES_IN ? "Role" : resultType === FCT_VIEW_TYPES.PROPERTIES ? "Property" : undefined;
+    const exampleColumn = resultType === FCT_VIEW_TYPES.PROPERTIES || resultType === FCT_VIEW_TYPES.PROPERTIES_IN ? columns[2] : undefined;
     return [{
       uri: columns[0].value,
       label: columns[0].label || columns[0].shortform || toLabel(columns[0].value, labelKind),
       count: Number(columns[1]?.value ?? 0),
-      ...(resultType === "classes" && columns[2]?.termType === "uri" && columns[2].value ? { parent: columns[2].value } : {}),
+      ...(resultType === FCT_VIEW_TYPES.CLASSES && columns[2]?.termType === "uri" && columns[2].value ? { parent: columns[2].value } : {}),
       ...(exampleColumn?.value ? { example: { uri: exampleColumn.value, label: exampleColumn.label || exampleColumn.shortform || (exampleColumn.termType === "uri" ? toLabel(exampleColumn.value, "Class") : exampleColumn.value), termType: exampleColumn.termType } } : {}),
     }];
   });
@@ -579,16 +580,16 @@ const dbActivity = getText("db-activity");
 ...(dbActivity ? { dbActivity } : {}),
 	
     rowCount: Number(getText("processed") || rows.length),
-    results: resultType === "text" || resultType === "list" || resultType === "list-count" ? results : [],
-    properties: resultType === "properties" ? facetItems : [],
-    classes: resultType === "classes" ? facetItems : [],
-    roles: resultType === "properties-in" ? facetItems : [],
-    graphs: resultType === "graphs" ? rowColumns.flatMap((columns) => columns[0] ? [{
+    results: resultType === FCT_VIEW_TYPES.TEXT || resultType === FCT_VIEW_TYPES.LIST || resultType === FCT_VIEW_TYPES.LIST_COUNT ? results : [],
+    properties: resultType === FCT_VIEW_TYPES.PROPERTIES ? facetItems : [],
+    classes: resultType === FCT_VIEW_TYPES.CLASSES ? facetItems : [],
+    roles: resultType === FCT_VIEW_TYPES.PROPERTIES_IN ? facetItems : [],
+    graphs: resultType === FCT_VIEW_TYPES.GRAPHS ? rowColumns.flatMap((columns) => columns[0] ? [{
       uri: columns[0].value,
       label: columns[1]?.value || columns[0].label || columns[0].shortform || toLabel(columns[0].value),
       count: Number(columns[2]?.value ?? 0),
     }] : []) : [],
-    describe: resultType === "describe" ? describe : [],
+    describe: resultType === FCT_VIEW_TYPES.DESCRIBE ? describe : [],
     count: resultType === "count" ? Number(rowColumns[0]?.[0]?.value ?? 0) : undefined,
     shortforms: Array.from(uris, ([uri, metadata]) => ({ uri, ...metadata })),
   };
@@ -775,10 +776,10 @@ function distinctCountQueryFor(
   candidateValue?: FctResult,
 ): string {
   const viewType =
-    kind === "property" ? "properties"
-      : kind === "role" ? "properties-in"
-        : kind === "class" ? "classes"
-          : "list-count";
+    kind === "property" ? FCT_VIEW_TYPES.PROPERTIES
+      : kind === "role" ? FCT_VIEW_TYPES.PROPERTIES_IN
+        : kind === "class" ? FCT_VIEW_TYPES.CLASSES
+          : FCT_VIEW_TYPES.LIST_COUNT;
   return buildFctCountSparql(
     createDistinctCountQuery(tree, kind, uri, propertyUri, candidateValue, viewType),
   ) ?? "";
@@ -1054,7 +1055,17 @@ function PersonalWidgetQueryListener({
             const datatype = child.attributes.datatype ?? (lang ? undefined : "string");
             return fctTermKey(child.text ?? "", datatype, lang);
           });
-        const filteredValues = selectedTerms.length
+        // Equality bindings can be matched by exact RDF-term identity.
+        // For contains/regex/comparisons/ranges, the returned facet values
+        // satisfy the predicate but need not equal its operand (e.g.
+        // CONTAINS("1997-05-16", "1997")). Never drop those server matches.
+        const valueBindings = (activeFilter?.children ?? []).filter((child) => child.name === "value");
+        const equalityOnly = valueBindings.every((child) =>
+          !Object.hasOwn(child.attributes, "rangeStart") &&
+          !Object.hasOwn(child.attributes, "rangeEnd") &&
+          ["", "=", "eq", "equal"].includes((child.attributes.op ?? "=").trim().toLowerCase()),
+        );
+        const filteredValues = equalityOnly && selectedTerms.length
           ? fetchedValues.filter((value) => selectedTerms.includes(facetValueKey(value)))
           : fetchedValues;
         const values = orderLikeGroups ? filteredValues.slice().sort(compareGroupValues) : filteredValues;
@@ -1433,6 +1444,29 @@ function replaceFacetAutofillCandidates(kind: "property" | "property-in", uris: 
 }
 
 const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+// Movie/Film release metadata is fetched alongside rdf:type so the release
+// year is available even when no release-date facet was selected.
+const MOVIE_RELEASE_PROPERTIES = [
+  "http://dbpedia.org/ontology/releaseDate",
+  "http://dbpedia.org/property/released",
+  "http://schema.org/datePublished",
+  "http://dbpedia.org/ontology/releaseYear",
+  "http://dbpedia.org/property/releaseDate",
+  "http://dbpedia.org/property/year",
+] as const;
+const MOVIE_CLASS_IRIS = new Set([
+  "http://dbpedia.org/ontology/Film",
+  "http://schema.org/Movie",
+  "https://schema.org/Movie",
+  "http://schema.org/Film",
+]);
+const releaseYearFromText = (text: string): string | null => {
+  // ISO dates, date-time literals and year-only values; avoid arbitrary digits
+  // embedded inside identifiers or numerical measurements.
+  const match = text.match(/(?:^|\D)((?:18|19|20|21)\d{2})(?=\D|$)/);
+  return match?.[1] ?? null;
+};
+
 
 /** Cap example ("e.g.") text at a character limit so one long value cannot stretch a row or badge. */
 function ellipsize(text: string, limit = 40): string {
@@ -1554,7 +1588,7 @@ function parseFctQueryXml(xml: string): FctQueryTree | null {
   };
   const children = elementChildren(root).map((child, index) => parseNode(child, String(index), true));
   if (!hasQueryView) {
-    children.push({ id: "query-view", name: "view", attributes: { type: "text", limit: "30", offset: "0" }, children: [] });
+    children.push({ id: "query-view", name: "view", attributes: { type: FCT_VIEW_TYPES.TEXT, limit: "30", offset: "0" }, children: [] });
   }
   return { name: "query", attributes: rootAttributes, children };
 }
@@ -2326,8 +2360,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     };
     const currentView = findView(queryTree.children);
     const rootView: FctQueryNode = currentView
-      ? { ...currentView, attributes: { ...currentView.attributes, type: "properties", offset: "0", index: "" }, children: [] }
-      : { id: "query-view", name: "view", attributes: { type: "properties", limit: "30", offset: "0" }, children: [] };
+      ? { ...currentView, attributes: { ...currentView.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0", index: "" }, children: [] }
+      : { id: "query-view", name: "view", attributes: { type: FCT_VIEW_TYPES.LIST, limit: "30", offset: "0" }, children: [] };
     const freshTree = { ...queryTree, children: [rootView] };
     const rooted = fctQueryTreeApi.setValue(freshTree, null, [{ text: uri, datatype: "uri" }], {
       replaceExisting: true,
@@ -2342,13 +2376,54 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     setSearchPipelineRun((current) => current + 1);
   };
 
+  // Navigate through the shared FCT query API. Class navigation must use a
+  // native <class>, which Categories and the root breadcrumb both derive from.
+  // Property/role badges use the same canonical filter IDs as their widgets.
+  const navigateResultBadge = (predicate: string, term: ScopeValue["values"][number], direction: "forward" | "reverse", category = false, operator: "=" | "contains" = "=") => {
+    const uri = term.value.trim();
+    if (!uri || uri === "-") return;
+    const freshView: FctQueryNode = {
+      id: "query-view", name: "view", attributes: {
+        type: FCT_VIEW_TYPES.LIST, limit: String(resultsBatchSize), offset: "0",
+      }, children: [],
+    };
+    // Preserve query-wide settings (especially addr), but remove all previous
+    // constraints. Compose the new tree via the public query transformations,
+    // then publish it once so all listeners derive the same authoritative state.
+    let nextTree = { ...queryTree, children: [freshView] };
+    if (category) {
+      nextTree = fctQueryTreeApi.addClass(nextTree, null, uri);
+    } else {
+      const value = {
+        text: uri,
+        ...(operator === "contains" ? { op: "contains" } : {}),
+        ...(term.type === "uri" ? { datatype: "uri" }
+          : term.datatype ? { datatype: term.datatype }
+          : term.lang ? { lang: term.lang }
+          : { datatype: "string" }),
+      };
+      if (direction === "reverse") {
+        nextTree = fctQueryTreeApi.setRoleFilter(nextTree, predicate, true);
+        nextTree = fctQueryTreeApi.setRoleValue(nextTree, predicate, value, true);
+      } else {
+        nextTree = fctQueryTreeApi.addProperty(nextTree, predicate, null);
+        nextTree = fctQueryTreeApi.setPropertyValues(nextTree, null, predicate, [value]);
+      }
+    }
+    replaceQueryTree(nextTree);
+    searchDraftRef.current = "";
+    setSearchDraft("");
+    setResultsUiPage(0);
+    setCentralTab("results");
+  };
+
   const applyRecordAsRootValue = (uri: string) => {
     if (!uri.trim()) return;
     const nonTextTree = {
       ...queryTree,
       children: queryTree.children
         .filter((node) => node.name !== "text")
-        .map((node) => setMainViewType(node, "properties")),
+        .map((node) => setMainViewType(node, FCT_VIEW_TYPES.LIST)),
     };
     replaceQueryTree(fctQueryTreeApi.setValue(nonTextTree, null, [{ text: uri, datatype: "uri" }], {
       replaceExisting: true,
@@ -2376,7 +2451,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         ...queryTree,
         children: queryTree.children
           .filter((node) => node.id !== "query-text")
-          .map((node) => setMainViewType(node, "text")),
+          .map((node) => setMainViewType(node, FCT_VIEW_TYPES.TEXT)),
       };
       replaceQueryTree(fctQueryTreeApi.setValue(withoutSearch, null, [], {
         replaceExisting: true,
@@ -2397,7 +2472,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         ...queryTree,
         children: queryTree.children
           .filter((node) => node.name !== "text")
-          .map((node) => setMainViewType(node, "properties")),
+          .map((node) => setMainViewType(node, FCT_VIEW_TYPES.LIST)),
       };
       replaceQueryTree(fctQueryTreeApi.setValue(
         nonSearchTree,
@@ -2434,7 +2509,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       ...queryTree,
       children: queryTree.children
         .filter((node) => node.id !== "query-text")
-        .map((node) => setMainViewType(node, "text")),
+        .map((node) => setMainViewType(node, FCT_VIEW_TYPES.TEXT)),
     };
     const withoutUri = fctQueryTreeApi.setValue(withoutSearch, null, [], {
       replaceExisting: true,
@@ -2453,7 +2528,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
             method: "POST",
             cache: "no-store",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("uri-label-lookup", "UriLabelLookup") },
-            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : ""))}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="describe" limit="30" offset="0"/></query>`,
+            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : ""))}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="${FCT_VIEW_TYPES.DESCRIBE}" limit="30" offset="0"/></query>`,
             signal: controller.signal,
           });
           const data = await readFctResponse(response);
@@ -2659,7 +2734,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
           (node.name === "property" || node.name === "property-of") &&
           typeof node.attributes.iri === "string" &&
           node.attributes.iri.length > 0 &&
-          (node.id.startsWith("property-filter-") || node.id.startsWith("role-filter-")) &&
+          node.children.some((child) => child.name === "value" && Boolean(child.text?.trim())) &&
           node.id !== activePath[activePath.length - 1]?.id,
         );
         if (firstSelectedRelationship) {
@@ -3028,6 +3103,14 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // Server batches and visible UI pages are independent. The active query view's
   // limit/offset are the main Results batch profile; the Group by query has its
   // own limit/offset below. The page-size preference is shared across both views.
+  useEffect(() => {
+    const rootHasUri = queryTree.children.some((node) => node.name === "value" && node.attributes.datatype === "uri");
+    const rootHasRelationship = queryTree.children.some((node) => node.name === "property" || node.name === "property-of");
+    const rootView = queryTree.children.find((node) => node.name === "view");
+    if (rootHasUri && !rootHasRelationship && rootView?.attributes.type === FCT_VIEW_TYPES.PROPERTIES) {
+      setNodeAttribute(rootView.id, "type", FCT_VIEW_TYPES.LIST);
+    }
+  }, [queryTree, setNodeAttribute]);
   const resultsBatchSize = Math.max(
     1,
     Math.floor(Number(viewNode?.attributes.limit ?? 100) || 100),
@@ -3629,7 +3712,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   }
   const sourceSparql = sparqlQuery || "# SPARQL will appear after the endpoint returns a query.";
   const queryWithoutPagingXml = useCallback(
-  (viewType?: string, sortByCount = false, classTree = false) =>
+  (viewType?: FctViewType, sortByCount = false, classTree = false) =>
     serializeFctQuery(
       setQueryViewAttributes(queryTree, {
         ...(viewType ? { type: viewType } : {}),
@@ -3645,10 +3728,10 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 );
   // Snapshot the semantic facet requests. Effects depend on their serialized XML,
   // not queryWithoutPagingXml's callback identity (which changes on every tree edit).
-  const propertyFacetQueryXml = queryWithoutPagingXml("properties");
+  const propertyFacetQueryXml = queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES);
   // The flat Categories list is authoritative in both display modes. Tree mode only changes its arrangement.
-  const classFacetQueryXml = queryWithoutPagingXml("classes", isGroupByCategory, false);
-  const roleFacetQueryXml = queryWithoutPagingXml("properties-in");
+  const classFacetQueryXml = queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, isGroupByCategory, false);
+  const roleFacetQueryXml = queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES_IN);
   // For broad scans of large public endpoints, use the tested rdfs:label-only
   // alphabet query. Other label predicates in the former 17-way join made the
   // aggregation prohibitively expensive on the Virtuoso DBpedia demo.
@@ -3656,8 +3739,24 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // The Alphabet system facet queries a clone of the live scope and never
   // constrains its own counts by the currently selected letter.
   const alphabetQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
-    type: "alphabet", index: "", indexLabels: alphabetLabelUris, limit: "26", offset: "0",
+    type: FCT_VIEW_TYPES.ALPHABET, index: "", indexLabels: alphabetLabelUris, limit: "26", offset: "0",
   }));
+  // ASK preflight: clone the *live* query and append only the label
+  // relationship to its active view scope. Do not run the alphabet query,
+  // its language/initial filters, GROUP BY, or any count until ASK is true.
+  const alphabetAskQueryXml = (() => {
+    const clone = setQueryViewAttributes(queryTree, {
+      type: FCT_VIEW_TYPES.ASK, index: "", limit: "1", offset: "0",
+    });
+    const addLabelAtViewScope = (nodes: FctQueryNode[]): FctQueryNode[] => {
+      if (nodes.some((node) => node.name === "view")) return [
+        ...nodes,
+        { id: "alphabet-preflight-label", name: "property", attributes: { iri: alphabetLabelUris }, children: [] },
+      ];
+      return nodes.map((node) => ({ ...node, children: addLabelAtViewScope(node.children) }));
+    };
+    return serializeFctQuery({ ...clone, children: addLabelAtViewScope(clone.children) });
+  })();
   // Show the same locally compiled SPARQL that the FCT proxy executes for
   // this alphabet request. Keep failures visible in Code Block for diagnosis.
   const alphabetSparql = (() => {
@@ -3682,10 +3781,11 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const alphabetCountsQueryRef = useRef("");
   const [alphabetError, setAlphabetError] = useState("");
   const [isLoadingAlphabet, setIsLoadingAlphabet] = useState(false);
+  const [alphabetPreflight, setAlphabetPreflight] = useState<"checking" | "available" | "unavailable">("checking");
   // Ask FCT for the total independently of the current results page. The
   // count view uses the same active scope and filters, but never the page offset.
   const queryCountXml = serializeFctQuery(
-    setQueryViewAttributes(queryTree, { type: "text", limit: "1000", offset: "0" }),
+    setQueryViewAttributes(queryTree, { type: FCT_VIEW_TYPES.TEXT, limit: "1000", offset: "0" }),
   );
 
   const [results, setResults] = useState<FctResult[]>([]);
@@ -3706,19 +3806,44 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     ))
   );
 
-  // A-Z counts are computed over the unrestricted view, using precisely the
-  // label properties selected beside the root search field.
+  // A cheap ASK first determines whether the current scope has alphabetic
+  // English labels. Only a true response reveals the pane and starts counts.
+  // Both requests share the same AbortController so navigation cannot publish
+  // stale letters or reveal the pane for an earlier query.
   useEffect(() => {
-    if (!selectedEndpointId || !endpointReadyForQuery) return;
     const controller = new AbortController();
     if (alphabetCountsQueryRef.current !== alphabetQueryXml) {
       alphabetCountsQueryRef.current = alphabetQueryXml;
       setAlphabetCounts({});
     }
-    setIsLoadingAlphabet(true);
+    setAlphabetPreflight("checking");
+    setIsLoadingAlphabet(false);
     setAlphabetError("");
+    if (!selectedEndpointId || !endpointReadyForQuery) {
+      setAlphabetPreflight("unavailable");
+      return () => controller.abort();
+    }
     void (async () => {
       try {
+        const askResponse = await cachedFetchFct("/proxy/api/fct", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("alphabet-ask", "AlphabetSystemFacetAsk") },
+          body: alphabetAskQueryXml,
+        });
+        const askXml = await askResponse.text();
+        if (!askResponse.ok) throw new Error(`Alphabet preflight returned HTTP ${askResponse.status}: ${askXml.slice(0, 300)}`);
+        const askDoc = new DOMParser().parseFromString(askXml, "application/xml");
+        if (askDoc.querySelector("parsererror")) throw new Error("Invalid alphabet ASK response XML.");
+        const decision = Array.from(askDoc.getElementsByTagName("*")).find((node) => node.localName === "boolean")?.textContent?.trim();
+        if (decision !== "true" && decision !== "false") throw new Error("Alphabet preflight returned no valid boolean.");
+        if (controller.signal.aborted) return;
+        if (decision === "false") {
+          setAlphabetPreflight("unavailable");
+          setAlphabetCounts({});
+          return;
+        }
+        setAlphabetPreflight("available");
+        setIsLoadingAlphabet(true);
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
           headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("alphabet-facet", "AlphabetSystemFacet") },
@@ -3730,27 +3855,28 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         }
         const next: Record<string, number> = {};
         for (const row of payload.rows) {
-          // Virtuoso may report multiple term representations for the same
-          // printed letter (e.g. S and "S"). Aggregate them client-side and
-          // render the fixed A-Z strip in alphabetical order, without SPARQL
-          // ORDER BY. Only normalize the one-letter grouping value here.
           const rawKey = (row[0]?.value ?? "").trim();
           const match = /^(?:["']?)([A-Za-z])(?:["']?)$/.exec(rawKey);
           const key = match?.[1].toUpperCase();
           const count = Number(row[1]?.value ?? 0);
           if (key && Number.isFinite(count) && count >= 0) next[key] = (next[key] ?? 0) + count;
         }
-        if (!controller.signal.aborted) setAlphabetCounts(next);
+        if (!controller.signal.aborted) {
+          setAlphabetCounts(next);
+          if (!Object.values(next).some((count) => count > 0)) setAlphabetPreflight("unavailable");
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
           setAlphabetError(error instanceof Error ? error.message : "Could not load alphabet counts.");
+          setAlphabetPreflight("unavailable");
+          setAlphabetCounts({});
         }
       } finally {
         if (!controller.signal.aborted) setIsLoadingAlphabet(false);
       }
     })();
     return () => controller.abort();
-  }, [alphabetQueryXml, selectedEndpointId, endpointReadyForQuery]);
+  }, [alphabetQueryXml, alphabetAskQueryXml, selectedEndpointId, endpointReadyForQuery]);
 
   useEffect(() => {
     // Keep the view's persisted index label predicates consistent with changes
@@ -3929,10 +4055,12 @@ useEffect(() => {
   );
   const recordAuthors = recordGraphAuthors.filter((entry) => graphsInSelectedFamily.includes(entry.graph));
 
-  type RecordPolicyOption = { uri: string; label: string; recordShape: string; templates: { uri: string; label: string }[]; template: string | null };
+  type RecordPolicyOption = { uri: string; label: string; recordShape: string; matchedClasses: string[]; templates: { uri: string; label: string }[]; template: string | null };
   const [recordPolicies, setRecordPolicies] = useState<RecordPolicyOption[]>([]);
   const [recordPolicy, setRecordPolicy] = useState<RecordPolicyOption | null>(null);
   const [selectedRecordTemplateUri, setSelectedRecordTemplateUri] = useState("");
+  // A user-selected format wins over automatic policy selection for that Record/query.
+  const manualRecordFormatSelectionRef = useRef<{ recordUri: string; queryXml: string; policyUri: string; templateUri: string } | null>(null);
   // Format choices belong to the selected Category (rdf:type), never to an individual record.
   // Explicitly checked Categories take precedence when a resource has several types.
   const recordFormatCategory = (): string => {
@@ -4006,6 +4134,39 @@ useEffect(() => {
   const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
   const [recordDescriptionPageSize, setRecordDescriptionPageSize] = useState<number>(20);
   const [recordDescriptionQueryLimit, setRecordDescriptionQueryLimit] = useState<number>(10000);
+  const [pendingRecordDescriptionLimit, setPendingRecordDescriptionLimit] = useState<number | null>(null);
+  const [pendingCenterBatchLimit, setPendingCenterBatchLimit] = useState<number | null>(null);
+  const [pendingLeftPanelLimit, setPendingLeftPanelLimit] = useState<number | null>(null);
+  const [pendingGroupsBatchLimit, setPendingGroupsBatchLimit] = useState<number | null>(null);
+  const previousSettingsRevisionRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (previousSettingsRevisionRef.current === null) {
+      previousSettingsRevisionRef.current = queryRevision;
+      return;
+    }
+    if (previousSettingsRevisionRef.current === queryRevision) return;
+    previousSettingsRevisionRef.current = queryRevision;
+    if (pendingRecordDescriptionLimit !== null) {
+      setRecordDescriptionQueryLimit(pendingRecordDescriptionLimit);
+      setPendingRecordDescriptionLimit(null);
+    }
+    if (pendingCenterBatchLimit !== null) {
+      setPendingCenterBatchLimit(null);
+      // Apply the preference to the live view when another query change occurs.
+      setResultsPage(pendingCenterBatchLimit, 0);
+    }
+    if (pendingLeftPanelLimit !== null) {
+      setLeftPanelLimitState(pendingLeftPanelLimit);
+      setGraphsPage(0);
+      setPendingLeftPanelLimit(null);
+    }
+    if (pendingGroupsBatchLimit !== null) {
+      setGroupBatchSize(pendingGroupsBatchLimit);
+      setGroupBatchOffset(0);
+      setGroupUiPage(0);
+      setPendingGroupsBatchLimit(null);
+    }
+  }, [queryRevision, pendingRecordDescriptionLimit, pendingCenterBatchLimit, pendingLeftPanelLimit, pendingGroupsBatchLimit, setResultsPage]);
   const [panelLimitsOpen, setPanelLimitsOpen] = useState(false);
   const RECORD_DESCRIPTION_PAGE_SIZE = recordDescriptionPageSize;
   
@@ -4031,6 +4192,7 @@ const describedPropertyCount = describedProperties.filter((item) => item.directi
 const describedRoleCount = describedProperties.filter((item) => item.direction === "property-of").length;
   
   const [isDescribing, setIsDescribing] = useState(false);
+  const [recordDescriptionError, setRecordDescriptionError] = useState("");
   const [isCountingResults, setIsCountingResults] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [resultsRawResponse, setResultsRawResponse] = useState("# No Results FCT response received yet.");
@@ -4046,8 +4208,10 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
 
 
   const resultsCountSparql = buildFctCountSparql(queryTree);
+  const rootUriWithoutPath = queryTree.children.some((node) => node.name === "value" && node.attributes.datatype === "uri") &&
+    !queryTree.children.some((node) => node.name === "property" || node.name === "property-of");
   const resultsRequestXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
-    type: "text",
+    type: rootUriWithoutPath ? FCT_VIEW_TYPES.LIST : FCT_VIEW_TYPES.TEXT,
     limit: String(resultsBatchSize),
     offset: String(resultsOffset),
     badges: "no", // list-values independently enriches the paginated Results page.
@@ -4306,7 +4470,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
             ? { ...previous, ...item, matches: [...previous.matches, ...item.matches] }
             : { ...item, matches: [...item.matches] });
         }
-        const enrichmentScopeForPage = `list-values-v1\u0000${selectedEndpointId}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
+        const enrichmentScopeForPage = `list-values-movie-year-v2\u0000${selectedEndpointId}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
         const nextResults = Array.from(uniqueResults.values()).map((item) => {
           const saved = showResultBadges ? resultsEnrichmentCacheRef.current.get(enrichmentScopeForPage + item.uri) : undefined;
           return saved ? { ...item, scopeValues: saved } : item;
@@ -4378,7 +4542,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
     // Every Results card needs rdf:type for its Category banner, regardless of
     // which Properties the user has chosen to show as additional badges.
     const selectedForward = [...new Set([
-      ...(showResultBadges ? [RDF_TYPE_URI] : []),
+      ...(showResultBadges ? [RDF_TYPE_URI, ...MOVIE_RELEASE_PROPERTIES] : []),
       ...(resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000") : []),
     ])];
     const selectedReverse = resultBadgeRolesKey ? resultBadgeRolesKey.split("\u0000") : [];
@@ -4412,7 +4576,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
       })),
     ];
 
-    const enrichmentScope = `list-values-v1\u0000${selectedEndpointId}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
+    const enrichmentScope = `list-values-movie-year-v2\u0000${selectedEndpointId}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
     const cache = resultsEnrichmentCacheRef.current;
     setResults((current) => current.map((item) => {
       const saved = cache.get(enrichmentScope + item.uri);
@@ -4615,7 +4779,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
         try {
           const memberTree = createGroupMemberQuery(queryTree, selectedGroupByOption, groupValue);
           const memberXml = serializeFctQuery(setQueryViewAttributes(memberTree, {
-            type: "text", limit: String(resultsBatchSize), offset: "0",
+            type: FCT_VIEW_TYPES.TEXT, limit: String(resultsBatchSize), offset: "0",
           }));
           const request = (body: string, label: string) => cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store",
@@ -4735,7 +4899,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
             // Virtuoso manages to complete a global GROUP BY. Counts are
             // sample frequencies, never represented as exact totals.
             const sampleXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
-              type: "classes", sample: "yes", tree: "", sort: "", offset: "0", limit: "500",
+              type: FCT_VIEW_TYPES.CLASSES, sample: "yes", tree: "", sort: "", offset: "0", limit: "500",
             }));
             const sampled = await loadCategories(sampleXml, "FacetLoader:classes-sample-fallback");
             const classSamples = new Map<string, { label: string; members: Set<string> }>();
@@ -4798,7 +4962,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:classes-hierarchy") },
-            body: queryWithoutPagingXml("classes", false, true),
+            body: queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, true),
             signal: controller.signal,
           });
           const data = await readFctResponse(response);
@@ -4941,7 +5105,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
         const limit = FACET_PAGE_SIZE; //leftPanelLimit;
         const offset = graphsPage * limit;
         const graphQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
-          type: "graphs", sort: graphSort, limit: String(limit), offset: String(offset),
+          type: FCT_VIEW_TYPES.GRAPHS, sort: graphSort, limit: String(limit), offset: String(offset),
         }));
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
@@ -5123,6 +5287,7 @@ setGraphFacets(graphs);
     setDescribedRecord([]);
     setRecordDescriptionSnapshot(null);
     setRecordDescribeIncomplete(false);
+    setRecordDescriptionError("");
     setDescribedRecordUri("");
     setRecordDescriptionPage(0);
     setFormattedRecordHtml("");
@@ -5265,6 +5430,9 @@ setGraphFacets(graphs);
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
           console.warn("Record SELECT failed:", error);
+          const message = error instanceof Error ? error.message : String(error);
+          setRecordDescriptionError(`Record SELECT failed: ${message}`);
+          setRecordFormatError(`Record SELECT failed: ${message}`);
           setDescribedRecord([]);
           setRecordDescriptionSnapshot(null);
           setRecordDescribeIncomplete(false);
@@ -5404,10 +5572,11 @@ setGraphFacets(graphs);
       item.direction === "property" && bookPredicates.has(item.property) &&
       /[0-9Xx]{9,13}/.test(item.value.replace(/[\s-]/g, "")),
     );
+    const actualRecordTypes = Array.from(new Set(describedRecord
+      .filter((item) => item.direction === "property" && item.property === rdfTypeUri && /^[a-z][a-z0-9+.-]*:/i.test(item.value))
+      .map((item) => item.value)));
     const recordTypes = Array.from(new Set([
-      ...describedRecord
-        .filter((item) => item.direction === "property" && item.property === rdfTypeUri && /^[a-z][a-z0-9+.-]*:/i.test(item.value))
-        .map((item) => item.value),
+      ...actualRecordTypes,
       // When the partial DESCRIBE does not include rdf:type, the current
       // Results query's class constraint still identifies this matched record.
       ...knownResultClassIris,
@@ -5434,7 +5603,7 @@ setGraphFacets(graphs);
       body: JSON.stringify({ action: "discover", recordTypes }),
       signal: controller.signal,
     }).then(async (response) => {
-      const payload = await response.json() as { policies?: { uri: string; label: string; recordShape: string; templates: { uri: string; label: string }[] }[]; error?: string; debugSparql?: string };
+      const payload = await response.json() as { policies?: { uri: string; label: string; recordShape: string; matchedClasses?: string[]; templates: { uri: string; label: string }[] }[]; error?: string; debugSparql?: string };
       if (!controller.signal.aborted) setRecordDebug((current) => ({ ...current, policyDiscovery: payload.debugSparql ?? `POST /proxy/api/policies\n${JSON.stringify({ action: "discover", recordTypes }, null, 2)}` }));
       if (!response.ok) throw new Error(payload.error || `Policy lookup returned HTTP ${response.status}.`);
       if (!controller.signal.aborted) {
@@ -5444,7 +5613,7 @@ setGraphFacets(graphs);
           const templates = (item.templates ?? []).filter((template) =>
             !template.uri.endsWith("BookmarkQueryResultsTemplate") || hasSavedHistoryQuery,
           );
-          return { ...item, templates, template: templates[0]?.uri ?? null };
+          return { ...item, matchedClasses: item.matchedClasses ?? [], templates, template: templates[0]?.uri ?? null };
         }).filter((item) => item.templates.length > 0);
         setRecordPolicies(policies);
         let preferredPolicy = policies[0] ?? null;
@@ -5470,6 +5639,31 @@ setGraphFacets(graphs);
             preferredTemplate = preferredPolicy?.templates.some((item) => item.uri === savedTemplate) ? savedTemplate : (preferredPolicy?.templates[0]?.uri ?? "");
           }
         } catch { /* Use the first available policy/format when no saved preference is available. */ }
+        // The XML query is authoritative. Only classes directly in the active
+        // view scope participate; never consult classes from unrelated branches.
+        // Test every scoped class against every actual rdf:type, then prefer a
+        // discovered policy whose mui:forClass matches that shared class.
+        const activePath = getPropertyPath();
+        const scopeClasses = getClassesAtNode(activePath.at(-1)?.id ?? null);
+        const recordTypeSet = new Set(actualRecordTypes);
+        const matchingClass = scopeClasses.find((iri) =>
+          recordTypeSet.has(iri) && policies.some((policy) => policy.matchedClasses.includes(iri)));
+        const queryClassPolicy = matchingClass
+          ? policies.find((policy) => policy.matchedClasses.includes(matchingClass)) ?? null
+          : null;
+        const explicitSelection = manualRecordFormatSelectionRef.current;
+        const manualPolicy = explicitSelection?.recordUri === selectedUri && explicitSelection.queryXml === queryXml
+          ? policies.find((policy) => policy.uri === explicitSelection.policyUri &&
+              policy.templates.some((template) => template.uri === explicitSelection.templateUri)) ?? null
+          : null;
+        if (manualPolicy && explicitSelection) {
+          preferredPolicy = manualPolicy;
+          preferredTemplate = explicitSelection.templateUri;
+        } else if (queryClassPolicy) {
+          preferredPolicy = queryClassPolicy;
+          preferredTemplate = queryClassPolicy.templates[0]?.uri ?? "";
+        }
+        if (controller.signal.aborted) return;
         setRecordPolicy(preferredPolicy);
         setSelectedRecordTemplateUri(preferredTemplate);
       }
@@ -5741,7 +5935,7 @@ setGraphFacets(graphs);
           const askDoc = reviewQueryDoc.cloneNode(true) as Document;
           const askView = Array.from(askDoc.getElementsByTagName("*")).find((node) => node.localName === "view");
           if (!askView) throw new Error("The Review pivot has no FCT view.");
-          askView.setAttribute("type", "ask");
+          askView.setAttribute("type", FCT_VIEW_TYPES.ASK);
           askView.removeAttribute("offset");
           askView.removeAttribute("limit");
           const askResponse = await cachedFetchFct("/proxy/api/fct", {
@@ -5792,7 +5986,7 @@ setGraphFacets(graphs);
           if (fetched.querySelector("parsererror")) throw new Error("Invalid list-values Book review XML.");
           const namespace = "http://openlinksw.com/services/facets/1.0/";
           const targetResult = Array.from(sourceXml.getElementsByTagNameNS(namespace, "result"))
-            .find((element) => element.getAttribute("type") === "describe");
+            .find((element) => element.getAttribute("type") === FCT_VIEW_TYPES.DESCRIBE);
           if (targetResult) {
             const insertTriple = (subject: string, predicate: string, object: Element) => {
               if (!subject || !predicate || !object.textContent?.trim()) return;
@@ -6254,7 +6448,7 @@ setGraphFacets(graphs);
         // The SPARQL translator does not support view type="count". Count via a
         // text-view clone with a larger bounded window instead, while preserving
         // the exact saved query filters and bindings.
-        countView.setAttribute("type", "text");
+        countView.setAttribute("type", FCT_VIEW_TYPES.TEXT);
         countView.setAttribute("limit", "100000");
         countView.setAttribute("offset", "0");
         const countQuery = new XMLSerializer().serializeToString(countQueryDocument);
@@ -6559,6 +6753,19 @@ setGraphFacets(graphs);
         }
         return;
       }
+      // Record-formatter chips can request the same property navigation as
+      // result-card badges, with an explicit lexical contains comparison.
+      const propertyChip = target.closest("[data-maestro-filter-property]");
+      if (propertyChip) {
+        event.preventDefault();
+        const predicate = propertyChip.getAttribute("data-maestro-filter-property") ?? "";
+        const value = propertyChip.getAttribute("data-maestro-filter-value") ?? "";
+        const operator = propertyChip.getAttribute("data-maestro-filter-op") === "contains" ? "contains" : "=";
+        if (/^https?:\/\//.test(predicate) && value.trim()) {
+          navigateResultBadge(predicate, { value, type: "literal" }, "forward", false, operator);
+        }
+        return;
+      }
       const recordUriLink = target.closest("[data-maestro-record-uri]");
       if (recordUriLink) {
         const uri = recordUriLink.getAttribute("data-maestro-record-uri") ?? "";
@@ -6580,7 +6787,7 @@ setGraphFacets(graphs);
     };
     root.addEventListener("click", handleTemplateAction);
     return () => root.removeEventListener("click", handleTemplateAction);
-  }, [formattedRecordHtml, selectedUri]);
+  }, [formattedRecordHtml, selectedUri, navigateResultBadge]);
 
   // The active scope is the property-path node that currently contains the
   // authoritative <view>; at the root, scope is represented by null.
@@ -6622,7 +6829,7 @@ const makeBreadcrumbScopedTree = (
   // <value> on its own node, so the target scope can only return values reached
   // from that exact record (R0 -p1-> R1 -p2-> R2 ...).
   pins: { nodeId: string; uri: string }[] = [],
-  viewType: "text" | "classes" = "text",
+  viewType: typeof FCT_VIEW_TYPES.TEXT | typeof FCT_VIEW_TYPES.CLASSES = FCT_VIEW_TYPES.TEXT,
 ): FctQueryTree | null => {
   // Metadata queries are clones of the live query. Only the active <view> is
   // moved to the target scope and normalized to one result at offset zero.
@@ -6664,7 +6871,7 @@ const makeBreadcrumbScopedTree = (
   const viewNode: FctQueryNode = {
     id: "query-view",
     name: "view",
-    attributes: { ...(existingView?.attributes ?? {}), type: viewType, limit: viewType === "classes" ? "30" : "1", offset: "0" },
+    attributes: { ...(existingView?.attributes ?? {}), type: viewType, limit: viewType === FCT_VIEW_TYPES.CLASSES ? "30" : "1", offset: "0" },
     children: [],
   };
   const attach = (nodes: FctQueryNode[]): boolean => {
@@ -6743,7 +6950,7 @@ useEffect(() => {
     if (textData.results[0]) return textData.results[0];
     if (controller.signal.aborted) return undefined;
     try {
-      const listTree = setQueryViewAttributes(tree, { type: "list", limit: "1", offset: "0", order: "no" });
+      const listTree = setQueryViewAttributes(tree, { type: FCT_VIEW_TYPES.LIST, limit: "1", offset: "0", order: "no" });
       const listData = await request(serializeFctQuery(listTree), `${component}:list-fallback`);
       if (listData.error) return undefined;
       return listData.results[0];
@@ -6812,7 +7019,7 @@ useEffect(() => {
     if (breadcrumbBadgeMode === "classes") {
       for (let index = 0; index < targetCrumbs.length; index += 1) {
         const crumb = targetCrumbs[index];
-        const scopeTree = makeBreadcrumbScopedTree(crumb.id, [], "classes");
+        const scopeTree = makeBreadcrumbScopedTree(crumb.id, [], FCT_VIEW_TYPES.CLASSES);
         if (!scopeTree) continue;
         let scope = cachedSummary(scopeTree);
         if (!scope && fetchMissing) {
@@ -7511,7 +7718,7 @@ useEffect(() => {
             attributes: { iri: "https://schema.org/identifier" },
             children: [],
           }] : []),
-          { id: "query-view", name: "view", attributes: { type: "text", limit: "30", offset: "0" }, children: [] },
+          { id: "query-view", name: "view", attributes: { type: FCT_VIEW_TYPES.TEXT, limit: "30", offset: "0" }, children: [] },
         ],
       };
       const historyQueryXml = serializeFctQuery(historyTree);
@@ -7921,15 +8128,43 @@ useEffect(() => {
   }
 
   /** Bound <value> children of a relationship node, in query order. */
+  function hasValueRange(value: FctQueryNode): boolean {
+    return value.attributes.rangeStart !== undefined || value.attributes.rangeEnd !== undefined;
+  }
+
   function boundValueNodes(node: FctQueryNode | undefined): FctQueryNode[] {
-    return (node?.children ?? []).filter((child) => child.name === "value" && Boolean(child.text));
+    return (node?.children ?? []).filter((child) => child.name === "value" && (Boolean(child.text) || hasValueRange(child)));
   }
 
   function boundValueLabel(value: FctQueryNode): string {
+    if (hasValueRange(value)) {
+      return `(${value.attributes.rangeStart ?? ""}, ${value.attributes.rangeEnd ?? ""})`;
+    }
     const text = value.text ?? "";
     const lang = value.attributes["xml:lang"];
     const base = value.attributes.datatype === "uri" ? toLabel(text) : text;
     return lang ? `${base} @${lang}` : base;
+  }
+
+  /** Operator icon shared by breadcrumb bindings, menus, and Query Tree bindings. */
+  function renderValueOperator(value: FctQueryNode, sizeClass = "size-3.5"): ReactNode {
+    const op = (value.attributes.op ?? "=").trim().toLowerCase();
+    const iconClass = `${sizeClass} shrink-0 self-center text-muted-foreground`;
+    if (hasValueRange(value)) {
+      return <ChevronsRightLeft className={iconClass} aria-label="inclusive range" />;
+    }
+    if (op === "regex") return <Regex className={iconClass} aria-label="regular expression" />;
+    if (op === "contains") return <EqualApproximately className={iconClass} aria-label="contains" />;
+    if (op === ">" || op === "gt") return <ChevronRight className={iconClass} aria-label="greater than" />;
+    if (op === "<" || op === "lt") return <ChevronLeft className={iconClass} aria-label="less than" />;
+    if ([">=", "gte", "<=", "lte"].includes(op)) {
+      const Icon = op === ">=" || op === "gte" ? ChevronRight : ChevronLeft;
+      return <span className="inline-flex shrink-0 items-center gap-0" aria-label={op === ">=" || op === "gte" ? "greater than or equal" : "less than or equal"}>
+        <Icon className={iconClass} aria-hidden="true" />
+        <Equal className={iconClass} aria-hidden="true" />
+      </span>;
+    }
+    return <Equal className={iconClass} aria-label="equals" />;
   }
 
   /** Lazy, real example/count for a submenu node, never the predicate display name. */
@@ -8018,7 +8253,7 @@ useEffect(() => {
         <span className="truncate">{baseLabel}</span>
         {boundValues.map((v) => (
           <span key={v.id} className="ml-1 inline-flex items-baseline gap-0.5 text-xs text-muted-foreground">
-            <Equal className="size-3 shrink-0" aria-label="equals" />
+            {renderValueOperator(v, "size-3")}
             <span>
               <em>i.e.</em> {boundValueLabel(v)}
             </span>
@@ -8078,7 +8313,7 @@ useEffect(() => {
       return `Focus · limit ${node.attributes.limit ?? "30"} · offset ${node.attributes.offset ?? "0"}`;
     }
     if (node.name === "value")
-      return node.text || "Value";
+      return boundValueLabel(node) || "Value";
     if (node.name === "property-of") {
       // Depending on the source XML, reverse relationships may expose their
       // predicate through iri, property, role, or text. Prefer the Roles facet
@@ -8181,7 +8416,7 @@ useEffect(() => {
     const showMinus = !isRootCarrierRow || rootTextOrValue || rootClassesOnThisNode.length > 0;
     const lockedNode = protectedNode && !isRootCarrierRow;
     const visibleChildren = node.children.filter((child) =>
-      child.id !== "query-view" && child.name !== "class" && !(inlinesValues && child.name === "value" && Boolean(child.text)));
+      child.id !== "query-view" && child.name !== "class" && !(inlinesValues && child.name === "value" && (Boolean(child.text) || hasValueRange(child))));
     const hasVisibleChildren = visibleChildren.length > 0;
     const isCollapsed = collapsedQueryNodeIds.has(node.id);
     const toggleCollapsed = () => setCollapsedQueryNodeIds((current) => {
@@ -8233,12 +8468,13 @@ useEffect(() => {
               <Tooltip><TooltipTrigger render={<span
                 className="min-w-0 break-words"
               >
+                {node.name === "value" && <span className="mr-1 inline-flex align-middle">{renderValueOperator(node)}</span>}
                 {node.id === "query-view" ? "Results view" : facetHoverPreview?.kind === "record" && node.id === rootPreviewNodeId ? facetHoverPreview.label : queryNodeLabel(node)}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
               </span>} /><TooltipContent>{node.attributes.iri ?? node.name}</TooltipContent></Tooltip>
             )}
             {inlineValues.map((value) => (
               <span key={value.id} className="ml-1.5 inline-flex max-w-full items-baseline gap-1 align-baseline">
-                <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
+                {renderValueOperator(value)}
                 <Tooltip><TooltipTrigger render={<span
                   className="min-w-0 break-words"
                 >
@@ -9637,8 +9873,13 @@ useEffect(() => {
                 <select
                   id="left-panel-limit"
                   aria-label="Left panel widget limit"
-                  value={leftPanelLimit}
-                  onChange={(event) => setLeftPanelLimit(Number(event.currentTarget.value))}
+                  value={pendingLeftPanelLimit ?? leftPanelLimit}
+                  onChange={(event) => {
+                    const limit = Number(event.currentTarget.value);
+                    if (!RESULTS_BATCH_SIZE_OPTIONS.includes(limit as typeof RESULTS_BATCH_SIZE_OPTIONS[number])) return;
+                    try { window.localStorage.setItem(LEFT_PANEL_LIMIT_STORAGE_KEY, String(limit)); } catch { /* non-fatal */ }
+                    setPendingLeftPanelLimit(limit);
+                  }}
                   className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
                 >
                   {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
@@ -9650,28 +9891,24 @@ useEffect(() => {
 
                   <div className="flex items-center justify-between gap-3">
                     <Label htmlFor="center-results-limit">Results batch LIMIT</Label>
-                    <select id="center-results-limit" aria-label="Center Results server batch limit" value={resultsBatchSize} disabled={isSearching}
+                    <select id="center-results-limit" aria-label="Center Results server batch limit" value={pendingCenterBatchLimit ?? resultsBatchSize}
                       onChange={(event) => {
                         const limit = Number(event.currentTarget.value);
                         if (!RESULTS_BATCH_SIZE_OPTIONS.some((size) => size === limit)) return;
                         maestroStorageSet(CENTER_PANEL_LIMIT_STORAGE_KEY, String(limit));
-                        setResultsUiPage(0);
-                        setResults([]);
-                        resultsLoadedQueryIdentityRef.current = "";
-                        setResultsPage(limit, 0);
+                        setPendingCenterBatchLimit(limit);
                       }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
                     </select>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <Label htmlFor="center-group-limit">Groups batch LIMIT</Label>
-                    <select id="center-group-limit" aria-label="Center Groups server batch limit" value={groupBatchSize} disabled={groupValuesLoading}
+                    <select id="center-group-limit" aria-label="Center Groups server batch limit" value={pendingGroupsBatchLimit ?? groupBatchSize}
                       onChange={(event) => {
                         const limit = Number(event.currentTarget.value);
                         if (!RESULTS_BATCH_SIZE_OPTIONS.some((size) => size === limit)) return;
                         maestroStorageSet(CENTER_GROUP_LIMIT_STORAGE_KEY, String(limit));
-                        setGroupBatchSize(limit); setGroupBatchOffset(0); setGroupUiPage(0);
-                        setGroupHasMoreBatches(false); setGroupValues([]);
+                        setPendingGroupsBatchLimit(limit);
                       }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
                     </select>
@@ -9683,12 +9920,12 @@ useEffect(() => {
 
                   <div className="flex items-center justify-between gap-3">
                     <Label htmlFor="right-describe-limit">Record SELECT LIMIT</Label>
-                    <select id="right-describe-limit" aria-label="Right Record DESCRIBE query limit" value={recordDescriptionQueryLimit} disabled={isDescribing}
+                    <select id="right-describe-limit" aria-label="Right Record DESCRIBE query limit" value={pendingRecordDescriptionLimit ?? recordDescriptionQueryLimit}
                       onChange={(event) => {
                         const limit = Number(event.currentTarget.value);
                         if (!RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS.some((size) => size === limit)) return;
                         maestroStorageSet(RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY, String(limit));
-                        setRecordDescriptionQueryLimit(limit);
+                        setPendingRecordDescriptionLimit(limit);
                       }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       {RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
                     </select>
@@ -10076,7 +10313,7 @@ useEffect(() => {
                   {breadcrumbBaseLabel}
                   {breadcrumbBoundValues.map((value) => (
                     <span key={value.id} className="ml-1.5 inline-flex items-baseline gap-1">
-  <Equal className="size-3.5 shrink-0 self-center text-muted-foreground" aria-label="equals" />
+  {renderValueOperator(value)}
   <span>{boundValueLabel(value)}</span>
 </span>
                   ))}
@@ -10400,21 +10637,21 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                             </div>
                             {group === "Properties" && (
                               <QueryInspectorButton
-                                query={`${queryWithoutPagingXml("properties")}\n<!-- FCT API option: view=properties -->`}
+                                query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES)}\n<!-- FCT API option: view=properties -->`}
                                 filename="properties-fct-query.xml"
                                 label="View Properties widget query"
                                 headerTone
-                                countQuery={propertyFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "property", propertyFacets[0].uri, undefined, undefined, "properties")) : undefined}
+                                countQuery={propertyFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "property", propertyFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.PROPERTIES)) : undefined}
                                 countFilename="properties-first-item-count.sparql"
                               />
                             )}
                             {group === "Roles" && (
                               <QueryInspectorButton
-                                query={`${queryWithoutPagingXml("properties-in")}\n<!-- FCT API option: view=properties-in -->`}
+                                query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES_IN)}\n<!-- FCT API option: view=properties-in -->`}
                                 filename="roles-fct-query.xml"
                                 label="View Roles widget query"
                                 headerTone
-                                countQuery={roleFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "role", roleFacets[0].uri, undefined, undefined, "properties-in")) : undefined}
+                                countQuery={roleFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "role", roleFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.PROPERTIES_IN)) : undefined}
                                 countFilename="roles-first-item-count.sparql"
                               />
                             )}
@@ -10694,7 +10931,7 @@ onMouseLeave={() => {
                   <div className="space-y-3">
                     <article ref={categoriesWidgetRef} className={`flex min-w-0 flex-col ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
                       <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
-                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml("classes", false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, "classes")) : undefined} countFilename="categories-first-item-count.sparql" /><Tooltip><TooltipTrigger render={<button
+                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.CLASSES)) : undefined} countFilename="categories-first-item-count.sparql" /><Tooltip><TooltipTrigger render={<button
                           type="button"
                           aria-pressed={categoriesTreeMode}
                           onClick={() => { setQueryAttribute("classTree", categoriesTreeMode ? "false" : "true"); setExpandedCategoryNodes(new Set()); setClassesPage(0); }}
@@ -10889,10 +11126,10 @@ onMouseLeave={() => {
                                 )}
                                 <div className="flex shrink-0 items-center gap-1">
                                   <QueryInspectorButton
-                                    query={`${queryWithoutPagingXml("properties-in")}\n<!-- FCT API option: view=properties-in -->`}
+                                    query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES_IN)}\n<!-- FCT API option: view=properties-in -->`}
                                     filename="roles-fct-query.xml"
                                     label="View Roles widget query"
-                                    countQuery={buildFctCountSparql(createDistinctCountQuery(queryTree, "role", uri, undefined, undefined, "properties-in"))}
+                                    countQuery={buildFctCountSparql(createDistinctCountQuery(queryTree, "role", uri, undefined, undefined, FCT_VIEW_TYPES.PROPERTIES_IN))}
                                     countFilename="roles-first-item-count.sparql"
                                   />
                                   {!excluded && (
@@ -11131,7 +11368,7 @@ onMouseLeave={() => {
                 </div>
               </div>
 
-              {centralTab === "results" && Object.values(alphabetCounts).some((count) => count > 0) && (
+              {centralTab === "results" && alphabetPreflight === "available" && (
                 <div id="maestro-alphabet" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2" aria-label="Alphabetical browse by selected label properties">
                   <IncompleteWidgetIndicator source="alphabet" />
                   {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0).map((letter) => (
@@ -11148,7 +11385,7 @@ onMouseLeave={() => {
                       <span className={`tabular-nums font-normal ${alphabetIndex === letter ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
                     </button>
                   ))}
-                  {isLoadingAlphabet && <span className="text-xs text-muted-foreground">Locating letters...</span>}
+                  {isLoadingAlphabet && <span className="text-xs text-muted-foreground">Fetching letter filters...</span>}
                   {alphabetError && <span className="text-xs text-destructive" title={alphabetError}>{Object.values(alphabetCounts).some((count) => count > 0) ? "Alphabet partial" : "Alphabet unavailable"}</span>}
                 </div>
               )}
@@ -11211,6 +11448,30 @@ onMouseLeave={() => {
                       .filter((value) => Boolean(value) && value !== "-")
                   ));
 
+                  const isMovie = recordClasses.some((iri) => MOVIE_CLASS_IRIS.has(iri));
+                  const movieYear = isMovie ? (() => {
+                    const scopeValues = item.scopeValues ?? [];
+                    // Prefer dedicated release predicates in declared priority order.
+                    for (const predicate of MOVIE_RELEASE_PROPERTIES) {
+                      for (const term of scopeValues.filter((scope) => scope.direction === "forward" && scope.property === predicate).flatMap((scope) => scope.values)) {
+                        const year = releaseYearFromText(term.value);
+                        if (year) return year;
+                      }
+                    }
+                    // If no known property is available, inspect date/year-like
+                    // properties already returned by the enrichment query.
+                    for (const scope of scopeValues) {
+                      if (!/(?:date|year|released|premier|published)/i.test(scope.property)) continue;
+                      for (const term of scope.values) {
+                        const year = releaseYearFromText(term.value);
+                        if (year) return year;
+                      }
+                    }
+                    // Titles sometimes carry their release year in parentheses.
+                    return (item.title.match(/\(((?:18|19|20|21)\d{2})\)/)?.[1] ?? null);
+                  })() : null;
+                  const selectedBadgePropertySet = new Set(resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000") : []);
+
                   return (
                     <div
                       key={`${item.uri}-${index}`}
@@ -11223,15 +11484,17 @@ onMouseLeave={() => {
                     >
                       {showResultBadges && (
                         <div
-                          className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-t-[5px] bg-zinc-200 px-3 py-2 text-xs font-medium text-zinc-800 dark:bg-zinc-700 dark:text-zinc-100"
+                          className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-t-[5px] bg-sky-100 px-3 py-2 text-xs font-medium text-sky-950 dark:bg-sky-950/60 dark:text-sky-100"
                           aria-label="Record classes"
                         >
                           {recordClasses.length > 0 ? recordClasses.map((classIri, classIndex) => (
                             <Fragment key={classIri}>
-                              {classIndex > 0 && <span className="text-zinc-500 dark:text-zinc-300" aria-hidden="true">·</span>}
-                              <span title={classIri} className="break-words">{toLabel(classIri, "Class")}</span>
+                              {classIndex > 0 && <span className="text-sky-600/70 dark:text-sky-300/70" aria-hidden="true">·</span>}
+                              <button type="button" title={`Show all records of class ${classIri}`}
+                                onClick={() => navigateResultBadge(RDF_TYPE_URI, { value: classIri, type: "uri" }, "forward", true)}
+                                className="cursor-pointer break-words rounded px-1 hover:bg-sky-200 hover:text-sky-950 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring dark:hover:bg-sky-800 dark:hover:text-sky-100">{toLabel(classIri, "Class")}</button>
                             </Fragment>
-                          )) : <span className="font-normal italic text-zinc-500 dark:text-zinc-300">no type</span>}
+                          )) : <span className="font-normal italic text-sky-700/75 dark:text-sky-200/75">no type</span>}
                         </div>
                       )}
                       <div className="flex items-start gap-2 p-3">
@@ -11239,31 +11502,13 @@ onMouseLeave={() => {
                           onClick={() => setSelectedUri(item.uri)}
                           className="min-w-0 flex-1 text-left cursor-pointer"
                         >
-                          <span className="block text-sm font-medium cursor-pointer">
-                            {item.termType === "uri" ? toLabel(item.uri, "Class") : item.title || item.uri}
+                          <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm font-medium cursor-pointer">
+                            <span>{item.termType === "uri" ? toLabel(item.uri, "Class") : item.title || item.uri}</span>
+                            {movieYear && <span className="text-xs font-normal text-muted-foreground" title="Release year">{movieYear}</span>}
                           </span>
                           <span className="mt-1 block break-all text-xs text-muted-foreground">
                             {item.uri}
                           </span>
-                          {(item.scopeValues?.some((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward")) ?? false) && (
-                            <span className="mt-2 flex flex-wrap gap-1.5" aria-label="Selected property values">
-                              {item.scopeValues!.filter((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward")).map((scopeValue) => scopeValue.values.map((term, termIndex) => {
-                                const propertyLabel = toLabel(scopeValue.property);
-                                const visiblePropertyLabel = scopeValue.direction === "reverse" ? `${propertyLabel} of` : propertyLabel;
-                                const displayValue = term.type === "uri" ? toLabel(term.value) : term.value;
-                                const label = `${visiblePropertyLabel}: ${displayValue}${term.lang ? ` @${term.lang}` : ""}${term.datatype ? `^^${term.datatype}` : ""}`;
-                                return (
-                                  <Tooltip><TooltipTrigger render={<span
-                                    key={`${scopeValue.direction}:${scopeValue.property}:${term.value}:${term.lang ?? ""}:${term.datatype ?? ""}:${termIndex}`}
-                                    className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-1 text-[11px] font-normal text-muted-foreground"
-                                  >
-                                    <span className="font-medium text-foreground">{visiblePropertyLabel}</span>
-                                    <span className="max-w-[240px] truncate">{displayValue}</span>
-                                  </span>} /><TooltipContent>{label}</TooltipContent></Tooltip>
-                                );
-                              }))}
-                            </span>
-                          )}
                         </button>
 
                         {isRootView && liveQueryHasText && search.trim().length > 0 && (
@@ -11310,6 +11555,29 @@ onMouseLeave={() => {
                               )}
                             </div>
                           ))}
+                        </div>
+                      )}
+
+                      {(item.scopeValues?.some((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward") &&
+                            (scopeValue.direction !== "forward" || !MOVIE_RELEASE_PROPERTIES.some((iri) => iri === scopeValue.property) || selectedBadgePropertySet.has(scopeValue.property))) ?? false) && (
+                        <div className="flex flex-wrap items-center gap-1.5 border-t border-border px-3 py-2" aria-label="Selected property values">
+                          {item.scopeValues!.filter((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward") &&
+                            (scopeValue.direction !== "forward" || !MOVIE_RELEASE_PROPERTIES.some((iri) => iri === scopeValue.property) || selectedBadgePropertySet.has(scopeValue.property))).map((scopeValue) => scopeValue.values.map((term, termIndex) => {
+                                const propertyLabel = toLabel(scopeValue.property);
+                                const visiblePropertyLabel = scopeValue.direction === "reverse" ? `${propertyLabel} of` : propertyLabel;
+                                const displayValue = term.type === "uri" ? toLabel(term.value) : term.value;
+                                const label = `${visiblePropertyLabel}: ${displayValue}${term.lang ? ` @${term.lang}` : ""}${term.datatype ? `^^${term.datatype}` : ""}`;
+                                return (
+                                  <Tooltip><TooltipTrigger render={<button type="button"
+                                    key={`${scopeValue.direction}:${scopeValue.property}:${term.value}:${term.lang ?? ""}:${term.datatype ?? ""}:${termIndex}`}
+                                    onClick={() => navigateResultBadge(scopeValue.property, term, scopeValue.direction)}
+                                    className="inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md bg-muted px-2 py-1 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                                  >
+                                    <span className="font-medium text-foreground">{visiblePropertyLabel}</span>
+                                    <span className="max-w-[240px] truncate">{displayValue}</span>
+                                  </button>} /><TooltipContent>{label}</TooltipContent></Tooltip>
+                                );
+                              }))}
                         </div>
                       )}
                     </div>
@@ -11630,7 +11898,7 @@ onMouseLeave={() => {
                   </div>}
                   {recordControlsOpen && selectedUri && <div className="ml-auto inline-flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/record-header:opacity-100 focus-within:opacity-100">
                     <QueryInspectorButton
-                      query={recordDebug.xml || `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" addr="${escapeXmlText(queryTree.attributes.addr ?? "")}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="describe" limit="30" offset="0"/></query>`}
+                      query={recordDebug.xml || `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" addr="${escapeXmlText(queryTree.attributes.addr ?? "")}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="${FCT_VIEW_TYPES.DESCRIBE}" limit="30" offset="0"/></query>`}
                       filename="record-describe.xml" label="Record queries" toolbarButton
                       extraQueries={[
                         { id: "record-describe-sparql", label: "Record SELECT SPARQL", query: recordDebug.sparql || "Record SELECT has not executed.", filename: "record-select.sparql", language: "sparql" },
@@ -11692,7 +11960,7 @@ onMouseLeave={() => {
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild><button type="button" disabled={isValidatingRecord} title="Validate record" aria-label="Validate record" className="inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50">{isValidatingRecord ? <LoaderCircle className="size-4 animate-spin" aria-label="Validating record" /> : <ClipboardCheck className="size-4" aria-hidden="true" />}<span>Validate</span>{recordPolicies.length > 1 && <ChevronDown className="size-3.5" />}</button></DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="w-72">
-                        {recordPolicies.map((policy) => <DropdownMenuItem key={policy.uri} onSelect={() => { const templateUri = policy.templates[0]?.uri ?? ""; setRecordPolicy(policy); setSelectedRecordTemplateUri(templateUri); setRecordValidation(null); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(templateUri, templateKey); } catch (error) { console.warn("Maestro could not persist the selected record policy in IndexedDB", error); } void validateSelectedRecord(policy); }}>{policy.label}</DropdownMenuItem>)}
+                        {recordPolicies.map((policy) => <DropdownMenuItem key={policy.uri} onSelect={() => { const templateUri = policy.templates[0]?.uri ?? ""; manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(templateUri); setRecordValidation(null); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(templateUri, templateKey); } catch (error) { console.warn("Maestro could not persist the selected record policy in IndexedDB", error); } void validateSelectedRecord(policy); }}>{policy.label}</DropdownMenuItem>)}
                       </DropdownMenuContent>
                     </DropdownMenu>
                     <DropdownMenu open={recordFormatMenuOpen} onOpenChange={setRecordFormatMenuOpen}>
@@ -11712,7 +11980,7 @@ onMouseLeave={() => {
                           </span>
                           <span className="min-w-0 flex-1"><span className="flex items-center gap-2 font-medium">Default{!recordFormatEnabled && <Check className="size-4 text-primary" aria-label="Selected format" />}</span><span className="block text-xs text-muted-foreground">Property/value table and roles</span></span>
                         </DropdownMenuItem>
-                        {recordPolicies.flatMap((policy) => policy.templates.map((template) => ({ policy, template }))).map(({ policy, template }) => <DropdownMenuItem key={`${policy.uri}:${template.uri}`} onSelect={() => { setRecordPolicy(policy); setSelectedRecordTemplateUri(template.uri); setRecordValidation(null); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setRecordFormatError(""); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(template.uri, templateKey); } catch (error) { console.warn("Maestro could not persist the selected record format in IndexedDB", error); } if (!recordFormatEnabled) setRecordFormatEnabled(true); }} className="flex items-start gap-3 py-3">
+                        {recordPolicies.flatMap((policy) => policy.templates.map((template) => ({ policy, template }))).map(({ policy, template }) => <DropdownMenuItem key={`${policy.uri}:${template.uri}`} onSelect={() => { manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri: template.uri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(template.uri); setRecordValidation(null); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setRecordFormatError(""); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(template.uri, templateKey); } catch (error) { console.warn("Maestro could not persist the selected record format in IndexedDB", error); } if (!recordFormatEnabled) setRecordFormatEnabled(true); }} className="flex items-start gap-3 py-3">
                           <span className="mt-0.5 block h-24 w-24 shrink-0 overflow-hidden rounded border bg-background"><span className="pointer-events-none block h-24 w-44 origin-top-left scale-[0.5] overflow-hidden" dangerouslySetInnerHTML={{ __html: (policy.uri === recordPolicy.uri ? recordFormatPreviews[template.uri] : undefined) ?? "<div class=\"p-2 text-xs text-muted-foreground\">Preview available after selection</div>" }} /></span>
                           <span className="min-w-0 flex-1"><span className="flex items-center gap-2 font-medium">{template.label}{recordFormatEnabled && recordPolicy.uri === policy.uri && selectedRecordTemplateUri === template.uri && <Check className="size-4 shrink-0 text-primary" aria-label="Selected format" />}</span><span className="block break-all text-xs text-muted-foreground">{template.uri}</span></span>
                         </DropdownMenuItem>)}
@@ -11731,7 +11999,8 @@ onMouseLeave={() => {
                   {(recordValidation.optionalMissing?.length ?? 0) > 0 && <p className="mt-2 text-xs text-muted-foreground">Optional fields not present in this Record snapshot: {Array.from(new Set(recordValidation.optionalMissing!.map((item) => item.name))).join(", ")}. These fields are not required by the selected SHACL shape.</p>}
                   {recordValidation.unsupportedConstraints.length > 0 && <p className="mt-2 break-all text-xs">Unsupported constraints: {recordValidation.unsupportedConstraints.join(", ")}</p>}
                 </div>}
-                {recordFormatError && <p className="mt-2 text-sm text-destructive">{recordFormatError}</p>}
+                {recordDescriptionError && <p role="alert" className="mt-2 text-sm text-destructive">{recordDescriptionError}</p>}
+                {recordFormatError && recordFormatError !== recordDescriptionError && <p className="mt-2 text-sm text-destructive">{recordFormatError}</p>}
                 {!isDescribing && describedRecordUri === selectedUri &&
                  recordDescriptionSnapshot?.key === currentRecordDescriptionKey && (
                 <div className="mt-3 flex shrink-0 items-center justify-between gap-2 border-t pt-3">
@@ -11778,7 +12047,7 @@ onMouseLeave={() => {
                 )}
                 </CollapsibleContent>
               </Collapsible>
-              {recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && (!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || (!currentFormattedRecordHtml && !recordFormatError)))) ? (
+              {recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && !recordDescriptionError && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && (!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || (!currentFormattedRecordHtml && !recordFormatError)))) ? (
                 <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status">Loading formatted record…</div>
               ) : currentFormattedRecordHtml ? (
                 <div ref={formattedRecordContainerRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
@@ -11824,7 +12093,7 @@ onMouseLeave={() => {
                 </section>}
                 {describedRecord.length === 0 && (
                   <p className="mt-4 text-sm text-muted-foreground">
-                    {isDescribing ? "Loading record…" : selectedUri ? "No description data returned." : "Select a result to describe it."}
+                    {recordDescriptionError || (isDescribing ? "Loading record…" : selectedUri ? "No description data returned." : "Select a result to describe it.")}
                   </p>
                 )}
               </section>

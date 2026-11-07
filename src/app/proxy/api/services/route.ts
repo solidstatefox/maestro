@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
-import { ensureShapesGraphSeeded, getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
+import { getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
 import { requirePersonalLogin } from "@/lib/personal-guard";
 import { executeServiceXslt, serviceJsonToXml } from "@/lib/maestro-service-xslt";
 
@@ -68,7 +68,6 @@ export async function POST(request: Request) {
   try {
     if (Number(request.headers.get("content-length") ?? "0") > 1050000) return NextResponse.json({error:"Service request too large."},{status:413});
     const body = await request.json() as { action?: string; recordTypes?: string[]; service?: string; operation?: string; queryXml?: string; fctXml?: string; recordUri?: string; arguments?: Record<string,string> };
-    await ensureShapesGraphSeeded(request);
     if (body.action === "discover") {
       const classes = [...new Set((Array.isArray(body.recordTypes) ? body.recordTypes : []).filter(iri))].slice(0, 100);
       if (!classes.length) return NextResponse.json({services:[]});

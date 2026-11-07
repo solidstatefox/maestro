@@ -11,9 +11,11 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { configureMaestroBrowserLogging, type BrowserLogLevel } from "@/lib/maestro-client-logging";
 import type { ReactNode, Dispatch, SetStateAction, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { MaestroAnalysisDataTable, type MaestroDataColumn, type MaestroDataRow } from "@/components/maestro-analysis-data-table";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from "recharts";
 import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
+import { FEATURE_VIEW_XSLT, type FeatureKind, type FeatureItem } from "@/lib/feature-view-xslt";
+import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +40,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightLeft, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, EqualApproximately, Regex, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info, Table2, TableProperties, ChartColumn, Server, Database, Globe, LayoutGrid } from "lucide-react";
+import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightLeft, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, EqualApproximately, Regex, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info, Table2, TableProperties, ChartColumn, Server, Database, Globe, LayoutGrid, FileCode2, ArrowLeftRight, Blocks } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
 import { MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
@@ -64,6 +66,34 @@ import type { FctQueryNode, FctQueryTree, FctUiResultSummary, DistinctCountKind 
 hljs.registerLanguage("xml", xmlLanguage);
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
 hljs.registerLanguage("sparql", sqlLanguage);
+
+const MAESTRO_ALPHABET_LANGUAGES = [
+  { code: "en", name: "English" },
+  { code: "zh", name: "Chinese" },
+  { code: "hi", name: "Hindi" },
+  { code: "es", name: "Spanish" },
+  { code: "fr", name: "French" },
+  { code: "ar", name: "Arabic" },
+  { code: "bn", name: "Bengali" },
+  { code: "pt", name: "Portuguese" },
+  { code: "ru", name: "Russian" },
+  { code: "ur", name: "Urdu" },
+  { code: "id", name: "Indonesian" },
+  { code: "de", name: "German" },
+  { code: "ja", name: "Japanese" },
+  { code: "sw", name: "Swahili" },
+  { code: "mr", name: "Marathi" },
+  { code: "te", name: "Telugu" },
+  { code: "tr", name: "Turkish" },
+  { code: "ta", name: "Tamil" },
+  { code: "vi", name: "Vietnamese" },
+  { code: "ko", name: "Korean" },
+  { code: "it", name: "Italian" },
+  { code: "th", name: "Thai" },
+  { code: "fa", name: "Persian" },
+  { code: "pl", name: "Polish" },
+  { code: "nl", name: "Dutch" },
+] as const;
 
 /** Display an Anytime result marker only for a widget whose most recent query was incomplete. */
 
@@ -1703,6 +1733,17 @@ export default function Home() {
   // While the pointer is over the search input, coalesce rapid query edits into
   // While the root breadcrumb search is expanded, coalesce changes into one in-memory snapshot.
   const pendingHistoryVisitRef = useRef<{ queryXml: string; stateUrl: string; action: { operator: "+" | "-"; xpath: string; value?: string } | null } | null>(null);
+  const [preferredAlphabetLanguage, setPreferredAlphabetLanguage] = useState("en");
+  useEffect(() => {
+    let active = true;
+    void initializeMaestroStorage().then(() => {
+      const saved = maestroStorageGet("maestro-alphabet-preferred-language");
+      if (active && saved && MAESTRO_ALPHABET_LANGUAGES.some((option) => option.code === saved)) {
+        setPreferredAlphabetLanguage(saved);
+      }
+    });
+    return () => { active = false; };
+  }, []);
   const [prefixSource, setPrefixSource] = useState<"prefixcc" | "zazuko" | "builtin">("prefixcc");
   const [prefixStatus, setPrefixStatus] = useState("Built-in prefixes");
   useEffect(() => {
@@ -3755,7 +3796,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // The Alphabet system facet queries a clone of the live scope and never
   // constrains its own counts by the currently selected letter.
   const alphabetQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
-    type: FCT_VIEW_TYPES.ALPHABET, index: "", indexLabels: alphabetLabelUris, limit: "26", offset: "0",
+    type: FCT_VIEW_TYPES.ALPHABET, index: "", indexLabels: alphabetLabelUris, indexLang: preferredAlphabetLanguage, limit: "26", offset: "0",
   }));
   // ASK preflight: clone the *live* query and append only the label
   // relationship to its active view scope. Do not run the alphabet query,
@@ -3936,7 +3977,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     // to the user's selected root search label properties.
     if (!alphabetIndex) return;
     if ((currentView?.attributes.indexLabels ?? "") !== alphabetLabelUris) setNodeAttribute("query-view", "indexLabels", alphabetLabelUris);
-  }, [alphabetIndex, currentView?.attributes.indexLabels, alphabetLabelUris]);
+    if ((currentView?.attributes.indexLang ?? "en") !== preferredAlphabetLanguage) setNodeAttribute("query-view", "indexLang", preferredAlphabetLanguage);
+  }, [alphabetIndex, currentView?.attributes.indexLabels, currentView?.attributes.indexLang, alphabetLabelUris, preferredAlphabetLanguage]);
 
   // Keep the active request identity current for stale-response protection, but
   // do not clear widgets merely because arbitrary query state changed. The
@@ -5320,7 +5362,8 @@ setGraphFacets(graphs);
     void (async () => {
       try {
         const response = await maestroQueryFetch("/proxy/api/record-graphs", {
-          method: "POST", cache: "no-store", signal: controller.signal,
+          method: "POST", cache: "no-store",
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-discovery", "RecordGraphs") },
           body: JSON.stringify({ iri: selectedUri, addr: queryTree.attributes.addr, operation: "graphs" }),
         });
@@ -5328,7 +5371,12 @@ setGraphFacets(graphs);
         if (!response.ok) throw new Error(data.error || "Could not discover record graphs.");
         if (!controller.signal.aborted) setRecordGraphs(data.graphs ?? []);
       } catch (error) {
-        if (!controller.signal.aborted) setRecordGraphError(error instanceof Error ? error.message : "Could not discover record graphs.");
+        if (!controller.signal.aborted) {
+          const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+          setRecordGraphError(timedOut
+            ? "Graph discovery timed out. Record data can still load without graph metadata."
+            : error instanceof Error ? error.message : "Could not discover record graphs.");
+        }
       } finally {
         if (!controller.signal.aborted) setLoadingRecordGraphs(false);
       }
@@ -9365,6 +9413,12 @@ useEffect(() => {
   const [selectedViewUri, setSelectedViewUri] = useState("");
   const [viewDiscoveryLoading, setViewDiscoveryLoading] = useState(false);
   const [viewDiscoveryError, setViewDiscoveryError] = useState("");
+  const [viewPanel, setViewPanel] = useState<"trail" | "perspectives" | "features">("features");
+  const [viewFeature, setViewFeature] = useState<FeatureKind | null>(null);
+  const [viewFeatureHtml, setViewFeatureHtml] = useState("");
+  const [viewFeatureLoading, setViewFeatureLoading] = useState(false);
+  const [viewFeatureError, setViewFeatureError] = useState("");
+  const [viewFeatureCount, setViewFeatureCount] = useState(0);
   const [viewHtml, setViewHtml] = useState("");
   const [viewXsltMetadata, setViewXsltMetadata] = useState<{ title?: string; icon?: string }>({});
   const [viewDomainRanks, setViewDomainRanks] = useState<Record<string, string>>({});
@@ -9409,6 +9463,36 @@ useEffect(() => {
     })();
     return () => { clearTimeout(timeout); controller.abort(); };
   }, [workspaceTab, viewClassKey]);
+  // The feature query is a snapshot of the live FCT query. Never mutate queryTree
+  // or issue an FCT navigation/history action while browsing feature libraries.
+  useEffect(() => {
+    if (workspaceTab !== "view" || !viewFeature) return;
+    const controller = new AbortController();
+    setViewFeatureLoading(true);
+    setViewFeatureError("");
+    setViewFeatureHtml("");
+    const timer = setTimeout(() => controller.abort(), 16000);
+    void (async () => {
+      try {
+        const response = await fetch("/proxy/api/view-features", {
+          method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store", signal: controller.signal,
+          body: JSON.stringify({ feature: viewFeature, classes: JSON.parse(viewClassKey), queryXml: String(queryXml) }),
+        });
+        const data = await response.json() as { items?: FeatureItem[]; error?: string };
+        if (!response.ok) throw new Error(data.error || "Could not locate feature definitions.");
+        if (controller.signal.aborted) return;
+        const items = data.items ?? [];
+        setViewFeatureCount(items.length);
+        setViewFeatureHtml(renderDiscoveredViewXslt(FEATURE_VIEW_XSLT[viewFeature], items.map((item) => ({ ...item, label: item.label }))));
+      } catch (error) {
+        if (!controller.signal.aborted) setViewFeatureError(error instanceof Error ? error.message : "Feature lookup failed.");
+      } finally {
+        clearTimeout(timer);
+        if (!controller.signal.aborted) setViewFeatureLoading(false);
+      }
+    })();
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [workspaceTab, viewFeature, viewClassKey, queryXml]);
   const selectedView = discoveredViews.find((view) => view.uri === selectedViewUri);
   // Registry keys are internal slugs, while FCT results contain RDF resource IRIs.
   // Join on endpoint URL first; also accept the registry's display label for
@@ -9486,7 +9570,7 @@ useEffect(() => {
     }));
     return () => controller.abort();
   }, [workspaceTab, selectedView?.uri, viewDomainKey]);
-  const viewPageKey = JSON.stringify(visibleResultsPage.map((item) => [item.uri, item.title]));
+  const viewPageKey = JSON.stringify(allLoadedResults.map((item) => [item.uri, item.title]));
   useEffect(() => {
     if (workspaceTab !== "view" || !selectedView) { setViewHtml(""); setViewRenderError(""); return; }
     try {
@@ -9504,12 +9588,15 @@ useEffect(() => {
         const software = endpoint ? viewServerSoftware[endpoint.id] : undefined;
         const healthText = checkingEndpointIds[endpoint?.id ?? ""] ? "Checking…" : health?.status !== null && health?.status !== undefined ? `HTTP ${health.status}` : health ? health.state : "Not yet pinged";
         const healthColor = !health ? "unknown" : health.status === 200 ? "green" : health.status !== null && health.status >= 500 ? "red" : "amber";
-        return { uri, label, endpoint: endpointUrl, endpointId: endpoint?.id ?? "", group: endpoint?.group ?? "",
+        return { uri, label, endpoint: endpointUrl, endpointId: endpoint?.id ?? "", selected: Boolean(endpoint && endpoint.id === selectedEndpointId), group: endpoint?.group ?? "",
           favicon, rank: domain ? (viewDomainRanks[domain] ?? "Checking…") : "Unranked",
           health: healthText, healthState: healthColor, pinging: Boolean(endpoint && checkingEndpointIds[endpoint.id]), product: software?.product ?? "Unknown", version: software?.version ?? "",
           description: endpoint ? (viewServerDescriptions[endpoint.id] ?? "") : "" };
       });
-      const html = renderDiscoveredViewXslt(selectedView.stylesheet, rows);
+      const start = resultsUiPage * effectivePageSize;
+      const html = renderDiscoveredViewXslt(selectedView.stylesheet, rows.slice(start, start + effectivePageSize), {
+        availableRows: rows, page: resultsUiPage, pageSize: effectivePageSize,
+      });
       const parsed = new DOMParser().parseFromString(html, "text/html");
       const meta = parsed.querySelector("section[data-view-title], section[data-view-icon]");
       const icon = meta?.getAttribute("data-view-icon") ?? undefined;
@@ -9517,7 +9604,7 @@ useEffect(() => {
       setViewHtml(html);
       setViewRenderError("");
     } catch (error) { setViewHtml(""); setViewRenderError(error instanceof Error ? error.message : "View translation failed."); }
-  }, [workspaceTab, selectedView?.uri, selectedView?.stylesheet, viewPageKey, endpointStatuses, fctEndpoints, viewDomainRanks, viewServerSoftware, viewServerDescriptions, checkingEndpointIds]);
+  }, [workspaceTab, selectedView?.uri, selectedView?.stylesheet, viewPageKey, endpointStatuses, fctEndpoints, viewDomainRanks, viewServerSoftware, viewServerDescriptions, checkingEndpointIds, selectedEndpointId, resultsUiPage, effectivePageSize]);
   const isCompareAnalysis = selectedAnalysisUri.includes("compare-table");
   const histogramColumns = isCompareAnalysis && analysisTable ? analysisTable.columns.slice(1).map((column, index) => ({
     label: /^[a-z][a-z0-9+.-]*:/i.test(column.label) ? toLabel(column.label, "OBJECT") : column.label,
@@ -10783,6 +10870,19 @@ useEffect(() => {
                 </div>
               </div>
               <div className="flex flex-col gap-2 rounded-md border p-3">
+                <Label htmlFor="maestro-alphabet-language">Preferred language</Label>
+                <select id="maestro-alphabet-language" className="rounded-md border bg-background px-2 py-1.5 text-sm" value={preferredAlphabetLanguage}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    if (!MAESTRO_ALPHABET_LANGUAGES.some((option) => option.code === next)) return;
+                    setPreferredAlphabetLanguage(next);
+                    void maestroStorageSet("maestro-alphabet-preferred-language", next);
+                  }}>
+                  {MAESTRO_ALPHABET_LANGUAGES.map(({ code, name }) => <option key={code} value={code}>{name} ({code})</option>)}
+                </select>
+                <p className="text-xs text-muted-foreground">Alphabet counts and letter filters use labels in this language, plus language-neutral labels. Applies to the entire current query, not only the visible page.</p>
+              </div>
+              <div className="flex flex-col gap-2 rounded-md border p-3">
                 <Label htmlFor="maestro-prefix-source">Namespace prefixes (CURIEs shown for IRIs without labels)</Label>
                 <select id="maestro-prefix-source" className="rounded-md border bg-background px-2 py-1.5 text-sm" value={prefixSource}
                   onChange={(event) => {
@@ -11144,10 +11244,51 @@ useEffect(() => {
       )}
 
       <div className="shrink-0">
-        {workspaceTab === "browse" || workspaceTab === "view" ? <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-start gap-2 bg-background px-4 pt-2 pb-7">
+        {workspaceTab === "browse" ? <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-start gap-2 bg-background px-4 pt-2 pb-7">
         {renderRootBreadcrumb()}
         {tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}
-        </nav> : <div className="flex min-h-[78px] flex-wrap items-center gap-3 border-b bg-background px-4 py-2" role="toolbar" aria-label="Analyze presentations">
+        </nav> : workspaceTab === "view" ? <MaestroHoverExpand active={viewPanel} onChange={setViewPanel} panels={[
+          { id: "trail", label: "Trail", content: <nav aria-label="Navigation breadcrumbs" className="flex flex-wrap items-start gap-2">
+            {renderRootBreadcrumb()}
+            {tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}
+          </nav> },
+          { id: "perspectives", label: "Perspectives", content: <div className="flex h-full flex-wrap items-center gap-1" role="toolbar" aria-label="View perspectives">
+            {discoveredViews.map((view) => {
+              const active = !viewFeature && selectedViewUri === view.uri;
+              // The formatter's stylesheet declares its own display icon. Prefer
+              // that over a SHACL policy icon, with a generic fallback.
+              const xsltIcon = view.stylesheet.match(/data-view-icon\s*=\s*["']([^"']+)["']/i)?.[1];
+              const icon = xsltIcon || view.icon;
+              const Icon = icon === "server" ? Server : icon === "database" ? Database : icon === "globe" ? Globe : icon === "layout-grid" ? LayoutGrid : Network;
+              const title = view.stylesheet.match(/data-view-title\s*=\s*["']([^"']+)["']/i)?.[1] || view.label;
+              return <button type="button" key={view.uri} aria-pressed={active}
+                onClick={() => { setSelectedViewUri(view.uri); setViewFeature(null); }}
+                className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${active ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+                <Icon className={`size-7 ${active ? "stroke-[2.5]" : ""}`} aria-hidden="true" />{title}
+              </button>;
+            })}
+            {viewDiscoveryLoading && <span className="px-3 text-xs text-muted-foreground">Locating views…</span>}
+            {!viewDiscoveryLoading && !discoveredViews.length && <span className="px-3 text-xs text-muted-foreground">No perspectives found</span>}
+          </div> },
+          { id: "features", label: "Features", content: <div className="flex h-full flex-wrap items-center gap-1" role="toolbar" aria-label="View features">
+            {([
+              { id: "policies", label: "Policies", Icon: ShieldCheck },
+              { id: "formats", label: "Formats", Icon: FileCode2 },
+              { id: "transcoders", label: "Transcoders", Icon: ArrowLeftRight },
+            ] as const).map(({ id, label, Icon }) => {
+              const active = viewFeature === id;
+              return <button type="button" key={id}
+                className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${active ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+                aria-pressed={active} onClick={() => setViewFeature((current) => current === id ? null : id)}>
+                <Icon className={`size-7 ${active ? "stroke-[2.5]" : ""}`} aria-hidden="true" />{label}
+              </button>;
+            })}
+            <button type="button" disabled title="Services catalog is planned"
+              className="flex min-w-24 cursor-not-allowed flex-col items-center gap-1 rounded-md px-3 py-2 text-xs text-muted-foreground opacity-40">
+              <Blocks className="size-7" aria-hidden="true" />Services
+            </button>
+          </div> },
+        ]}/> : <div className="flex min-h-[78px] flex-wrap items-center gap-3 border-b bg-background px-4 py-2" role="toolbar" aria-label="Analyze presentations">
           {analysisDefinitions.map((definition) => {
             const active = selectedAnalysisUri === definition.uri && !analyzeHistogram;
             const Icon = definition.icon === "table-properties" ? TableProperties : Table2;
@@ -12181,7 +12322,7 @@ onMouseLeave={() => {
                 </div>
               </div>
 
-              {/* An active alphabet restriction must remain visible and removable even when
+              {/* An active alphabet restriction must remain visible and toggleable even when
                   subsequent filters eliminate its count or the alphabet preflight fails. */}
               {workspaceTab === "browse" && centralTab === "results" && (alphabetPreflight === "available" || Boolean(alphabetIndex)) && (
                 <div id="maestro-alphabet" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2" aria-label="Alphabetical browse by selected label properties">
@@ -12192,6 +12333,7 @@ onMouseLeave={() => {
                       className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${alphabetIndex === letter ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
                       onClick={() => {
                         setNodeAttribute("query-view", "indexLabels", alphabetLabelUris);
+                        setNodeAttribute("query-view", "indexLang", preferredAlphabetLanguage);
                         setNodeAttribute("query-view", "index", alphabetIndex === letter ? null : letter);
                         setResultsUiPage(0); setResults([]); setResultsPage(resultsBatchSize, 0);
                       }}>
@@ -12200,16 +12342,6 @@ onMouseLeave={() => {
                       <span className={`tabular-nums font-normal ${alphabetIndex === letter ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
                     </button>
                   ))}
-                  {alphabetIndex && (
-                    <button type="button" className="cursor-pointer rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      aria-label={`Clear alphabet filter ${alphabetIndex}`} title={`Clear alphabet filter ${alphabetIndex}`}
-                      onClick={() => {
-                        setNodeAttribute("query-view", "index", null);
-                        setResultsUiPage(0); setResults([]); setResultsPage(resultsBatchSize, 0);
-                      }}>
-                      Clear letter ({alphabetIndex})
-                    </button>
-                  )}
                   {isLoadingAlphabet && <span className="text-xs text-muted-foreground">Fetching letter filters...</span>}
                   {alphabetError && <span className="text-xs text-destructive" title={alphabetError}>{Object.values(alphabetCounts).some((count) => count > 0) ? "Alphabet partial" : "Alphabet unavailable"}</span>}
                 </div>
@@ -12263,23 +12395,23 @@ onMouseLeave={() => {
                 </div>
               )}
               {workspaceTab === "view" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Views">
-                <nav aria-label="View breadcrumbs" className="flex shrink-0 flex-wrap items-start gap-2 border-b bg-background px-4 py-2">
-                  {renderRootBreadcrumb(false, undefined, false)}
-                  {analyzeBreadcrumbTrail.map((crumb, index) => renderPathBreadcrumb(crumb, index, false, undefined, false))}
-                </nav>
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-4 py-3">
                   <div className="flex items-center gap-2">{(() => {
-                    const icon = viewXsltMetadata.icon ?? selectedView?.icon;
-                    const Icon = (viewXsltMetadata.title === "Graph Servers" || selectedView?.label === "Graph Servers") ? Server : icon === "server" ? Server : icon === "database" ? Database : icon === "globe" ? Globe : icon === "layout-grid" ? LayoutGrid : Network;
+                    const icon = viewFeature ? (viewFeature === "formats" ? "layout-grid" : "network") : (viewXsltMetadata.icon ?? selectedView?.icon);
+                    const Icon = (!viewFeature && (viewXsltMetadata.title === "Graph Servers" || selectedView?.label === "Graph Servers")) ? Server : icon === "server" ? Server : icon === "database" ? Database : icon === "globe" ? Globe : icon === "layout-grid" ? LayoutGrid : Network;
                     return <Icon className="size-5 text-muted-foreground" aria-hidden="true"/>;
-                  })()}<h2 className="font-semibold">{selectedView ? (viewXsltMetadata.title || selectedView.label) : "View"}</h2></div>
-                  {discoveredViews.length > 1 && <select aria-label="Select view" className="rounded border bg-background px-2 py-1 text-sm" value={selectedViewUri} onChange={(event) => setSelectedViewUri(event.currentTarget.value)}>
+                  })()}<h2 className="font-semibold">{viewFeature ? viewFeature.charAt(0).toUpperCase() + viewFeature.slice(1) : selectedView ? (viewXsltMetadata.title || selectedView.label) : "View"}</h2></div>
+                  {!viewFeature && discoveredViews.length > 1 && <select aria-label="Select view" className="rounded border bg-background px-2 py-1 text-sm" value={selectedViewUri} onChange={(event) => setSelectedViewUri(event.currentTarget.value)}>
                     {discoveredViews.map((view) => <option key={view.uri} value={view.uri}>{view.label}</option>)}
                   </select>}
-                  {selectedView && <span className="text-xs text-muted-foreground">{selectedView.label} · {visibleResultsPage.length} results on this page</span>}
+                  {!viewFeature && selectedView && <span className="text-xs text-muted-foreground">{selectedView.label} · {visibleResultsPage.length} results on this page</span>}
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto p-4">
-                  {viewDiscoveryLoading ? <p className="text-sm text-muted-foreground">Locating views…</p>
+                  {viewFeature ? (viewFeatureLoading ? <p className="text-sm text-muted-foreground">Locating {viewFeature}…</p>
+                    : viewFeatureError ? <p role="alert" className="text-sm text-destructive">{viewFeatureError}</p>
+                    : viewFeatureCount === 0 ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">No applicable {viewFeature} found for the current query context.</p>
+                    : <div className="maestro-discovered-view" dangerouslySetInnerHTML={{ __html: viewFeatureHtml }}/>)
+                    : viewDiscoveryLoading ? <p className="text-sm text-muted-foreground">Locating views…</p>
                     : viewDiscoveryError ? <p role="alert" className="text-sm text-destructive">{viewDiscoveryError}</p>
                     : !selectedView ? <div className="mx-auto max-w-lg rounded-lg border border-dashed p-8 text-center">
                         <Network className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden="true"/>
@@ -12289,6 +12421,12 @@ onMouseLeave={() => {
                     : viewRenderError ? <p role="alert" className="text-sm text-destructive">{viewRenderError}</p>
                     : <div className="maestro-discovered-view" onClick={(event) => {
                         const target = event.target as HTMLElement;
+                        const select = target.closest<HTMLButtonElement>("button[data-endpoint-select]");
+                        if (select) {
+                          const endpoint = fctEndpoints.find((item) => item.id === select.dataset.endpointSelect);
+                          if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id);
+                          return;
+                        }
                         const button = target.closest<HTMLButtonElement>("button[data-endpoint-refresh]");
                         if (!button) return;
                         const endpoint = fctEndpoints.find((item) => item.id === button.dataset.endpointRefresh);
@@ -12310,7 +12448,7 @@ onMouseLeave={() => {
                         });
                       }} dangerouslySetInnerHTML={{ __html: viewHtml }}/>} 
                 </div>
-                {selectedView && <div className="flex shrink-0 items-center justify-between gap-3 border-t px-4 py-2 text-xs">
+                {!viewFeature && selectedView && <div className="flex shrink-0 items-center justify-between gap-3 border-t px-4 py-2 text-xs">
                   <span className="text-muted-foreground">Page {resultsUiPage + 1}</span>
                   <div className="flex items-center gap-2"><label htmlFor="view-page-size">Per page</label>
                     <select id="view-page-size" className="rounded border bg-background px-2 py-1" value={effectivePageSize} onChange={(event) => { const n=Number(event.currentTarget.value); setResultsPageSize(n); maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY,String(n)); setResultsUiPage(0); }}>
@@ -12322,7 +12460,7 @@ onMouseLeave={() => {
                 </div>}
               </div>}
               {workspaceTab === "analyze" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Analyze canvas">
-                {!selectedAnalysisUri.includes("compare-table") && (
+                {(
                   <nav aria-label="Analyze breadcrumbs" className="flex shrink-0 flex-wrap items-start justify-start gap-2 border-b bg-background px-4 py-2">
                     {renderRootBreadcrumb(false, analysisTable?.trailStyle, false)}
                     {analyzeBreadcrumbTrail.map((crumb, index) => renderPathBreadcrumb(crumb, index, false, analysisTable?.trailStyle, false))}
@@ -12334,7 +12472,7 @@ onMouseLeave={() => {
                     {availableCompareFacets.map((facet) => <option key={facet.key} value={facet.key}>{facet.label}</option>)}
                   </select>
                 </div>}
-                {!selectedAnalysisUri.includes("compare-table") && <div role="toolbar" aria-label="Analyze table actions" className="flex shrink-0 items-center gap-2 border-b bg-muted/30 px-3 py-1 text-muted-foreground">
+                {<div role="toolbar" aria-label="Analyze table actions" className="flex shrink-0 items-center gap-2 border-b bg-muted/30 px-3 py-1 text-muted-foreground">
                   <button type="button" className="inline-flex items-center gap-1.5 rounded border border-border/60 bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground disabled:cursor-not-allowed" title="Export (coming soon)" aria-label="Export" disabled><Download aria-hidden="true" className="size-4"/>Export</button>
                 </div>}
                 {analysisError && <p role="alert" className="p-3 text-sm text-destructive">{analysisError}</p>}
@@ -12362,52 +12500,42 @@ onMouseLeave={() => {
                       ) : <p className="text-sm text-muted-foreground">No comparison columns available.</p>}
                     </div>
                   )}
-                  {analysisTable && !(isCompareAnalysis && analyzeHistogram) && <Table className="border-collapse text-xs" style={{...analysisTable.tableStyle, tableLayout:"fixed", width: 36 + analysisTable.columns.reduce((sum, col, i) => sum + (analysisColumnWidths[col.nodeId || `${col.kind}:${col.label}`] ?? (i === 0 ? 240 : 190)), 0)}} aria-label={selectedAnalysisUri.includes("compare-table") ? "Compare Table" : "Table"}>
-                    <colgroup>
-                      <col style={{width:36}}/>
-                      {analysisTable.columns.map((col) => <col key={col.nodeId || `${col.kind}:${col.label}`} style={{width:analysisColumnWidths[col.nodeId || `${col.kind}:${col.label}`] ?? (col.kind === "result" ? 240 : 190)}}/>)}
-                    </colgroup>
-                    <TableHeader className="sticky top-0 z-20 bg-background"><TableRow>
-                      <TableHead scope="col" className="w-9 min-w-9 border px-1 py-1 text-center align-middle" style={analysisTable.headerStyle}>
-                        <input type="checkbox" aria-label="Select all results on this page" className="size-4 cursor-pointer align-middle accent-primary" checked={analysisAllSelected} disabled={!analysisRowKeys.length} onChange={(event) => setAnalysisSelection({ pageKey: analysisSelectionPageKey, keys: event.currentTarget.checked ? analysisRowKeys : [] })} />
-                      </TableHead>
-                      {analysisTable.columns.map((col, i) => <TableHead key={col.nodeId || `result-${i}`} scope="col" className="relative border px-1.5 py-1 pr-3 align-top text-left font-medium" style={{...analysisTable.headerStyle, ...col.headerStyle}}>
-                        {col.kind === "result" && !selectedAnalysisUri.includes("compare-table")
-                          ? "Results"
-                          : col.kind === "breadcrumb" ? (() => {
-                          const header = analyzeTableHeaderNodes.find((crumb) => crumb.id === col.nodeId);
-                          return header ? renderPathBreadcrumb(header, activeBreadcrumbIndex + 1, true, col.breadcrumbStyle) : col.label;
-                        })() : col.kind === "value" && /^[a-z][a-z0-9+.-]*:/i.test(col.label) ? toLabel(col.label, "OBJECT") : col.label}
-                        <span role="separator" tabIndex={0} aria-label={`Resize ${col.label || "Results"} column`} aria-orientation="vertical" title="Drag to resize column; use Left/Right arrows for fine adjustment" className="absolute right-0 top-0 z-30 h-full w-2 cursor-col-resize touch-none hover:bg-sky-300/40 focus:bg-sky-300/40 focus:outline-2 focus:outline-sky-500" onPointerDown={(event) => beginAnalysisColumnResize(event, col.nodeId || `${col.kind}:${col.label}`, analysisColumnWidths[col.nodeId || `${col.kind}:${col.label}`] ?? (col.kind === "result" ? 240 : 190))} onKeyDown={(event) => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); const key = col.nodeId || `${col.kind}:${col.label}`; setAnalysisColumnWidths((current) => ({...current, [key]: Math.max(88, Math.min(900, (current[key] ?? (col.kind === "result" ? 240 : 190)) + (event.key === "ArrowRight" ? 16 : -16)))})); }}/>
-                      </TableHead>)}
-                    </TableRow></TableHeader><TableBody>
-                      {analysisTable.rows.map((row, rowIndex) => <TableRow key={`${row.uri}:${rowIndex}`} className="hover:bg-accent/40" style={analysisTable.rowStyle}>
-                        <TableCell className="w-9 min-w-9 border px-1 py-1 text-center align-middle" style={analysisTable.cellStyle}>
-                          <input type="checkbox" aria-label={`Select ${row.label}`} className="size-4 cursor-pointer align-middle accent-primary" checked={analysisSelectedKeys.includes(analysisRowKeys[rowIndex] ?? "")} onChange={(event) => toggleAnalysisRow(analysisRowKeys[rowIndex], event.currentTarget.checked)} />
-                        </TableCell>
-                        <TableHead scope="row" className="max-w-72 border px-1.5 py-1 text-left font-normal" style={analysisTable.cellStyle}>
-                          <button type="button" className="max-w-full break-words text-left text-primary hover:underline" onClick={() => { setSelectedUri(row.uri); setWorkspaceTab("browse"); setCentralTab("results"); }}>{row.label}</button>
-                        </TableHead>
-                        {row.cells.map((cell, index) => <TableCell key={analysisTable.columns[index + 1]?.nodeId || analysisTable.columns[index + 1]?.label || index} className="max-w-80 border px-1.5 py-1 align-top" style={{...analysisTable.cellStyle,...cell.cellStyle}}>
-                          {selectedAnalysisUri.includes("compare-table") ? (cell.checked ? <Check className="size-4 text-emerald-600" aria-label="Present"/> : null) : (() => {
-                            const column = analysisTable.columns[index + 1];
-                            const header = analyzeTableHeaderNodes.find((crumb) => crumb.id === column?.nodeId);
-                            if (!header) return <span className="text-muted-foreground">—</span>;
-                            const direction = header.name === "property-of" ? "reverse" : "forward";
-                            // Reuse the exact typed terms that Browse badges consume.
-                            // Prefer the dedicated projection, but retain already-loaded
-                            // Browse badges while the current page projection is pending.
-                            const currentResult = visibleResultsPage.find((item) => item.uri === row.uri);
-                            const scopes = [...(currentResult?.scopeValues ?? []), ...(readyAnalysisValues?.get(row.uri) ?? [])];
-                            const scope = [...scopes].reverse().find((value) => value.property === header.uri && value.direction === direction);
-                            const values = scope?.values.filter((value) => value.value && value.value !== "-") ?? [];
-                            return values.length && scope
-                              ? <div className="flex flex-wrap gap-0.5">{values.map((value, j) => renderScopeValueBadge(scope, value, j, {valueOnly: true, style: cell.badgeStyle}))}</div>
-                              : <span className="text-muted-foreground">—</span>;
-                          })()}
-                        </TableCell>)}
-                      </TableRow>)}
-                    </TableBody></Table>}
+                  {analysisTable && !(isCompareAnalysis && analyzeHistogram) && <MaestroAnalysisDataTable
+                    label={isCompareAnalysis ? "Compare Table" : "Table"}
+                    tableStyle={analysisTable.tableStyle} headerStyle={analysisTable.headerStyle} cellStyle={analysisTable.cellStyle}
+                    selectedKeys={analysisSelectedKeys}
+                    onToggle={toggleAnalysisRow}
+                    onToggleAll={(checked) => setAnalysisSelection({ pageKey: analysisSelectionPageKey, keys: checked ? analysisRowKeys : [] })}
+                    columns={analysisTable.columns.map((col, i): MaestroDataColumn => ({
+                      id: col.nodeId || `${col.kind}:${col.label}:${i}`,
+                      label: col.label,
+                      width: analysisColumnWidths[col.nodeId || `${col.kind}:${col.label}`] ?? (i === 0 ? 240 : 190),
+                      headerStyle: col.headerStyle,
+                      heading: col.kind === "result" && !isCompareAnalysis ? "Results" : col.kind === "breadcrumb" ? (() => {
+                        const header = analyzeTableHeaderNodes.find((crumb) => crumb.id === col.nodeId);
+                        return header ? renderPathBreadcrumb(header, activeBreadcrumbIndex + 1, true, col.breadcrumbStyle) : col.label;
+                      })() : col.kind === "value" && /^[a-z][a-z0-9+.-]*:/i.test(col.label) ? toLabel(col.label, "OBJECT") : col.label,
+                    }))}
+                    rows={analysisTable.rows.map((row, rowIndex): MaestroDataRow => ({
+                      key: analysisRowKeys[rowIndex] ?? `${rowIndex}:${row.uri}`,
+                      sortValues: [row.label, ...row.cells.map((cell) => cell.values.join(" "))],
+                      rowStyle: analysisTable.rowStyle,
+                      cells: [<button key="result" type="button" className="max-w-full break-words text-left text-primary hover:underline" onClick={() => { setSelectedUri(row.uri); setWorkspaceTab("browse"); setCentralTab("results"); }}>{row.label}</button>,
+                        ...row.cells.map((cell, index) => {
+                          if (isCompareAnalysis) return cell.checked ? <Check key={index} className="size-4 text-emerald-600" aria-label="Present"/> : null;
+                          const column = analysisTable.columns[index + 1];
+                          const header = analyzeTableHeaderNodes.find((crumb) => crumb.id === column?.nodeId);
+                          if (!header) return <span key={index} className="text-muted-foreground">—</span>;
+                          const direction = header.name === "property-of" ? "reverse" : "forward";
+                          const currentResult = visibleResultsPage.find((item) => item.uri === row.uri);
+                          const scopes = [...(currentResult?.scopeValues ?? []), ...(readyAnalysisValues?.get(row.uri) ?? [])];
+                          const scope = [...scopes].reverse().find((value) => value.property === header.uri && value.direction === direction);
+                          const values = scope?.values.filter((value) => value.value && value.value !== "-") ?? [];
+                          return values.length && scope ? <div key={index} className="flex flex-wrap gap-0.5">{values.map((value, j) => renderScopeValueBadge(scope, value, j, {valueOnly: true, style: cell.badgeStyle}))}</div>
+                            : <span key={index} className="text-muted-foreground">—</span>;
+                        })],
+                    }))}
+                  />}
                   {!analysisLoading && !analysisTable && !analysisError && <p className="p-3 text-sm text-muted-foreground">Choose an analysis from the ribbon.</p>}
                 </div>
                 <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-3 py-2 text-xs">

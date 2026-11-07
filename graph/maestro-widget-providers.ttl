@@ -1,0 +1,108 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix schema: <https://schema.org/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/entrypoint> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/entrypoint-input> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/view#EntryPointCards> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-0> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/record-0-input> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-1> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/record-0-input> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-1-template-2> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/record-1-input-class-1>,
+        <gttp://ggg.maestro.ecosys/shacl/provider/record-1-input-class-2>,
+        <gttp://ggg.maestro.ecosys/shacl/provider/record-1-input-class-3> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/template#DbpediaBookRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-2-template-3> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/record-2-input> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/template#DbpediaFilmRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-3-template-4> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/record-3-input> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/template#DbpediaOrganisationRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-4-template-5> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/record-4-input> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/template#DbpediaPersonRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-5-template-6> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/record-5-input> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/template#DbpediaPlaceRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-6-template-7> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/record-6-input> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/template#DbpediaSpeciesRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-7-template-8> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/record-7-input> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/template#DbpediaWorkRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-8-template-9> a mui:Provider ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/record-8-input> ;
+    mui:widget <gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/entrypoint-input> a mui:InputShape ;
+    sh:class schema:EntryPoint .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-1-input-class-1> a mui:InputShape ;
+    sh:class <http://dbpedia.org/ontology/Book> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-1-input-class-2> a mui:InputShape ;
+    sh:class <http://schema.org/Book> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-1-input-class-3> a mui:InputShape ;
+    sh:class schema:Book .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-2-input> a mui:InputShape ;
+    sh:class <http://dbpedia.org/ontology/Film> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-3-input> a mui:InputShape ;
+    sh:class <http://dbpedia.org/ontology/Organisation> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-4-input> a mui:InputShape ;
+    sh:class <http://dbpedia.org/ontology/Person> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-5-input> a mui:InputShape ;
+    sh:class <http://dbpedia.org/ontology/Place> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-6-input> a mui:InputShape ;
+    sh:class <http://dbpedia.org/ontology/Species> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-7-input> a mui:InputShape ;
+    sh:class <http://dbpedia.org/ontology/Work> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-8-input> a mui:InputShape ;
+    sh:class <https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#QueryHistoryVisit> .
+
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate> a mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> a mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaBookRecordTemplate> a mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaFilmRecordTemplate> a mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaOrganisationRecordTemplate> a mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaPersonRecordTemplate> a mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaPlaceRecordTemplate> a mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaSpeciesRecordTemplate> a mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaWorkRecordTemplate> a mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> a mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/view#EntryPointCards> a mui:CardGridWidget .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-0-input> a mui:InputShape ;
+    sh:class <http://www.w3.org/2002/01/bookmark#Bookmark> .
+

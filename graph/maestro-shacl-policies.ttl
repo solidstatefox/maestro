@@ -11,14 +11,13 @@
     rdfs:label "Bookmark record policy"@en ;
     mui:forClass bookmark:Bookmark ;
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape> ;
-    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate>,
-        <gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> .
+    mui:widget mui:RecordViewerWidget .
 
 <gttp://ggg.maestro.ecosys/shacl/policy/query-history-visit> a mui:ClassPolicy ;
     rdfs:label "Query history bookmark policy"@en ;
     mui:forClass vfct:QueryHistoryVisit ;
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#QueryHistoryVisitRecordShape> ;
-    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> .
+    mui:widget mui:RecordViewerWidget .
 
 <gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape> a sh:NodeShape ;
     rdfs:label "Bookmark record shape"@en ;

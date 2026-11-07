@@ -119,7 +119,7 @@ export const getDataserversGraph = (request?: Request): string => graphForFile("
 /** History graph base IRI (<graph>/query). Callers append #history / #bookmarks. */
 export const getHistoryGraph = (request?: Request): string => getUserGraph(request);
 export const getOntologyGraph = (request?: Request): string => graphForFile("maestro-ui-ontology.ttl", request);
-export const getShapesGraph = (request?: Request): string => graphForFile("maestro-shacl-policies.rdf", request);
+export const getShapesGraph = (request?: Request): string => graphForFile("maestro-shacl-policies.ttl", request);
 export const VFCT_NS = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#";
 export const MAESTRO_IDS_NS = "gttp://ggg.maestro.ecosys/ids/";
 
@@ -160,14 +160,11 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
       ".grdf": "application/x-grdf; charset=utf-8",
     };
     const manifest = getGraphManifest();
-    const files = entries.filter((entry) => entry.isFile() && mediaTypes[extname(entry.name).toLowerCase()]);
+    const files = entries.filter((entry) => entry.isFile() && Object.hasOwn(manifest, entry.name) && mediaTypes[extname(entry.name).toLowerCase()]);
     if (files.length === 0) throw new Error(`No supported RDF documents were found in ./graph.`);
     const listedFiles = new Set(files.map((file) => file.name));
     for (const filename of Object.keys(manifest)) {
       if (!listedFiles.has(filename)) throw new Error(`Manifest entry ${filename} has no matching supported RDF file in ${getGraphDirectory()}.`);
-    }
-    for (const file of files) {
-      if (!manifest[file.name]) throw new Error(`No Graph mapping for ${file.name} in graph/manifest.json.`);
     }
 
     const endpoint = personalSparqlUrl(request); // read endpoint (/sparql), advertised in the Datasites seed
@@ -263,11 +260,6 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
     if (graphDirectorySeedPromises.get(sessionKey) === promise) graphDirectorySeedPromises.delete(sessionKey);
   });
   return promise;
-}
-
-/** Compatibility wrapper: policy discovery loads the manifest-mapped RDF files from /graph. */
-export async function ensureShapesGraphSeeded(request?: Request): Promise<void> {
-  await ensureGraphDirectorySeeded(request);
 }
 
 /** Accept a host-only graph-server identifier, defaulting to HTTPS SPARQL. */

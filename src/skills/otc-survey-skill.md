@@ -6,7 +6,7 @@ Interpret the supplied RDF resource `gttp://ggg.openlink.sw/nlp/transcoder#Trans
 ## Semantic contract
 - RDF represents resources by IRIs and literals. RDF/XML entity references such as `&otc;Document` expand to full IRIs in the XML source. Prefixes in Turtle and SPARQL abbreviate those same IRIs.
 - `otc:ask` is a SPARQL boolean preflight; `otc:select` binds authoritative input variables. An ASK result is not a survey answer.
-- `otc:validator` links to the input's SHACL shape. Validation is enforced in Maestro before the survey.
+- `mui:accepts` links an OTC provider to its `mui:InputShape`. Validation is enforced in Maestro before the survey.
 - `otc:assume` is declarative only: premises, not commands. `otc:query` is strictly interrogatory. Answer it using the supplied source data.
 - The answer to the question is always the `resp` variable. Other variables mentioned by the question form an implicit projection. Fill unbound projected variables using evidence; never guess.
 - Variables already projected by SPARQL are authoritative; NEVER change or repeat them in the response.

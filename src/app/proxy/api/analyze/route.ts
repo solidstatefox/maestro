@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requirePersonalLogin } from "@/lib/personal-guard";
-import { ensureShapesGraphSeeded, getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
+import { getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
 
 const MA = "gttp://ggg.maestro.ecosys/ns/analyze#";
 type Binding = { value?: string };
@@ -9,7 +9,6 @@ export async function GET(request: Request) {
   const login = requirePersonalLogin(request);
   if (login) return login;
   try {
-    await ensureShapesGraphSeeded(request);
     const graph = getShapesGraph(request);
     const query = `PREFIX ma: <${MA}> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
       SELECT ?uri ?label ?icon ?stylesheet ?order WHERE {

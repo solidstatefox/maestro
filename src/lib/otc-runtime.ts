@@ -11,6 +11,7 @@ import { renderOtcLiquid } from "@/lib/otc-liquid";
 export const OTC = "gttp://ggg.openlink.sw/nlp/transcoder#";
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const SH = "http://www.w3.org/ns/shacl#";
+const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
 const XSD = "http://www.w3.org/2001/XMLSchema#";
 export type Term = { type: string; value: string; datatype?: string; "xml:lang"?: string };
 type Row = Record<string, Term>;
@@ -42,7 +43,7 @@ export function validateReadQuery(source: string, kind: "ASK" | "SELECT"): strin
 
 export async function listTranscoders(request: Request, rulesGraph: string) {
   assertPersonalSession(request);
-  const query = `PREFIX otc: <${OTC}> PREFIX dcterms: <http://purl.org/dc/terms/> SELECT DISTINCT ?transcoder ?title WHERE { GRAPH ${ref(rulesGraph)} { ?transcoder a otc:Transcoder ; otc:hasRule ?rule . OPTIONAL { ?transcoder dcterms:title ?title } } } LIMIT 100`;
+  const query = `PREFIX otc: <${OTC}> PREFIX mui: <${MUI}> PREFIX dcterms: <http://purl.org/dc/terms/> SELECT DISTINCT ?transcoder ?title WHERE { GRAPH ${ref(rulesGraph)} { ?transcoder a otc:Transcoder ; otc:hasRule ?rule . OPTIONAL { ?transcoder dcterms:title ?title } } } LIMIT 100`;
   const result = await queryPersonalSparql(query, 20000, request);
   return (result.results?.bindings ?? []).map((r) => ({ uri: r.transcoder?.value ?? "", title: r.title?.value || r.transcoder?.value || "" }));
 }
@@ -50,9 +51,9 @@ export async function listTranscoders(request: Request, rulesGraph: string) {
 /** Only specialist surveys are selectable. Listing never calls an LLM. */
 export async function listChatSurveys(request: Request, rulesGraph: string) {
   assertPersonalSession(request);
-  const query = `PREFIX otc: <${OTC}> PREFIX dcterms: <http://purl.org/dc/terms/>
+  const query = `PREFIX otc: <${OTC}> PREFIX mui: <${MUI}> PREFIX dcterms: <http://purl.org/dc/terms/>
     SELECT DISTINCT ?transcoder ?title ?description WHERE { GRAPH ${ref(rulesGraph)} {
-      ?transcoder a otc:Transcoder ; otc:hasRule ?rule ; otc:validator ?shape .
+      ?transcoder a otc:Transcoder, mui:Provider ; otc:hasRule ?rule ; mui:accepts ?shape ; mui:widget ?widget . ?widget a mui:RdfTranscoderWidget .
       OPTIONAL { ?transcoder dcterms:title ?title }
       OPTIONAL { ?transcoder dcterms:description ?description }
     } } ORDER BY ?title LIMIT 50`;
@@ -70,7 +71,7 @@ export async function listChatSurveys(request: Request, rulesGraph: string) {
 
 export async function loadTranscoder(request: Request, rulesGraph: string, transcoderIri: string): Promise<OtcRule[]> {
   assertPersonalSession(request);
-  const query = `PREFIX otc: <${OTC}> SELECT ?rule ?ask ?select ?target ?survey ?template ?assumption ?validator WHERE { GRAPH ${ref(rulesGraph)} { ${ref(transcoderIri)} a otc:Transcoder ; otc:hasRule ?rule . OPTIONAL { ${ref(transcoderIri)} otc:validator ?validator } ?rule otc:select ?select ; otc:query ?survey ; otc:template ?template . OPTIONAL { ?rule otc:target ?target } OPTIONAL { ?rule otc:ask ?ask } OPTIONAL { ?rule otc:assume ?assumption } } } LIMIT 100`;
+  const query = `PREFIX otc: <${OTC}> PREFIX mui: <${MUI}> SELECT ?rule ?ask ?select ?target ?survey ?template ?assumption ?validator WHERE { GRAPH ${ref(rulesGraph)} { ${ref(transcoderIri)} a otc:Transcoder ; otc:hasRule ?rule . OPTIONAL { ${ref(transcoderIri)} mui:accepts ?validator } ?rule otc:select ?select ; otc:query ?survey ; otc:template ?template . OPTIONAL { ?rule otc:target ?target } OPTIONAL { ?rule otc:ask ?ask } OPTIONAL { ?rule otc:assume ?assumption } } } LIMIT 100`;
   const result = await queryPersonalSparql(query, 20000, request);
   const rules = new Map<string, OtcRule>();
   for (const row of result.results?.bindings ?? []) {
@@ -101,7 +102,7 @@ type MessageShape = { iri: string; classes: string[]; properties: ShapeProperty[
 
 async function loadMessageShape(request: Request, rulesGraph: string, shapeIri: string): Promise<MessageShape> {
   assertPersonalSession(request);
-  const query = `PREFIX sh: <${SH}> SELECT ?class ?property ?path ?minCount ?datatype ?nodeKind ?minLength ?hasValue WHERE { GRAPH ${ref(rulesGraph)} { ${ref(shapeIri)} a sh:NodeShape . OPTIONAL { ${ref(shapeIri)} sh:class ?class } OPTIONAL { ${ref(shapeIri)} sh:property ?property . ?property sh:path ?path . OPTIONAL { ?property sh:minCount ?minCount } OPTIONAL { ?property sh:datatype ?datatype } OPTIONAL { ?property sh:nodeKind ?nodeKind } OPTIONAL { ?property sh:minLength ?minLength } OPTIONAL { ?property sh:hasValue ?hasValue } } } } LIMIT 100`;
+  const query = `PREFIX sh: <${SH}> PREFIX mui: <${MUI}> SELECT ?class ?property ?path ?minCount ?datatype ?nodeKind ?minLength ?hasValue WHERE { GRAPH ${ref(rulesGraph)} { ${ref(shapeIri)} a mui:InputShape . OPTIONAL { ${ref(shapeIri)} sh:class ?class } OPTIONAL { ${ref(shapeIri)} sh:property ?property . ?property sh:path ?path . OPTIONAL { ?property sh:minCount ?minCount } OPTIONAL { ?property sh:datatype ?datatype } OPTIONAL { ?property sh:nodeKind ?nodeKind } OPTIONAL { ?property sh:minLength ?minLength } OPTIONAL { ?property sh:hasValue ?hasValue } } } } LIMIT 100`;
   const result = await queryPersonalSparql(query, 20000, request);
   const rows = (result.results?.bindings ?? []) as Row[];
   if (!rows.length) throw new Error(`OTC SHACL validator is missing: ${shapeIri}`);
@@ -229,18 +230,20 @@ async function survey(request: Request, rule: OtcRule, row: Row, activity: OtcLl
   const rdfLiteral = (value: string) => JSON.stringify(value);
   const metadataTtl = [
     `@prefix otc: <${OTC}> .`,
+    `@prefix mui: <${MUI}> .`,
     '@prefix dcterms: <http://purl.org/dc/terms/> .',
     '@prefix schema: <http://schema.org/> .',
     '@prefix sh: <http://www.w3.org/ns/shacl#> .',
     '@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .',
     '@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .',
     '@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .',
-    `${ref(transcoder)} a otc:Transcoder ; otc:hasRule _:survey .`,
+    `${ref(transcoder)} a otc:Transcoder, mui:Provider ; otc:hasRule _:survey ; mui:widget ${ref(transcoder + "-widget")} .`,
+    `${ref(transcoder + "-widget")} a mui:RdfTranscoderWidget ; mui:transcoder ${ref(transcoder)} .`,
     `_:survey a otc:Rule ; otc:query ${rdfLiteral(rule.query)} .`,
     ...(rule.ask ? [`_:survey otc:ask ${rdfLiteral(rule.ask)} .`] : []),
     ...(rule.select ? [`_:survey otc:select ${rdfLiteral(rule.select)} .`] : []),
     ...(rule.target ? [`_:survey otc:target ${rdfLiteral(rule.target)} .`] : []),
-    ...(rule.validator ? [`${ref(transcoder)} otc:validator ${ref(rule.validator)} .`] : []),
+    ...(rule.validator ? [`${ref(transcoder)} mui:accepts ${ref(rule.validator)} .`] : []),
     ...rule.assumptions.map((a) => `_:survey otc:assume ${rdfLiteral(a)} .`),
   ].join("\n");
   const prompt = [
@@ -528,7 +531,7 @@ async function findSuccessor(
   const subjectIris = [...new Set(triples.filter((t) => t.subject.termType === "NamedNode").map((t) => t.subject.value))];
   for (const [transcoder, shapeIri] of [...found.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const successorRules = await loadTranscoder(request, rulesGraph, transcoder);
-    // otc:validator is the accepted input shape for this candidate; no unlinked shape may dispatch it.
+    // mui:accepts links each candidate to its accepted SHACL InputShape.
     if (successorRules.some((r) => r.validator !== shapeIri)) {
       checks.push({ transcoder, shape: shapeIri, conforms: false, reason: "Shape is not linked to successor transcoder." });
       continue;
@@ -564,7 +567,7 @@ export async function runRootTranscoders(
   namespace: string, activity: OtcLlmActivity[], instruction?: string,
 ) {
   assertPersonalSession(request);
-  const rootQuery = `PREFIX otc: <${OTC}> SELECT ?root ?rule ?ask ?select ?question ?assumption ?shape WHERE {
+  const rootQuery = `PREFIX otc: <${OTC}> PREFIX mui: <${MUI}> SELECT ?root ?rule ?ask ?select ?question ?assumption ?shape WHERE {
     GRAPH ${ref(rulesGraph)} { ?root a otc:rootTranscoder ; otc:hasRule ?rule ; otc:dispatchShape ?shape .
     ?rule otc:ask ?ask ; otc:select ?select ; otc:query ?question .
     OPTIONAL { ?rule otc:assume ?assumption }
@@ -599,8 +602,8 @@ export async function runRootTranscoders(
     if (!['true', 'yes', '1'].includes(rootAnswer.resp.value.trim().toLowerCase())) {
       report.push(`${rootIri}: root survey returned false`); continue;
     }
-    const candidateQuery = `PREFIX otc: <${OTC}> SELECT DISTINCT ?transcoder ?shape WHERE {
-      GRAPH ${ref(rulesGraph)} { ?transcoder a otc:Transcoder ; otc:validator ?shape ; otc:hasRule ?rule . }
+    const candidateQuery = `PREFIX otc: <${OTC}> PREFIX mui: <${MUI}> SELECT DISTINCT ?transcoder ?shape WHERE {
+      GRAPH ${ref(rulesGraph)} { ?transcoder a otc:Transcoder, mui:Provider ; mui:accepts ?shape ; mui:widget ?widget ; otc:hasRule ?rule . ?widget a mui:RdfTranscoderWidget . }
     } LIMIT 100`;
     const candidates = await queryPersonalSparql(candidateQuery, 20000, request);
     for (const row of (candidates.results?.bindings ?? []) as Row[]) {

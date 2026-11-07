@@ -26,11 +26,11 @@ class GraphEndpointError extends Error {
     this.name = "GraphEndpointError";
   }
 }
-async function execute(endpoint: string, query: string, accept: string, operation: string): Promise<string> {
+async function execute(endpoint: string, query: string, accept: string, operation: string, timeoutMs = 30000): Promise<string> {
   const url = new URL("/sparql", endpoint);
   const started = Date.now();
   const result = await fetch(url, {
-    method: "POST", cache: "no-store", signal: AbortSignal.timeout(30000),
+    method: "POST", cache: "no-store", signal: AbortSignal.timeout(timeoutMs),
     headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Accept: accept },
     body: new URLSearchParams({ query }).toString(),
   });
@@ -45,26 +45,17 @@ function readUris(payload: string, key: string): string[] {
     .filter((term): term is { type: string; value: string } => term?.type === "uri" && validIri(term.value))
     .map((term) => term.value))];
 }
-async function graphExists(endpoint: string, iri: string): Promise<boolean> {
-  const query = `ASK WHERE { GRAPH ?src { ${graphPattern(iri)} } }`;
-  const result = JSON.parse(await execute(endpoint, query, "application/sparql-results+json", "ask")) as { boolean?: boolean };
-  if (typeof result.boolean !== "boolean") throw new Error("Graph server returned an invalid ASK response.");
-  return result.boolean;
-}
 const GRAPH_CACHE_MS = 5 * 60 * 1000;
 const graphDiscoveryCache = new Map<string, { expires: number; graphs: string[] }>();
 async function discover(endpoint: string, iri: string): Promise<string[]> {
   const cacheKey = `${endpoint}\0${iri}`;
   const cached = graphDiscoveryCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) return [...cached.graphs];
-  // Preflight: avoid a potentially expensive graph listing when this record
-  // does not occur as a subject in any named graph.
-  if (!await graphExists(endpoint, iri)) {
-    graphDiscoveryCache.set(cacheKey, { expires: Date.now() + GRAPH_CACHE_MS, graphs: [] });
-    return [];
-  }
+  // One bounded discovery query. An ASK preflight over GRAPH ?src does
+  // essentially the same expensive scan and doubles the worst-case latency.
+  // Graph metadata is optional and must not delay the main Record SELECT.
   const query = `SELECT DISTINCT ?src WHERE { GRAPH ?src { ${graphPattern(iri)} } } ORDER BY ?src`;
-  const graphs = readUris(await execute(endpoint, query, "application/sparql-results+json", "discover"), "src");
+  const graphs = readUris(await execute(endpoint, query, "application/sparql-results+json", "discover", 10000), "src");
   // Store only successful discovery. An aborted request or upstream error is
   // never cached. This cache is best-effort on ephemeral Vercel instances.
   if (graphDiscoveryCache.size > 250) graphDiscoveryCache.clear();

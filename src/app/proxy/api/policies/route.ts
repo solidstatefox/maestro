@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { ensureShapesGraphSeeded, getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
+import { getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
 import { requirePersonalLogin } from "@/lib/personal-guard";
@@ -47,12 +47,17 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "discover") {
-      await ensureShapesGraphSeeded(request);
       const types = Array.isArray(body.recordTypes) ? [...new Set(body.recordTypes.filter(safeIri))] : [];
       if (types.length === 0) return NextResponse.json({ policy: null });
       const values = types.map(sparqlIri).join(" ");
       const shapesGraph = sparqlIri(getShapesGraph(request));
-      const query = `PREFIX rdf: <${RDF}>\nPREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?class ?policy ?policyLabel ?recordShape ?template ?templateLabel WHERE { GRAPH ${shapesGraph} { VALUES ?class { ${values} } ?policy a mui:ClassPolicy ; mui:forClass ?class ; mui:recordShape ?recordShape ; rdfs:label ?policyLabel . OPTIONAL { ?policy mui:xsltTemplate ?template . OPTIONAL { ?template rdfs:label ?templateLabel } } } } ORDER BY LCASE(STR(?policyLabel)) LCASE(STR(?templateLabel)) LIMIT 100`;
+      const query = `PREFIX rdf: <${RDF}>\nPREFIX sh: <${SH}>\nPREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?class ?policy ?policyLabel ?recordShape ?template ?templateLabel WHERE { GRAPH ${shapesGraph} { VALUES ?class { ${values} } ?policy a mui:ClassPolicy ; mui:forClass ?class ; mui:recordShape ?recordShape ; mui:widget ?widgetClass ; rdfs:label ?policyLabel .
+  OPTIONAL { ?provider a mui:Provider ; mui:widget ?template ; mui:accepts ?inputShape .
+    ?inputShape a mui:InputShape .
+    ?inputShape sh:class ?class .
+    ?template rdf:type/rdfs:subClassOf* ?widgetClass .
+    OPTIONAL { ?template rdfs:label ?templateLabel }
+  } } } ORDER BY LCASE(STR(?policyLabel)) LCASE(STR(?templateLabel)) LIMIT 100`;
       const payload = await queryPersonalSparql(query, 20000, request);
       const grouped = new Map<string, { uri: string; label: string; recordShape: string; matchedClasses: string[]; templates: { uri: string; label: string }[] }>();
       for (const row of (payload.results?.bindings ?? []) as BindingRow[]) {

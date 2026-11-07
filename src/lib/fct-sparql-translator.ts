@@ -412,6 +412,20 @@ function buildSelectQuery(args: {
 }
 
 const DEFAULT_INDEX_LABEL = "http://www.w3.org/2000/01/rdf-schema#label";
+// Language is a view-level attribute so shared URLs and server-side queries
+// use the same alphabet semantics as the preferred-language Sheet setting.
+function indexLanguage(view: XmlNode | null): string {
+  const language = (view?.attributes.indexLang || "en").toLowerCase();
+  if (!/^[a-z]{2,3}$/.test(language)) throw new Error("Invalid alphabet language code.");
+  return language;
+}
+function indexLanguageFilter(value: SparqlTerm, language: string): SparqlPattern {
+  const lang: SparqlExpression = { kind: "function", name: "LANG", args: [termExpr(value)] };
+  return { kind: "filter", expression: binary("||",
+    { kind: "function", name: "LANGMATCHES", args: [lang, termExpr(literalTerm(language))] },
+    binary("=", lang, termExpr(literalTerm(""))),
+  ) };
+}
 function indexLabelPredicates(view: XmlNode | null): string[] {
   const list = (view?.attributes.indexLabels || DEFAULT_INDEX_LABEL).split(/[\s,]+/).filter(Boolean);
   const values = [...new Set(list)];
@@ -797,11 +811,9 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     // grouping, and 26 VALUES prefix tests are much slower. Use the empirically
     // faster expression-based grouping without UCASE or ORDER BY; the client
     // normalizes letters and displays A-Z in a fixed sequence.
-    // Restrict to rdfs:label: a predicate-variable join over the full picker
-    // is too expensive for this public endpoint. The active letter constraint
-    // below uses the same predicate selection. Do not constrain label language
-    // here: clicking a letter accepts labels in every language, so counts must
-    // count the same eligible resources (including untagged labels).
+    // Use rdfs:label alone to avoid expensive predicate-variable joins.
+    // Both grouped counts and active-letter results honor indexLang and include
+    // language-neutral labels so their populations stay consistent.
     const name = variable("maestroLabel");
     const labelPredicate = iriTerm(DEFAULT_INDEX_LABEL);
     const letter: SparqlExpression = { kind: "function", name: "SUBSTR", args: [
@@ -811,6 +823,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     ] };
     const labelPatterns: SparqlPattern[] = [
       { kind: "triple", subject: target, predicate: labelPredicate, object: name },
+      indexLanguageFilter(name, indexLanguage(viewNode)),
       { kind: "filter", expression: { kind: "function", name: "REGEX", args: [
         letter, termExpr(literalTerm("^[A-Za-z]$")),
       ] } },
@@ -878,6 +891,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
         { kind: "triple", subject: target, predicate, object: name },
         { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
         startsWithLetter(name),
+        indexLanguageFilter(name, indexLanguage(viewNode)),
       ];
       // A forward property can bind a literal or an IRI. Keep the focus
       // variable in the outer query scope: Virtuoso rejects FILTERs over a
@@ -888,6 +902,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
             { kind: "optional", patterns: [
               { kind: "triple", subject: target, predicate, object: name },
               { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
+              indexLanguageFilter(name, indexLanguage(viewNode)),
             ] },
             { kind: "filter", expression: binary("||",
               binary("&&",

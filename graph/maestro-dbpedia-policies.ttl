@@ -17,43 +17,43 @@
         schema1:Book,
         schemahttps:Book ;
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#DbpediaBookRecordShape> ;
-    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#DbpediaBookRecordTemplate> .
+    mui:widget mui:RecordViewerWidget .
 
 <gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-film> a mui:ClassPolicy ;
     rdfs:label "DBpedia Film policy"@en ;
     mui:forClass dbo:Film ;
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#DbpediaFilmRecordShape> ;
-    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#DbpediaFilmRecordTemplate> .
+    mui:widget mui:RecordViewerWidget .
 
 <gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-organisation> a mui:ClassPolicy ;
     rdfs:label "DBpedia Organisation policy"@en ;
     mui:forClass dbo:Organisation ;
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#DbpediaOrganisationRecordShape> ;
-    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#DbpediaOrganisationRecordTemplate> .
+    mui:widget mui:RecordViewerWidget .
 
 <gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-person> a mui:ClassPolicy ;
     rdfs:label "DBpedia Person policy"@en ;
     mui:forClass dbo:Person ;
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#DbpediaPersonRecordShape> ;
-    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#DbpediaPersonRecordTemplate> .
+    mui:widget mui:RecordViewerWidget .
 
 <gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-place> a mui:ClassPolicy ;
     rdfs:label "DBpedia Place policy"@en ;
     mui:forClass dbo:Place ;
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#DbpediaPlaceRecordShape> ;
-    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#DbpediaPlaceRecordTemplate> .
+    mui:widget mui:RecordViewerWidget .
 
 <gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-species> a mui:ClassPolicy ;
     rdfs:label "DBpedia Species policy"@en ;
     mui:forClass dbo:Species ;
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#DbpediaSpeciesRecordShape> ;
-    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#DbpediaSpeciesRecordTemplate> .
+    mui:widget mui:RecordViewerWidget .
 
 <gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-work> a mui:ClassPolicy ;
     rdfs:label "DBpedia Work policy"@en ;
     mui:forClass dbo:Work ;
     mui:recordShape <gttp://ggg.maestro.ecosys/shacl/shape#DbpediaWorkRecordShape> ;
-    mui:xsltTemplate <gttp://ggg.maestro.ecosys/shacl/template#DbpediaWorkRecordTemplate> .
+    mui:widget mui:RecordViewerWidget .
 
 <gttp://ggg.maestro.ecosys/shacl/shape#DbpediaBookRecordShape> a sh:NodeShape ;
     rdfs:label "DBpedia Book validator"@en ;

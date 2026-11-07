@@ -1,11 +1,13 @@
 /** Render a SHACL-discovered XSLT View over the currently visible FCT result page. */
 export type ViewResult = {
-  uri: string; label: string;
+  uri: string; label: string; selected?: boolean;
   endpoint?: string; endpointId?: string; favicon?: string; rank?: string;
-  health?: string; healthState?: string; pinging?: boolean; group?: string; product?: string; version?: string; description?: string;
+  target?: string; detail?: string; health?: string; healthState?: string; pinging?: boolean; group?: string; product?: string; version?: string; description?: string;
 };
 
-export function renderDiscoveredViewXslt(stylesheetText: string, rows: ViewResult[]): string {
+export function renderDiscoveredViewXslt(stylesheetText: string, rows: ViewResult[], options?: {
+  availableRows?: ViewResult[]; page?: number; pageSize?: number;
+}): string {
   if (typeof DOMParser === "undefined" || typeof XSLTProcessor === "undefined") {
     throw new Error("This browser does not support XSLT views.");
   }
@@ -13,16 +15,25 @@ export function renderDiscoveredViewXslt(stylesheetText: string, rows: ViewResul
     throw new Error("View stylesheet contains unsupported external references.");
   }
   const doc = document.implementation.createDocument(null, "results");
-  rows.forEach((row) => {
+  const makeResult = (row: ViewResult) => {
     const element = doc.createElement("result");
     element.setAttribute("uri", row.uri);
     element.setAttribute("label", row.label);
+    if (row.selected) element.setAttribute("selected", "true");
     if (row.pinging) element.setAttribute("pinging", "true");
-    for (const key of ["endpoint", "endpointId", "favicon", "rank", "health", "healthState", "group", "product", "version", "description"] as const) {
+    for (const key of ["endpoint", "endpointId", "favicon", "rank", "health", "healthState", "group", "product", "version", "description", "target", "detail"] as const) {
       if (row[key]) element.setAttribute(key, row[key]);
     }
-    doc.documentElement.appendChild(element);
-  });
+    return element;
+  };
+  rows.forEach((row) => doc.documentElement.appendChild(makeResult(row)));
+  if (options?.availableRows) {
+    doc.documentElement.setAttribute("page", String(options.page ?? 0));
+    doc.documentElement.setAttribute("pageSize", String(options.pageSize ?? rows.length));
+    const available = doc.createElement("available");
+    options.availableRows.forEach((row) => available.appendChild(makeResult(row)));
+    doc.documentElement.appendChild(available);
+  }
   const xslt = new DOMParser().parseFromString(stylesheetText, "application/xml");
   if (xslt.querySelector("parsererror") || !["stylesheet", "transform"].includes(xslt.documentElement.localName) || xslt.documentElement.namespaceURI !== "http://www.w3.org/1999/XSL/Transform") {
     throw new Error("Discovered View stylesheet is not valid XSLT XML.");
@@ -74,6 +85,8 @@ export function renderDiscoveredViewXslt(stylesheetText: string, rows: ViewResul
           } else if (name === "data-favicon-fallback" && element.localName.toLowerCase() === "img") {
             try { const url = new URL(attribute.value); if (url.protocol !== "https:") element.removeAttribute(attribute.name); }
             catch { element.removeAttribute(attribute.name); }
+          } else if (name === "data-endpoint-select" && element.localName.toLowerCase() === "button") {
+            // The delegated View handler validates the registry ID before selection.
           } else if (name === "data-endpoint-refresh" && element.localName.toLowerCase() === "button") {
             // React checks this key against the active configured registry.
           } else if (name === "type" && attribute.value === "button" && element.localName.toLowerCase() === "button") {

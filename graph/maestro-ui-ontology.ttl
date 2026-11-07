@@ -160,12 +160,25 @@ mui:XsltTemplate
     rdfs:label "XSLT template"@en ;
     rdfs:comment "An XSLT 1.0 stylesheet that formats FCT DESCRIBE XML while preserving Maestro rendering and actions. The stylesheet is stored as an RDF literal."@en .
 
-mui:xsltTemplate
-    a owl:ObjectProperty ;
-    rdfs:label "XSLT template"@en ;
-    rdfs:comment "The XSLT stylesheet resource used by a class policy's Format action."@en ;
-    rdfs:domain mui:ClassPolicy ;
-    rdfs:range mui:XsltTemplate .
+# The W3C SHACL UI widget predicates are kept unchanged; Maestro treats
+# each as a special form of the common mui:widget relationship.
+mui:widget a owl:ObjectProperty ;
+    rdfs:label "widget"@en ;
+    rdfs:comment "On a policy shape, the requested widget class; on a Provider, a concrete implementation resource."@en .
+
+shui:editor rdfs:subPropertyOf mui:widget .
+shui:viewer rdfs:subPropertyOf mui:widget .
+
+mui:Provider a owl:Class ; rdfs:label "widget provider"@en .
+mui:InputShape a owl:Class ; rdfs:subClassOf sh:NodeShape ;
+    rdfs:label "provider input shape"@en .
+mui:accepts a owl:ObjectProperty ; rdfs:domain mui:Provider ;
+    rdfs:range mui:InputShape ; rdfs:label "accepts"@en .
+
+mui:RecordViewerWidget a owl:Class ; rdfs:subClassOf mui:XsltTemplate .
+mui:CardGridWidget a owl:Class ; rdfs:subClassOf mui:XsltTemplate .
+mui:RdfTranscoderWidget a owl:Class ; rdfs:label "RDF transcoder widget"@en .
+mui:transcoder a owl:ObjectProperty ; rdfs:label "OTC transcoder"@en .
 
 mui:templateContent
     a owl:DatatypeProperty ;

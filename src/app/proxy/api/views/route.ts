@@ -20,7 +20,10 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 SELECT DISTINCT ?policy ?class ?label ?template ?stylesheet WHERE {
   GRAPH <${graph}> {
     VALUES ?class { ${classes.map((iri) => `<${iri}>`).join(" ")} }
-    ?policy sh:targetClass ?class ; mui:xsltTemplate ?template .
+    ?policy sh:targetClass ?class ; mui:widget ?widgetClass .
+    ?provider a mui:Provider ; mui:widget ?template ; mui:accepts ?inputShape .
+    ?inputShape a mui:InputShape ; sh:class ?class .
+    ?template rdf:type/rdfs:subClassOf* ?widgetClass .
     OPTIONAL { ?policy rdfs:label ?label }
     ?template (rdf:value|mui:templateContent) ?stylesheet .
     FILTER(CONTAINS(STR(?stylesheet), 'xsl:stylesheet') || CONTAINS(STR(?stylesheet), 'xsl:transform'))

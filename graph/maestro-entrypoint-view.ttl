@@ -11,7 +11,7 @@ view:EntryPointView a sh:NodeShape ;
     sh:targetClass schema:EntryPoint ;
     rdfs:label "Graph Servers" ;
     mui:icon "server" ;
-    mui:xsltTemplate view:EntryPointCards .
+    mui:widget mui:CardGridWidget .
 
 view:EntryPointCards a mui:XsltTemplate ;
     rdfs:label "Graph server cards" ;
@@ -20,11 +20,27 @@ view:EntryPointCards a mui:XsltTemplate ;
   <xsl:output method="html" omit-xml-declaration="yes"/>
   <xsl:template match="/results">
     <section data-view-title="Graph Servers" data-view-icon="server" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Graph servers">
-      <xsl:apply-templates select="result"/>
+      <!-- All selected-first ordering and page slicing happen in this stylesheet.
+           The available collection includes only results already returned by FCT;
+           a filtered-out graph server is never injected. -->
+      <xsl:variable name="offset" select="number(@page) * number(@pageSize)"/>
+      <xsl:variable name="limit" select="number(@pageSize)"/>
+      <xsl:apply-templates select="available/result">
+        <xsl:sort select="number(@selected = 'true')" data-type="number" order="descending"/>
+        <xsl:with-param name="offset" select="$offset"/>
+        <xsl:with-param name="limit" select="$limit"/>
+      </xsl:apply-templates>
     </section>
   </xsl:template>
   <xsl:template match="result">
-    <article class="flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
+    <xsl:param name="offset" select="0"/>
+    <xsl:param name="limit" select="30"/>
+    <xsl:if test="position() &gt; $offset and position() &lt;= ($offset + $limit)">
+    <article>
+      <xsl:attribute name="class"><xsl:choose>
+        <xsl:when test="@selected = 'true'">flex flex-col overflow-hidden rounded-xl border-2 border-primary bg-card shadow-sm ring-1 ring-primary/20</xsl:when>
+        <xsl:otherwise>flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm</xsl:otherwise>
+      </xsl:choose></xsl:attribute>
       <xsl:if test="string-length(normalize-space(@group)) &gt; 0">
         <div class="border-b bg-muted/50 px-5 py-1.5 text-xs font-medium text-muted-foreground"><xsl:value-of select="@group"/></div>
       </xsl:if>
@@ -39,7 +55,18 @@ view:EntryPointCards a mui:XsltTemplate ;
             </img>
           </xsl:if>
         </span>
-        <h3 class="min-w-0 break-words text-base font-semibold"><xsl:value-of select="@label"/></h3>
+        <h3 class="min-w-0 break-words text-base font-semibold">
+          <xsl:choose>
+            <xsl:when test="string-length(@endpointId) &gt; 0">
+              <button type="button" class="cursor-pointer text-left hover:text-primary hover:underline focus-visible:underline" title="Select graph server">
+                <xsl:attribute name="data-endpoint-select"><xsl:value-of select="@endpointId"/></xsl:attribute>
+                <xsl:value-of select="@label"/>
+              </button>
+            </xsl:when>
+            <xsl:otherwise><xsl:value-of select="@label"/></xsl:otherwise>
+          </xsl:choose>
+          <xsl:if test="@selected = 'true'"><span class="ml-2 text-xs font-medium text-primary">Selected</span></xsl:if>
+        </h3>
       </div>
       <div class="flex items-center gap-2 text-sm text-muted-foreground">
         <xsl:choose>
@@ -80,5 +107,6 @@ view:EntryPointCards a mui:XsltTemplate ;
       </a>
       </div>
     </article>
+    </xsl:if>
   </xsl:template>
 </xsl:stylesheet>""" .

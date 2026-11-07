@@ -201,6 +201,9 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
     const available = props.map((prop) => `<${prop}>`).join(", ");
     state.patterns.push(`${state.viewVariable} ?maestroIndexPredicate ?maestroIndexLabel .`);
     state.patterns.push(`FILTER (?maestroIndexPredicate IN (${available}))`);
+    const indexLang = (viewNode?.attributes.indexLang || "en").toLowerCase();
+    if (!/^[a-z]{2,3}$/.test(indexLang)) return null;
+    state.patterns.push(`FILTER (LANGMATCHES(LANG(?maestroIndexLabel), "${indexLang}") || LANG(?maestroIndexLabel) = "")`);
     state.patterns.push(`FILTER (STRSTARTS(UCASE(STR(?maestroIndexLabel)), "${indexLetter}"))`);
   }
 

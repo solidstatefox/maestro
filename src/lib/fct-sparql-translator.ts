@@ -19,6 +19,8 @@ export type CompiledFctQuery = {
   target: string;
   graphOnly: boolean;
   countOnly: boolean;
+  /** A literal-focused DESCRIBE projects incoming Roles as SPARQL SELECT triples. */
+  describeLiteral?: boolean;
   badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse" }>;
   valueColumns?: Array<{ property: string; direction: "forward" | "reverse"; path?: string[] }>; 
 };
@@ -501,6 +503,10 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   compileConstraints(root.children, variable("s1"), constraints, errors, state);
   if (errors.length) throw new Error(errors.join(" "));
   const target = state.target ?? variable("s1");
+  const rootLiteralNode = root.children.find((node) => node.name === "value" &&
+    node.attributes.datatype !== "uri" && node.attributes.datatype !== "bnode");
+  const describeLiteral = view === FCT_VIEW_TYPES.DESCRIBE && Boolean(rootLiteralNode) &&
+    !root.children.some((node) => node.name === "property" || node.name === "property-of");
   const textNodeProperty = textNode?.attributes.property;
   const textPatterns = searchText ? fullTextPatterns(searchText, textNodeProperty) : null;
   if (searchText && !textPatterns) throw new Error("The text search contains no searchable terms.");
@@ -531,12 +537,16 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
   // in the authoritative FCT XML. This is Maestro's extension to native FCT.
   const isRootUri = root.children.some((child) =>
     child.name === "value" && child.attributes.datatype === "uri");
+  const isRootLiteral = root.children.some((child) =>
+    child.name === "value" && child.attributes.datatype !== "uri" && child.attributes.datatype !== "bnode");
   where.unshift(isRootUri
     ? { kind: "union", branches: [
         [{ kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") }],
         [{ kind: "triple", subject: variable("incoming0"), predicate: variable("p1"), object: variable("s1") }],
       ] }
-    : { kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") });
+    : isRootLiteral
+      ? { kind: "triple", subject: variable("incoming0"), predicate: variable("p0"), object: variable("s1") }
+      : { kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") });
 }
 
 
@@ -831,8 +841,21 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       { expression: termExpr(target), as: variable("c3") },
     ], where: geoWhere, orderBy: shouldOrder ? [entityRankOrder(target)] : undefined, limit, offset });
   } else if (view === FCT_VIEW_TYPES.DESCRIBE) {
-    const document = new SparqlQueryDocument({ kind: "describe", describe: target, directives, projections: [], where: scopedWhere, limit, offset });
-    query = document.toString();
+    if (describeLiteral && rootLiteralNode) {
+      // RDF literals cannot be triple subjects. A literal Record consists of
+      // incoming Roles; return their triples using the FCT describe envelope.
+      const literal = valueTerm(rootLiteralNode);
+      if (!literal || literal.kind !== "literal") throw new Error("Invalid literal Record value.");
+      const rolePatterns: SparqlPattern[] = [{ kind: "triple", subject: variable("subject"), predicate: variable("predicate"), object: literal }];
+      query = buildSelectQuery({ directives, projections: [
+        { expression: termExpr(variable("subject")), as: variable("s") },
+        { expression: termExpr(variable("predicate")), as: variable("p") },
+        { expression: termExpr(literal), as: variable("o") },
+      ], where: graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: rolePatterns }] : rolePatterns, limit, offset });
+    } else {
+      const document = new SparqlQueryDocument({ kind: "describe", describe: target, directives, projections: [], where: scopedWhere, limit, offset });
+      query = document.toString();
+    }
   } else if (view === FCT_VIEW_TYPES.TEXT) {
     // The view-level alphabet index constrains label values, not URI initials.
     // Every label property selected beside the root search input is eligible.
@@ -844,14 +867,46 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       const predicates = indexLabelPredicates(viewNode);
       const name = variable("maestroIndexLabel");
       const predicate = variable("maestroIndexPredicate");
-      const labelPatterns: SparqlPattern[] = [
+      const startsWithLetter = (value: SparqlTerm): SparqlPattern => ({
+        kind: "filter",
+        expression: { kind: "function", name: "STRSTARTS", args: [
+          { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(value)] }] },
+          termExpr(literalTerm(selectedLetter)),
+        ] },
+      });
+      const resourceLabelPatterns: SparqlPattern[] = [
         { kind: "triple", subject: target, predicate, object: name },
         { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
-        { kind: "filter", expression: { kind: "function", name: "STRSTARTS", args: [
-          { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(name)] }] },
-          termExpr(literalTerm(selectedLetter)),
-        ] } },
+        startsWithLetter(name),
       ];
+      // A forward property can bind a literal or an IRI. Keep the focus
+      // variable in the outer query scope: Virtuoso rejects FILTERs over a
+      // variable assigned only outside a UNION branch (SP031). An OPTIONAL
+      // label lookup handles IRIs without excluding literal values.
+      const labelPatterns: SparqlPattern[] = viewParent?.name === "property"
+        ? [
+            { kind: "optional", patterns: [
+              { kind: "triple", subject: target, predicate, object: name },
+              { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
+            ] },
+            { kind: "filter", expression: binary("||",
+              binary("&&",
+                { kind: "function", name: "isLiteral", args: [termExpr(target)] },
+                { kind: "function", name: "STRSTARTS", args: [
+                  { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(target)] }] },
+                  termExpr(literalTerm(selectedLetter)),
+                ] },
+              ),
+              binary("&&",
+                { kind: "function", name: "isIRI", args: [termExpr(target)] },
+                { kind: "function", name: "STRSTARTS", args: [
+                  { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(name)] }] },
+                  termExpr(literalTerm(selectedLetter)),
+                ] },
+              ),
+            ) },
+          ]
+        : resourceLabelPatterns;
       indexedWhere = graphTerm
         ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...labelPatterns] }]
         : [...where, ...labelPatterns];
@@ -915,6 +970,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     target: serializeTerm(target),
     graphOnly,
     countOnly,
+    describeLiteral,
     badgeColumns: state.badgeColumns?.map(({ colName, property, direction }) => ({ colName, property, direction })),
     ...(view === FCT_VIEW_TYPES.LIST_VALUES ? { valueColumns } : {}),
   };

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
-import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
+import { getConfiguredFctEndpoints, resolveConfiguredFctEndpoint, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
 import { parseRdfDocument } from "@/lib/rdf-to-sparql";
 import { proxyLog, proxyFailure } from "@/lib/maestro-logger";
 
@@ -101,9 +101,10 @@ export async function POST(request: Request) {
     // fct_endpoint cookie (which may be stale after restoring a share URL).
     const addr = typeof body.addr === "string" ? body.addr : "";
     const server = addr.includes("@") ? addr.slice(addr.indexOf("@") + 1).trim() : "";
-    const endpoint = server
-      ? endpoints.find((item) => item.id === server || item.url === server || item.label === server)
+    const configured = server
+      ? resolveConfiguredFctEndpoint(endpoints, server) ?? endpoints.find((item) => item.id === server || item.label === server)
       : selectConfiguredFctEndpoint(request, endpoints);
+    const endpoint = configured && server.startsWith("http") ? { ...configured, url: server } : configured;
     if (!endpoint) return NextResponse.json({ error: server ? `Graph server from query addr is not configured: ${server}` : "No configured graph server." }, { status: 503 });
     const iri: string = body.iri;
     if (body.operation === "graphs") {

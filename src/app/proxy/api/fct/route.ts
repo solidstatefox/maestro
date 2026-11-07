@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
 import { compileFctXmlToSparql, type SparqlJsonResults, type SparqlBindingTerm } from "@/lib/fct-sparql-translator";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
-import { getDataserversGraph, getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
+import { getDataserversGraph, getConfiguredFctEndpoints, normalizeGraphServerUri, resolveConfiguredFctEndpoint, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
 import { proxyLog } from "@/lib/maestro-logger";
 import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
@@ -180,6 +180,19 @@ function xmlEscape(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
+function xmlAttributeValue(value: string): string {
+  return value.replace(/&(?:amp|quot|apos|lt|gt|#x[0-9a-fA-F]+|#[0-9]+);/g, (entity) => {
+    if (entity === "&amp;") return "&";
+    if (entity === "&quot;") return '"';
+    if (entity === "&apos;") return "'";
+    if (entity === "&lt;") return "<";
+    if (entity === "&gt;") return ">";
+    const hex = entity.startsWith("&#x");
+    const point = Number.parseInt(entity.slice(hex ? 3 : 2, -1), hex ? 16 : 10);
+    return Number.isFinite(point) && point >= 0 && point <= 0x10ffff ? String.fromCodePoint(point) : entity;
+  });
+}
+
 const FCT_NS = "http://openlinksw.com/services/facets/1.0/";
 
 function xmlText(value: unknown): string {
@@ -290,6 +303,27 @@ function fctResponseXml(args: {
   return `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;
 }
 
+/** Safe absolute RDF IRIs may use schemes beyond HTTP (e.g. urn:, gttp:).
+ * Validate IRIREF syntax before interpolating a term into SPARQL VALUES.
+ * RDF results may also be literals, which retain their datatype and language.
+ */
+function validProjectionIri(value: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|^`\\\u0000-\u001f]+$/u.test(value);
+}
+
+function serializeProjectionResource(term: SparqlBindingTerm): string | null {
+  const value = term.value;
+  if (typeof value !== "string" || value.length > 4096) return null;
+  if (term.type === "uri") return validProjectionIri(value) ? `<${value}>` : null;
+  if (term.type !== "literal" || /[\u0000-\u001f]/.test(value)) return null;
+  const lang = term["xml:lang"];
+  const datatype = term.datatype === "string" ? undefined : term.datatype;
+  if (lang && (!/^[A-Za-z]+(?:-[A-Za-z0-9]+)*$/.test(lang) || datatype)) return null;
+  if (datatype && !validProjectionIri(datatype)) return null;
+  const text = JSON.stringify(value);
+  return lang ? `${text}@${lang}` : datatype ? `${text}^^<${datatype}>` : text;
+}
+
 /**
  * Maestro list-values extension. The first query has already selected the page.
  * This second query only retrieves projected triples for those page resources.
@@ -304,17 +338,23 @@ async function expandListValues(args: {
   graph: string;
   timeoutMs: number;
 }): Promise<{ rows: Record<string, SparqlBindingTerm[]>; query: string; complete: boolean; upstream?: ReturnType<typeof fctUpstreamMetadata> }> {
-  const values = [...new Set(args.page.map((row) => row.c1?.value).filter((v): v is string => typeof v === "string" && /^https?:\/\//i.test(v)))];
+  const uniqueTerms = new Map<string, string>();
+  for (const row of args.page) {
+    if (!row.c1) continue;
+    const encoded = serializeProjectionResource(row.c1);
+    if (encoded) uniqueTerms.set(encoded, row.c1.value);
+  }
+  const values = [...new Set(uniqueTerms.values())];
   const validIri = (value: string) => /^https?:\/\/[^\s<>"{}|^`\\]+$/i.test(value);
   const columns = args.columns.slice(0, 24).filter((column) => validIri(column.property));
   if (!values.length || !columns.length) return { rows: {}, query: "", complete: true };
-  if (!values.every(validIri) || (args.graph && !validIri(args.graph)))
+  if (args.graph && !validIri(args.graph))
     throw new Error("Invalid RDF IRI in list-values projection.");
   // Bind the paginated resources inside every UNION branch. This avoids an
   // unbound ?resource in branches that some Virtuoso versions otherwise
   // evaluate separately, and guarantees that every projected value remains
   // associated with a member of the selected Results page.
-  const subjectValues = values.map((value) => `<${value}>`).join(" ");
+  const subjectValues = [...uniqueTerms.keys()].join(" ");
   const branches = columns.map((column, index) => {
     const path = column.path?.length ? column.path : [column.property];
     if (path.some((predicate) => !validIri(predicate))) throw new Error("Invalid list-values property path.");
@@ -447,22 +487,18 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const selectedId = selectConfiguredFctEndpoint(request, endpoints)?.id ?? "";
   if (url.searchParams.get("health") !== "1") {
-    return NextResponse.json({ endpoints: endpoints.map(({ id, label, url, group }) => ({ id, label, url, group })), selectedId });
+    return NextResponse.json({ endpoints: endpoints.map(({ id, label, url, group, schemeInferred }) => ({ id, label, url, group, schemeInferred })), selectedId });
   }
 
   const endpointId = url.searchParams.get("endpointId") ?? "";
   const endpoint = endpoints.find((item) => item.id === endpointId);
   if (!endpoint) return NextResponse.json({ error: "Unknown SPARQL endpoint health check." }, { status: 400 });
 
-  const testedUrl = endpoint.url;
-  try {
+  const probe = async (testedUrl: string) => {
     const response = await fetch(testedUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        Accept: "application/sparql-results+json, application/json;q=0.9",
-      },
-      body: new URLSearchParams({ query: "ASK WHERE { ?s ?p ?o }" }).toString(),
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Accept: "application/sparql-results+json, application/json;q=0.9" },
+      body: new URLSearchParams({ query: "ASK WHERE { }" }).toString(),
       cache: "no-store",
       signal: AbortSignal.timeout(7000),
     });
@@ -471,26 +507,25 @@ export async function GET(request: Request) {
     try {
       const parsed = JSON.parse(responseText);
       validResults = response.ok && (typeof parsed?.boolean === "boolean" || parseResults(responseText) !== null);
-    } catch {
-      validResults = false;
-    }
+    } catch { /* A non-SPARQL body is not a healthy SPARQL endpoint. */ }
     const status = validResults ? response.status : response.ok ? 502 : response.status;
-    return NextResponse.json({
-      check: {
-        id: endpoint.id,
-        status,
-        state: validResults ? "ok" : status >= 500 ? "server-error" : "http-error",
-        testedUrl,
-      },
-    });
-
+    return { id: endpoint.id, status, state: validResults ? "ok" : status >= 500 ? "server-error" : "http-error", testedUrl };
+  };
+  try {
+    const httpsResult = await probe(endpoint.url);
+    // Only a real HTTP 404 permits falling back from an inferred HTTPS URL.
+    if (endpoint.schemeInferred && endpoint.url.startsWith("https://") && httpsResult.status === 404) {
+      const httpUrl = endpoint.url.replace(/^https:\/\//, "http://");
+      try { return NextResponse.json({ check: await probe(httpUrl) }); }
+      catch (error) {
+        return NextResponse.json({ check: { id: endpoint.id, status: null,
+          state: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "unreachable", testedUrl: httpUrl } });
+      }
+    }
+    return NextResponse.json({ check: httpsResult });
   } catch (error) {
-    return NextResponse.json({ check: {
-      id: endpoint.id,
-      status: null,
-      state: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "unreachable",
-      testedUrl,
-    } });
+    return NextResponse.json({ check: { id: endpoint.id, status: null,
+      state: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "unreachable", testedUrl: endpoint.url } });
   }
 }
 
@@ -509,11 +544,14 @@ export async function POST(request: Request) {
       return fctError(`Could not load graphs from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}`, 503);
     }
 
-    if (typeof body?.selectEndpointId === "string") {
-      const selected = endpoints.find((endpoint) => endpoint.id === body.selectEndpointId);
-      if (!selected) return NextResponse.json({ error: "Unknown SPARQL endpoint selection." }, { status: 400 });
-      const response = NextResponse.json({ selectedId: selected.id, label: selected.label });
-      response.cookies.set("fct_endpoint", selected.id, { httpOnly: true, sameSite: "lax", path: "/" });
+    if (typeof body?.selectEndpointUrl === "string") {
+      // Cookie is only for older auxiliary routes. The FCT query itself is
+      // always routed by its authoritative graphURI@graphserverURI address.
+      const selected = resolveConfiguredFctEndpoint(endpoints, body.selectEndpointUrl);
+      if (!selected) return NextResponse.json({ error: "Graph server URI is not configured." }, { status: 400 });
+      const resolvedUrl = normalizeGraphServerUri(body.selectEndpointUrl);
+      const response = NextResponse.json({ selectedUrl: resolvedUrl, label: selected.label });
+      response.cookies.set("fct_endpoint", resolvedUrl, { httpOnly: true, sameSite: "lax", path: "/" });
       return response;
     }
 
@@ -521,20 +559,20 @@ export async function POST(request: Request) {
     if (!queryXml && typeof body?.text === "string") {
       const fallbackEndpoint = selectConfiguredFctEndpoint(request, endpoints);
       if (!fallbackEndpoint) return fctError(`No graph servers are configured in the personal SPARQL store graph ${getDataserversGraph(request)}.`, 503);
-      queryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="" same-as="" addr="@${xmlEscape(fallbackEndpoint.id)}"><text>${xmlEscape(body.text.trim())}</text><view type="${FCT_VIEW_TYPES.TEXT}" limit="30" offset="0"/></query>`;
+      queryXml = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="" same-as="" addr="@${xmlEscape(fallbackEndpoint.url)}"><text>${xmlEscape(body.text.trim())}</text><view type="${FCT_VIEW_TYPES.TEXT}" limit="30" offset="0"/></query>`;
     }
     if (!queryXml) return fctError("An FCT query XML document is required.", 400);
 
     // Resolve the endpoint from this query's address, not the mutable selection
-    // cookie. Only the first @ separates graph from graph-server ID.
+    // cookie. Only the first @ separates graph from graph-server URI.
     const rootTag = queryXml.match(/<query\b([^>]*)>/i)?.[1] ?? "";
     const addrMatch = rootTag.match(/\baddr\s*=\s*(["'])(.*?)\1/i);
-    let address = addrMatch?.[2];
+    let address = addrMatch ? xmlAttributeValue(addrMatch[2]) : undefined;
     if (!address) {
       const fallbackEndpoint = selectConfiguredFctEndpoint(request, endpoints);
       if (fallbackEndpoint) {
-        address = `@${fallbackEndpoint.id}`;
-        queryXml = queryXml.replace(/<query\b/i, `<query addr="@${xmlEscape(fallbackEndpoint.id)}" `);
+        address = `@${fallbackEndpoint.url}`;
+        queryXml = queryXml.replace(/<query\b/i, `<query addr="@${xmlEscape(fallbackEndpoint.url)}" `);
       }
     }
     const delimiter = address?.indexOf("@") ?? -1;
@@ -548,12 +586,13 @@ export async function POST(request: Request) {
       if (hash >= 0 && localName !== "history" && localName !== "bookmarks") {
         const normalizedAddress = `${graphValue.slice(0, hash)}@${address.slice(delimiter + 1)}`;
         if (addrMatch) {
-          queryXml = queryXml.replace(addrMatch[0], `addr=${addrMatch[1]}${normalizedAddress}${addrMatch[1]}`);
+          queryXml = queryXml.replace(addrMatch[0], `addr=${addrMatch[1]}${xmlEscape(normalizedAddress)}${addrMatch[1]}`);
         }
       }
     }
-    const serverAddress = address.slice(delimiter + 1).trim();
-    const endpoint = endpoints.find((item) => item.id === serverAddress || item.url === serverAddress || item.label === serverAddress);
+    const serverAddress = normalizeGraphServerUri(address.slice(delimiter + 1).trim());
+    const configuredEndpoint = resolveConfiguredFctEndpoint(endpoints, serverAddress);
+    const endpoint = configuredEndpoint ? { ...configuredEndpoint, url: serverAddress } : undefined;
     if (!endpoint) return fctError(`The graph server in query addr is not configured: ${serverAddress}`, 400);
 
     // Maestro uses #history and #bookmarks as client-side names for its two
@@ -584,13 +623,34 @@ export async function POST(request: Request) {
     // pagination query. The request remains an FCT XML clone with explicit
     // projected siblings, and the proxy still owns all SPARQL construction.
     const suppliedResources = Array.isArray(body?.resources) && compiled.view === FCT_VIEW_TYPES.LIST_VALUES
-      ? [...new Set(body.resources.filter((value): value is string => typeof value === "string"))]
+      ? body.resources.map((raw: unknown): SparqlBindingTerm | null => {
+          const term = typeof raw === "string" ? { type: "uri", value: raw } : raw;
+          if (!term || typeof term !== "object") return null;
+          const value = term as { type?: unknown; value?: unknown; datatype?: unknown; lang?: unknown };
+          if (typeof value.value !== "string" || (value.type !== "uri" && value.type !== "literal")) return null;
+          if ((value.datatype !== undefined && typeof value.datatype !== "string") ||
+              (value.lang !== undefined && typeof value.lang !== "string")) return null;
+          const candidate: SparqlBindingTerm = { type: value.type, value: value.value,
+            ...(typeof value.datatype === "string" ? { datatype: value.datatype } : {}),
+            ...(typeof value.lang === "string" ? { "xml:lang": value.lang } : {}),
+          };
+          return serializeProjectionResource(candidate) ? candidate : null;
+        })
       : null;
-    if (suppliedResources && (suppliedResources.length > 100 || suppliedResources.some((value) => !/^https?:\/\/[^\s<>"{}|^`\\]+$/i.test(value))))
-      return fctError("list-values resources must contain at most 100 valid URI values.", 400);
+    if (suppliedResources && suppliedResources.length > 100)
+      return fctError(`list-values received ${suppliedResources.length} resources; maximum 100 per request.`, 400);
+    if (suppliedResources && suppliedResources.some((term) => term === null))
+      return fctError(`list-values received ${suppliedResources.filter((term) => term === null).length} invalid RDF terms; verify URI schemes, literal datatypes, and term types.`, 400);
     if (suppliedResources) {
       const startedAt = Date.now();
-      const page = suppliedResources.map((value) => ({ c1: { type: "uri", value } as SparqlBindingTerm }));
+      const seen = new Set<string>();
+      const page = suppliedResources.filter((term): term is SparqlBindingTerm => {
+        if (!term) return false;
+        const key = serializeProjectionResource(term)!;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).map((term) => ({ c1: term }));
       const address = queryXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
       const graph = address.includes("@") ? address.slice(0, address.indexOf("@")) : "";
       const expansion = await expandListValues({
@@ -614,7 +674,7 @@ export async function POST(request: Request) {
     }
     stage = "execute";
     const startedAt = Date.now();
-    const { response, text, key } = await executeSparql(endpoint.url, compiled.query, isDescribe ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs);
+    const { response, text, key } = await executeSparql(endpoint.url, compiled.query, isDescribe && !compiled.describeLiteral ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs);
     const elapsedMs = Date.now() - startedAt;
     const sqlState = response.headers.get("X-SQL-State")?.trim() ?? "";
     const anytime = isVirtuosoAnytime(response, text);
@@ -635,13 +695,25 @@ export async function POST(request: Request) {
     if (isDescribe) {
       if (response.status === 200 && !partial) setQueryCache(key, text);
       let bindings: Record<string, SparqlBindingTerm>[];
-      try { bindings = parseDescribeRdfXml(text); }
+      try {
+        if (compiled.describeLiteral) {
+          const parsed = parseResults(text);
+          if (!parsed) throw new Error("Invalid literal Record SELECT response.");
+          bindings = (parsed.results?.bindings ?? []).filter((row) => row.s?.value && row.p?.value && row.o?.value)
+            .map((row) => ({ s: row.s, p: row.p, o: row.o }));
+        } else {
+          bindings = parseDescribeRdfXml(text);
+        }
+      }
       catch (error) {
         if (!anytime) return fctError(error instanceof Error ? error.message : "Invalid DESCRIBE response", 502, text.slice(0, 1000));
         proxyLog("warn", "fct.describe-anytime-no-rows", { view: compiled.view, status: response.status });
         bindings = [];
       }
-      const labels = await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
+      // A literal Record can be returned promptly without a second network
+      // query merely to decorate the subjects of its incoming Roles.
+      const labels = compiled.describeLiteral ? new Map<string, string>()
+        : await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
       const labelFor = (term: SparqlBindingTerm | undefined) => term?.type === "uri" ? labels.get(term.value) : undefined;
       const describeRows = bindings.map((binding) => `<fct:row>${fctColumn(binding.s, labelFor(binding.s))}${fctColumn(binding.p, labelFor(binding.p))}${fctColumn(binding.o, labelFor(binding.o))}</fct:row>`).join("");
       const describeComplete = !partial;

@@ -1,0 +1,67 @@
+@prefix ma: <gttp://ggg.maestro.ecosys/ns/analyze#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<gttp://ggg.maestro.ecosys/analyze/table> a ma:Analysis, sh:NodeShape ;
+  rdfs:label "Table"@en ;
+  ma:lucideIcon "table-2" ;
+  ma:order 1 ;
+  ma:stylesheet <gttp://ggg.maestro.ecosys/analyze/table#xslt> .
+
+<gttp://ggg.maestro.ecosys/analyze/table#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/context#" exclude-result-prefixes="m">
+  <xsl:output method="xml" omit-xml-declaration="yes"/>
+  <xsl:template match="/m:context">
+    <analysis kind="table" trail-style="font-weight: 500;" table-style="font-size: 12px; line-height: 1.25;" header-style="padding: 4px 6px; vertical-align: top; font-weight: 600;" cell-style="padding: 3px 6px; vertical-align: top;" row-style="line-height: 1.25;" badge-style="background-color: transparent; color: inherit; border-radius: 0; padding: 1px 2px; line-height: 1.2;">
+      <columns>
+        <!-- Maestro renders the live breadcrumb trail above the canvas.
+             Table data columns reference only direct children of the view carrier. -->
+        <column kind="result" label="Results" header-style="padding: 4px 6px;"/>
+        <xsl:for-each select="m:breadcrumbs/m:breadcrumb">
+          <column kind="breadcrumb" node-id="{@id}" label="{@label}" breadcrumb-style="font-weight: 500;" header-style="padding: 4px 6px;"/>
+        </xsl:for-each>
+      </columns>
+      <rows><xsl:for-each select="m:results/m:result">
+        <xsl:variable name="res" select="."/>
+        <row uri="{@uri}" label="{@label}">
+          <xsl:for-each select="/m:context/m:breadcrumbs/m:breadcrumb">
+            <xsl:variable name="iri" select="string(@iri)"/>
+            <xsl:variable name="direction" select="string(@direction)"/>
+            <cell cell-style="padding: 3px 6px;"><xsl:for-each select="$res/m:value[@property=$iri and @direction=$direction]">
+              <value><xsl:value-of select="."/></value>
+            </xsl:for-each></cell>
+          </xsl:for-each>
+        </row>
+      </xsl:for-each></rows>
+    </analysis>
+  </xsl:template>
+</xsl:stylesheet>""" .
+
+<gttp://ggg.maestro.ecosys/analyze/compare-table> a ma:Analysis, sh:NodeShape ;
+  rdfs:label "Compare Table"@en ;
+  ma:lucideIcon "table-properties" ;
+  ma:order 2 ;
+  ma:stylesheet <gttp://ggg.maestro.ecosys/analyze/compare-table#xslt> .
+
+<gttp://ggg.maestro.ecosys/analyze/compare-table#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/context#" exclude-result-prefixes="m">
+  <xsl:output method="xml" omit-xml-declaration="yes"/>
+  <xsl:template match="/m:context">
+    <xsl:variable name="facet" select="string(m:selection/@facet)"/>
+    <xsl:variable name="direction" select="string(m:selection/@direction)"/>
+    <xsl:variable name="values" select="distinct-values(m:results/m:result/m:value[@property=$facet and @direction=$direction]/string())"/>
+    <analysis kind="compare" table-style="font-size: 12px; line-height: 1.25;" header-style="padding: 4px 6px;" cell-style="padding: 3px 6px;" row-style="line-height: 1.25;">
+      <columns><column kind="result" label="Result"/>
+        <xsl:for-each select="$values[position() le 60]"><column kind="value" label="{.}"/></xsl:for-each>
+      </columns>
+      <rows><xsl:for-each select="m:results/m:result">
+        <xsl:variable name="res" select="."/>
+        <row uri="{@uri}" label="{@label}">
+          <xsl:for-each select="$values[position() le 60]">
+            <xsl:variable name="v" select="."/>
+            <cell checked="{if ($res/m:value[@property=$facet and @direction=$direction and string(.)=$v]) then 'yes' else 'no'}"/>
+          </xsl:for-each>
+        </row>
+      </xsl:for-each></rows>
+    </analysis>
+  </xsl:template>
+</xsl:stylesheet>""" .

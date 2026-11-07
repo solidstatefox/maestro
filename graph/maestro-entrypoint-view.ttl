@@ -1,0 +1,84 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix schema: <https://schema.org/> .
+@prefix view: <gttp://ggg.maestro.ecosys/shacl/view#> .
+
+# A View is discovered from the classes bound in the live FCT <query>.
+# The component has no knowledge of the EntryPoint class itself.
+view:EntryPointView a sh:NodeShape ;
+    sh:targetClass schema:EntryPoint ;
+    rdfs:label "Graph Servers" ;
+    mui:icon "server" ;
+    mui:xsltTemplate view:EntryPointCards .
+
+view:EntryPointCards a mui:XsltTemplate ;
+    rdfs:label "Graph server cards" ;
+    rdf:value """<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:output method="html" omit-xml-declaration="yes"/>
+  <xsl:template match="/results">
+    <section data-view-title="Graph Servers" data-view-icon="server" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Graph servers">
+      <xsl:apply-templates select="result"/>
+    </section>
+  </xsl:template>
+  <xsl:template match="result">
+    <article class="flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
+      <xsl:if test="string-length(normalize-space(@group)) &gt; 0">
+        <div class="border-b bg-muted/50 px-5 py-1.5 text-xs font-medium text-muted-foreground"><xsl:value-of select="@group"/></div>
+      </xsl:if>
+      <div class="flex flex-col gap-3 p-5">
+      <div class="flex items-center gap-3">
+        <span class="relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted" aria-hidden="true">
+          <span data-lucide-icon="globe" class="inline-flex items-center justify-center text-muted-foreground"/>
+          <xsl:if test="string-length(@favicon) &gt; 0">
+            <img class="absolute inset-0 size-9 rounded-lg bg-muted object-contain p-1" alt="Site favicon">
+              <xsl:attribute name="data-favicon-fallback">https://icons.duckduckgo.com/ip3/<xsl:value-of select="substring-before(substring-after(@favicon,'domain='),'&amp;')"/>.ico</xsl:attribute>
+              <xsl:attribute name="src"><xsl:value-of select="@favicon"/></xsl:attribute>
+            </img>
+          </xsl:if>
+        </span>
+        <h3 class="min-w-0 break-words text-base font-semibold"><xsl:value-of select="@label"/></h3>
+      </div>
+      <div class="flex items-center gap-2 text-sm text-muted-foreground">
+        <xsl:choose>
+          <xsl:when test="@healthState='green'"><span data-lucide-icon="badge-check" class="text-green-600"/></xsl:when>
+          <xsl:when test="@healthState='red'"><span data-lucide-icon="badge-x" class="text-red-600"/></xsl:when>
+          <xsl:when test="@healthState='amber'"><span data-lucide-icon="badge-alert" class="text-orange-500"/></xsl:when>
+          <xsl:otherwise><span data-lucide-icon="badge-question-mark" class="text-muted-foreground"/></xsl:otherwise>
+        </xsl:choose>
+        <span><xsl:value-of select="@health"/></span>
+        <xsl:if test="string-length(@endpointId) &gt; 0">
+          <button type="button" class="inline-flex size-5 shrink-0 items-center justify-center rounded border-0 bg-transparent text-muted-foreground/60 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring" aria-label="Refresh graph server health" title="Refresh health">
+            <xsl:attribute name="data-endpoint-refresh"><xsl:value-of select="@endpointId"/></xsl:attribute>
+            <span data-lucide-icon="refresh-cw">
+              <xsl:attribute name="class"><xsl:choose><xsl:when test="@pinging='true'">animate-spin text-muted-foreground</xsl:when><xsl:otherwise>text-current</xsl:otherwise></xsl:choose></xsl:attribute>
+            </span>
+          </button>
+        </xsl:if>
+      </div>
+      <xsl:if test="string-length(normalize-space(@description)) &gt; 0">
+        <p class="text-sm leading-relaxed text-muted-foreground"><xsl:value-of select="@description"/></p>
+      </xsl:if>
+      <xsl:if test="string-length(normalize-space(@product)) &gt; 0 and @product != 'Unknown'">
+        <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <span><xsl:value-of select="@product"/></span>
+          <xsl:if test="string-length(normalize-space(@version)) &gt; 0">
+            <div class="h-4 w-px shrink-0 bg-border" data-slot="separator" role="none"/>
+            <span><xsl:value-of select="@version"/></span>
+          </xsl:if>
+        </div>
+      </xsl:if>
+      <xsl:if test="string-length(normalize-space(@rank)) &gt; 0 and starts-with(@rank, '#')">
+        <p class="text-sm text-muted-foreground">Site rank: <xsl:value-of select="@rank"/></p>
+      </xsl:if>
+      <a class="break-all text-sm text-primary hover:underline">
+        <xsl:attribute name="href"><xsl:value-of select="@endpoint"/></xsl:attribute>
+        <xsl:attribute name="target">_blank</xsl:attribute>
+        <xsl:value-of select="@endpoint"/>
+      </a>
+      </div>
+    </article>
+  </xsl:template>
+</xsl:stylesheet>""" .

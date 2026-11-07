@@ -355,6 +355,15 @@ function createQueryStore(initialTree?: FctQueryTree) {
       const attributes = { ...tree.attributes };
       if (value === null) delete attributes[name];
       else attributes[name] = value;
+      // The graphsite is encoded in the first portion of addr. Update both
+      // together so clearing the field cannot leave a stale GRAPH restriction.
+      if (name === "graph") {
+        const address = attributes.addr ?? "";
+        const separator = address.indexOf("@");
+        if (separator >= 0) {
+          attributes.addr = `${value?.trim() ?? ""}@${address.slice(separator + 1)}`;
+        }
+      }
       return { ...tree, attributes };
     });
   }

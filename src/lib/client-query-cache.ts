@@ -53,7 +53,7 @@ export function computeClientCacheKey(url: string, init?: RequestInit): string |
   if (method === "POST") {
     const bodyStr = typeof init?.body === "string" ? init.body : "";
     // Endpoint selection mutation should not be cached
-    if (bodyStr.includes('"selectEndpointId"')) return null;
+    if ((bodyStr.includes('"selectEndpointId"') || bodyStr.includes('"selectEndpointUrl"'))) return null;
     return `POST::${url}::${bodyStr}`;
   }
   return null;
@@ -160,22 +160,32 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
   }
 }
 
-/** Request errors are a reason to recheck health, not proof the graph server is down. */
-export const MAESTRO_GRAPH_SERVER_REQUEST_FAILURE = "maestro:graph-server-request-failure";
+/** Data-request errors are diagnostic, not endpoint connectivity status. */
+export const MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS = "maestro:graph-server-request-success";
 async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-  const isDataRequest = /\/proxy\/api\/(?:fct|sparql|record-graphs|policies|xslt)(?:[/?]|$)/.test(url) &&
-    !url.includes("health=1") && !(typeof init?.body === "string" && init.body.includes('"selectEndpointId"'));
-  const report = () => {
-    if (isDataRequest && !init?.signal?.aborted && typeof window !== "undefined")
-      window.dispatchEvent(new Event(MAESTRO_GRAPH_SERVER_REQUEST_FAILURE));
-  };
+  const body = typeof init?.body === "string" ? init.body : "";
+  const isFctQuery = /\/proxy\/api\/fct(?:[/?]|$)/.test(url) &&
+    (init?.method ?? "GET").toUpperCase() === "POST" &&
+    /<(?:(?:[A-Za-z][\w.-]*):)?query(?:\s|>)/.test(body);
+  // A query's addr is authoritative. Don't mark the *selected* endpoint
+  // healthy because an unrelated personal-store or other proxy call worked.
+  const address = isFctQuery ? body.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "" : "";
+  const endpointUrl = address.includes("@") ? address.slice(address.indexOf("@") + 1) : "";
   try {
     const response = await fetch(input, init);
-    if (response.status >= 500) report();
+    if (!init?.signal?.aborted && typeof window !== "undefined") {
+      if (response.status === 200 && endpointUrl) {
+        window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, { detail: { endpointUrl } }));
+      } else if (response.status >= 400 && /\/proxy\/api\/(?:fct|sparql|record-graphs|policies|xslt)(?:[/?]|$)/.test(url)) {
+        console.warn(`[Maestro] Request returned HTTP ${response.status}: ${url}`);
+      }
+    }
     return response;
   } catch (error) {
-    if (!(error instanceof Error && error.name === "AbortError") && !init?.signal?.aborted) report();
+    if (!(error instanceof Error && error.name === "AbortError") && !init?.signal?.aborted) {
+      console.warn(`[Maestro] Request failed: ${url}`, error);
+    }
     throw error;
   }
 }
@@ -264,7 +274,7 @@ export function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Pr
   // not be aborted merely because the live query changes.
   const body = typeof init?.body === "string" ? init.body : "";
   if (!/\/proxy\/api\/(?:fct|sparql|policies|xslt)/.test(url) ||
-      body.includes('"selectEndpointId"') || body.includes('"health"')) {
+      body.includes('"selectEndpointId"') || body.includes('"selectEndpointUrl"') || body.includes('"health"')) {
     return cachedFetchFctImpl(input, init);
   }
   return trackMaestroQuery(init?.signal, (signal) => cachedFetchFctImpl(input, { ...init, signal }));

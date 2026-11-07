@@ -179,21 +179,23 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
     graphStoreUrl.search = "";
     graphStoreUrl.hash = "";
 
-    // Clear every distinct manifest destination before loading any documents. The clear is a SPARQL Update
-    // (CLEAR SILENT GRAPH) POSTed to the write endpoint (/sparql-auth for sparql-auth logins), the same
-    // call path as every other Maestro write; a graph that does not exist yet is already empty.
-    const destinationGraphs = [...new Set(files.map((file) => graphForFile(file.name, request)))].sort();
-    for (const destinationGraph of destinationGraphs) {
-      try {
-        await updatePersonalSparql(`CLEAR SILENT GRAPH <${destinationGraph}>`, 30000, request);
-      } catch (error) {
-        throw new Error(`Could not clear manifest graph ${destinationGraph} before loading via ${writeEndpoint.toString()}: ${describeUpstreamError(error)}`);
-      }
-      console.info(`Maestro cleared manifest graph ${destinationGraph}.`);
-    }
+    // Clear a destination immediately before reloading its manifest files,
+    // not all destinations upfront. Load the graph-server registry first so
+    // it is never empty for the duration of the entire manifest import.
+    const clearedGraphs = new Set<string>();
 
-    for (const file of files.sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const file of files.sort((a, b) =>
+      (a.name === "dataserver-seed.ttl" ? -1 : b.name === "dataserver-seed.ttl" ? 1 : a.name.localeCompare(b.name)))) {
       const destinationGraph = graphForFile(file.name, request);
+      if (!clearedGraphs.has(destinationGraph)) {
+        try {
+          await updatePersonalSparql(`CLEAR SILENT GRAPH <${destinationGraph}>`, 30000, request);
+        } catch (error) {
+          throw new Error(`Could not clear manifest graph ${destinationGraph} before loading: ${describeUpstreamError(error)}`);
+        }
+        clearedGraphs.add(destinationGraph);
+        console.info(`Maestro cleared manifest graph ${destinationGraph}.`);
+      }
       const fileGraphStoreUrl = new URL(graphStoreUrl.toString());
       // Graph IRI is sent as-is (only URL-structural characters escaped), as in Virtuoso's own curl examples.
       fileGraphStoreUrl.search = `?graph=${destinationGraph.replace(/[%&#+\s]/g, (c) => encodeURIComponent(c))}`;
@@ -268,7 +270,28 @@ export async function ensureShapesGraphSeeded(request?: Request): Promise<void> 
   await ensureGraphDirectorySeeded(request);
 }
 
-export type FctEndpoint = { id: string; label: string; url: string; group: string };
+/** Accept a host-only graph-server identifier, defaulting to HTTPS SPARQL. */
+export function normalizeGraphServerUri(value: string): string {
+  const raw = value.trim();
+  if (!raw) return "";
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (!(["https:", "http:"].includes(parsed.protocol)) || !parsed.hostname || parsed.username || parsed.password) return raw;
+    // Only a host-only endpoint gets /sparql; retain explicit paths unchanged.
+    if (parsed.pathname === "/" && !parsed.search && !parsed.hash) parsed.pathname = "/sparql";
+    return parsed.toString();
+  } catch { return raw; }
+}
+
+export type FctEndpoint = { id: string; label: string; url: string; group: string; schemeInferred?: boolean };
+
+/** HTTP fallback is permitted only for host-only registry entries whose HTTPS probe returned 404. */
+export function resolveConfiguredFctEndpoint(endpoints: FctEndpoint[], requested: string): FctEndpoint | undefined {
+  const normalized = normalizeGraphServerUri(requested);
+  return endpoints.find((item) => item.url === normalized ||
+    (item.schemeInferred && normalized === item.url.replace(/^https:\/\//i, "http://")));
+}
 type SparqlJson = { results?: { bindings?: Record<string, { type?: string; value?: string }>[] } };
 
 /** Return the personal READ endpoint (/sparql) without embedding credentials in its URL. A pasted /sparql-auth is normalised to /sparql. */
@@ -394,11 +417,11 @@ export function getSeedFctEndpoints(): Promise<FctEndpoint[]> {
     const servers = [...new Set(triples.map((t) => t.subject.value))].filter((subject) => isType(subject, `${SCHEMA_NS}EntryPoint`));
     const rows = servers.flatMap((server) => {
       const label = first(server, `${RDFS_NS}label`)?.trim() ?? "";
-      const url = first(server, `${SCHEMA_NS}url`)?.trim() ?? "";
+      const url = normalizeGraphServerUri(first(server, `${SCHEMA_NS}url`)?.trim() ?? "");
       if (!label || !/^https?:\/\//i.test(url)) return [];
       const group = first(server, `${DCTERMS_NS}isPartOf`);
       const groupName = (group && isType(group, `${SKOS_NS}Collection`) ? first(group, `${RDFS_NS}label`)?.trim() : "") || "Endpoints";
-      return [{ label, url, group: groupName, groupOrder: group ? order(group, `${SCHEMA_NS}position`) : 9999, serverOrder: order(server, `${SCHEMA_NS}position`) }];
+      return [{ label, url, schemeInferred: !/^https?:\/\//i.test(first(server, `${SCHEMA_NS}url`)?.trim() ?? ""), group: groupName, groupOrder: group ? order(group, `${SCHEMA_NS}position`) : 9999, serverOrder: order(server, `${SCHEMA_NS}position`) }];
     });
     rows.sort((a, b) => a.groupOrder - b.groupOrder || a.serverOrder - b.serverOrder || a.label.localeCompare(b.label));
     const seen = new Set<string>();
@@ -407,7 +430,7 @@ export function getSeedFctEndpoints(): Promise<FctEndpoint[]> {
       const id = row.group === "Endpoints" ? slugify(row.label) : slugify(`${row.group}-${row.label}`);
       if (seen.has(id)) continue;
       seen.add(id);
-      endpoints.push({ id, label: row.label, url: row.url, group: row.group });
+      endpoints.push({ id, label: row.label, url: row.url, group: row.group, schemeInferred: row.schemeInferred });
     }
     return endpoints;
   })();
@@ -433,11 +456,12 @@ export async function getConfiguredFctEndpoints(request?: Request): Promise<FctE
   const endpoints: FctEndpoint[] = [];
   for (const binding of payload.results?.bindings ?? []) {
     const label = binding.name?.value?.trim() ?? "";
-    const url = binding.url?.value?.trim() ?? "";
+    const rawUrl = binding.url?.value?.trim() ?? "";
+    const url = normalizeGraphServerUri(rawUrl);
     const group = binding.groupName?.value?.trim() || "Endpoints";
     if (!label || !/^https?:\/\//i.test(url)) continue;
     const id = group === "Endpoints" ? slugify(label) : slugify(`${group}-${label}`);
-    endpoints.push({ id, label, url, group });
+    endpoints.push({ id, label, url, group, schemeInferred: !/^https?:\/\//i.test(rawUrl) });
   }
   const seen = new Set<string>();
   return endpoints.filter((endpoint) => {
@@ -453,7 +477,8 @@ export function selectConfiguredFctEndpoint(request: Request, endpoints: FctEndp
   const match = cookie.match(/(?:^|;\s*)fct_endpoint=([^;]+)/);
   let selectedId = "";
   try { selectedId = match ? decodeURIComponent(match[1]) : ""; } catch { selectedId = ""; }
-  return endpoints.find((endpoint) => endpoint.id === selectedId) ?? endpoints[0] ?? null;
+  const selected = resolveConfiguredFctEndpoint(endpoints, selectedId);
+  return selected ? { ...selected, url: normalizeGraphServerUri(selectedId) } : endpoints[0] ?? null;
 }
 
 /** Load the shared RDF-backed endpoint list and resolve the selected endpoint for routes that do not need the full list. */

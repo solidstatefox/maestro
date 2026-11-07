@@ -1,0 +1,115 @@
+@prefix svc: <gttp://ggg.maestro.ecosys/ns/service#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dbo: <http://dbpedia.org/ontology/> .
+@prefix schema: <http://schema.org/> .
+@prefix schemas: <https://schema.org/> .
+
+<gttp://ggg.maestro.ecosys/service/open-library> a svc:Service ;
+    rdfs:label "Open Library"@en ;
+    a sh:NodeShape ;
+    sh:targetClass dbo:Book, schema:Book, schemas:Book ;
+    svc:operation <gttp://ggg.maestro.ecosys/service/open-library#find>,
+        <gttp://ggg.maestro.ecosys/service/open-library#details>,
+        <gttp://ggg.maestro.ecosys/service/open-library#editions>,
+        <gttp://ggg.maestro.ecosys/service/open-library#ratings>,
+        <gttp://ggg.maestro.ecosys/service/open-library#bookshelves>,
+        <gttp://ggg.maestro.ecosys/service/open-library#author>,
+        <gttp://ggg.maestro.ecosys/service/open-library#authorWorks>,
+        <gttp://ggg.maestro.ecosys/service/open-library#isbn>,
+        <gttp://ggg.maestro.ecosys/service/open-library#subject> .
+
+<gttp://ggg.maestro.ecosys/service/template#SearchInput> rdf:value """<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:xs="http://www.w3.org/2001/XMLSchema" version="3.0" exclude-result-prefixes="xs fct mctx">
+<xsl:output method="xml" omit-xml-declaration="yes"/>
+<xsl:param name="recordUri" as="xs:string" select="''"/>
+<xsl:variable name="rows" select="/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row"/>
+<xsl:function name="mctx:field" as="xs:string"><xsl:param name="names" as="xs:string*"/>
+<xsl:sequence select="string(($rows[lower-case(tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()]) = $names]/fct:column[3] ! normalize-space(string(.)))[1])"/>
+</xsl:function>
+<xsl:template match="/"><request>
+<param name="title"><xsl:value-of select="mctx:field(('title','label','name'))"/></param>
+<param name="author"><xsl:variable name="writer" select="mctx:field(('author','writer','creator'))"/><xsl:value-of select="if (matches($writer, '^https?://')) then '' else $writer"/></param>
+<param name="limit">5</param><param name="fields">key,title,author_name,author_key,first_publish_year,edition_count,cover_i,isbn,subject,language,has_fulltext,ebook_access</param>
+</request></xsl:template></xsl:stylesheet>""" .
+
+<gttp://ggg.maestro.ecosys/service/template#ResourceInput> rdf:value """<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" version="3.0" exclude-result-prefixes="mctx"><xsl:output method="xml" omit-xml-declaration="yes"/><xsl:template match="/"><request><xsl:for-each select="/mctx:context/mctx:arguments/mctx:argument"><param name="{@name}"><xsl:value-of select="."/></param></xsl:for-each><param name="limit">10</param></request></xsl:template></xsl:stylesheet>""" .
+
+<gttp://ggg.maestro.ecosys/service/template#JsonOutput> rdf:value """<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:j="http://www.w3.org/2005/xpath-functions" version="3.0" exclude-result-prefixes="mctx j">
+<xsl:output method="html" omit-xml-declaration="yes"/>
+<xsl:template match="/"><section class="space-y-3 text-sm"><xsl:apply-templates select="/mctx:context/mctx:response/j:map | /mctx:context/mctx:response/j:array"/></section></xsl:template>
+<xsl:template match="j:map|j:array"><div class="space-y-1"><xsl:for-each select="*"><div class="border-b border-border/40 py-1"><xsl:if test="@key"><span class="mr-2 font-medium text-muted-foreground"><xsl:value-of select="@key"/>:</span></xsl:if><xsl:apply-templates select="." mode="value"/></div></xsl:for-each></div></xsl:template>
+<xsl:template match="j:map|j:array" mode="value"><details class="ml-2 inline-block align-top" open="open"><summary class="cursor-pointer text-xs text-muted-foreground"><xsl:value-of select="if (self::j:array) then concat('List (', count(*), ')') else concat('Object (', count(*), ' fields)')"/></summary><div class="mt-1 border-l pl-3"><xsl:apply-templates select="."/></div></details></xsl:template>
+<xsl:template match="j:string|j:number|j:boolean|j:null" mode="value"><span class="break-all"><xsl:value-of select="if (self::j:null) then 'null' else string(.)"/></span></xsl:template>
+</xsl:stylesheet>""" .
+
+<gttp://ggg.maestro.ecosys/service/open-library#find> rdfs:label "Find Book"@en ;
+    svc:method "GET" ;
+    svc:queryParameter "title", "author", "limit", "fields" ;
+    svc:endpoint "https://openlibrary.org/search.json" ;
+    svc:inputTransform <gttp://ggg.maestro.ecosys/service/template#SearchInput> ;
+    svc:outputTransform <gttp://ggg.maestro.ecosys/service/template#JsonOutput> ;
+    svc:extract [ svc:name "workId" ; svc:pointer "/docs/0/key" ; svc:format "tail" ] ;
+    svc:extract [ svc:name "authorId" ; svc:pointer "/docs/0/author_key/0" ] ;
+    svc:extract [ svc:name "isbn" ; svc:pointer "/docs/0/isbn/0" ] ;
+    svc:extract [ svc:name "subject" ; svc:pointer "/docs/0/subject/0" ; svc:format "slug" ] .
+
+<gttp://ggg.maestro.ecosys/service/open-library#details> rdfs:label "Book Details"@en ;
+    svc:method "GET" ;
+    svc:endpoint "https://openlibrary.org/works/{workId}.json" ;
+    svc:inputTransform <gttp://ggg.maestro.ecosys/service/template#ResourceInput> ;
+    svc:outputTransform <gttp://ggg.maestro.ecosys/service/template#JsonOutput> ;
+    svc:requires "workId" .
+
+<gttp://ggg.maestro.ecosys/service/open-library#editions> rdfs:label "Editions"@en ;
+    svc:method "GET" ;
+    svc:queryParameter "limit" ;
+    svc:endpoint "https://openlibrary.org/works/{workId}/editions.json" ;
+    svc:inputTransform <gttp://ggg.maestro.ecosys/service/template#ResourceInput> ;
+    svc:outputTransform <gttp://ggg.maestro.ecosys/service/template#JsonOutput> ;
+    svc:requires "workId" .
+
+<gttp://ggg.maestro.ecosys/service/open-library#ratings> rdfs:label "Ratings"@en ;
+    svc:method "GET" ;
+    svc:endpoint "https://openlibrary.org/works/{workId}/ratings.json" ;
+    svc:inputTransform <gttp://ggg.maestro.ecosys/service/template#ResourceInput> ;
+    svc:outputTransform <gttp://ggg.maestro.ecosys/service/template#JsonOutput> ;
+    svc:requires "workId" .
+
+<gttp://ggg.maestro.ecosys/service/open-library#bookshelves> rdfs:label "Bookshelves"@en ;
+    svc:method "GET" ;
+    svc:endpoint "https://openlibrary.org/works/{workId}/bookshelves.json" ;
+    svc:inputTransform <gttp://ggg.maestro.ecosys/service/template#ResourceInput> ;
+    svc:outputTransform <gttp://ggg.maestro.ecosys/service/template#JsonOutput> ;
+    svc:requires "workId" .
+
+<gttp://ggg.maestro.ecosys/service/open-library#author> rdfs:label "Author Details"@en ;
+    svc:method "GET" ;
+    svc:endpoint "https://openlibrary.org/authors/{authorId}.json" ;
+    svc:inputTransform <gttp://ggg.maestro.ecosys/service/template#ResourceInput> ;
+    svc:outputTransform <gttp://ggg.maestro.ecosys/service/template#JsonOutput> ;
+    svc:requires "authorId" .
+
+<gttp://ggg.maestro.ecosys/service/open-library#authorWorks> rdfs:label "More by Author"@en ;
+    svc:method "GET" ;
+    svc:queryParameter "limit" ;
+    svc:endpoint "https://openlibrary.org/authors/{authorId}/works.json" ;
+    svc:inputTransform <gttp://ggg.maestro.ecosys/service/template#ResourceInput> ;
+    svc:outputTransform <gttp://ggg.maestro.ecosys/service/template#JsonOutput> ;
+    svc:requires "authorId" .
+
+<gttp://ggg.maestro.ecosys/service/open-library#isbn> rdfs:label "ISBN Edition"@en ;
+    svc:method "GET" ;
+    svc:endpoint "https://openlibrary.org/isbn/{isbn}.json" ;
+    svc:inputTransform <gttp://ggg.maestro.ecosys/service/template#ResourceInput> ;
+    svc:outputTransform <gttp://ggg.maestro.ecosys/service/template#JsonOutput> ;
+    svc:requires "isbn" .
+
+<gttp://ggg.maestro.ecosys/service/open-library#subject> rdfs:label "Related Books"@en ;
+    svc:method "GET" ;
+    svc:queryParameter "limit" ;
+    svc:endpoint "https://openlibrary.org/subjects/{subject}.json" ;
+    svc:inputTransform <gttp://ggg.maestro.ecosys/service/template#ResourceInput> ;
+    svc:outputTransform <gttp://ggg.maestro.ecosys/service/template#JsonOutput> ;
+    svc:requires "subject" .
+

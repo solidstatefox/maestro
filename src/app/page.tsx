@@ -2,14 +2,18 @@
 
 import { FCT_VIEW_TYPES, type FctViewType } from "@/lib/fct-view-types";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { rememberNamespaceMetadata, rememberShortforms, toLabel } from "@/lib/uri-labels";
+import { createPortal } from "react-dom";
+import { rememberNamespaceMetadata, rememberShortforms, setNamespacePrefixSource, toLabel } from "@/lib/uri-labels";
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { configureMaestroBrowserLogging, type BrowserLogLevel } from "@/lib/maestro-client-logging";
-import type { ReactNode, Dispatch, SetStateAction } from "react";
+import type { ReactNode, Dispatch, SetStateAction, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from "recharts";
+import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
@@ -34,10 +38,10 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightLeft, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, EqualApproximately, Regex, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info } from "lucide-react";
+import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightLeft, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, EqualApproximately, Regex, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info, Table2, TableProperties, ChartColumn, Server, Database, Globe, LayoutGrid } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
-import { MAESTRO_GRAPH_SERVER_REQUEST_FAILURE, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
+import { MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
 import { MAESTRO_TIMEOUT_CATEGORIES, readMaestroWidgetTimeouts, writeMaestroWidgetTimeouts, type MaestroTimeoutCategory } from "@/lib/maestro-query-timeouts";
 import { setMaestroIncompleteResults, getMaestroIncompleteResults, subscribeMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 import { initializeMaestroStorage, maestroStorageGet, maestroStorageSet, clearMaestroStorage } from "@/lib/maestro-storage";
@@ -126,10 +130,14 @@ const CONFIGURE_LIST_BACKGROUND_COLOR = "#EFF6FC";
 const CONFIGURE_HEADER_BACKGROUND_COLOR = "#6BA8E0"//"#0078D4";
 const CONFIGURE_HEADER_BORDER_COLOR = "#005A9E";
 
-const DEFAULT_RESULTS_PAGE_SIZE = 30;
+const DEFAULT_RESULTS_PAGE_SIZE = 20;
 const RESULTS_PAGE_SIZE_STORAGE_KEY = "maestro-results-page-size";
-const RESULTS_PAGE_SIZE_OPTIONS = [10, 20, 30, 50] as const;
-const RESULTS_BATCH_SIZE_OPTIONS = [30, 100, 250, 500, 1000] as const;
+const RESULTS_BATCH_SIZE_OPTIONS = [100, 200, 300, 400, 500, 1000, 2000] as const;
+/** Page sizes partition the active server batch into five equal fractions. */
+function pageSizesForBatch(batchSize: number): number[] {
+  const batch = Math.max(5, Math.floor(batchSize));
+  return Array.from({ length: 5 }, (_, index) => Math.max(1, Math.floor(batch * (index + 1) / 5)));
+}
 /** LIMIT applied to every left-panel widget: Categories, Personal facets, Graphs, and Configure Properties/Roles. */
 const LEFT_PANEL_LIMIT_STORAGE_KEY = "maestro-left-panel-limit";
 const DEFAULT_LEFT_PANEL_LIMIT = 30;
@@ -1308,7 +1316,7 @@ type EndpointStatus = {
   testedUrl?: string;
   attempts?: Array<{ url: string; status: number | null; state: string }>;
 };
-type EndpointOption = { id: string; label: string; url: string; group: string };
+type EndpointOption = { id: string; label: string; url: string; group: string; schemeInferred?: boolean };
 
 function EndpointStatusIcon({ status }: { status?: EndpointStatus }) {
   // Distinguish "not yet polled" from a completed probe without an HTTP response.
@@ -1487,6 +1495,7 @@ type ShareableUiState = {
   rolesPage?: number;
   findEndpointsEnabled?: boolean;
   centralTab?: "results" | "groups" | "query-tree" | "view-query" | "chat";
+  workspaceTab?: "browse" | "view" | "analyze";
   /** Explicit state for the Results/Query toolbar toggle. */
   queryToggle?: boolean;
   showResultBadges?: boolean;
@@ -1522,7 +1531,7 @@ type ShareableUiState = {
   breadcrumbBadgeMode?: "records" | "classes";
 };
 
-/** Read the configured graph-server identifier from the query's authoritative addr attribute. */
+/** Read the graph-server URI from the query's authoritative addr attribute. */
 function readGraphServerFromQueryXml(xml: string | null | undefined): string | null {
   if (!xml || typeof DOMParser === "undefined") return null;
   const document = new DOMParser().parseFromString(xml, "application/xml");
@@ -1660,6 +1669,7 @@ export default function Home() {
   const graphInfoRequestRef = useRef(0);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [authRestoreIssue, setAuthRestoreIssue] = useState(false);
+  const [authRestoreComplete, setAuthRestoreComplete] = useState(false);
   const [endpointReloadRevision, setEndpointReloadRevision] = useState(0);
   const [queryRefreshRevision, setQueryRefreshRevision] = useState(0);
   const [loginTab, setLoginTab] = useState<AuthType>("sparql-auth");
@@ -1693,6 +1703,32 @@ export default function Home() {
   // While the pointer is over the search input, coalesce rapid query edits into
   // While the root breadcrumb search is expanded, coalesce changes into one in-memory snapshot.
   const pendingHistoryVisitRef = useRef<{ queryXml: string; stateUrl: string; action: { operator: "+" | "-"; xpath: string; value?: string } | null } | null>(null);
+  const [prefixSource, setPrefixSource] = useState<"prefixcc" | "zazuko" | "builtin">("prefixcc");
+  const [prefixStatus, setPrefixStatus] = useState("Built-in prefixes");
+  useEffect(() => {
+    let active = true;
+    const stored = maestroStorageGet("maestro-namespace-prefix-source");
+    if (active && (stored === "prefixcc" || stored === "zazuko" || stored === "builtin")) setPrefixSource(stored);
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    let active = true;
+    if (prefixSource === "builtin") {
+      setNamespacePrefixSource({});
+      setPrefixStatus("Built-in list only");
+      return () => { active = false; };
+    }
+    setPrefixStatus("Loading namespace prefixes…");
+    fetch(`/proxy/api/ontology/prefixes?source=${prefixSource}`, { cache: "force-cache" })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+      .then((data: { prefixes?: Record<string, string>; count?: number; note?: string }) => {
+        if (!active) return;
+        setNamespacePrefixSource(data.prefixes ?? {});
+        setPrefixStatus(`${data.count ?? 0} community prefixes · ${data.note ?? "Built-in fallback"}`);
+      })
+      .catch(() => { if (active) { setNamespacePrefixSource({}); setPrefixStatus("Built-in prefixes (remote source unavailable)"); } });
+    return () => { active = false; };
+  }, [prefixSource]);
   const [fctEndpoints, setFctEndpoints] = useState<EndpointOption[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState("");
   const activeBreadcrumbButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1703,49 +1739,32 @@ export default function Home() {
   // different endpoint finishing its health check must not restart these loads.
   const selectedEndpointStatus = selectedEndpointId ? endpointStatuses[selectedEndpointId] : undefined;
   const [isCheckingEndpoints, setIsCheckingEndpoints] = useState(false);
+  const [checkingEndpointIds, setCheckingEndpointIds] = useState<Record<string, boolean>>({});
   const [endpointChecksCompleted, setEndpointChecksCompleted] = useState(0);
   const [endpointChecksTotal, setEndpointChecksTotal] = useState(0);
   const [endpointMenuError, setEndpointMenuError] = useState("");
   const [endpointHealthToast, setEndpointHealthToast] = useState<{ endpointId: string; message: string } | null>(null);
   const [isRefreshingFailedEndpoint, setIsRefreshingFailedEndpoint] = useState(false);
-  // A failed data request invalidates an old green badge only if a fresh
-  // health probe also fails. Coalesce simultaneous failures across panes.
-  const serverFailureProbeInFlight = useRef(false);
+  // A fresh 200 from an FCT query proves that its *own* graph server is
+  // responding. Recover a non-green status once, without updating green on
+  // every request or treating 4xx/5xx as a connectivity failure.
   useEffect(() => {
-    const probeSelectedGraphServer = () => {
-      if (!selectedEndpointId || serverFailureProbeInFlight.current) return;
+    const onSuccess = (event: Event) => {
+      const endpointUrl = (event as CustomEvent<{ endpointUrl?: string }>).detail?.endpointUrl;
+      if (!endpointUrl) return;
       const endpoint = fctEndpoints.find((item) => item.id === selectedEndpointId);
-      if (!endpoint) return;
-      serverFailureProbeInFlight.current = true;
-      void (async () => {
-        try {
-          const response = await fetch(
-            `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}`,
-            { cache: "no-store", headers: proxyDebugHeaders("request-failure-health", "GraphServerStatus") },
-          );
-          const data = await response.json() as { check?: EndpointStatus };
-          const health = response.ok && data.check ? data.check : {
-            id: endpoint.id, status: response.status, state: "server-error" as const, testedUrl: endpoint.url,
-          };
-          if (health.state !== "ok" || health.status !== 200) {
-            setEndpointStatuses((current) => ({ ...current, [endpoint.id]: health }));
-            setEndpointHealthToast({ endpointId: endpoint.id,
-              message: `Graph server ${endpoint.label} is unavailable. Refresh to retry this server.` });
-          }
-        } catch {
-          setEndpointStatuses((current) => ({ ...current, [endpoint.id]: {
-            id: endpoint.id, status: null, state: "unreachable", testedUrl: endpoint.url,
-          } }));
-          setEndpointHealthToast({ endpointId: endpoint.id,
-            message: `Graph server ${endpoint.label} is unreachable. Refresh to retry this server.` });
-        } finally {
-          serverFailureProbeInFlight.current = false;
-        }
-      })();
+      if (!endpoint || endpoint.url !== endpointUrl) return;
+      setEndpointStatuses((current) => {
+        const previous = current[endpoint.id];
+        if (previous?.state === "ok" && previous.status === 200) return current;
+        return { ...current, [endpoint.id]: {
+          id: endpoint.id, status: 200, state: "ok", testedUrl: endpoint.url,
+        } };
+      });
     };
-    window.addEventListener(MAESTRO_GRAPH_SERVER_REQUEST_FAILURE, probeSelectedGraphServer);
-    return () => window.removeEventListener(MAESTRO_GRAPH_SERVER_REQUEST_FAILURE, probeSelectedGraphServer);
-  }, [selectedEndpointId, fctEndpoints]);
+    window.addEventListener(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, onSuccess);
+    return () => window.removeEventListener(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, onSuccess);
+  }, [fctEndpoints, selectedEndpointId]);
 
   const [selectedFacet, setSelectedFacet] = useState<FacetName>("Properties");
   const [propertiesPage, setPropertiesPage] = useState(0);
@@ -1760,6 +1779,75 @@ export default function Home() {
   const restoredGraphTextRef = useRef<string | null>(null);
   const [findEndpointsEnabled, setFindEndpointsEnabled] = useState(false);
   const [centralTab, setCentralTab] = useState<"results" | "groups" | "query-tree" | "view-query" | "chat">("results");
+  const [workspaceTab, setWorkspaceTab] = useState<"browse" | "view" | "analyze">("browse");
+  // The URL's top-level tab takes precedence from the first client paint.
+  // A layout effect runs before the browser paints, avoiding a flash of Browse
+  // while the full query and shareable UI state are still being restored.
+  useLayoutEffect(() => {
+    const requestedTab = new URLSearchParams(window.location.search).get("tab");
+    if (requestedTab === "browse" || requestedTab === "view" || requestedTab === "analyze") {
+      setWorkspaceTab(requestedTab);
+    }
+  }, []);
+  type AnalysisDefinition = { uri: string; label: string; icon: string; stylesheet: string; order: number };
+  // XSLT controls presentation only. It never supplies callbacks, event attributes,
+  // breadcrumb mutation logic, or badge navigation logic.
+  type AnalysisCell = { values: string[]; checked: boolean; badgeStyle: CSSProperties; cellStyle: CSSProperties };
+  type AnalysisTable = { trailStyle: CSSProperties; tableStyle: CSSProperties; headerStyle: CSSProperties; cellStyle: CSSProperties; rowStyle: CSSProperties; columns: { kind: string; nodeId: string; label: string; breadcrumbStyle: CSSProperties; headerStyle: CSSProperties }[]; rows: { uri: string; label: string; cells: AnalysisCell[] }[] };
+  function analysisPresentationStyle(raw: string | null): CSSProperties {
+    const permitted: Record<string, keyof CSSProperties> = {
+      "background-color": "backgroundColor", "color": "color", "font-size": "fontSize",
+      "font-weight": "fontWeight", "font-style": "fontStyle", "text-align": "textAlign",
+      "border-radius": "borderRadius", "padding": "padding", "opacity": "opacity",
+      "border-color": "borderColor", "border-width": "borderWidth", "line-height": "lineHeight",
+      "white-space": "whiteSpace", "vertical-align": "verticalAlign",
+    };
+    const output: Record<string, string> = {};
+    for (const part of (raw ?? "").split(";")) {
+      const index = part.indexOf(":");
+      if (index < 1) continue;
+      const key = permitted[part.slice(0, index).trim().toLowerCase()];
+      const value = part.slice(index + 1).trim();
+      // No URL expressions, CSS variables, positioning, or interactive styling.
+      if (!key || !value || /url\s*\(|var\s*\(|[{}<>]/i.test(value)) continue;
+      output[key] = value;
+    }
+    return output as CSSProperties;
+  }
+  const [analysisDefinitions, setAnalysisDefinitions] = useState<AnalysisDefinition[]>([]);
+  const [selectedAnalysisUri, setSelectedAnalysisUri] = useState("");
+  const [analysisTable, setAnalysisTable] = useState<AnalysisTable | null>(null);
+  // Width is keyed by the real facet node / value rather than its position, so
+  // adding a column does not reset unrelated columns in either analysis table.
+  const [analysisColumnWidths, setAnalysisColumnWidths] = useState<Record<string, number>>({});
+  function beginAnalysisColumnResize(event: ReactPointerEvent<HTMLSpanElement>, key: string, width: number) {
+    event.preventDefault();
+    event.stopPropagation();
+    const origin = event.clientX;
+    const update = (move: PointerEvent) => setAnalysisColumnWidths((current) => ({
+      ...current, [key]: Math.max(88, Math.min(900, width + move.clientX - origin)),
+    }));
+    const finish = () => {
+      window.removeEventListener("pointermove", update);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+    window.addEventListener("pointermove", update);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  }
+  // Analyze-only selection. Stored against the visible page so changes of
+  // query or pagination cannot accidentally select different results.
+  const [analysisSelection, setAnalysisSelection] = useState<{ pageKey: string; keys: string[] }>({ pageKey: "", keys: [] });
+  const [analysisError, setAnalysisError] = useState("");
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const analysisRenderedBaseRef = useRef("");
+  const [analysisValuesState, setAnalysisValuesState] = useState<{ requestKey: string; byUri: Map<string, ScopeValue[]> } | null>(null);
+  const [analysisValuesError, setAnalysisValuesError] = useState("");
+  const [compareFacet, setCompareFacet] = useState("");
+  // Histogram reuses Compare Table's exact boolean cells; it is a presentation,
+  // not another FCT query, XSLT template, or numeric-bin calculation.
+  const [analyzeHistogram, setAnalyzeHistogram] = useState(false);
   const [assistantPromptDraft, setAssistantPromptDraft] = useState("");
   const [assistantPendingPrompt, setAssistantPendingPrompt] = useState<{ id: number; text: string } | null>(null);
   const assistantPromptIdRef = useRef(0);
@@ -1916,8 +2004,8 @@ useEffect(() => {
             if (session.oauthToken) setLoginOauthToken(session.oauthToken);
           }
           if (session.avatarUrl) setFetchedAvatarUrl(session.avatarUrl);
-          // The restored session just (re)set the maestro_session cookie; reload Datasites with it.
-          setEndpointReloadRevision((r) => r + 1);
+          // The initial menu load waits for session restoration. A browser
+          // refresh is not a new login and must not trigger another load.
         }
         if (!session && window.localStorage.getItem(AUTH_EXPECTED_KEY) === "1") {
           // A previous login should exist, but neither persisted credentials nor
@@ -1928,6 +2016,10 @@ useEffect(() => {
       } catch (err) {
         console.warn("Could not load personal graph auth session", err);
         if (window.localStorage.getItem(AUTH_EXPECTED_KEY) === "1") setAuthRestoreIssue(true);
+      } finally {
+        // Only now may the registry be read. The session cookie has either
+        // been restored or we've established this is an anonymous session.
+        setAuthRestoreComplete(true);
       }
     })();
   }, []);
@@ -2199,6 +2291,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   { id: string; uri: string; name: string }[]
 >([]);
 
+  // Remember whether the muted suffix came from navigating to an ancestor.
+  // Such a suffix must not be replaced by newly added Configure relationships.
+  const ancestorGhostRetainedRef = useRef(false);
+  const previousActiveGhostPathRef = useRef<string[]>([]);
+  const previousScopeRelationshipsRef = useRef<Map<string, string[]>>(new Map());
+
   const [focusWidgetsSuppressed, setFocusWidgetsSuppressed] = useState(false);
   const [groupByPropertyUri, setGroupByPropertyUri] = useState("");
   // Preserve a Personal facet's group-by selection while the Code Block pane
@@ -2469,15 +2567,21 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         .filter((node) => node.name !== "text")
         .map((node) => setMainViewType(node, FCT_VIEW_TYPES.LIST)),
     };
-    replaceQueryTree(fctQueryTreeApi.setValue(nonTextTree, null, [{ text: uri, datatype: "uri" }], {
+    const record = results.find((item) => item.uri === uri) ?? groupValues.find((item) => item.uri === uri);
+    const rootValue = record?.termType === "literal"
+      ? { text: uri, ...(record.lang ? { lang: record.lang } : { datatype: record.datatype || "string" }) }
+      : { text: uri, datatype: "uri" };
+    replaceQueryTree(fctQueryTreeApi.setValue(nonTextTree, null, [rootValue], {
       replaceExisting: true,
       idPrefix: "query-uri-value",
     }));
-    selectedSignalModeRef.current = "uri";
-    setSelectedSignalMode("uri");
-    setSavedUriDraft(uri);
-    searchDraftRef.current = uri;
-    setSearchDraft(uri);
+    if (record?.termType !== "literal") {
+      selectedSignalModeRef.current = "uri";
+      setSelectedSignalMode("uri");
+      setSavedUriDraft(uri);
+      searchDraftRef.current = uri;
+      setSearchDraft(uri);
+    }
     clearTutorialPreview();
     setSearchPipelineRun((current) => current + 1);
   };
@@ -2572,7 +2676,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
             method: "POST",
             cache: "no-store",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("uri-label-lookup", "UriLabelLookup") },
-            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : ""))}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="${FCT_VIEW_TYPES.DESCRIBE}" limit="30" offset="0"/></query>`,
+            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}` : ""))}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="${FCT_VIEW_TYPES.DESCRIBE}" limit="30" offset="0"/></query>`,
             signal: controller.signal,
           });
           const data = await readFctResponse(response);
@@ -2712,413 +2816,217 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
 
   useEffect(() => {
     const activePath = getPropertyPath();
+    const activeIds = activePath.map((crumb) => crumb.id);
+    const previousActiveIds = previousActiveGhostPathRef.current;
+    const movedToAncestor = previousActiveIds.length > activeIds.length &&
+      activeIds.every((id, index) => id === previousActiveIds[index]);
+    if (movedToAncestor) ancestorGhostRetainedRef.current = true;
+    else if (previousActiveIds.join("|") !== activeIds.join("|")) ancestorGhostRetainedRef.current = false;
+    previousActiveGhostPathRef.current = activeIds;
 
-    // Collect IDs of relationship nodes that still exist in the query tree.
+    // Only relationships in the authoritative query can appear as breadcrumbs.
     const existingIds = new Set<string>();
-
-    function collectIds(nodes: FctQueryNode[]) {
-      for (const node of nodes) {
-        if (
-          (node.name === "property" || node.name === "property-of") &&
-          typeof node.attributes.iri === "string" &&
-          node.attributes.iri.length > 0
-        ) {
-          existingIds.add(node.id);
-        }
-
-        collectIds(node.children);
-      }
-    }
-
-    collectIds(queryTree.children);
+    const scopeRelationships = new Map<string, FctQueryNode[]>();
+    const collect = (nodes: FctQueryNode[], scopeId: string) => {
+      const relationships = nodes.filter((node) =>
+        (node.name === "property" || node.name === "property-of") && Boolean(node.attributes.iri?.trim()),
+      );
+      scopeRelationships.set(scopeId, relationships);
+      for (const node of relationships) existingIds.add(node.id);
+      for (const node of nodes) collect(node.children, node.id);
+    };
+    collect(queryTree.children, "query-root");
+    const currentScopeIds = new Map(Array.from(scopeRelationships, ([id, nodes]) => [id, nodes.map((node) => node.id)]));
+    const previousScopeIds = previousScopeRelationshipsRef.current;
+    const scopeId = activePath[activePath.length - 1]?.id ?? "query-root";
+    const siblingNodes = scopeRelationships.get(scopeId) ?? [];
+    const newlyAdded = siblingNodes.filter((node) => !(previousScopeIds.get(scopeId) ?? []).includes(node.id));
+    previousScopeRelationshipsRef.current = currentScopeIds;
 
     setBreadcrumbTrail((current) => {
-      // Remove breadcrumbs whose relationship nodes were deleted.
       const retained = current.filter((crumb) => existingIds.has(crumb.id));
-
-      // If the active path is a prefix of the remembered trail,
-      // the user navigated backward. Keep the suffix visible.
-      const isNavigatingBackward =
-        activePath.length <= retained.length &&
+      const activeIsPrefix = activePath.length <= retained.length &&
         activePath.every((crumb, index) => crumb.id === retained[index]?.id);
+      let nextTrail = activeIsPrefix ? retained : activePath;
 
-      let nextTrail: { id: string; uri: string; name: string }[];
-      if (isNavigatingBackward) {
-        nextTrail = retained;
-      } else {
-        // A new branch was selected or the user drilled farther down.
-        // Replace the remembered trail with the active path.
-        const unchanged =
-          current.length === activePath.length &&
-          current.every(
-            (crumb, index) =>
-              crumb.id === activePath[index]?.id &&
-              crumb.uri === activePath[index]?.uri &&
-              crumb.name === activePath[index]?.name,
-          );
-        nextTrail = unchanged ? current : activePath;
-      }
+      // An ancestor-navigation suffix is owned by the user's navigation, so
+      // Configure additions cannot silently replace its muted path.
+      if (ancestorGhostRetainedRef.current && nextTrail.length > activePath.length) return nextTrail;
 
-      // If no ghost successor is already visible, use the first selected
-      // property/property-of facet in this scope as a ghost breadcrumb. The
-      // active <view> remains where it is; this only extends the displayed trail.
-      if (nextTrail.length <= activePath.length) {
-        const scopeId = activePath[activePath.length - 1]?.id;
-        const findNode = (nodes: FctQueryNode[], id: string): FctQueryNode | null => {
-          for (const node of nodes) {
-            if (node.id === id) return node;
-            const nested = findNode(node.children, id);
-            if (nested) return nested;
-          }
-          return null;
-        };
-        const scopeNode = scopeId ? findNode(queryTree.children, scopeId) : null;
-        const scopeNodes = scopeNode ? scopeNode.children : queryTree.children;
-        const firstSelectedRelationship = scopeNodes.find((node) =>
-          (node.name === "property" || node.name === "property-of") &&
-          typeof node.attributes.iri === "string" &&
-          node.attributes.iri.length > 0 &&
-          node.children.some((child) => child.name === "value" && Boolean(child.text?.trim())) &&
-          node.id !== activePath[activePath.length - 1]?.id,
-        );
-        if (firstSelectedRelationship) {
-          nextTrail = [...nextTrail, {
-            id: firstSelectedRelationship.id,
-            uri: firstSelectedRelationship.attributes.iri ?? "",
-            name: firstSelectedRelationship.name,
-          }];
-        }
+      // A Configure addition at the root (or any active scope) creates a
+      // single ghost successor without moving <view>. When there is already an
+      // automatic ghost, the *latest* added sibling takes that slot.
+      const candidate = newlyAdded[newlyAdded.length - 1] ??
+        (nextTrail.length <= activePath.length ? siblingNodes[siblingNodes.length - 1] : undefined);
+      if (candidate) {
+        nextTrail = [...activePath, {
+          id: candidate.id,
+          uri: candidate.attributes.iri ?? "",
+          name: candidate.name,
+        }];
+        ancestorGhostRetainedRef.current = false;
       }
       return nextTrail;
     });
-  // queryRevision is required because the query store may mutate the tree in
-  // place; it keeps ghost breadcrumbs synchronized after delete/pop actions.
   }, [queryTree, getPropertyPath, queryRevision]);
 
 
 
-
+  // Read the registry once after session restoration; subsequently only an
+  // explicit login changes the menu. Never POST a proxy selection on refresh.
   useEffect(() => {
+    if (!authRestoreComplete) return;
     let cancelled = false;
-    async function loadEndpointMenu() {
-      // Resolve the initial graph server from q's addr attribute. Endpoint
-      // selection is deliberately not duplicated in the URL's UI-state JSON.
-      const initialParams = new URLSearchParams(window.location.search);
-      const requestedUrlSelection = readGraphServerFromQueryXml(initialParams.get("q"));
-
-      // Toolbar Refresh may carry a one-time snapshot of the already-green
-      // selected graph server. Restore it BEFORE entering the server-loading
-      // state or making any endpoint-list/health-check requests.
+    void (async () => {
       try {
-        const refreshSnapshotJson = window.sessionStorage.getItem("maestro-refresh-green-server");
-        window.sessionStorage.removeItem("maestro-refresh-green-server");
-        if (refreshSnapshotJson) {
-          const snapshot: unknown = JSON.parse(refreshSnapshotJson);
-          if (snapshot && typeof snapshot === "object") {
-            const saved = snapshot as {
-              selectedId?: unknown;
-              endpoints?: unknown;
-              status?: unknown;
-            };
-            const selectedId = typeof saved.selectedId === "string" ? saved.selectedId : "";
-            const endpoints = Array.isArray(saved.endpoints) && saved.endpoints.every((item) =>
-              item && typeof item === "object" &&
-              typeof item.id === "string" && typeof item.url === "string" &&
-              typeof item.label === "string" && typeof item.group === "string"
-            ) ? saved.endpoints as EndpointOption[] : [];
-            const selected = endpoints.find((endpoint) => endpoint.id === selectedId);
-            const status = saved.status as EndpointStatus | undefined;
-            const urlMatches = !requestedUrlSelection || Boolean(selected &&
-              [selected.id, selected.url, selected.label].includes(requestedUrlSelection));
-            if (selected && urlMatches && status?.id === selectedId &&
-                status.state === "ok" && status.status === 200) {
-              if (cancelled) return;
-              setFctEndpoints(endpoints);
-              setSelectedEndpointId(selectedId);
-              setEndpointStatuses({ [selectedId]: status });
-              setEndpointMenuError("");
-              setEndpointHealthToast(null);
-              setIsCheckingEndpoints(false);
-              setEndpointChecksCompleted(0);
-              setEndpointChecksTotal(0);
-              refreshQuery();
-              return;
-            }
-          }
-        }
-      } catch { /* Invalid or unavailable snapshot: use normal startup checks. */ }
-
-      setIsCheckingEndpoints(true);
-      setEndpointChecksCompleted(0);
-      setSelectedEndpointId("");
-      setEndpointStatuses({});
-      setEndpointHealthToast(null);
-      try {
-        // Load the configured server list. Logged-out startup probes it in
-        // order and stops at the first healthy graph server.
-        const response = await cachedFetchFct("/proxy/api/fct", { cache: "no-store", headers: proxyDebugHeaders("endpoint-menu", "EndpointMenu") });
+        const params = new URLSearchParams(window.location.search);
+        const requestedUrl = readGraphServerFromQueryXml(params.get("q"));
+        const response = await cachedFetchFct("/proxy/api/fct", {
+          cache: "no-store", headers: proxyDebugHeaders("endpoint-menu", "EndpointMenu"),
+        });
         const data = await response.json();
-        rememberShortforms(data?.shortforms);
-        if (!response.ok)
-          throw new Error(data.error ?? "Could not load FCT endpoints.");
+        if (!response.ok) throw new Error(data.error ?? "Could not load graph servers.");
         if (cancelled) return;
-        const rawEndpoints = Array.isArray(data.endpoints)
-          ? (data.endpoints as EndpointOption[])
+        const endpoints: EndpointOption[] = Array.isArray(data.endpoints)
+          ? (data.endpoints as EndpointOption[]).filter((item) =>
+              authSession || (item.id !== "personal-sparql" && item.label.toLowerCase() !== "personal sparql"))
           : [];
-        const endpoints = authSession
-          ? rawEndpoints
-          : rawEndpoints.filter((item) => item.id !== "personal-sparql" && item.label.trim().toLowerCase() !== "personal sparql");
-        const savedSelection = typeof data.selectedId === "string" ? data.selectedId : "";
-        const requestedEndpoint = typeof requestedUrlSelection === "string"
-          ? endpoints.find((endpoint) => endpoint.id === requestedUrlSelection || endpoint.url === requestedUrlSelection || endpoint.label === requestedUrlSelection)
+        // The server in the authoritative query wins. Match the shorthand
+        // registry address and its expanded /sparql URL equivalently.
+        const canonicalServer = (value: string) => {
+          try {
+            const uri = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`);
+            const path = uri.pathname.replace(/\/+$/, "") || "/sparql";
+            return `${uri.host.toLowerCase()}${path}`;
+          } catch { return value.trim().toLowerCase(); }
+        };
+        const requested = requestedUrl
+          ? endpoints.find((item) => item.url === requestedUrl || item.id === requestedUrl ||
+              canonicalServer(item.url) === canonicalServer(requestedUrl))
           : undefined;
-        const requestedSelection = requestedEndpoint?.id ?? savedSelection;
-
-        setFctEndpoints(endpoints);
-        setEndpointMenuError("");
-
-        // Logged-out startup is a sequential failover: try configured graph
-        // servers in list order and stop as soon as one passes its health check.
-        // A saved choice must not strand an anonymous user on an offline server.
-        // Logged-in startup retains its explicit URL/session selection behavior.
-        const candidates = authSession
-          ? [endpoints.find((endpoint) => endpoint.id === (requestedSelection || endpoints[0]?.id))].filter(
-              (endpoint): endpoint is EndpointOption => Boolean(endpoint),
-            )
-          : endpoints;
-        if (candidates.length === 0) {
-          setSelectedEndpointId("");
-          setEndpointMenuError(endpoints.length === 0
-            ? "No graph servers are configured. Configure a reachable server before browsing data."
-            : "The requested graph server is not in the configured server list.");
-          return;
+        if (requestedUrl && !requested) {
+          setEndpointMenuError(`The graph server in query addr is not configured: ${requestedUrl}`);
+        } else {
+          setEndpointMenuError("");
         }
-
-        const checked = await runEndpointChecks(candidates, () => cancelled, !authSession);
-        if (cancelled) return;
-        const selectedEndpoint = candidates.find((endpoint) => {
-          const status = checked[endpoint.id];
-          return status?.state === "ok" && status.status != null && status.status < 400;
+        // An empty response during restoration must not erase a menu that
+        // was already available to the user.
+        setFctEndpoints((current) => endpoints.length > 0 ? endpoints : current);
+        // Preserve the selection across a login-triggered registry reload.
+        // Never clear it because a transient response omits an entry.
+        setSelectedEndpointId((current) => {
+          const retained = endpoints.find((item) => item.id === current);
+          const choice = requested ?? retained ?? (!requestedUrl ? endpoints[0] : undefined);
+          return choice?.id ?? current;
         });
-        if (!selectedEndpoint) {
-          setSelectedEndpointId("");
-          if (!authSession) {
-            setEndpointMenuError(`None of the ${candidates.length} configured graph servers passed a health check. Refresh to retry.`);
-            setEndpointHealthToast(null);
-          } else {
-            const candidate = candidates[0];
-            const message = `Graph server ${candidate.label} did not pass its health check.`;
-            setEndpointMenuError(`${message} Refresh to retry this server, or choose another server.`);
-            setEndpointHealthToast({ endpointId: candidate.id, message });
-          }
-          return;
-        }
-        const effectiveSelection = selectedEndpoint.id;
-        setEndpointHealthToast(null);
-        setEndpointMenuError("");
-
-        // Synchronize the proxy cookie only after the single candidate passes
-        // its health check, so the UI and actual query destination cannot diverge.
-        const selectResponse = await cachedFetchFct("/proxy/api/fct", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-initial-select", "EndpointMenu") },
-          body: JSON.stringify({ selectEndpointId: effectiveSelection }),
-          cache: "no-store",
-        });
-        const selectData = await selectResponse.json();
-        rememberShortforms(selectData?.shortforms);
-        if (!selectResponse.ok || selectData.selectedId !== effectiveSelection) {
-          throw new Error(selectData.error ?? "Could not select the loaded graph server.");
-        }
-        if (!cancelled) {
-          setSelectedEndpointId(effectiveSelection);
-          refreshQuery();
-        }
       } catch (error) {
-        if (!cancelled) {
-          setSelectedEndpointId("");
-          setEndpointMenuError(
-            error instanceof Error
-              ? error.message
-              : "Could not load FCT endpoints.",
-          );
-        }
-      } finally {
-        if (!cancelled) setIsCheckingEndpoints(false);
+        if (!cancelled) setEndpointMenuError(
+          error instanceof Error ? error.message : "Could not load graph servers.",
+        );
+        // Keep both the existing menu and selection on fetch failure.
       }
-    }
-    void loadEndpointMenu();
-    return () => {
-      cancelled = true;
-    };
-    // endpointReloadRevision re-runs the Datasite load after login.
+    })();
+    return () => { cancelled = true; };
+    // A new login explicitly increments endpointReloadRevision. Session
+    // restoration only unblocks the first read; it never increments revision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endpointReloadRevision]);
+  }, [authRestoreComplete, endpointReloadRevision]);
 
-  async function runEndpointChecks(
-    endpoints: EndpointOption[],
-    isCancelled: () => boolean = () => false,
-    stopOnFirstSuccess = false,
-  ): Promise<Record<string, EndpointStatus>> {
+  /** Health-check precisely one selected server. Never scan the registry. */
+  async function checkSelectedGraphServer(endpoint: EndpointOption): Promise<EndpointStatus> {
+    setCheckingEndpointIds((current) => ({ ...current, [endpoint.id]: true }));
     setIsCheckingEndpoints(true);
     setEndpointChecksCompleted(0);
-    setEndpointChecksTotal(endpoints.length);
-    const results: Record<string, EndpointStatus> = {};
-    let completed = 0;
-
-    async function checkOne(endpoint: EndpointOption): Promise<EndpointStatus> {
-      let status: EndpointStatus;
-      try {
-        const response = await fetch(
-          `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}`,
-          { cache: "no-store", headers: proxyDebugHeaders("endpoint-health", `EndpointHealth:${endpoint.id}`) },
-        );
-        const data = await response.json();
-        rememberShortforms(data?.shortforms);
-        if (!response.ok || !data.check)
-          throw new Error(data.error ?? "Health check failed.");
-        status = data.check as EndpointStatus;
-      } catch {
-        status = {
-          id: endpoint.id,
-          status: null,
-          state: "unreachable",
-          testedUrl: endpoint.url,
-        };
-      }
-      results[endpoint.id] = status;
-      completed += 1;
-      if (!isCancelled()) {
-        setEndpointStatuses((current) => ({ ...current, [endpoint.id]: status }));
-        setEndpointChecksCompleted(completed);
-      }
-      return status;
+    setEndpointChecksTotal(1);
+    let status: EndpointStatus;
+    try {
+      const response = await fetch(
+        `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}`,
+        { cache: "no-store", headers: proxyDebugHeaders("endpoint-health", `EndpointHealth:${endpoint.id}`) },
+      );
+      const data = await response.json();
+      if (!response.ok || !data.check) throw new Error(data.error ?? "Health check failed.");
+      status = data.check as EndpointStatus;
+    } catch {
+      status = { id: endpoint.id, status: null, state: "unreachable", testedUrl: endpoint.url };
+    } finally {
+      setCheckingEndpointIds((current) => ({ ...current, [endpoint.id]: false }));
+      setIsCheckingEndpoints(false);
+      setEndpointChecksCompleted(1);
     }
-
-    if (stopOnFirstSuccess) {
-      for (const endpoint of endpoints) {
-        if (isCancelled()) break;
-        const status = await checkOne(endpoint);
-        if (status.state === "ok" && status.status != null && status.status < 400) break;
+    // A host-only registry entry may resolve to HTTP, but only after HTTPS
+    // returned 404. Make that resolved URL authoritative for subsequent queries.
+    if (status.state === "ok" && status.status === 200 &&
+        endpoint.schemeInferred && endpoint.url.startsWith("https://") &&
+        status.testedUrl === endpoint.url.replace(/^https:\/\//, "http://")) {
+      const resolvedUrl = status.testedUrl;
+      setFctEndpoints((current) => current.map((item) => item.id === endpoint.id ? { ...item, url: resolvedUrl } : item));
+      const address = queryTree.attributes.addr ?? "";
+      const separator = address.indexOf("@");
+      if (separator >= 0 && address.slice(separator + 1) === endpoint.url) {
+        setQueryAttribute("addr", `${address.slice(0, separator)}@${resolvedUrl}`);
       }
-    } else {
-      // Manual Check All retains concurrent checks and independent status updates.
-      await Promise.all(endpoints.map(checkOne));
+      await setAuxiliaryGraphServerUri(resolvedUrl).catch(() => {});
     }
-    return results;
+    setEndpointStatuses((current) => ({ ...current, [endpoint.id]: status }));
+    return status;
   }
 
   async function refreshFailedEndpointAndRetry() {
     if (!endpointHealthToast || isRefreshingFailedEndpoint) return;
-    const endpointId = endpointHealthToast.endpointId;
-    const endpoint = fctEndpoints.find((item) => item.id === endpointId);
+    const endpoint = fctEndpoints.find((item) => item.id === endpointHealthToast.endpointId);
     if (!endpoint) return;
     setIsRefreshingFailedEndpoint(true);
     try {
-      const checked = await runEndpointChecks([endpoint]);
-      setIsCheckingEndpoints(false);
-      const status = checked[endpointId];
-      if (!(status?.state === "ok" && status.status != null && status.status < 400)) {
-        setEndpointHealthToast({ endpointId, message: `Graph server ${endpoint.label} is still unreachable. Refresh to try again.` });
-        return;
+      const health = await checkSelectedGraphServer(endpoint);
+      if (health.state === "ok" && health.status === 200) {
+        setEndpointHealthToast(null);
+        setEndpointMenuError("");
+        refreshQuery();
       }
-      const response = await cachedFetchFct("/proxy/api/fct", {
-        method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-select", "EndpointHealthToastRefresh") },
-        body: JSON.stringify({ selectEndpointId: endpointId }), cache: "no-store",
-      });
-      const data = await response.json() as { selectedId?: string; error?: string };
-      if (!response.ok || data.selectedId !== endpointId) throw new Error(data.error ?? "Could not select the refreshed graph server.");
-      setSelectedEndpointId(endpointId);
-      setEndpointHealthToast(null);
-      setEndpointMenuError("");
-      refreshQuery();
-    } catch (error) {
-      setEndpointHealthToast({ endpointId, message: error instanceof Error ? error.message : "Could not refresh the graph server." });
-    } finally { setIsRefreshingFailedEndpoint(false); setIsCheckingEndpoints(false); }
-  }
-
-  async function checkFctEndpoints() {
-    setEndpointMenuError("");
-    await runEndpointChecks(fctEndpoints);
-    setIsCheckingEndpoints(false);
-  }
-
-  /** Select a server in the proxy cookie before restoring query/UI state that depends on it. */
-  async function synchronizeFctEndpointSelection(endpointId: string) {
-    if (!endpointId) return;
-    const endpoint = fctEndpoints.find((item) => item.id === endpointId);
-    if (!endpoint) throw new Error(`The saved query refers to an unknown graph server: ${endpointId}`);
-    if (!authSession && (endpoint.id === "personal-sparql" || endpoint.label.trim().toLowerCase() === "personal sparql")) {
-      throw new Error("Log in before selecting the Personal SPARQL graph server.");
-    }
-    let health = endpointStatuses[endpointId];
-    if (!health) {
-      const checked = await runEndpointChecks([endpoint]);
+    } finally {
+      setIsRefreshingFailedEndpoint(false);
       setIsCheckingEndpoints(false);
-      health = checked[endpointId];
     }
-    if (!(health?.state === "ok" && health.status != null && health.status < 400)) {
-      const message = `Graph server ${endpoint.label} did not pass its health check; the saved query was not switched to it.`;
-      setEndpointHealthToast({ endpointId, message });
-      throw new Error(message);
-    }
-    const response = await cachedFetchFct("/proxy/api/fct", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-state-restore", "EndpointMenu") },
-      body: JSON.stringify({ selectEndpointId: endpointId }),
-      cache: "no-store",
+  }
+
+  async function setAuxiliaryGraphServerUri(uri: string) {
+    const response = await fetch("/proxy/api/fct", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ selectEndpointUrl: uri }), cache: "no-store",
     });
-    const data = await response.json() as { selectedId?: string; error?: string; shortforms?: unknown };
-    rememberShortforms(data?.shortforms);
-    if (!response.ok || data.selectedId !== endpointId) {
-      throw new Error(data.error ?? `Could not select graph server ${endpoint.label}.`);
+    if (!response.ok) throw new Error("Unable to select the configured graph server URI.");
+  }
+
+  /** Only a user's explicit menu selection or a saved query URI may select a server. */
+  async function synchronizeFctEndpointSelection(graphServerUri: string) {
+    if (!graphServerUri) return;
+    const endpoint = fctEndpoints.find((item) => item.url === graphServerUri || item.id === graphServerUri);
+    if (!endpoint) throw new Error(`The query references an unconfigured graph server: ${graphServerUri}`);
+    if (!authSession && (endpoint.id === "personal-sparql" || endpoint.label.toLowerCase() === "personal sparql")) {
+      throw new Error("Log in before selecting the personal graph server.");
     }
-    setSelectedEndpointId(endpointId);
+    await setAuxiliaryGraphServerUri(endpoint.url);
+    setSelectedEndpointId(endpoint.id);
+    setEndpointMenuError("");
   }
 
   async function chooseFctEndpoint(endpointId: string) {
     if (!endpointId || endpointId === selectedEndpointId) return;
     const endpoint = fctEndpoints.find((item) => item.id === endpointId);
     if (!endpoint) return;
-    if (!authSession && (endpoint.id === "personal-sparql" || endpoint.label.trim().toLowerCase() === "personal sparql")) return;
-
-    setEndpointMenuError("");
-    try {
-      // A server must pass a health check before it can become the active
-      // selection. Recheck unknown or previously unhealthy servers on demand.
-      let status = endpointStatuses[endpointId];
-      if (!status) {
-        const checked = await runEndpointChecks([endpoint]);
-        setIsCheckingEndpoints(false);
-        status = checked[endpointId];
-      }
-      if (!(status?.state === "ok" && status.status != null && status.status < 400)) {
-        const message = `Graph server ${endpoint.label} did not pass its health check; it was not selected.`;
-        setEndpointHealthToast({ endpointId, message });
-        throw new Error(message);
-      }
-
-      const response = await cachedFetchFct("/proxy/api/fct", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-select", "EndpointMenu") },
-        body: JSON.stringify({ selectEndpointId: endpointId }),
-        cache: "no-store",
-      });
-      const data = await response.json();
-      rememberShortforms(data?.shortforms);
-      if (!response.ok || data.selectedId !== endpointId)
-        throw new Error(data.error ?? "Could not select FCT endpoint.");
-      setSelectedEndpointId(endpointId);
-      // Trigger the existing query and facet effects only after the proxy
-      // confirms that the same, health-checked endpoint is active.
-      refreshQuery();
-    } catch (error) {
-      setEndpointMenuError(
-        error instanceof Error
-          ? error.message
-          : "Could not select FCT endpoint.",
-      );
+    if (!authSession && (endpoint.id === "personal-sparql" || endpoint.label.toLowerCase() === "personal sparql")) return;
+    try { await setAuxiliaryGraphServerUri(endpoint.url); }
+    catch (error) {
+      setEndpointMenuError(error instanceof Error ? error.message : "Could not choose graph server.");
+      return;
     }
+    setSelectedEndpointId(endpointId);
+    setEndpointMenuError("");
+    setEndpointHealthToast(null);
+    const graph = queryTree.attributes.graph?.trim() ?? "";
+    setQueryAttribute("addr", `${graph}@${endpoint.url}`);
+    // The query health gate checks the newly selected server before executing.
   }
 
   // Personal View widgets subscribe to the authoritative query tree. A widget
@@ -3204,6 +3112,18 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   );
   const resultsOffset = Math.max(0, Number(viewNode?.attributes.offset ?? "0") || 0);
   const [resultsPageSize, setResultsPageSize] = useState<number>(DEFAULT_RESULTS_PAGE_SIZE);
+  const activePageBatchSize = centralTab === "groups" ? groupBatchSize : resultsBatchSize;
+  const resultsPageSizeOptions = pageSizesForBatch(activePageBatchSize);
+  const effectivePageSize = resultsPageSizeOptions.includes(resultsPageSize) ? resultsPageSize : resultsPageSizeOptions[0];
+  useEffect(() => {
+    if (resultsPageSize !== effectivePageSize) {
+      setResultsPageSize(effectivePageSize);
+      setResultsUiPage(0);
+      setGroupUiPage(0);
+      maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(effectivePageSize));
+    }
+  }, [resultsPageSize, effectivePageSize]);
+
   useEffect(() => {
     let active = true;
     void initializeMaestroStorage().then(() => {
@@ -3237,8 +3157,8 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     void initializeMaestroStorage().then(() => {
       if (!active) return;
       const saved = maestroStorageGet(RESULTS_PAGE_SIZE_STORAGE_KEY);
-      const valid = RESULTS_PAGE_SIZE_OPTIONS.find((size) => size === Number(saved));
-      if (saved !== null && valid !== undefined) setResultsPageSize(valid);
+      const savedSize = Number(saved);
+      if (saved !== null && Number.isFinite(savedSize) && savedSize > 0) setResultsPageSize(savedSize);
       else maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(DEFAULT_RESULTS_PAGE_SIZE));
     });
     return () => { active = false; };
@@ -3434,6 +3354,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       if (["results", "groups", "query-tree", "view-query", "chat"].includes(restored.centralTab ?? "")) {
         setCentralTab(restored.centralTab === "query-tree" || restored.centralTab === "chat" ? "results" : restored.centralTab!);
       }
+      if (restored.workspaceTab === "browse" || restored.workspaceTab === "view" || restored.workspaceTab === "analyze") setWorkspaceTab(restored.workspaceTab);
       if (typeof restored.queryToggle === "boolean") setQueryTreeOpen(restored.queryToggle);
       else if (restored.centralTab === "query-tree") setQueryTreeOpen(true);
       if (typeof restored.showResultBadges === "boolean") setShowResultBadges(restored.showResultBadges);
@@ -3449,9 +3370,9 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       if (typeof restored.groupByPropertyUri === "string") setGroupByPropertyUri(restored.groupByPropertyUri);
       if (typeof restored.resultsUiPage === "number" && Number.isFinite(restored.resultsUiPage)) setResultsUiPage(Math.max(0, Math.floor(restored.resultsUiPage)));
       if (typeof restored.groupUiPage === "number" && Number.isFinite(restored.groupUiPage)) setGroupUiPage(Math.max(0, Math.floor(restored.groupUiPage)));
-      if (typeof restored.groupBatchSize === "number" && Number.isFinite(restored.groupBatchSize)) setGroupBatchSize(Math.max(1, Math.min(1000, Math.floor(restored.groupBatchSize))));
+      if (typeof restored.groupBatchSize === "number" && RESULTS_BATCH_SIZE_OPTIONS.some((n) => n === restored.groupBatchSize)) setGroupBatchSize(restored.groupBatchSize);
       if (typeof restored.groupBatchOffset === "number" && Number.isFinite(restored.groupBatchOffset)) setGroupBatchOffset(Math.max(0, Math.floor(restored.groupBatchOffset)));
-      if (typeof restored.resultsPageSize === "number" && RESULTS_PAGE_SIZE_OPTIONS.includes(restored.resultsPageSize as typeof RESULTS_PAGE_SIZE_OPTIONS[number])) setResultsPageSize(restored.resultsPageSize);
+      if (typeof restored.resultsPageSize === "number" && Number.isFinite(restored.resultsPageSize) && restored.resultsPageSize > 0) setResultsPageSize(restored.resultsPageSize);
       if (typeof restored.selectedUri === "string") setSelectedUri(restored.selectedUri);
       // Clear Terms removes <text> from q, so preserve the hidden draft separately
       // to restore it when the user switches back to Name or All fields.
@@ -3508,7 +3429,12 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   // the address bar; they never navigate or rerun this initializer.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    // Select the URL tab before restoring any query or saved UI state.
+    const tabFromUrl = params.get("tab");
+    if (tabFromUrl === "browse" || tabFromUrl === "view" || tabFromUrl === "analyze") setWorkspaceTab(tabFromUrl);
     restoreQueryAndUiState(params.get("q"), readShareableUiState(), params.get("history"));
+    // An explicit ?tab= wins over a possibly older workspaceTab in saved state.
+    if (tabFromUrl === "browse" || tabFromUrl === "view" || tabFromUrl === "analyze") setWorkspaceTab(tabFromUrl);
     setUrlStateInitialized(true);
   // This is intentionally a one-time initializer for the initial URL only.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3518,6 +3444,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     if (!urlStateInitialized) return;
     const params = new URLSearchParams(window.location.search);
     params.set("q", queryXml);
+    params.set("tab", workspaceTab);
     const state: ShareableUiState = {
       selectedFacet,
       propertiesPage,
@@ -3526,6 +3453,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
       rolesPage,
       findEndpointsEnabled,
       centralTab,
+      workspaceTab,
       queryToggle: queryTreeOpen,
       showResultBadges,
       badgesToggle: showResultBadges,
@@ -3553,7 +3481,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     params.set("state", JSON.stringify(state));
     const nextUrl = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", nextUrl);
-  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft]);
+  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft]);
 
   /** Describe the first XML-tree delta between two query snapshots for History replay. */
   function deriveHistoryAction(previousXml: string, nextXml: string): { operator: "+" | "-"; xpath: string; value?: string } | null {
@@ -3693,7 +3621,7 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     historyWriteQueueRef.current = historyWriteQueueRef.current.then(synchronizeWhenCollapsed, synchronizeWhenCollapsed);
     // Do not cancel queued writes in effect cleanup; pending History is flushed
     // when the root breadcrumb search field closes.
-  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession, selectedSignalMode]);
+  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession, selectedSignalMode]);
 
   // The graph text box may contain an unapplied draft distinct from the query's graph binding.
   // Restore that draft after the query-graph synchronization effect has run once.
@@ -3885,14 +3813,51 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
   const queryGraphServer = readGraphServerFromQueryXml(queryCountXml);
   const endpointReadyForQuery = Boolean(
     selectedEndpointId &&
-    selectedEndpointStatus?.status != null &&
-    selectedEndpointStatus.status < 400 &&
+    selectedEndpointStatus?.state === "ok" &&
+    selectedEndpointStatus.status === 200 &&
     // addr is authoritative: a restored query must not race ahead of its server.
-    (!queryGraphServer || fctEndpoints.some((endpoint) =>
+    (queryGraphServer && fctEndpoints.some((endpoint) =>
       endpoint.id === selectedEndpointId &&
-      (queryGraphServer === endpoint.id || queryGraphServer === endpoint.url || queryGraphServer === endpoint.label)
+      (queryGraphServer === endpoint.url)
     ))
   );
+
+  // A URL load or an attempted query against a non-green server triggers
+  // exactly one selected-server health check. No startup failover or bulk scans.
+  const lastPreflightRef = useRef("");
+  const preflightInFlightRef = useRef("");
+  useEffect(() => {
+    if (!urlStateInitialized || !selectedEndpointId) return;
+    const selected = fctEndpoints.find((item) => item.id === selectedEndpointId);
+    if (!selected || queryGraphServer !== selected.url) return;
+    if (selectedEndpointStatus?.state === "ok" && selectedEndpointStatus.status === 200) return;
+    const probeKey = `${selected.url}\u0000${queryRefreshRevision}\u0000${queryRevision}`;
+    if (lastPreflightRef.current === probeKey || preflightInFlightRef.current === selected.url) return;
+    lastPreflightRef.current = probeKey;
+    preflightInFlightRef.current = selected.url;
+    void (async () => {
+      try {
+        // A cold start can race the proxy registry/session initialization. Only
+        // report an unavailable server after a couple of bounded retries; the
+        // manual toast Refresh used to work because it happened later.
+        let health: EndpointStatus | undefined;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (attempt > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, attempt * 900));
+          health = await checkSelectedGraphServer(selected);
+          if (health.state === "ok" && health.status === 200) break;
+        }
+        if (health?.state !== "ok" || health.status !== 200) {
+          setEndpointHealthToast({ endpointId: selected.id, message: `Graph server ${selected.label} is unavailable.` });
+        } else {
+          setEndpointHealthToast(null);
+        }
+      } finally {
+        if (preflightInFlightRef.current === selected.url) preflightInFlightRef.current = "";
+        setIsCheckingEndpoints(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlStateInitialized, selectedEndpointId, fctEndpoints, queryGraphServer, queryRefreshRevision, queryRevision]);
 
   // A cheap ASK first determines whether the current scope has labels.
   // Only a true response reveals the pane and starts counts.
@@ -4034,9 +3999,9 @@ useEffect(() => {
     setIsDescribing(false);
 
     // Keep the persistent facet widget shells/headers; clear only their data.
-    setPropertyFacets([]);
+    // Keep the last successful Configure lists visible while replacement requests
+    // load. A transient health failure must not remove the Configure buttons.
     setClassFacets([]); setClassTreeEdges([]);
-    setRoleFacets([]);
     setGraphFacets([]);
     setPropertyFacetSparql("");
     setRoleFacetSparql("");
@@ -4086,70 +4051,22 @@ useEffect(() => {
     navigateToPropertyPath(targetId);
   }
 
-  /** Toolbar Query Refresh never reloads the graph-server list or the page. */
+  /** Toolbar Refresh repeats the current query, checking only a non-green server. */
   async function refreshMaestroPage() {
-    const rerunCurrentQuery = () => {
-      refreshQuery();
-      setQueryRefreshRevision((revision) => revision + 1);
-      setSearchPipelineRun((revision) => revision + 1);
-    };
-    const selected = fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId);
-    if (!selected) {
-      setEndpointMenuError("Select a graph server before refreshing the query.");
-      return;
-    }
-
-    // The green icon corresponds to HTTP 200. Do not touch the server menu,
-    // health state, or its loading progress when it is already green.
-    const currentStatus = endpointStatuses[selected.id];
-    if (currentStatus?.state === "ok" && currentStatus.status === 200) {
-      rerunCurrentQuery();
-      return;
-    }
-
-    // Orange, red, grey and unknown all require a single-server health check.
-    // Invalidate the old status immediately so all query effects remain gated
-    // until this specific graph server is healthy again.
-    setEndpointStatuses((current) => {
-      const next = { ...current };
-      delete next[selected.id];
-      return next;
-    });
-    setEndpointMenuError("");
-    try {
-      const response = await fetch(
-        `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(selected.id)}`,
-        { cache: "no-store", headers: proxyDebugHeaders("toolbar-endpoint-health", `EndpointHealth:${selected.id}`) },
-      );
-      const data = await response.json();
-      rememberShortforms(data?.shortforms);
-      if (!response.ok || !data.check) throw new Error(data.error ?? "Health check failed.");
-      const health = data.check as EndpointStatus;
+    const selected = fctEndpoints.find((item) => item.id === selectedEndpointId);
+    if (!selected) return;
+    const status = endpointStatuses[selected.id];
+    if (!(status?.state === "ok" && status.status === 200)) {
+      const health = await checkSelectedGraphServer(selected);
       if (health.state !== "ok" || health.status !== 200) {
-        setEndpointStatuses((current) => ({ ...current, [selected.id]: health }));
-        setEndpointHealthToast({ endpointId: selected.id, message: `Graph server ${selected.label} did not pass its health check. Refresh to retry.` });
+        setEndpointHealthToast({ endpointId: selected.id, message: `Graph server ${selected.label} is unavailable.` });
         return;
       }
-      // The proxy's selected server must match the query's addr. The existing
-      // selection API only updates this server; it never reloads the list.
-      const selectionResponse = await fetch("/proxy/api/fct", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("toolbar-endpoint-select", "EndpointToolbarRefresh") },
-        body: JSON.stringify({ selectEndpointId: selected.id }),
-        cache: "no-store",
-      });
-      const selectedData = await selectionResponse.json();
-      if (!selectionResponse.ok || selectedData.selectedId !== selected.id)
-        throw new Error(selectedData.error ?? "Could not select the refreshed graph server.");
-      setEndpointStatuses((current) => ({ ...current, [selected.id]: health }));
       setEndpointHealthToast(null);
-      rerunCurrentQuery();
-    } catch (error) {
-      setEndpointStatuses((current) => ({ ...current, [selected.id]: {
-        id: selected.id, status: null, state: "unreachable", testedUrl: selected.url,
-      } }));
-      setEndpointHealthToast({ endpointId: selected.id, message: error instanceof Error ? error.message : "Graph server health check failed." });
     }
+    refreshQuery();
+    setQueryRefreshRevision((revision) => revision + 1);
+    setSearchPipelineRun((revision) => revision + 1);
   }
 
   function refreshCurrentBreadcrumb() {
@@ -4254,6 +4171,16 @@ useEffect(() => {
   const [recordFormatError, setRecordFormatError] = useState("");
   const [bookmarkQueryDebugOpen, setBookmarkQueryDebugOpen] = useState(false);
   const [bookmarkQueryDebug, setBookmarkQueryDebug] = useState({ xml: "", sparql: "", response: "", countResponse: "" });
+  // SHACL-discovered services use the same rendered Book XSLT tab host as
+  // Other Properties. Their operations and XSLT live in the personal graph.
+  type RecordService = { uri: string; label: string; operations: { uri: string; label: string; requires: string[] }[] };
+  type ServiceResult = { html: string; error: string; loading: boolean; name: string };
+  const [recordServices, setRecordServices] = useState<RecordService[]>([]);
+  const [recordServiceTab, setRecordServiceTab] = useState("");
+  const [recordServiceResults, setRecordServiceResults] = useState<Record<string, ServiceResult>>({});
+  const [recordServiceArguments, setRecordServiceArguments] = useState<Record<string, Record<string, string>>>({});
+  const [recordServiceDom, setRecordServiceDom] = useState<{tabs: HTMLElement; host: HTMLElement} | null>(null);
+  const activeServiceRecordRef = useRef("");
   const formattedRecordContainerRef = useRef<HTMLDivElement>(null);
   const [recordDebug, setRecordDebug] = useState({ xml: "", sparql: "", formatterXml: "", formatterSparql: "", policyDiscovery: "", templateLookup: "" });
   /** Download the RDF triples in the exact DESCRIBE snapshot shown in Record. */
@@ -4363,7 +4290,9 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   const [widgetTimeouts, setWidgetTimeouts] = useState<Record<MaestroTimeoutCategory, number>>(() => readMaestroWidgetTimeouts());
   const [timeoutEditorOpen, setTimeoutEditorOpen] = useState(false);
   const [recordDescribeIncomplete, setRecordDescribeIncomplete] = useState(false);
-  const currentRecordDescriptionKey = [selectedUri, selectedEndpointId, queryTree.attributes.addr ?? "",
+  const currentRecordIdentity = results.find((item) => item.uri === selectedUri)
+    ?? groupValues.find((item) => item.uri === selectedUri);
+  const currentRecordDescriptionKey = [selectedUri, currentRecordIdentity?.termType ?? "uri", currentRecordIdentity?.datatype ?? "", currentRecordIdentity?.lang ?? "", selectedEndpointId, queryTree.attributes.addr ?? "",
     queryTree.attributes.graph ?? "", queryTree.attributes.inference ?? "", queryTree.attributes["same-as"] ?? "",
     selectedRecordGraph, selectedRecordAuthor, recordDescriptionQueryLimit].join("\u0000");
 
@@ -4987,9 +4916,9 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
   useEffect(() => {
     const query = search.trim();
     if (!query && !endpointReadyForQuery) {
-      setPropertyFacets([]);
+      // Do not discard previously loaded Configure lists during a transient
+      // not-ready state; the next successful facet response replaces them.
       setClassFacets([]); setClassTreeEdges([]);
-      setRoleFacets([]);
       setGraphFacets([]);
       setPropertyFacetSparql("");
       setRoleFacetSparql("");
@@ -5159,9 +5088,6 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
   // Properties has a completely separate request lifecycle from Categories and Roles.
   useEffect(() => {
     if (!search.trim() && !endpointReadyForQuery) {
-      setPropertyFacets([]);
-      setPropertyFacetSparql("");
-      setPropertyFacetError("");
       setIsLoadingProperties(false);
       return;
     }
@@ -5205,9 +5131,7 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
   // Roles has a completely separate request lifecycle from Categories and Properties.
   useEffect(() => {
     if (!search.trim() && !endpointReadyForQuery) {
-      setRoleFacets([]);
-      setRoleFacetSparql("");
-      setRoleFacetError("");
+      // Preserve the last successful Role facets until a new response arrives.
       setIsLoadingRoles(false);
       return;
     }
@@ -5365,6 +5289,20 @@ setGraphFacets(graphs);
 
   const selectedResult = visibleResultsPage.find((item) => item.uri === selectedUri);
   const selectedGroupRecord = groupValues.find((item) => item.uri === selectedUri);
+  // Preserve RDF identity when Record is focused on a literal FCT result.
+  const selectedRecordTerm = currentRecordIdentity ?? selectedResult ?? selectedGroupRecord;
+  const selectedRecordTermType = selectedRecordTerm?.termType ?? "uri";
+  const selectedRecordDatatype = selectedRecordTerm?.datatype;
+  const selectedRecordLanguage = selectedRecordTerm?.lang;
+  // A literal reached through a focused forward property is known to have
+  // at least that incoming Role in the current query context. Retain this
+  // predicate for a bounded fallback when a global Roles scan times out.
+  const recordFocusNode = getPropertyPath().at(-1);
+  const recordFocusPredicate = selectedRecordTermType === "literal" && recordFocusNode?.name === "property"
+    ? recordFocusNode.uri : undefined;
+  const recordFocusValueDatatype = selectedRecordDatatype && selectedRecordDatatype !== "string" ? selectedRecordDatatype : undefined;
+  const recordRootDebugValue = `<value datatype="${escapeXmlText(selectedRecordTermType === "uri" ? "uri" : selectedRecordLanguage ? "string" : recordFocusValueDatatype ?? "string")}"${selectedRecordLanguage ? ` xml:lang="${escapeXmlText(selectedRecordLanguage)}"` : ""}>${escapeXmlText(selectedUri)}</value>`;
+  const recordRootDebugQuery = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" addr="${escapeXmlText(queryTree.attributes.addr ?? "")}">${recordRootDebugValue}<view type="${FCT_VIEW_TYPES.DESCRIBE}" limit="${recordDescriptionQueryLimit}" offset="0"/></query>`;
 
   // The graph membership request is independent of optional author metadata.
   // Always send the authoritative query address; endpoint selection must not
@@ -5376,7 +5314,7 @@ setGraphFacets(graphs);
     setSelectedRecordAuthor("");
     setRecordGraphError("");
     setRecordAuthorError("");
-    if (!selectedUri || !selectedEndpointId) { setLoadingRecordGraphs(false); return; }
+    if (!selectedUri || !selectedEndpointId || selectedRecordTermType !== "uri") { setLoadingRecordGraphs(false); return; }
     const controller = new AbortController();
     setLoadingRecordGraphs(true);
     void (async () => {
@@ -5396,7 +5334,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedEndpointId, queryTree.attributes.addr, queryRefreshRevision]);
+  }, [selectedUri, selectedRecordTermType, selectedEndpointId, queryTree.attributes.addr, queryRefreshRevision]);
 
   // Load author provenance only after the user selects a graph family.
   // Slow metadata queries must never delay the Graph dropdown.
@@ -5478,7 +5416,11 @@ setGraphFacets(graphs);
           method: "POST", cache: "no-store", signal: controller.signal,
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-select-labels", "RecordDescription") },
           body: JSON.stringify({ recordSelect: {
-            iri: selectedUri, limit: recordDescriptionQueryLimit, labelLookupVersion: 2,
+            iri: selectedUri, termType: selectedRecordTermType,
+            ...(recordFocusPredicate ? { focusPredicate: recordFocusPredicate } : {}),
+            ...(selectedRecordDatatype && selectedRecordDatatype !== "string" && selectedRecordTermType === "literal" ? { datatype: selectedRecordDatatype } : {}),
+            ...(selectedRecordLanguage ? { lang: selectedRecordLanguage } : {}),
+            limit: recordDescriptionQueryLimit, labelLookupVersion: 3,
             ...(selectedRecordGraph || selectedRecordAuthor ? { graphs: selectedGraphs } : {}),
           } }),
         });
@@ -5494,11 +5436,11 @@ setGraphFacets(graphs);
         if (!cancelled) {
           setRecordDescribeIncomplete(snapshotIncomplete);
           setRecordDebug((current) => ({ ...current,
-            xml: `POST /proxy/api/sparql\n${JSON.stringify({ recordSelect: { iri: selectedUri, limit: recordDescriptionQueryLimit, labelLookupVersion: 2, graphs: selectedGraphs } }, null, 2)}`,
+            xml: `POST /proxy/api/sparql\n${JSON.stringify({ recordSelect: { iri: selectedUri, termType: selectedRecordTermType, datatype: selectedRecordDatatype, lang: selectedRecordLanguage, limit: recordDescriptionQueryLimit, labelLookupVersion: 3, graphs: selectedGraphs } }, null, 2)}`,
             sparql: data.query ?? "Record SELECT query unavailable.",
           }));
         }
-        const queryAddrForLabels = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+        const queryAddrForLabels = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}` : "");
         const cachedLabels = recordUriLabelCacheRef.current;
         // The previous SELECT version could have assigned a subject's label
         // to unrelated wikiPageWikiLink objects. Replace those stale entries
@@ -5544,8 +5486,14 @@ setGraphFacets(graphs);
           snapshotTerms.push({ subject: subject.value, predicate: predicate.value,
             object: objectValue, objectType, ...(object.datatype ? { datatype: object.datatype } : {}),
             ...(object["xml:lang"] ? { lang: object["xml:lang"] } : {}) });
-          const direction: "property" | "property-of" | null = subject.value === selectedUri
-            ? "property" : object.value === selectedUri ? "property-of" : null;
+          const matchesRecordObject = object.value === selectedUri &&
+            (selectedRecordTermType === "uri" ? object.type === "uri" :
+             selectedRecordTermType === "literal" ? object.type === "literal" &&
+               (object["xml:lang"] ?? "").toLowerCase() === (selectedRecordLanguage ?? "").toLowerCase() &&
+               (!selectedRecordDatatype || !object.datatype || object.datatype === selectedRecordDatatype) :
+             object.type === "bnode");
+          const direction: "property" | "property-of" | null = selectedRecordTermType === "uri" && subject.value === selectedUri
+            ? "property" : matchesRecordObject ? "property-of" : null;
           if (direction) rows.push({ property: predicate.value,
             value: direction === "property" ? objectValue : subject.value, direction,
             termType: direction === "property" ? objectType : "uri",
@@ -5556,7 +5504,7 @@ setGraphFacets(graphs);
             // Use only the explicit join target, never the Record's own label.
             const labelUri = binding.labelResource.value;
             const expectedUri = subject.value === selectedUri && objectType === "uri"
-              ? object.value : object.value === selectedUri ? subject.value : "";
+              ? object.value : matchesRecordObject ? subject.value : "";
             const preferred = preferredLabels.get(labelUri);
             if (labelUri === expectedUri && preferred && /^https?:\/\//i.test(labelUri)) {
               cachedLabels.set(`${queryAddrForLabels}\u0000${labelUri}`, preferred.text);
@@ -5580,7 +5528,7 @@ setGraphFacets(graphs);
         {
           const fctNs = "http://openlinksw.com/services/facets/1.0/";
           const triplesXml = snapshotTerms
-            .filter((triple) => triple.subject === selectedUri || triple.object === selectedUri)
+            .filter((triple) => selectedRecordTermType === "uri" ? triple.subject === selectedUri || triple.object === selectedUri : triple.object === selectedUri)
             .map((triple) => {
               const attrs = ` termType="${escapeXmlText(triple.objectType)}"${triple.datatype ? ` datatype="${escapeXmlText(triple.datatype)}"` : ""}${triple.lang ? ` xml:lang="${escapeXmlText(triple.lang)}"` : ""}`;
               return `<fct:row><fct:column termType="uri">${escapeXmlText(triple.subject)}</fct:column><fct:column termType="uri">${escapeXmlText(triple.predicate)}</fct:column><fct:column${attrs}>${escapeXmlText(triple.object)}</fct:column></fct:row>`;
@@ -5608,7 +5556,7 @@ setGraphFacets(graphs);
     }
     void loadDescription();
     return () => { cancelled = true; controller.abort(); };
-  }, [selectedUri, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, queryRefreshRevision]);
+  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, queryRefreshRevision]);
 
   // The separate Record graph dropdown loader already knows which named graphs
   // contain this resource. Reuse that list for a single background label query;
@@ -5616,7 +5564,7 @@ setGraphFacets(graphs);
   useEffect(() => {
     if (!selectedUri || describedRecordUri !== selectedUri || isDescribing ||
         !recordGraphs.length || !describedRecord.length || !selectedEndpointId) return;
-    const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`;
+    const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`;
     const labelCache = recordUriLabelCacheRef.current;
     const valueUris = [...new Set(describedRecord
       .filter((row) => /^https?:\/\//i.test(row.value))
@@ -5690,7 +5638,7 @@ setGraphFacets(graphs);
   useEffect(() => {
     const root = formattedRecordContainerRef.current;
     if (!root || !formattedRecordHtml) return;
-    const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`;
+    const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`;
     for (const element of Array.from(root.querySelectorAll<HTMLElement>("[data-maestro-record-uri]"))) {
       const uri = element.getAttribute("data-maestro-record-uri") ?? "";
       const label = recordUriLabelCacheRef.current.get(`${addr}\u0000${uri}`);
@@ -6379,7 +6327,7 @@ setGraphFacets(graphs);
       const uriTargets = Array.from(document.body.querySelectorAll<HTMLElement>("[data-maestro-record-uri]"));
       // URI labels are already returned in the Record SELECT response and cached
       // before formatting; no follow-up FCT DESCRIBE requests are required.
-      const queryAddrForLabels = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}` : "");
+      const queryAddrForLabels = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}` : "");
       const cachedLabels = recordUriLabelCacheRef.current;
       for (const target of uriTargets) {
         const uri = target.getAttribute("data-maestro-record-uri") ?? "";
@@ -6597,7 +6545,7 @@ setGraphFacets(graphs);
         const graph = addressDelimiter >= 0
           ? existingAddress.slice(0, addressDelimiter).trim()
           : (savedQueryRoot.getAttribute("graph")?.trim() ?? "");
-        savedQueryRoot.setAttribute("addr", `${graph}@${savedEndpoint.id}`);
+        savedQueryRoot.setAttribute("addr", `${graph}@${savedEndpoint.url}`);
         savedQueryRoot.removeAttribute("graph");
         //if (savedEndpoint.id !== selectedEndpointId) await synchronizeFctEndpointSelection(savedEndpoint.id);
 		
@@ -6900,6 +6848,102 @@ setGraphFacets(graphs);
     });
   }, [recordFormatPreferenceLoaded, recordFormatEnabled, recordPolicy?.uri, selectedRecordTemplateUri, selectedUri, isDescribing, isLoadingRecordPolicy, recordPolicyCheckedUri, currentFormattedRecordHtml, recordDescriptionSnapshot, currentRecordDescriptionKey, describedRecordUri]);
 
+  // Read service metadata from the SHACL policy graph. The formatter never
+  // contains a list of APIs, and there are no service-specific branches here.
+  useEffect(() => {
+    const key = `${selectedUri}\u0000${currentRecordDescriptionKey}\u0000${selectedRecordTemplateUri}`;
+    activeServiceRecordRef.current = key;
+    setRecordServices([]);
+    setRecordServiceTab("");
+    setRecordServiceArguments({});
+    setRecordServiceResults({});
+    if (!authSession || !selectedUri || describedRecordUri !== selectedUri || isDescribing ||
+        !selectedRecordTemplateUri.includes("DbpediaBookRecordTemplate") ||
+        recordDescriptionSnapshot?.key !== currentRecordDescriptionKey) return;
+    const recordTypes = Array.from(new Set(describedRecord.filter((item) =>
+      item.direction === "property" && item.property === "http://www.w3.org/1999/02/22-rdf-syntax-ns#type" &&
+      /^https?:\/\//i.test(item.value)).map((item) => item.value)));
+    // A class constrained by the authoritative query remains valid scope
+    // context if the Record SELECT was partial and omitted its rdf:type row.
+    const scopeTypes = getClassesAtNode(getPropertyPath().at(-1)?.id ?? null);
+    const types = Array.from(new Set([...recordTypes, ...scopeTypes]));
+    if (!types.length) return;
+    const controller = new AbortController();
+    void maestroQueryFetch("/proxy/api/services", {
+      method: "POST", cache: "no-store",
+      headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-service-discover", "RecordServices") },
+      body: JSON.stringify({ action: "discover", recordTypes: types }),
+      signal: controller.signal,
+    }).then(async (response) => {
+      const payload = await response.json() as { services?: RecordService[]; error?: string };
+      if (!response.ok) throw new Error(payload.error || `Service discovery failed (${response.status}).`);
+      if (!controller.signal.aborted && activeServiceRecordRef.current === key) setRecordServices(payload.services ?? []);
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) console.warn("Record service discovery unavailable:", error);
+    });
+    return () => controller.abort();
+  }, [selectedUri, currentRecordDescriptionKey, selectedRecordTemplateUri, describedRecordUri, isDescribing, authSession, recordDescriptionSnapshot?.key]);
+
+  // The Book stylesheet owns this insertion point. Portals preserve the
+  // standard React event model and do not overwrite XSLT-produced properties.
+  useEffect(() => {
+    const root = formattedRecordContainerRef.current;
+    const tabs = root?.querySelector<HTMLElement>("#book-service-tablist");
+    const host = root?.querySelector<HTMLElement>("#book-services-host");
+    if (!root || !tabs || !host || !currentFormattedRecordHtml) { setRecordServiceDom(null); return; }
+    setRecordServiceDom((previous) => previous?.tabs === tabs && previous?.host === host ? previous : {tabs,host});
+    const props = root.querySelector<HTMLElement>("#book-properties-panel");
+    const propsButton = root.querySelector<HTMLButtonElement>("#book-properties-tab");
+    if (props) props.hidden = Boolean(recordServiceTab);
+    if (propsButton) {
+      propsButton.setAttribute("aria-selected", String(!recordServiceTab));
+      propsButton.classList.toggle("bg-accent", !recordServiceTab);
+      propsButton.onclick = () => setRecordServiceTab("");
+    }
+    return () => { if (propsButton) propsButton.onclick = null; };
+  }, [currentFormattedRecordHtml, recordServiceTab]);
+
+  async function invokeRecordService(service: RecordService, operation: RecordService["operations"][number]) {
+    const snapshot = recordDescriptionSnapshot;
+    if (!snapshot || snapshot.uri !== selectedUri || snapshot.key !== currentRecordDescriptionKey ||
+        describedRecordUri !== selectedUri) return;
+    const key = `${selectedUri}\u0000${currentRecordDescriptionKey}\u0000${selectedRecordTemplateUri}`;
+    const argumentsForService = recordServiceArguments[service.uri] ?? {};
+    if (operation.requires.some((name) => !argumentsForService[name])) return;
+    setRecordServiceResults((previous) => ({...previous,[service.uri]:{html:"",error:"",loading:true,name:operation.label}}));
+    try {
+      const response = await maestroQueryFetch("/proxy/api/services", {
+        method: "POST", cache: "no-store",
+        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-service-execute", "RecordServiceInvocation") },
+        body: JSON.stringify({action:"invoke", service:service.uri, operation:operation.uri,
+          recordUri:selectedUri, queryXml, fctXml:snapshot.xml, arguments:argumentsForService}),
+      });
+      const result = await response.json() as {html?:string; values?:Record<string,string>; error?:string};
+      if (!response.ok) throw new Error(result.error || `Service failed (${response.status}).`);
+      if (activeServiceRecordRef.current !== key) return;
+      if (result.values) setRecordServiceArguments((previous) => ({...previous,
+        [service.uri]:{...previous[service.uri],...result.values}}));
+      // Sanitize graph-authored response HTML before it reaches React's
+      // dangerouslySetInnerHTML: no script, embedded resources, handlers or URLs.
+      const doc = new DOMParser().parseFromString(result.html ?? "", "text/html");
+      const allowed = new Set(["SECTION","DIV","SPAN","P","H3","H4","TABLE","THEAD","TBODY","TR","TH","TD","UL","LI","OL","DETAILS","SUMMARY","STRONG","EM","PRE","CODE","BR"]);
+      const clean = (node: Node): void => {
+        for (const child of Array.from(node.childNodes)) {
+          if (child.nodeType !== Node.ELEMENT_NODE) continue;
+          const element = child as HTMLElement;
+          if (!allowed.has(element.tagName)) { element.replaceWith(...Array.from(element.childNodes).filter((item) => item.nodeType === Node.TEXT_NODE)); continue; }
+          for (const attr of Array.from(element.attributes)) if (attr.name !== "class") element.removeAttribute(attr.name);
+          clean(element);
+        }
+      };
+      clean(doc.body);
+      setRecordServiceResults((previous) => ({...previous,[service.uri]:{html:doc.body.innerHTML,error:"",loading:false,name:operation.label}}));
+    } catch (error) {
+      if (activeServiceRecordRef.current === key) setRecordServiceResults((previous) => ({...previous,
+        [service.uri]:{html:"",error:error instanceof Error?error.message:"Service failed.",loading:false,name:operation.label}}));
+    }
+  }
+
   // Template actions are parsed as a restricted API-call grammar, then dispatched through Maestro's existing query-update API.
   useEffect(() => {
     const root = formattedRecordContainerRef.current;
@@ -6953,7 +6997,7 @@ setGraphFacets(graphs);
 
       const candidates = describedRecord.filter((row) => row.termType !== "bnode" &&
         (row.direction === "property" || row.direction === "property-of"));
-      const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`;
+      const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`;
       const matchesFor = (text: string, explicitUri: string) => candidates.filter((row) => {
         if (explicitUri) return row.termType === "uri" && row.value === explicitUri;
         if (normalize(row.value) === text) return true;
@@ -7773,14 +7817,24 @@ useEffect(() => {
     setGraphText(queryTree.attributes.graph ?? "");
   }, [queryTree.attributes.graph]);
 
-  // Keep the serialized query address synchronized with the selected graph
-  // server and graph. The proxy treats this address as authoritative.
+  // `addr` is graphURI@graphserverURI. Only the user's graph-server
+  // selection may change the latter. A first-use default or old ID is
+  // normalized once when the login-time endpoint registry is available.
   useEffect(() => {
-    if (!selectedEndpointId) return;
+    const endpoint = fctEndpoints.find((item) => item.id === selectedEndpointId);
+    if (!endpoint) return;
+    const address = queryTree.attributes.addr ?? "";
+    const separator = address.indexOf("@");
+    // A missing graph attribute means no graph binding. Never recover an old
+    // graphsite from addr after the user has explicitly cleared the field.
     const graph = queryTree.attributes.graph?.trim() ?? "";
-    const addr = `${graph}@${selectedEndpointId}`;
-    if (queryTree.attributes.addr !== addr) setQueryAttribute("addr", addr);
-  }, [selectedEndpointId, queryTree.attributes.addr, queryTree.attributes.graph]);
+    const server = separator >= 0 ? address.slice(separator + 1) : "";
+    const resolved = fctEndpoints.find((item) => item.url === server);
+    // Never rewrite a saved URI that points to a different graph server.
+    if (server && !resolved && server !== endpoint.id) return;
+    const normalized = `${graph}@${resolved?.url ?? endpoint.url}`;
+    if (address !== normalized) setQueryAttribute("addr", normalized);
+  }, [selectedEndpointId, fctEndpoints, queryTree.attributes.addr, queryTree.attributes.graph]);
 
   function bindGraph(uri: string) {
     setGraphText(uri);
@@ -7936,10 +7990,10 @@ useEffect(() => {
       // query store through its API, notifying the query tree, breadcrumbs,
       // facets, results, and URL-state listeners together.
       // Health-checks the personal server, selects it, and throws if it is offline.
-      await synchronizeFctEndpointSelection(personalEndpoint.id);
+      await synchronizeFctEndpointSelection(personalEndpoint.url);
       const baseHistoryGraph = payload.historyGraph.replace(/#.*$/, "");
       const graphIri = `${baseHistoryGraph}#${includeFavorites ? "bookmarks" : "history"}`;
-      const addrAttr = `${graphIri}@${personalEndpoint.id}`;
+      const addrAttr = `${graphIri}@${personalEndpoint.url}`;
       const classIri = includeFavorites
         ? "http://www.w3.org/2002/01/bookmark#Bookmark"
         : "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#QueryHistoryVisit";
@@ -8800,8 +8854,8 @@ useEffect(() => {
         }
       >
         {personalWidgets.map((widget) => {
-          const isGroupByFacet = groupedPersonalFacetUri === widget.uri;
-          const canGroupByFacet = groupByOptions.some((option) => option.key === `forward:${widget.uri}`);
+          const isGroupByFacet = workspaceTab === "browse" && groupedPersonalFacetUri === widget.uri;
+          const canGroupByFacet = workspaceTab === "browse" && groupByOptions.some((option) => option.key === `forward:${widget.uri}`);
           return (
           <article
             key={widget.uri}
@@ -8842,7 +8896,7 @@ useEffect(() => {
                       countQuery={widget.values[0] ? buildFctCountSparql(createDistinctCountQuery(queryTree, "value", widget.values[0].uri, widget.uri, widget.values[0])) : undefined}
                       countFilename={`facet-${toLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}-first-item-count.xml`}
                     />
-                    {!widget.excluded && (
+                    {workspaceTab === "browse" && !widget.excluded && (
                       <Tooltip><TooltipTrigger render={<button
                         type="button"
                         disabled={!canGroupByFacet}
@@ -9247,6 +9301,696 @@ useEffect(() => {
                   </ButtonGroup>
   );
 
+  // Analyze Table projects the immediate successors of the live focus, not
+  // the focus's siblings. The first column is always the current focus's
+  // result set; each direct relationship child becomes another column.
+  const tableSlot = activePropertyPath[activePropertyPath.length - 1];
+  // Keep Analyze's path identical to Browse, including retained muted ghost suffixes.
+  const analyzeBreadcrumbTrail = tutorialBreadcrumbPath;
+  const tableFocusNode = tableSlot ? findQueryNode(queryTree.children, tableSlot.id) : queryTree;
+  const analyzeTableHeaderNodes = (tableFocusNode?.children ?? [])
+    .filter((node) => (node.name === "property" || node.name === "property-of") && Boolean(node.attributes.iri))
+    .map((node) => ({
+      id: node.id,
+      uri: node.attributes.iri || "",
+      name: node.name,
+    }));
+  const analyzeTableHeadersKey = [tableSlot?.id ?? "query-root", ...analyzeTableHeaderNodes.map((node) => `${node.id}:${node.name}:${node.uri}`)].join("\u0000");
+  // Compare Table retains its facet picker and independent value projection.
+  // The regular Table only asks for the relationships represented by its headers.
+  // Compare can select only relationships explicitly present at this focus
+  // in the live <query>, not all discoverable Properties/Roles facets.
+  const compareFacetCandidates = Array.from(new Map(analyzeTableHeaderNodes.map((node) => {
+    const key = `${node.name === "property-of" ? "reverse" : "forward"}|${node.uri}`;
+    return [key, { key, label: `${toLabel(node.uri, "Property")}${node.name === "property-of" ? " of" : ""}` }];
+  })).values());
+  const availableCompareFacets = compareFacetCandidates;
+  const analyzeFacets = selectedAnalysisUri.includes("compare-table")
+    ? availableCompareFacets
+    : Array.from(new Map(analyzeTableHeaderNodes.map((node) => {
+        const key = `${node.name === "property-of" ? "reverse" : "forward"}|${node.uri}`;
+        return [key, {key, label: toLabel(node.uri, "Property") + (node.name === "property-of" ? " of" : "")}];
+      })).values());
+  const analysisFacetKey = analyzeFacets.map((item) => item.key).join("\u0000");
+  const analysisResources = visibleResultsPage.filter((item) => item.termType !== "bnode").map((item) => ({
+    value: item.uri, type: item.termType ?? "uri",
+    ...(item.datatype && item.datatype !== "string" && item.termType !== "uri" ? { datatype: item.datatype } : {}),
+    ...(item.lang ? { lang: item.lang } : {}),
+  }));
+  const analysisResourceKey = JSON.stringify(analysisResources);
+  const analysisRequestKey = JSON.stringify([selectedEndpointId, queryXml, analysisFacetKey, analysisResourceKey]);
+  const readyAnalysisValues = analysisValuesState?.requestKey === analysisRequestKey ? analysisValuesState.byUri : null;
+  const effectiveCompareFacet = availableCompareFacets.some((facet) => facet.key === compareFacet)
+    ? compareFacet : availableCompareFacets[0]?.key ?? "";
+  const analysisPageKey = JSON.stringify(visibleResultsPage.map((item) => [item.uri, item.title, item.scopeValues]));
+  // Column edits do not change the identity of the page's result rows. Keep the
+  // XSLT-created table mounted and reconcile its children by their query node IDs.
+  const analysisBaseKey = JSON.stringify([selectedEndpointId, selectedAnalysisUri, tableSlot?.id ?? "query-root",
+    resultsUiPage, resultsPageSize, visibleResultsPage.map((item) => [item.uri, item.title, item.termType]),
+    selectedAnalysisUri.includes("compare-table") ? effectiveCompareFacet : ""]);
+  const analysisSelectionPageKey = JSON.stringify([queryXml, resultsUiPage, resultsPageSize, visibleResultsPage.map((item) => [item.uri, item.termType, item.datatype, item.lang])]);
+  const analysisSelectedKeys = analysisSelection.pageKey === analysisSelectionPageKey ? analysisSelection.keys : [];
+  const analysisRowKeys = visibleResultsPage.map((item, index) => `${index}:${item.uri}:${item.termType ?? "uri"}`);
+  const analysisAllSelected = analysisRowKeys.length > 0 && analysisRowKeys.every((key) => analysisSelectedKeys.includes(key));
+  // Discover View policies for class bindings at the active FCT focus.
+  // No built-in class names or endpoint-registry membership are assumed.
+  const viewScopeNodes = [queryTree, ...activePropertyPath.map((crumb) => findQueryNode(queryTree.children, crumb.id)).filter((node): node is FctQueryNode => Boolean(node))];
+  const viewScopeClasses = Array.from(new Set(viewScopeNodes.flatMap((node) => node.children
+    .filter((child) => child.name === "class")
+    .map((child) => child.attributes.iri ?? "")
+    .filter(Boolean))));
+  const viewClassKey = JSON.stringify(viewScopeClasses);
+  type DiscoveredView = { uri: string; label: string; icon?: string; template: string; matchedClass: string; stylesheet: string };
+  const [discoveredViews, setDiscoveredViews] = useState<DiscoveredView[]>([]);
+  const [selectedViewUri, setSelectedViewUri] = useState("");
+  const [viewDiscoveryLoading, setViewDiscoveryLoading] = useState(false);
+  const [viewDiscoveryError, setViewDiscoveryError] = useState("");
+  const [viewHtml, setViewHtml] = useState("");
+  const [viewXsltMetadata, setViewXsltMetadata] = useState<{ title?: string; icon?: string }>({});
+  const [viewDomainRanks, setViewDomainRanks] = useState<Record<string, string>>({});
+  const [viewRenderError, setViewRenderError] = useState("");
+  useEffect(() => {
+    if (workspaceTab !== "view") return;
+    const classes = JSON.parse(viewClassKey) as string[];
+    const controller = new AbortController();
+    setDiscoveredViews([]);
+    setViewDiscoveryError("");
+    if (!classes.length) { setViewDiscoveryLoading(false); return; }
+    setViewDiscoveryLoading(true);
+    // Discovery is read-only. Do not leave View waiting indefinitely when a
+    // personal SPARQL server is slow or a proxy request stalls.
+    const timeout = setTimeout(() => {
+      controller.abort();
+      setViewDiscoveryLoading(false);
+      setViewDiscoveryError("Locating views timed out. Check the personal SPARQL server and try again.");
+    }, 15000);
+    void (async () => {
+      try {
+        const response = await fetch("/proxy/api/views", { method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ classes }) });
+        const payload = await response.json() as { views?: DiscoveredView[]; error?: string };
+        if (!response.ok) throw new Error(payload.error || "Could not discover Views.");
+        if (!controller.signal.aborted) {
+          const views = payload.views ?? [];
+          setDiscoveredViews(views);
+          setSelectedViewUri((current) => views.some((view) => view.uri === current) ? current : (views[0]?.uri ?? ""));
+        }
+      } catch (error) {
+        if (controller.signal.aborted) {
+          // Ignore stale requests after changing scope or leaving the View tab.
+          // For the active request, the timeout callback below sets the error.
+        } else {
+          setViewDiscoveryError(error instanceof Error ? error.message : "Could not locate views.");
+        }
+      } finally {
+        clearTimeout(timeout);
+        if (!controller.signal.aborted) setViewDiscoveryLoading(false);
+      }
+    })();
+    return () => { clearTimeout(timeout); controller.abort(); };
+  }, [workspaceTab, viewClassKey]);
+  const selectedView = discoveredViews.find((view) => view.uri === selectedViewUri);
+  // Registry keys are internal slugs, while FCT results contain RDF resource IRIs.
+  // Join on endpoint URL first; also accept the registry's display label for
+  // entries whose RDF subject is not their HTTP endpoint URL (e.g. personal).
+  const endpointForViewResult = (uri: string, label: string): EndpointOption | undefined => {
+    const normalized = (value: string) => value.trim().replace(/\/+$/, "").toLowerCase();
+    const exact = fctEndpoints.find((endpoint) => normalized(endpoint.url) === normalized(uri) || endpoint.id === uri);
+    if (exact) return exact;
+    const labelMatches = fctEndpoints.filter((endpoint) => normalized(endpoint.label) === normalized(label));
+    if (labelMatches.length === 1) return labelMatches[0];
+    // Graph-server resources sometimes use the site origin instead of /sparql.
+    try {
+      const candidate = new URL(uri);
+      const hostMatches = fctEndpoints.filter((endpoint) => {
+        try { return new URL(endpoint.url).host === candidate.host; } catch { return false; }
+      });
+      if (hostMatches.length === 1) return hostMatches[0];
+    } catch { /* RDF identifiers need not be HTTP URLs. */ }
+    return undefined;
+  };
+  const [viewServerSoftware, setViewServerSoftware] = useState<Record<string, { product: string; version: string }>>({});
+  const viewSoftwareIds = Array.from(new Set(visibleResultsPage.map((result) => endpointForViewResult(result.uri, result.title)?.id).filter((id): id is string => Boolean(id))));
+  const viewSoftwareKey = JSON.stringify(viewSoftwareIds);
+  useEffect(() => {
+    if (workspaceTab !== "view" || !selectedView) return;
+    const controller = new AbortController();
+    for (const id of JSON.parse(viewSoftwareKey) as string[]) {
+      if (viewServerSoftware[id]) continue;
+      void (async () => {
+        try {
+          const response = await fetch(`/proxy/api/server-software?endpointId=${encodeURIComponent(id)}`, { signal: controller.signal });
+          if (!response.ok) return;
+          const data = await response.json() as { product?: string; version?: string };
+          if (!controller.signal.aborted) setViewServerSoftware((current) => ({ ...current, [id]: { product: data.product || "Unknown", version: data.version || "" } }));
+        } catch { /* Product detection is optional and must never gate the View. */ }
+      })();
+    }
+    return () => controller.abort();
+  }, [workspaceTab, selectedView?.uri, viewSoftwareKey, viewServerSoftware]);
+  const [viewServerDescriptions, setViewServerDescriptions] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (workspaceTab !== "view" || !selectedView) return;
+    const controller = new AbortController();
+    for (const id of JSON.parse(viewSoftwareKey) as string[]) {
+      if (Object.prototype.hasOwnProperty.call(viewServerDescriptions, id)) continue;
+      void (async () => {
+        try {
+          const response = await fetch(`/proxy/api/server-description?endpointId=${encodeURIComponent(id)}`, { signal: controller.signal });
+          if (!response.ok) return;
+          const data = await response.json() as { description?: string };
+          if (!controller.signal.aborted) setViewServerDescriptions((current) => ({ ...current, [id]: data.description ?? "" }));
+        } catch { /* Optional descriptions must not block View rendering. */ }
+      })();
+    }
+    return () => controller.abort();
+  }, [workspaceTab, selectedView?.uri, viewSoftwareKey, viewServerDescriptions]);
+  const viewResultDomains = Array.from(new Set(visibleResultsPage.map((result) => {
+    const endpoint = endpointForViewResult(result.uri, result.title);
+    try { return new URL(endpoint?.url ?? result.uri).hostname.replace(/^www\./i, "").toLowerCase(); }
+    catch { return ""; }
+  }).filter(Boolean)));
+  const viewDomainKey = JSON.stringify(viewResultDomains);
+  useEffect(() => {
+    if (workspaceTab !== "view" || !selectedView) return;
+    const domains = JSON.parse(viewDomainKey) as string[];
+    const controller = new AbortController();
+    // The server-side proxy caches rankings. Unknown domains are shown as unranked.
+    void Promise.all(domains.slice(0, 30).map(async (domain) => {
+      try {
+        const response = await fetch(`/proxy/api/site-rank?domain=${encodeURIComponent(domain)}`, { signal: controller.signal });
+        if (!response.ok) return;
+        const data = await response.json() as { rank?: number | null };
+        if (!controller.signal.aborted) setViewDomainRanks((prev) => ({ ...prev, [domain]: data.rank ? `#${data.rank.toLocaleString()}` : "Unranked" }));
+      } catch { /* Optional ranking must never block the View. */ }
+    }));
+    return () => controller.abort();
+  }, [workspaceTab, selectedView?.uri, viewDomainKey]);
+  const viewPageKey = JSON.stringify(visibleResultsPage.map((item) => [item.uri, item.title]));
+  useEffect(() => {
+    if (workspaceTab !== "view" || !selectedView) { setViewHtml(""); setViewRenderError(""); return; }
+    try {
+      const rows = (JSON.parse(viewPageKey) as [string,string][]).map(([uri,label]) => {
+        const endpoint = endpointForViewResult(uri, label);
+        const endpointUrl = endpoint?.url ?? uri;
+        let domain = "";
+        let favicon = "";
+        try {
+          const url = new URL(endpointUrl);
+          domain = url.hostname.replace(/^www\./i, "").toLowerCase();
+          if (["https:", "http:"].includes(url.protocol)) favicon = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(url.hostname)}&sz=64`;
+        } catch { /* A non-HTTP resource URI has no web favicon. */ }
+        const health = endpoint ? endpointStatuses[endpoint.id] : undefined;
+        const software = endpoint ? viewServerSoftware[endpoint.id] : undefined;
+        const healthText = checkingEndpointIds[endpoint?.id ?? ""] ? "Checking…" : health?.status !== null && health?.status !== undefined ? `HTTP ${health.status}` : health ? health.state : "Not yet pinged";
+        const healthColor = !health ? "unknown" : health.status === 200 ? "green" : health.status !== null && health.status >= 500 ? "red" : "amber";
+        return { uri, label, endpoint: endpointUrl, endpointId: endpoint?.id ?? "", group: endpoint?.group ?? "",
+          favicon, rank: domain ? (viewDomainRanks[domain] ?? "Checking…") : "Unranked",
+          health: healthText, healthState: healthColor, pinging: Boolean(endpoint && checkingEndpointIds[endpoint.id]), product: software?.product ?? "Unknown", version: software?.version ?? "",
+          description: endpoint ? (viewServerDescriptions[endpoint.id] ?? "") : "" };
+      });
+      const html = renderDiscoveredViewXslt(selectedView.stylesheet, rows);
+      const parsed = new DOMParser().parseFromString(html, "text/html");
+      const meta = parsed.querySelector("section[data-view-title], section[data-view-icon]");
+      const icon = meta?.getAttribute("data-view-icon") ?? undefined;
+      setViewXsltMetadata({ title: meta?.getAttribute("data-view-title") ?? undefined, icon });
+      setViewHtml(html);
+      setViewRenderError("");
+    } catch (error) { setViewHtml(""); setViewRenderError(error instanceof Error ? error.message : "View translation failed."); }
+  }, [workspaceTab, selectedView?.uri, selectedView?.stylesheet, viewPageKey, endpointStatuses, fctEndpoints, viewDomainRanks, viewServerSoftware, viewServerDescriptions, checkingEndpointIds]);
+  const isCompareAnalysis = selectedAnalysisUri.includes("compare-table");
+  const histogramColumns = isCompareAnalysis && analysisTable ? analysisTable.columns.slice(1).map((column, index) => ({
+    label: /^[a-z][a-z0-9+.-]*:/i.test(column.label) ? toLabel(column.label, "OBJECT") : column.label,
+    count: analysisTable.rows.reduce((sum, row) => sum + (row.cells[index]?.checked ? 1 : 0), 0),
+  })) : [];
+
+  function toggleAnalysisRow(key: string, checked: boolean) {
+    setAnalysisSelection((current) => {
+      const keys = current.pageKey === analysisSelectionPageKey ? current.keys : [];
+      return { pageKey: analysisSelectionPageKey, keys: checked ? Array.from(new Set([...keys, key])) : keys.filter((existing) => existing !== key) };
+    });
+  }
+
+  // Fetch per-record values through the existing FCT list-values extension.
+  // This is a separate Analyze projection, never a change to the live <query>
+  // and never gated by the Results badges setting.
+  useEffect(() => {
+    if (workspaceTab !== "analyze" || !endpointReadyForQuery || !analysisResourceKey || !analysisFacetKey) return;
+    const controller = new AbortController();
+    setAnalysisValuesError("");
+    void (async () => {
+      try {
+        const columns: ListValueProjection[] = analysisFacetKey.split("\u0000").map((key) => {
+          const separator = key.indexOf("|");
+          return {
+            direction: key.slice(0, separator) === "reverse" ? "reverse" as const : "forward" as const,
+            property: key.slice(separator + 1),
+          };
+        });
+        const projectionQueryXml = listValuesQueryClone(queryXml, columns);
+        // Virtuoso's list-values extension accepts at most 100 RDF terms per
+        // request. Analyze pages may contain more; preserve the page selection
+        // while projecting its terms through bounded, deduplicated requests.
+        const uniqueResources = Array.from(new Map(analysisResources.map((term) => [
+          JSON.stringify([term.value, term.type, term.datatype ?? "", term.lang ?? ""]), term,
+        ])).values());
+        const byUri = new Map<string, ScopeValue[]>();
+        const maxResourcesPerRequest = 100;
+        for (let start = 0; start < uniqueResources.length; start += maxResourcesPerRequest) {
+          if (controller.signal.aborted) return;
+          const resources = uniqueResources.slice(start, start + maxResourcesPerRequest);
+          const response = await cachedFetchFct("/proxy/api/fct", {
+            method: "POST", cache: "no-store", signal: controller.signal,
+            headers: {"Content-Type": "application/json", ...proxyDebugHeaders("analyze-values", `AnalyzeListValues:${proxyDebugFingerprint(analysisRequestKey)}:${start / maxResourcesPerRequest + 1}`)},
+            body: JSON.stringify({queryXml: projectionQueryXml, resources}),
+          });
+          const xml = await response.text();
+          if (!response.ok) throw new Error(`Analyze list-values batch ${start / maxResourcesPerRequest + 1} returned HTTP ${response.status}: ${xml.slice(0, 300)}`);
+          for (const [uri, values] of parseListValuesXml(xml)) byUri.set(uri, values);
+        }
+        if (!controller.signal.aborted) setAnalysisValuesState({requestKey: analysisRequestKey, byUri});
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setAnalysisValuesError(error instanceof Error ? error.message : "Could not load Analyze facet values.");
+          console.warn("Analyze facet values failed:", error);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [workspaceTab, endpointReadyForQuery, analysisRequestKey, analysisFacetKey, analysisResourceKey, queryXml]);
+
+  useEffect(() => {
+    if (workspaceTab !== "analyze") return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/proxy/api/analyze", {cache:"no-store",signal:controller.signal});
+        const payload = await response.json() as {analyses?: AnalysisDefinition[]; error?:string};
+        if (!response.ok) throw new Error(payload.error || "Could not discover Analyze policies.");
+        if (!controller.signal.aborted) {
+          const definitions = payload.analyses ?? [];
+          setAnalysisDefinitions(definitions);
+          setSelectedAnalysisUri((current) => definitions.some((item) => item.uri === current) ? current : (definitions[0]?.uri ?? ""));
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) setAnalysisError(error instanceof Error ? error.message : "Analysis discovery failed.");
+      }
+    })();
+    return () => controller.abort();
+  }, [workspaceTab]);
+
+  useEffect(() => {
+    if (workspaceTab !== "analyze") return;
+    const definition = analysisDefinitions.find((item) => item.uri === selectedAnalysisUri);
+    if (!definition) { setAnalysisTable(null); analysisRenderedBaseRef.current = ""; return; }
+    // Structural edits to the live focus's immediate children only add/remove
+    // a column. Reuse all existing result rows, cells, DOM and handlers.
+    if (!selectedAnalysisUri.includes("compare-table") && analysisRenderedBaseRef.current === analysisBaseKey) {
+      setAnalysisTable((previous) => {
+        if (!previous) return previous;
+        const existing = new Map(previous.columns.filter((column) => column.kind === "breadcrumb").map((column) => [column.nodeId, column]));
+        const resultColumn = previous.columns.find((column) => column.kind === "result") ?? {
+          kind: "result", nodeId: "", label: "Results", breadcrumbStyle: {}, headerStyle: {},
+        };
+        // New headers inherit XSLT presentation-only styles from an existing
+        // breadcrumb column. The interaction comes from the shared renderer.
+        const stylesheetColumn = previous.columns.find((column) => column.kind === "breadcrumb");
+        const columns = [resultColumn, ...analyzeTableHeaderNodes.map((node) => existing.get(node.id) ?? {
+          kind: "breadcrumb", nodeId: node.id, label: toLabel(node.uri, "Property"),
+          breadcrumbStyle: stylesheetColumn?.breadcrumbStyle ?? {},
+          headerStyle: stylesheetColumn?.headerStyle ?? {},
+        })];
+        if (columns.length === previous.columns.length && columns.every((column, index) => column === previous.columns[index])) return previous;
+        const oldCellByNode = new Map(previous.columns.slice(1).map((column, index) => [column.nodeId, index]));
+        return { ...previous, columns, rows: previous.rows.map((row) => ({
+          ...row,
+          cells: columns.slice(1).map((column) => {
+            const index = oldCellByNode.get(column.nodeId);
+            return index === undefined
+              ? { checked: false, badgeStyle: row.cells[0]?.badgeStyle ?? {}, cellStyle: row.cells[0]?.cellStyle ?? {}, values: [] }
+              : row.cells[index];
+          }),
+        })) };
+      });
+      return;
+    }
+    const controller = new AbortController();
+    // Keep the previous table visible while a genuinely new page/focus loads.
+    setAnalysisLoading(true);
+    setAnalysisError("");
+    void (async () => {
+      try {
+        const ns = "gttp://ggg.maestro.ecosys/ns/xslt/context#";
+        const doc = document.implementation.createDocument(ns, "mctx:context", null);
+        const root = doc.documentElement;
+        const add = (parent: Element, name: string) => {
+          const element = doc.createElementNS(ns, `mctx:${name}`);
+          parent.appendChild(element);
+          return element;
+        };
+        const liveQuery = add(root,"live-query");
+        const query = new DOMParser().parseFromString(queryXml, "application/xml");
+        if (query.getElementsByTagName("parsererror").length) throw new Error("The FCT query is not well-formed XML.");
+        liveQuery.appendChild(doc.importNode(query.documentElement, true));
+        const breadcrumbRoot = add(root,"breadcrumbs");
+        // The Table XSLT receives only immediate child relationship references.
+        // The first (focus/result) header is rendered separately by Maestro.
+        // Each child ID resolves to the existing live breadcrumb renderer.
+        analyzeTableHeaderNodes.forEach((crumb) => {
+          const node = add(breadcrumbRoot,"breadcrumb");
+          node.setAttribute("id",crumb.id);
+          node.setAttribute("iri",crumb.uri);
+          node.setAttribute("direction",crumb.name === "property-of" ? "reverse" : "forward");
+          node.setAttribute("label",toLabel(crumb.uri, "Property"));
+        });
+        // No generic facet columns in Table: only direct children of the
+        // live focus. Keep the element for backwards compatibility with XSLT.
+        add(root,"extra-facets");
+        const selection = add(root,"selection");
+        const [direction,facet] = effectiveCompareFacet.split("|",2);
+        selection.setAttribute("direction",direction || "forward");
+        selection.setAttribute("facet",facet || "");
+        const resultRoot = add(root,"results");
+        visibleResultsPage.forEach((result) => {
+          const resultElement = add(resultRoot,"result");
+          resultElement.setAttribute("uri",result.uri);
+          resultElement.setAttribute("label",result.title || result.uri);
+          // The independent Analyze projection supplies values even if Results
+          // badges are disabled. Keep already-known badge values as a fallback.
+          const byFacet = new Map<string, ScopeValue>();
+          for (const scope of result.scopeValues ?? []) byFacet.set(`${scope.direction}|${scope.property}`, scope);
+          for (const scope of readyAnalysisValues?.get(result.uri) ?? []) byFacet.set(`${scope.direction}|${scope.property}`, scope);
+          Array.from(byFacet.values()).forEach((scope) => scope.values.forEach((value) => {
+            if (!value.value || value.value === "-") return;
+            const element = add(resultElement,"value");
+            element.setAttribute("property",scope.property);
+            element.setAttribute("direction",scope.direction);
+            element.setAttribute("termType",value.type || "literal");
+            element.textContent = value.value;
+          }));
+        });
+        const response = await fetch("/proxy/api/xslt", {
+          method:"POST",cache:"no-store", signal:controller.signal,
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({stylesheetText:definition.stylesheet,sourceXml:new XMLSerializer().serializeToString(doc),recordUri:"",outputMode:"xml"}),
+        });
+        const payload = await response.json() as {xml?:string;error?:string};
+        if (!response.ok || !payload.xml) throw new Error(payload.error || "Analysis XSLT failed.");
+        const transformed = new DOMParser().parseFromString(payload.xml,"application/xml");
+        const analysis = transformed.documentElement;
+        if (analysis.localName !== "analysis" || transformed.getElementsByTagName("parsererror").length) throw new Error("Analysis XSLT must return an analysis element.");
+        const columns = Array.from(analysis.getElementsByTagName("columns")[0]?.children ?? []).map((node) => ({
+          kind:node.getAttribute("kind") ?? "",nodeId:node.getAttribute("node-id") ?? "",label:node.getAttribute("label") ?? "",breadcrumbStyle:analysisPresentationStyle(node.getAttribute("breadcrumb-style")),headerStyle:analysisPresentationStyle(node.getAttribute("header-style")),
+        }));
+        const rows = Array.from(analysis.getElementsByTagName("rows")[0]?.children ?? []).map((node) => ({
+          uri:node.getAttribute("uri") ?? "",label:node.getAttribute("label") ?? "",
+          cells:Array.from(node.children).map((cell) => ({checked:cell.getAttribute("checked") === "yes", badgeStyle:analysisPresentationStyle(cell.getAttribute("badge-style") ?? analysis.getAttribute("badge-style")), cellStyle:analysisPresentationStyle(cell.getAttribute("cell-style")), values:Array.from(cell.children).map((value) => value.textContent || "")})),
+        }));
+        if (!controller.signal.aborted) { analysisRenderedBaseRef.current = analysisBaseKey; setAnalysisTable({
+          trailStyle: analysisPresentationStyle(analysis.getAttribute("trail-style")),
+          tableStyle: analysisPresentationStyle(analysis.getAttribute("table-style")),
+          headerStyle: analysisPresentationStyle(analysis.getAttribute("header-style")),
+          cellStyle: analysisPresentationStyle(analysis.getAttribute("cell-style")),
+          rowStyle: analysisPresentationStyle(analysis.getAttribute("row-style")),
+          columns, rows,
+        }); }
+      } catch (error) {
+        if (!controller.signal.aborted) setAnalysisError(error instanceof Error ? error.message : "Analysis transformation failed.");
+      } finally { if (!controller.signal.aborted) setAnalysisLoading(false); }
+    })();
+    return () => controller.abort();
+  }, [workspaceTab, analysisDefinitions, selectedAnalysisUri, queryXml, analyzeTableHeadersKey, analysisPageKey, effectiveCompareFacet, analysisRequestKey, analysisValuesState, analysisBaseKey]);
+
+  // One interactive value badge renderer for Browse cards and Analyze cells.
+  // Navigation and tooltip semantics must remain identical in both layouts.
+  function renderScopeValueBadge(scope: ScopeValue, term: ScopeValue["values"][number], termIndex: number, options?: {valueOnly?: boolean; style?: CSSProperties}) {
+    const propertyLabel = toLabel(scope.property);
+    const visiblePropertyLabel = scope.direction === "reverse" ? `${propertyLabel} of` : propertyLabel;
+    const displayValue = term.type === "uri" ? toLabel(term.value) : term.value;
+    const label = `${visiblePropertyLabel}: ${displayValue}${term.lang ? ` @${term.lang}` : ""}${term.datatype ? `^^${term.datatype}` : ""}`;
+    return (
+      <Tooltip key={`${scope.direction}:${scope.property}:${term.value}:${term.lang ?? ""}:${term.datatype ?? ""}:${termIndex}`}>
+        <TooltipTrigger render={<button type="button"
+          onClick={() => navigateResultBadge(scope.property, term, scope.direction)}
+          style={options?.style}
+          className="inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md bg-muted px-2 py-1 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+        >
+          {!options?.valueOnly && <span className="font-medium text-foreground">{visiblePropertyLabel}</span>}
+          <span className="max-w-[240px] truncate">{displayValue}</span>
+        </button>} />
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  // A single root breadcrumb control is shared by Browse and Analyze.
+  // Keep all search, class, preview, and navigation interactions in one JSX tree.
+  function renderRootBreadcrumb(tableHeader = false, presentationStyle?: CSSProperties, showMetadata = true) {
+    return (<span
+          className="relative flex min-w-0 items-center gap-1"
+          style={{ zIndex: hoveredBreadcrumbBadgeId === "query-root" ? tutorialBreadcrumbPath.length + 100 : 1 }}
+          onMouseEnter={() => setHoveredBreadcrumbBadgeId("query-root")}
+          onMouseLeave={() => {
+            setHoveredBreadcrumbBadgeId((current) => current === "query-root" ? null : current);
+            if (!namePropertyMenuOpen) setRootSearchExpanded(false);
+          }}
+        >
+          <ButtonGroup aria-label="Root query controls" className={`min-w-0 max-w-full ${tableHeader ? "border-0 shadow-none" : rootSearchExpanded ? "border border-input" : "border border-border"} ${facetHoverPreview?.kind === "record" ? "rounded-md !border-purple-500/80 text-purple-800 dark:text-purple-200" : ""}`}>
+            {rootSearchExpanded ? (
+              <div className="min-w-0 max-w-[min(42rem,70vw)] flex-1">
+                {searchInputGroup}
+              </div>
+            ) : (
+              <Tooltip><TooltipTrigger render={<button
+                type="button"
+                ref={getPropertyPath().length === 0 ? activeBreadcrumbButtonRef : undefined}
+                onClick={handleRootBreadcrumbClick}
+                style={presentationStyle}
+                className={`relative cursor-pointer rounded-none border-0 px-2.5 pb-1.5 pt-4 text-sm ${facetHoverPreview?.kind === "record" ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200" : getPropertyPath().length === 0 ? "bg-accent font-medium" : "bg-background hover:bg-accent"}`}
+              >
+                {classBreadcrumbLabels(null).length > 0 && (
+                  <span className="absolute left-1 top-0 max-w-[calc(100%-8px)] truncate text-left text-[9px] font-normal leading-3 text-muted-foreground" aria-label={`Classes: ${classBreadcrumbLabels(null).join(", ")}`}>
+                    {classBreadcrumbLabels(null).join(", ")}
+                  </span>
+                )}
+                {facetHoverPreview?.kind === "record"
+                  ? facetHoverPreview.label
+                  : !search.trim()
+                    ? "Everything"
+                    : textSearchMode === "uri"
+                      ? `${rootUriLabel}${rootLabelPossessive}`
+                      : `"${search}"${rootLabelPossessive}`}
+              </button>} /><TooltipContent>{`Return to the top-level query view${textSearchMode === "uri" && rootSearchText ? ` · ${rootSearchText}` : ""}${classBreadcrumbLabels(null).length ? ` · Classes: ${classBreadcrumbLabels(null).join(", ")}` : ""}`}</TooltipContent></Tooltip>
+            )}
+            {!rootSearchExpanded && queryTree.children.some((node) => node.name === "class") && (
+              <Tooltip><TooltipTrigger render={<button
+                type="button"
+                onClick={() => {
+                  const rootClasses = queryTree.children.filter((node) => node.name === "class");
+                  const lastRootClass = rootClasses[rootClasses.length - 1];
+                  if (lastRootClass) deleteNode(lastRootClass.id);
+                }}
+                className="flex h-auto min-h-10 w-7 shrink-0 items-center justify-center border-l border-input text-muted-foreground hover:bg-accent hover:text-destructive"
+                aria-label="Remove the last root class constraint"
+              >−</button>} /><TooltipContent>{"Remove the last root class constraint"}</TooltipContent></Tooltip>
+            )}
+            {!rootSearchExpanded && <Tooltip><TooltipTrigger render={<button
+              type="button"
+              onFocus={() => setRootSearchExpanded(true)}
+              onClick={() => setRootSearchExpanded(true)}
+              className="flex h-auto min-h-10 w-7 shrink-0 items-center justify-center rounded border border-input py-0 text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label={`Search signal: ${signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}`}
+            >
+              <ActiveSignalIcon className="size-4" aria-hidden="true" />
+            </button>} /><TooltipContent>{signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}</TooltipContent></Tooltip>}
+          </ButtonGroup>
+          {showMetadata && (breadcrumbPreviewSummaries["query-root"] || breadcrumbPreviewPendingIds.has("query-root")) && (
+            /* 15px centers this compact metadata badge beneath the next slash. */
+            <span className="absolute left-[calc(100%+15px)] top-full -translate-x-1/2 pt-1"
+                    onMouseEnter={() => setHoveredBreadcrumbBadgeId("query-root")}
+                    onMouseLeave={() => setHoveredBreadcrumbBadgeId((current) => current === "query-root" ? null : current)}>
+              {breadcrumbPreviewSummaries["query-root"] ? (
+                <Tooltip><TooltipTrigger render={<Badge
+                  variant="outline"
+                  onClick={toggleBreadcrumbBadgeMode}
+                  className={`flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3 cursor-pointer select-none ${breadcrumbBadgeMode === "classes" ? "border-blue-400/70 bg-blue-50 text-blue-800 hover:bg-blue-100 dark:border-blue-600 dark:bg-blue-950/50 dark:text-blue-200" : "bg-background hover:bg-accent"}`}
+                  aria-label="Click to toggle category or record metadata"
+                >
+                  <span className="max-w-32 truncate">
+  <em>
+  {rootUriValues.length > 0 ? "i.e." : "e.g."}{" "}
+  {ellipsize(breadcrumbPreviewSummaries["query-root"].label || "—", 28)}{breadcrumbBadgeMode === "classes" ? "" : rootBadgePossessive}
+</em>
+</span>
+                  <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
+                  {breadcrumbPreviewSummaries["query-root"].zeroClasses ? (
+                    <Ban className="size-3 text-muted-foreground shrink-0" aria-label="0" />
+                  ) : (
+                    <span>{shortenCount(breadcrumbPreviewSummaries["query-root"].count)}</span>
+                  )}
+                </Badge>} /><TooltipContent side="bottom" sideOffset={7}>{`${breadcrumbPreviewSummaries["query-root"].label} · ${breadcrumbPreviewSummaries["query-root"].zeroClasses ? "0" : shortenCount(breadcrumbPreviewSummaries["query-root"].count)} (Click to toggle)`}</TooltipContent></Tooltip>
+              ) : (
+                <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" aria-label="Loading root result metadata">
+                  <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
+                  Loading…
+                </Badge>
+              )}
+            </span>
+          )}
+        </span>);
+  }
+
+  // Single breadcrumb implementation for both Browse and Analyze table headers.
+  // All query mutations, sibling menus, preview metadata and active state stay here.
+  function renderPathBreadcrumb(crumb: (typeof tutorialBreadcrumbPath)[number], index: number, tableHeader = false, presentationStyle?: CSSProperties, showMetadata = true) {
+
+  const isInactiveSuffix = index > activeBreadcrumbIndex;
+          const breadcrumbClasses = classBreadcrumbLabels(crumb.id);
+          const breadcrumbNode = findQueryNode(queryTree.children, crumb.id);
+          const breadcrumbIsRole = crumb.name === "property-of" || crumb.id.startsWith("role-filter-");
+          const breadcrumbBaseLabel = toLabel(crumb.uri, breadcrumbIsRole ? "Role" : "Property") + (breadcrumbIsRole ? " of" : "");
+          const breadcrumbExcluded = breadcrumbNode?.attributes.exclude?.trim().toLowerCase() === "yes";
+          const breadcrumbLabel = breadcrumbExcluded ? `Excluded: ${breadcrumbBaseLabel}` : breadcrumbBaseLabel;
+          const breadcrumbSiblings = getBreadcrumbSiblings(crumb.id);
+          const breadcrumbBoundValues = boundValueNodes(breadcrumbNode);
+          const topBoundValue = breadcrumbBoundValues[breadcrumbBoundValues.length - 1];
+          // A crumb followed by another displayed crumb is possessive ("Alice’s friend’s name"): its
+          // badge example takes "’s", and so does its label unless it is a role (property-of) crumb.
+          const breadcrumbHasSuccessor = tutorialBreadcrumbPath.some((entry, pathIndex) => entry.id === crumb.id && pathIndex < tutorialBreadcrumbPath.length - 1);
+          return (
+            <span key={crumb.id} className={tableHeader ? "relative flex max-w-full flex-col items-start gap-1" : "relative flex max-w-full items-center gap-1"}
+              style={{ zIndex: hoveredBreadcrumbBadgeId === crumb.id ? tutorialBreadcrumbPath.length + 100 : index + 2 }}
+              onMouseEnter={() => setHoveredBreadcrumbBadgeId(crumb.id)}
+              onMouseLeave={() => setHoveredBreadcrumbBadgeId((current) => current === crumb.id ? null : current)}>
+              {!tableHeader && <span className="flex size-3.5 shrink-0 items-center justify-center">
+                <Slash aria-hidden="true" className="size-3.5 text-muted-foreground" />
+              </span>}
+              {!tableHeader && showMetadata && (() => {
+                // Each relationship crumb displays its own scoped preview. The root has a
+                // separate query-root preview above the root breadcrumb button.
+                const isTutorialSuccessor = tutorialBreadcrumbTargetId === crumb.id;
+                const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
+                const isPending = breadcrumbPreviewPendingIds.has(crumb.id);
+                if (isTutorialSuccessor) return (
+                  <span className={tableHeader ? "order-2 mt-1" : "pointer-events-none absolute left-[calc(100%+15px)] top-full -translate-x-1/2 pt-1"}>
+                    <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap bg-background border-purple-400/70 text-[10px] font-normal leading-3 text-purple-700 dark:text-purple-300">Preview · …</Badge>
+                  </span>
+                );
+                if (openBreadcrumbDropdownId === crumb.id) return null;
+                return summary || isPending ? (
+                  /* Match the next slash center: 8px nav gap + 7px half of the 14px icon. */
+                  <span className={tableHeader ? "order-2 mt-1" : "absolute left-[calc(100%+15px)] top-full -translate-x-1/2 pt-1"}
+                    onMouseEnter={() => setHoveredBreadcrumbBadgeId(crumb.id)}
+                    onMouseLeave={() => setHoveredBreadcrumbBadgeId((current) => current === crumb.id ? null : current)}>
+                    {summary ? (
+                      <Tooltip><TooltipTrigger render={<Badge
+                        variant="outline"
+                        onClick={toggleBreadcrumbBadgeMode}
+                        className={`flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3 cursor-pointer select-none ${breadcrumbBadgeMode === "classes" ? "border-blue-400/70 bg-blue-50 text-blue-800 hover:bg-blue-100 dark:border-blue-600 dark:bg-blue-950/50 dark:text-blue-200" : "bg-background hover:bg-accent"}`}
+                        aria-label="Click to toggle category or record metadata"
+                      >
+                        <span className="max-w-32 truncate">
+  <em>
+  {breadcrumbBoundValues.length > 0 ? "i.e." : "e.g."} {ellipsize(summary.label || "—", 28)}{breadcrumbBadgeMode !== "classes" && breadcrumbHasSuccessor && !summary.zeroClasses && summary.label && summary.label !== "—" ? "’s" : ""}
+</em>
+</span>
+                        <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
+                        {summary.zeroClasses ? (
+                          <Ban className="size-3 text-muted-foreground shrink-0" aria-label="0" />
+                        ) : (
+                          <span>{shortenCount(summary.count)}</span>
+                        )}
+                      </Badge>} /><TooltipContent side="bottom" sideOffset={7}>{`${summary.label} · ${summary.zeroClasses ? "0" : shortenCount(summary.count)} (Click to toggle)`}</TooltipContent></Tooltip>
+                    ) : (
+                      <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap bg-background text-[10px] font-normal leading-3" aria-label={`Loading metadata for ${breadcrumbBaseLabel}`}>
+                        <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
+                        Loading…
+                      </Badge>
+                    )}
+                  </span>
+                ) : null;
+              })()}
+              {/* w-max lets the crumb stretch to its full "prop = value" statement; max-w-full only wraps it when it exceeds the whole bar. */}
+              <ButtonGroup aria-label={`Controls for ${breadcrumbLabel}`} className={`w-max max-w-full [&>*+*]:!border-l-0 ${tableHeader ? "order-1 border-0 shadow-none [&_button]:!border-0 [&_button]:!rounded-none" : ""} ${tutorialBreadcrumbTargetId === crumb.id ? "rounded-md !border-purple-500/80" : ""}`}>
+                <Tooltip><TooltipTrigger render={<button
+                  type="button"
+                  ref={crumb.id === activeLeafId && index === activeBreadcrumbIndex ? activeBreadcrumbButtonRef : undefined}
+                  onClick={() => handleBreadcrumbClick(crumb.id)}
+                  style={presentationStyle}
+                  className={`relative min-w-0 cursor-pointer break-words rounded-none border-0 px-2.5 pb-1.5 pt-4 text-left text-sm hover:bg-accent ${
+  tutorialBreadcrumbTargetId === crumb.id
+    ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200"
+    : index === activeBreadcrumbIndex
+      ? "bg-accent font-medium text-foreground"
+      : isInactiveSuffix
+        ? "bg-background text-muted-foreground"
+        : "bg-background text-foreground"
+}`}
+                  aria-current={
+  crumb.id === activeLeafId && index === activeBreadcrumbIndex ? "location" : undefined
+}
+                >
+                  {breadcrumbClasses.length > 0 && (
+                    <span className="absolute left-1 top-0 max-w-[calc(100%-8px)] truncate text-left text-[9px] font-normal leading-3 text-muted-foreground" aria-label={`Classes: ${breadcrumbClasses.join(", ")}`}>
+                      {breadcrumbClasses.join(", ")}
+                    </span>
+                  )}
+                  {breadcrumbExcluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
+                  {breadcrumbBaseLabel}
+                  {breadcrumbBoundValues.map((value) => (
+                    <span key={value.id} className="ml-1.5 inline-flex items-baseline gap-1">
+  {renderValueOperator(value)}
+  <span>{boundValueLabel(value)}</span>
+</span>
+                  ))}
+                  {breadcrumbHasSuccessor && !breadcrumbIsRole ? "’s" : ""}
+                </button>} /><TooltipContent>{`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}</TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger render={<button
+                  type="button"
+                  onClick={() => { clearTutorialPreview(); popBreadcrumbOrBinding(crumb); }}
+                  className="flex h-auto min-h-full w-7 shrink-0 self-stretch items-center justify-center rounded-none border-0 py-0 text-base leading-none text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  aria-label={topBoundValue
+                    ? `Remove value ${boundValueLabel(topBoundValue)} bound to ${breadcrumbLabel}`
+                    : `Pop ${breadcrumbLabel} from the breadcrumb stack`}
+                >
+                  −
+                </button>} /><TooltipContent>{topBoundValue
+                    ? "Remove the bound value; click again to pop this relationship"
+                    : "Pop this relationship and its descendants; preserve a sibling when available"}</TooltipContent></Tooltip>
+                {(() => {
+					 const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
+                  const hasMenu = breadcrumbSiblings.length > 0;
+                  if (!hasMenu || tableHeader) return null;
+                  return (
+                    <DropdownMenu open={openBreadcrumbDropdownId === crumb.id} onOpenChange={(open) => setOpenBreadcrumbDropdownId(open ? crumb.id : null)}>
+                      <Tooltip>
+                        <TooltipTrigger render={<DropdownMenuTrigger asChild><button
+                          type="button"
+                          aria-label={`Choose a relationship for ${compactIri(crumb.uri)}`}
+                          className={`flex h-auto min-h-10 w-8 shrink-0 self-stretch items-center justify-center rounded-none border-0 p-0 ${tutorialBreadcrumbTargetId === crumb.id ? "bg-transparent text-purple-800 dark:text-purple-200" : `bg-background ${isInactiveSuffix ? "text-muted-foreground" : "text-foreground"}`} outline-none hover:bg-accent focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=open]:bg-accent`}
+                        >
+                          <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m4 6 4 4 4-4" /></svg>
+                        </button></DropdownMenuTrigger>} />
+                        <TooltipContent>{"Choose a relationship"}</TooltipContent>
+                      </Tooltip>
+                      <DropdownMenuContent align="end" className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
+                        {renderBreadcrumbMenuHeader(summary, `Move view to ${breadcrumbBaseLabel}`, () => { clearTutorialPreview(); navigateToPropertyPath(crumb.id); }, breadcrumbBoundValues.length > 0)}
+                        {/* Siblings only: the crumb itself is not listed. A sibling with child relationships opens a submenu (headed by its own clickable e.g./i.e. label) of those children, recursively. */}
+                        {breadcrumbSiblings.map((sibling) =>
+                          renderBreadcrumbNodeMenuItem(sibling, (targetId) => {
+                            clearTutorialPreview();
+                            navigateToPropertyPath(targetId);
+                          })
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  );
+                })()}
+              </ButtonGroup>
+            </span>
+          );
+  }
+
   return (
     <main className="flex h-dvh min-h-[500px] flex-col bg-background text-foreground">
       <Toaster />
@@ -9398,7 +10142,7 @@ useEffect(() => {
                         className="flex w-80 min-w-0 max-w-full items-center gap-2 rounded-none bg-transparent px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <EndpointStatusIcon status={selectedEndpointStatus} />
-                        <span className="min-w-0 flex-1 truncate">{fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.label ?? (isCheckingEndpoints ? "Loading graph servers…" : "No endpoints configured")}</span>
+                        <span className="min-w-0 flex-1 truncate">{fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
                         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                       </button></DropdownMenuTrigger>} /><TooltipContent>{"Choose which FCT endpoint receives queries"}</TooltipContent></Tooltip>
                       <DropdownMenuContent align="start" className="z-50 w-80 max-w-[calc(100vw-2rem)]">
@@ -9433,11 +10177,11 @@ useEffect(() => {
                 </Tooltip>
                 <Tooltip><TooltipTrigger render={<button
                   type="button"
-                  onClick={() => void checkFctEndpoints()}
+                  onClick={() => void refreshQuery()}
                   disabled={isCheckingEndpoints || fctEndpoints.length === 0}
-                  aria-label={isCheckingEndpoints ? "Checking servers" : "Check servers"}
+                  aria-label={isCheckingEndpoints ? "Checking server" : "Refresh query"}
                   className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 py-2 text-sm opacity-0 transition-all duration-200 hover:bg-accent group-hover/graph-server-input:max-w-10 group-hover/graph-server-input:px-2.5 group-hover/graph-server-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 disabled:opacity-50"
-                ><RefreshCw aria-hidden="true" className={`size-4 ${isCheckingEndpoints ? "animate-spin" : ""}`} /></button>} /><TooltipContent>{isCheckingEndpoints ? "Checking servers…" : "Check each server with a small FCT query"}</TooltipContent></Tooltip>
+                ><RefreshCw aria-hidden="true" className={`size-4 ${isCheckingEndpoints ? "animate-spin" : ""}`} /></button>} /><TooltipContent>{isCheckingEndpoints ? "Checking selected server…" : "Refresh the query"}</TooltipContent></Tooltip>
               </ButtonGroup>
                   {isCheckingEndpoints && (
                     <span className="inline-flex items-center gap-1.5 px-2 text-xs text-muted-foreground" role="status" aria-live="polite">
@@ -9448,12 +10192,12 @@ useEffect(() => {
             </div>
           </div>
           <div className="shrink-0">
-        <Tabs value="browse" className="shrink-0" aria-label="Maestro ribbon">
+        <Tabs value={workspaceTab} onValueChange={(tab) => { if (tab === "browse" || tab === "view" || tab === "analyze") { setWorkspaceTab(tab); if (tab !== "browse") setCentralTab("results"); } }} className="shrink-0" aria-label="Maestro ribbon">
           <TabsList aria-label="Maestro ribbon tabs">
-            <TabsTrigger value="browse">Browse</TabsTrigger>
-            <Tooltip><TooltipTrigger render={<TabsTrigger value="view" disabled>View</TabsTrigger>} /><TooltipContent>{"Coming soon"}</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<TabsTrigger value="analyze" disabled>Analyze</TabsTrigger>} /><TooltipContent>{"Coming soon"}</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<TabsTrigger value="publish" disabled>Publish</TabsTrigger>} /><TooltipContent>{"Coming soon"}</TooltipContent></Tooltip>
+            <TabsTrigger value="browse" className="cursor-pointer">Browse</TabsTrigger>
+            <TabsTrigger value="view" className="cursor-pointer">View</TabsTrigger>
+            <TabsTrigger value="analyze" className="cursor-pointer">Analyze</TabsTrigger>
+            <Tooltip><TooltipTrigger render={<TabsTrigger value="publish" disabled className="cursor-pointer">Publish</TabsTrigger>} /><TooltipContent>{"Coming soon"}</TooltipContent></Tooltip>
           </TabsList>
         </Tabs>
           </div>
@@ -10038,6 +10782,20 @@ useEffect(() => {
                   </select>
                 </div>
               </div>
+              <div className="flex flex-col gap-2 rounded-md border p-3">
+                <Label htmlFor="maestro-prefix-source">Namespace prefixes (CURIEs shown for IRIs without labels)</Label>
+                <select id="maestro-prefix-source" className="rounded-md border bg-background px-2 py-1.5 text-sm" value={prefixSource}
+                  onChange={(event) => {
+                    const next = event.target.value as "prefixcc" | "zazuko" | "builtin";
+                    setPrefixSource(next);
+                    void maestroStorageSet("maestro-namespace-prefix-source", next);
+                  }}>
+                  <option value="prefixcc">prefix.cc community list (falls back to Zazuko over HTTPS)</option>
+                  <option value="zazuko">Zazuko curated list</option>
+                  <option value="builtin">Built-in list only</option>
+                </select>
+                <p className="text-xs text-muted-foreground">{prefixStatus}</p>
+              </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <Label>Appearance</Label>
                 <ThemeToggle />
@@ -10386,251 +11144,46 @@ useEffect(() => {
       )}
 
       <div className="shrink-0">
-        <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-start gap-2 bg-background px-4 pt-2 pb-7">
-        <span
-          className="relative flex min-w-0 items-center gap-1"
-          style={{ zIndex: hoveredBreadcrumbBadgeId === "query-root" ? tutorialBreadcrumbPath.length + 100 : 1 }}
-          onMouseEnter={() => setHoveredBreadcrumbBadgeId("query-root")}
-          onMouseLeave={() => {
-            setHoveredBreadcrumbBadgeId((current) => current === "query-root" ? null : current);
-            if (!namePropertyMenuOpen) setRootSearchExpanded(false);
-          }}
-        >
-          <ButtonGroup aria-label="Root query controls" className={`min-w-0 max-w-full ${rootSearchExpanded ? "border border-input" : "border border-border"} ${facetHoverPreview?.kind === "record" ? "rounded-md !border-purple-500/80 text-purple-800 dark:text-purple-200" : ""}`}>
-            {rootSearchExpanded ? (
-              <div className="min-w-0 max-w-[min(42rem,70vw)] flex-1">
-                {searchInputGroup}
-              </div>
-            ) : (
-              <Tooltip><TooltipTrigger render={<button
-                type="button"
-                ref={getPropertyPath().length === 0 ? activeBreadcrumbButtonRef : undefined}
-                onClick={handleRootBreadcrumbClick}
-                className={`relative cursor-pointer rounded-none border-0 px-2.5 pb-1.5 pt-4 text-sm ${facetHoverPreview?.kind === "record" ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200" : getPropertyPath().length === 0 ? "bg-accent font-medium" : "bg-background hover:bg-accent"}`}
-              >
-                {classBreadcrumbLabels(null).length > 0 && (
-                  <span className="absolute left-1 top-0 max-w-[calc(100%-8px)] truncate text-left text-[9px] font-normal leading-3 text-muted-foreground" aria-label={`Classes: ${classBreadcrumbLabels(null).join(", ")}`}>
-                    {classBreadcrumbLabels(null).join(", ")}
-                  </span>
-                )}
-                {facetHoverPreview?.kind === "record"
-                  ? facetHoverPreview.label
-                  : !search.trim()
-                    ? "Everything"
-                    : textSearchMode === "uri"
-                      ? `${rootUriLabel}${rootLabelPossessive}`
-                      : `"${search}"${rootLabelPossessive}`}
-              </button>} /><TooltipContent>{`Return to the top-level query view${textSearchMode === "uri" && rootSearchText ? ` · ${rootSearchText}` : ""}${classBreadcrumbLabels(null).length ? ` · Classes: ${classBreadcrumbLabels(null).join(", ")}` : ""}`}</TooltipContent></Tooltip>
-            )}
-            {!rootSearchExpanded && queryTree.children.some((node) => node.name === "class") && (
-              <Tooltip><TooltipTrigger render={<button
-                type="button"
-                onClick={() => {
-                  const rootClasses = queryTree.children.filter((node) => node.name === "class");
-                  const lastRootClass = rootClasses[rootClasses.length - 1];
-                  if (lastRootClass) deleteNode(lastRootClass.id);
-                }}
-                className="flex h-auto min-h-10 w-7 shrink-0 items-center justify-center border-l border-input text-muted-foreground hover:bg-accent hover:text-destructive"
-                aria-label="Remove the last root class constraint"
-              >−</button>} /><TooltipContent>{"Remove the last root class constraint"}</TooltipContent></Tooltip>
-            )}
-            {!rootSearchExpanded && <Tooltip><TooltipTrigger render={<button
-              type="button"
-              onFocus={() => setRootSearchExpanded(true)}
-              onClick={() => setRootSearchExpanded(true)}
-              className="flex h-auto min-h-10 w-7 shrink-0 items-center justify-center rounded border border-input py-0 text-muted-foreground hover:bg-accent hover:text-foreground"
-              aria-label={`Search signal: ${signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}`}
-            >
-              <ActiveSignalIcon className="size-4" aria-hidden="true" />
-            </button>} /><TooltipContent>{signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}</TooltipContent></Tooltip>}
-          </ButtonGroup>
-          {(breadcrumbPreviewSummaries["query-root"] || breadcrumbPreviewPendingIds.has("query-root")) && (
-            /* 15px centers this compact metadata badge beneath the next slash. */
-            <span className="absolute left-[calc(100%+15px)] top-full -translate-x-1/2 pt-1"
-                    onMouseEnter={() => setHoveredBreadcrumbBadgeId("query-root")}
-                    onMouseLeave={() => setHoveredBreadcrumbBadgeId((current) => current === "query-root" ? null : current)}>
-              {breadcrumbPreviewSummaries["query-root"] ? (
-                <Tooltip><TooltipTrigger render={<Badge
-                  variant="outline"
-                  onClick={toggleBreadcrumbBadgeMode}
-                  className={`flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3 cursor-pointer select-none ${breadcrumbBadgeMode === "classes" ? "border-blue-400/70 bg-blue-50 text-blue-800 hover:bg-blue-100 dark:border-blue-600 dark:bg-blue-950/50 dark:text-blue-200" : "bg-background hover:bg-accent"}`}
-                  aria-label="Click to toggle category or record metadata"
-                >
-                  <span className="max-w-32 truncate">
-  <em>
-  {rootUriValues.length > 0 ? "i.e." : "e.g."}{" "}
-  {ellipsize(breadcrumbPreviewSummaries["query-root"].label || "—", 28)}{breadcrumbBadgeMode === "classes" ? "" : rootBadgePossessive}
-</em>
-</span>
-                  <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
-                  {breadcrumbPreviewSummaries["query-root"].zeroClasses ? (
-                    <Ban className="size-3 text-muted-foreground shrink-0" aria-label="0" />
-                  ) : (
-                    <span>{shortenCount(breadcrumbPreviewSummaries["query-root"].count)}</span>
-                  )}
-                </Badge>} /><TooltipContent side="bottom" sideOffset={7}>{`${breadcrumbPreviewSummaries["query-root"].label} · ${breadcrumbPreviewSummaries["query-root"].zeroClasses ? "0" : shortenCount(breadcrumbPreviewSummaries["query-root"].count)} (Click to toggle)`}</TooltipContent></Tooltip>
-              ) : (
-                <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3" aria-label="Loading root result metadata">
-                  <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
-                  Loading…
-                </Badge>
-              )}
-            </span>
+        {workspaceTab === "browse" || workspaceTab === "view" ? <nav aria-label="Navigation breadcrumbs" className="flex min-h-14 flex-wrap items-start gap-2 bg-background px-4 pt-2 pb-7">
+        {renderRootBreadcrumb()}
+        {tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}
+        </nav> : <div className="flex min-h-[78px] flex-wrap items-center gap-3 border-b bg-background px-4 py-2" role="toolbar" aria-label="Analyze presentations">
+          {analysisDefinitions.map((definition) => {
+            const active = selectedAnalysisUri === definition.uri && !analyzeHistogram;
+            const Icon = definition.icon === "table-properties" ? TableProperties : Table2;
+            return <Tooltip key={definition.uri} disableHoverablePopup={false}>
+              <TooltipTrigger render={<button type="button" onClick={() => { setSelectedAnalysisUri(definition.uri); setAnalyzeHistogram(false); }} aria-pressed={active && !analyzeHistogram}
+                className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${active ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+                <Icon className={`size-7 ${active ? "stroke-[2.5]" : ""}`} aria-hidden="true"/>{definition.label}
+              </button>} />
+              <TooltipContent side="bottom" className="z-[100] w-64 p-3" >
+                <div className="mb-2 font-semibold">{definition.label} preview</div>
+                <div className="rounded border bg-background p-2 text-foreground">
+                  <table className="w-full border-collapse text-[10px]"><thead><tr><th className="border p-1 text-left">Result</th><th className="border p-1 text-left">{definition.icon === "table-properties" ? "Value A" : (tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : "Property")}</th><th className="border p-1 text-left">{definition.icon === "table-properties" ? "Value B" : "Property 2"}</th></tr></thead><tbody>
+                  <tr><td className="border p-1">{visibleResultsPage[0]?.title ?? "Resource"}</td><td className="border p-1">{definition.icon === "table-properties" ? "✓" : "Value"}</td><td className="border p-1">—</td></tr></tbody></table>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">Choose to fill the Analyze canvas using its SHACL-discovered XSLT.</p>
+              </TooltipContent>
+            </Tooltip>;
+          })}
+          {analysisDefinitions.some((definition) => definition.uri.includes("compare-table")) && (
+            <Tooltip>
+              <TooltipTrigger render={<button type="button" aria-pressed={isCompareAnalysis && analyzeHistogram}
+                onClick={() => { const compare = analysisDefinitions.find((definition) => definition.uri.includes("compare-table")); if (compare) { setSelectedAnalysisUri(compare.uri); setAnalyzeHistogram(true); } }}
+                className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${isCompareAnalysis && analyzeHistogram ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+                <ChartColumn className="size-7" aria-hidden="true"/>Histogram
+              </button>} />
+              <TooltipContent side="bottom">Count checked Compare Table cells for each column value.</TooltipContent>
+            </Tooltip>
           )}
-        </span>
-        {tutorialBreadcrumbPath.map((crumb, index) => {
-  const isInactiveSuffix = index > activeBreadcrumbIndex;
-          const breadcrumbClasses = classBreadcrumbLabels(crumb.id);
-          const breadcrumbNode = findQueryNode(queryTree.children, crumb.id);
-          const breadcrumbIsRole = crumb.name === "property-of" || crumb.id.startsWith("role-filter-");
-          const breadcrumbBaseLabel = toLabel(crumb.uri, breadcrumbIsRole ? "Role" : "Property") + (breadcrumbIsRole ? " of" : "");
-          const breadcrumbExcluded = breadcrumbNode?.attributes.exclude?.trim().toLowerCase() === "yes";
-          const breadcrumbLabel = breadcrumbExcluded ? `Excluded: ${breadcrumbBaseLabel}` : breadcrumbBaseLabel;
-          const breadcrumbSiblings = getBreadcrumbSiblings(crumb.id);
-          const breadcrumbBoundValues = boundValueNodes(breadcrumbNode);
-          const topBoundValue = breadcrumbBoundValues[breadcrumbBoundValues.length - 1];
-          // A crumb followed by another displayed crumb is possessive ("Alice’s friend’s name"): its
-          // badge example takes "’s", and so does its label unless it is a role (property-of) crumb.
-          const breadcrumbHasSuccessor = index < tutorialBreadcrumbPath.length - 1;
-          return (
-            <span key={crumb.id} className="relative flex max-w-full items-center gap-1"
-              style={{ zIndex: hoveredBreadcrumbBadgeId === crumb.id ? tutorialBreadcrumbPath.length + 100 : index + 2 }}
-              onMouseEnter={() => setHoveredBreadcrumbBadgeId(crumb.id)}
-              onMouseLeave={() => setHoveredBreadcrumbBadgeId((current) => current === crumb.id ? null : current)}>
-              <span className="flex size-3.5 shrink-0 items-center justify-center">
-                <Slash aria-hidden="true" className="size-3.5 text-muted-foreground" />
-              </span>
-              {(() => {
-                // Each relationship crumb displays its own scoped preview. The root has a
-                // separate query-root preview above the root breadcrumb button.
-                const isTutorialSuccessor = tutorialBreadcrumbTargetId === crumb.id;
-                const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
-                const isPending = breadcrumbPreviewPendingIds.has(crumb.id);
-                if (isTutorialSuccessor) return (
-                  <span className="pointer-events-none absolute left-[calc(100%+15px)] top-full -translate-x-1/2 pt-1">
-                    <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap bg-background border-purple-400/70 text-[10px] font-normal leading-3 text-purple-700 dark:text-purple-300">Preview · …</Badge>
-                  </span>
-                );
-                if (openBreadcrumbDropdownId === crumb.id) return null;
-                return summary || isPending ? (
-                  /* Match the next slash center: 8px nav gap + 7px half of the 14px icon. */
-                  <span className="absolute left-[calc(100%+15px)] top-full -translate-x-1/2 pt-1"
-                    onMouseEnter={() => setHoveredBreadcrumbBadgeId(crumb.id)}
-                    onMouseLeave={() => setHoveredBreadcrumbBadgeId((current) => current === crumb.id ? null : current)}>
-                    {summary ? (
-                      <Tooltip><TooltipTrigger render={<Badge
-                        variant="outline"
-                        onClick={toggleBreadcrumbBadgeMode}
-                        className={`flex max-w-52 items-center gap-1 whitespace-nowrap text-[10px] font-normal leading-3 cursor-pointer select-none ${breadcrumbBadgeMode === "classes" ? "border-blue-400/70 bg-blue-50 text-blue-800 hover:bg-blue-100 dark:border-blue-600 dark:bg-blue-950/50 dark:text-blue-200" : "bg-background hover:bg-accent"}`}
-                        aria-label="Click to toggle category or record metadata"
-                      >
-                        <span className="max-w-32 truncate">
-  <em>
-  {breadcrumbBoundValues.length > 0 ? "i.e." : "e.g."} {ellipsize(summary.label || "—", 28)}{breadcrumbBadgeMode !== "classes" && breadcrumbHasSuccessor && !summary.zeroClasses && summary.label && summary.label !== "—" ? "’s" : ""}
-</em>
-</span>
-                        <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />
-                        {summary.zeroClasses ? (
-                          <Ban className="size-3 text-muted-foreground shrink-0" aria-label="0" />
-                        ) : (
-                          <span>{shortenCount(summary.count)}</span>
-                        )}
-                      </Badge>} /><TooltipContent side="bottom" sideOffset={7}>{`${summary.label} · ${summary.zeroClasses ? "0" : shortenCount(summary.count)} (Click to toggle)`}</TooltipContent></Tooltip>
-                    ) : (
-                      <Badge variant="outline" className="flex items-center gap-1 whitespace-nowrap bg-background text-[10px] font-normal leading-3" aria-label={`Loading metadata for ${breadcrumbBaseLabel}`}>
-                        <LoaderCircle data-icon="inline-start" className="size-3 animate-spin" aria-hidden="true" />
-                        Loading…
-                      </Badge>
-                    )}
-                  </span>
-                ) : null;
-              })()}
-              {/* w-max lets the crumb stretch to its full "prop = value" statement; max-w-full only wraps it when it exceeds the whole bar. */}
-              <ButtonGroup aria-label={`Controls for ${breadcrumbLabel}`} className={`w-max max-w-full [&>*+*]:!border-l-0 ${tutorialBreadcrumbTargetId === crumb.id ? "rounded-md !border-purple-500/80" : ""}`}>
-                <Tooltip><TooltipTrigger render={<button
-                  type="button"
-                  ref={index === activeBreadcrumbIndex ? activeBreadcrumbButtonRef : undefined}
-                  onClick={() => handleBreadcrumbClick(crumb.id)}
-                  className={`relative min-w-0 cursor-pointer break-words rounded-none border-0 px-2.5 pb-1.5 pt-4 text-left text-sm hover:bg-accent ${
-  tutorialBreadcrumbTargetId === crumb.id
-    ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200"
-    : index === activeBreadcrumbIndex
-      ? "bg-accent font-medium text-foreground"
-      : isInactiveSuffix
-        ? "bg-background text-muted-foreground"
-        : "bg-background text-foreground"
-}`}
-                  aria-current={
-  index === activeBreadcrumbIndex ? "location" : undefined
-}
-                >
-                  {breadcrumbClasses.length > 0 && (
-                    <span className="absolute left-1 top-0 max-w-[calc(100%-8px)] truncate text-left text-[9px] font-normal leading-3 text-muted-foreground" aria-label={`Classes: ${breadcrumbClasses.join(", ")}`}>
-                      {breadcrumbClasses.join(", ")}
-                    </span>
-                  )}
-                  {breadcrumbExcluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
-                  {breadcrumbBaseLabel}
-                  {breadcrumbBoundValues.map((value) => (
-                    <span key={value.id} className="ml-1.5 inline-flex items-baseline gap-1">
-  {renderValueOperator(value)}
-  <span>{boundValueLabel(value)}</span>
-</span>
-                  ))}
-                  {breadcrumbHasSuccessor && !breadcrumbIsRole ? "’s" : ""}
-                </button>} /><TooltipContent>{`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}</TooltipContent></Tooltip>
-                <Tooltip><TooltipTrigger render={<button
-                  type="button"
-                  onClick={() => { clearTutorialPreview(); popBreadcrumbOrBinding(crumb); }}
-                  className="flex h-auto min-h-full w-7 shrink-0 self-stretch items-center justify-center rounded-none border-0 py-0 text-base leading-none text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  aria-label={topBoundValue
-                    ? `Remove value ${boundValueLabel(topBoundValue)} bound to ${breadcrumbLabel}`
-                    : `Pop ${breadcrumbLabel} from the breadcrumb stack`}
-                >
-                  −
-                </button>} /><TooltipContent>{topBoundValue
-                    ? "Remove the bound value; click again to pop this relationship"
-                    : "Pop this relationship and its descendants; preserve a sibling when available"}</TooltipContent></Tooltip>
-                {(() => {
-					 const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
-                  const hasMenu = breadcrumbSiblings.length > 0;
-                  if (!hasMenu) return null;
-                  return (
-                    <DropdownMenu open={openBreadcrumbDropdownId === crumb.id} onOpenChange={(open) => setOpenBreadcrumbDropdownId(open ? crumb.id : null)}>
-                      <Tooltip>
-                        <TooltipTrigger render={<DropdownMenuTrigger asChild><button
-                          type="button"
-                          aria-label={`Choose a relationship for ${compactIri(crumb.uri)}`}
-                          className={`flex h-auto min-h-10 w-8 shrink-0 self-stretch items-center justify-center rounded-none border-0 p-0 ${tutorialBreadcrumbTargetId === crumb.id ? "bg-transparent text-purple-800 dark:text-purple-200" : `bg-background ${isInactiveSuffix ? "text-muted-foreground" : "text-foreground"}`} outline-none hover:bg-accent focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=open]:bg-accent`}
-                        >
-                          <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m4 6 4 4 4-4" /></svg>
-                        </button></DropdownMenuTrigger>} />
-                        <TooltipContent>{"Choose a relationship"}</TooltipContent>
-                      </Tooltip>
-                      <DropdownMenuContent align="end" className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
-                        {renderBreadcrumbMenuHeader(summary, `Move view to ${breadcrumbBaseLabel}`, () => { clearTutorialPreview(); navigateToPropertyPath(crumb.id); }, breadcrumbBoundValues.length > 0)}
-                        {/* Siblings only: the crumb itself is not listed. A sibling with child relationships opens a submenu (headed by its own clickable e.g./i.e. label) of those children, recursively. */}
-                        {breadcrumbSiblings.map((sibling) =>
-                          renderBreadcrumbNodeMenuItem(sibling, (targetId) => {
-                            clearTutorialPreview();
-                            navigateToPropertyPath(targetId);
-                          })
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  );
-                })()}
-              </ButtonGroup>
-            </span>
-          );
-        })}
-        </nav>
+          {analysisDefinitions.length === 0 && <span className="text-sm text-muted-foreground">No analysis templates discovered. Load the updated SHACL policies into your personal graph server.</span>}
+        </div>}
 
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 
-          <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
+          <ResizablePanelGroup key={workspaceTab} direction="horizontal" className="min-h-0 flex-1">
             <ResizablePanel defaultSize={25} minSize={16} className="min-w-0">
             {/* Left pane navigation uses count links while retaining the existing panes. */}
             <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r">
@@ -11543,9 +12096,9 @@ onMouseLeave={() => {
 
             </ResizablePanel>
             <ResizableHandle withHandle />
-            <ResizablePanel defaultSize={45} minSize={25} className="min-w-0">
+            <ResizablePanel defaultSize={workspaceTab === "browse" ? 45 : 75} minSize={25} className="min-w-0">
             <section ref={centralPaneRef} className="flex h-full min-h-0 min-w-0 flex-col border-r">
-              <div className={`group/header shrink-0 border-b px-3 pb-3 pt-0 ${centralTab === "chat" ? "hidden" : ""}`}>
+              <div className={`group/header shrink-0 border-b px-3 pb-3 pt-0 ${centralTab === "chat" || workspaceTab !== "browse" ? "hidden" : ""}`}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm">
                   <span className="shrink-0 text-muted-foreground">
                     <IncompleteWidgetIndicator source={centralTab === "groups" ? "groups" : "results"} /> Group <strong className="font-semibold text-foreground">{effectiveResultsTotalCount !== null ? shortenCount(effectiveResultsTotalCount) : "many"}</strong> results by:
@@ -11572,11 +12125,11 @@ onMouseLeave={() => {
                   <select
                     id="results-page-size"
                     aria-label="Results page size"
-                    value={resultsPageSize}
+                    value={effectivePageSize}
                     disabled={isSearching}
                     onChange={(event) => {
                       const nextSize = Number(event.currentTarget.value);
-                      if (!RESULTS_PAGE_SIZE_OPTIONS.some((size) => size === nextSize)) return;
+                      if (!resultsPageSizeOptions.includes(nextSize)) return;
                       try {
                         maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(nextSize));
                       } catch {
@@ -11588,7 +12141,7 @@ onMouseLeave={() => {
                     }}
                     className="h-9 min-w-[4.5rem] appearance-none rounded-md border border-input bg-background py-2 pl-3 pr-8 text-sm"
                   >
-                    {RESULTS_PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+                    {resultsPageSizeOptions.map((size) => <option key={size} value={size}>{size}</option>)}
                   </select>
                   <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2.5 size-3.5 text-muted-foreground" />
                   </div>
@@ -11628,12 +12181,14 @@ onMouseLeave={() => {
                 </div>
               </div>
 
-              {centralTab === "results" && alphabetPreflight === "available" && (
+              {/* An active alphabet restriction must remain visible and removable even when
+                  subsequent filters eliminate its count or the alphabet preflight fails. */}
+              {workspaceTab === "browse" && centralTab === "results" && (alphabetPreflight === "available" || Boolean(alphabetIndex)) && (
                 <div id="maestro-alphabet" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2" aria-label="Alphabetical browse by selected label properties">
                   <IncompleteWidgetIndicator source="alphabet" />
-                  {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0).map((letter) => (
+                  {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0 || alphabetIndex === letter).map((letter) => (
                     <button key={letter} type="button" title={`Letter ${letter}`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={alphabetIndex === letter}
-                      disabled={isLoadingAlphabet || (!alphabetCounts[letter] && alphabetIndex !== letter)}
+                      disabled={alphabetIndex !== letter && (isLoadingAlphabet || !alphabetCounts[letter])}
                       className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${alphabetIndex === letter ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
                       onClick={() => {
                         setNodeAttribute("query-view", "indexLabels", alphabetLabelUris);
@@ -11645,15 +12200,25 @@ onMouseLeave={() => {
                       <span className={`tabular-nums font-normal ${alphabetIndex === letter ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
                     </button>
                   ))}
+                  {alphabetIndex && (
+                    <button type="button" className="cursor-pointer rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      aria-label={`Clear alphabet filter ${alphabetIndex}`} title={`Clear alphabet filter ${alphabetIndex}`}
+                      onClick={() => {
+                        setNodeAttribute("query-view", "index", null);
+                        setResultsUiPage(0); setResults([]); setResultsPage(resultsBatchSize, 0);
+                      }}>
+                      Clear letter ({alphabetIndex})
+                    </button>
+                  )}
                   {isLoadingAlphabet && <span className="text-xs text-muted-foreground">Fetching letter filters...</span>}
                   {alphabetError && <span className="text-xs text-destructive" title={alphabetError}>{Object.values(alphabetCounts).some((count) => count > 0) ? "Alphabet partial" : "Alphabet unavailable"}</span>}
                 </div>
               )}
 
-              {(centralTab === "results" && (resultsUiPage > 0 || results.length > resultsPageSize ||
+              {workspaceTab === "browse" && ((centralTab === "results" && (resultsUiPage > 0 || results.length > resultsPageSize ||
                 (effectiveResultsTotalCount === null && !resultsPageComplete && results.length > 0) ||
                 (effectiveResultsTotalCount !== null && effectiveResultsTotalCount > resultsPageSize)) ||
-                centralTab === "groups" && selectedGroupByOption && (groupValues.length > resultsPageSize || groupHasMoreBatches)) && (
+                centralTab === "groups" && selectedGroupByOption && (groupValues.length > resultsPageSize || groupHasMoreBatches))) && (
                 <div className="flex min-h-[42px] shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs">
                   <span className="text-muted-foreground" aria-live="polite">
                     {centralTab === "groups"
@@ -11697,7 +12262,167 @@ onMouseLeave={() => {
                   </div>
                 </div>
               )}
-              {centralTab === "results" && (
+              {workspaceTab === "view" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Views">
+                <nav aria-label="View breadcrumbs" className="flex shrink-0 flex-wrap items-start gap-2 border-b bg-background px-4 py-2">
+                  {renderRootBreadcrumb(false, undefined, false)}
+                  {analyzeBreadcrumbTrail.map((crumb, index) => renderPathBreadcrumb(crumb, index, false, undefined, false))}
+                </nav>
+                <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-4 py-3">
+                  <div className="flex items-center gap-2">{(() => {
+                    const icon = viewXsltMetadata.icon ?? selectedView?.icon;
+                    const Icon = (viewXsltMetadata.title === "Graph Servers" || selectedView?.label === "Graph Servers") ? Server : icon === "server" ? Server : icon === "database" ? Database : icon === "globe" ? Globe : icon === "layout-grid" ? LayoutGrid : Network;
+                    return <Icon className="size-5 text-muted-foreground" aria-hidden="true"/>;
+                  })()}<h2 className="font-semibold">{selectedView ? (viewXsltMetadata.title || selectedView.label) : "View"}</h2></div>
+                  {discoveredViews.length > 1 && <select aria-label="Select view" className="rounded border bg-background px-2 py-1 text-sm" value={selectedViewUri} onChange={(event) => setSelectedViewUri(event.currentTarget.value)}>
+                    {discoveredViews.map((view) => <option key={view.uri} value={view.uri}>{view.label}</option>)}
+                  </select>}
+                  {selectedView && <span className="text-xs text-muted-foreground">{selectedView.label} · {visibleResultsPage.length} results on this page</span>}
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto p-4">
+                  {viewDiscoveryLoading ? <p className="text-sm text-muted-foreground">Locating views…</p>
+                    : viewDiscoveryError ? <p role="alert" className="text-sm text-destructive">{viewDiscoveryError}</p>
+                    : !selectedView ? <div className="mx-auto max-w-lg rounded-lg border border-dashed p-8 text-center">
+                        <Network className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden="true"/>
+                        <h3 className="font-medium">No views found</h3>
+                        <p className="mt-2 text-sm text-muted-foreground">No views match the classes at this breadcrumb scope.</p>
+                      </div>
+                    : viewRenderError ? <p role="alert" className="text-sm text-destructive">{viewRenderError}</p>
+                    : <div className="maestro-discovered-view" onClick={(event) => {
+                        const target = event.target as HTMLElement;
+                        const button = target.closest<HTMLButtonElement>("button[data-endpoint-refresh]");
+                        if (!button) return;
+                        const endpoint = fctEndpoints.find((item) => item.id === button.dataset.endpointRefresh);
+                        if (!endpoint || checkingEndpointIds[endpoint.id]) return;
+                        void checkSelectedGraphServer(endpoint).catch((error) => {
+                          toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" });
+                        });
+                      }} ref={(element) => {
+                        if (!element) return;
+                        // Native favicon fetching is optional; expose the XSLT's Lucide fallback when missing.
+                        element.querySelectorAll("img").forEach((image) => {
+                          image.onerror = () => {
+                            const fallback = image.getAttribute("data-favicon-fallback");
+                            if (fallback && image.src !== fallback) {
+                              image.removeAttribute("data-favicon-fallback");
+                              image.src = fallback;
+                            } else image.hidden = true;
+                          };
+                        });
+                      }} dangerouslySetInnerHTML={{ __html: viewHtml }}/>} 
+                </div>
+                {selectedView && <div className="flex shrink-0 items-center justify-between gap-3 border-t px-4 py-2 text-xs">
+                  <span className="text-muted-foreground">Page {resultsUiPage + 1}</span>
+                  <div className="flex items-center gap-2"><label htmlFor="view-page-size">Per page</label>
+                    <select id="view-page-size" className="rounded border bg-background px-2 py-1" value={effectivePageSize} onChange={(event) => { const n=Number(event.currentTarget.value); setResultsPageSize(n); maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY,String(n)); setResultsUiPage(0); }}>
+                      {resultsPageSizeOptions.map((n) => <option value={n} key={n}>{n}</option>)}
+                    </select>
+                    <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={resultsUiPage===0 || isSearching} onClick={() => changeResultsPage(-1)}>Previous</button>
+                    <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={isSearching || (effectiveResultsTotalCount === null ? (results.length <= (resultsUiPage+1)*resultsPageSize && (resultsPageComplete || resultsBatchRequestPending.current)) : resultsUiPage+1 >= Math.ceil(effectiveResultsTotalCount/resultsPageSize))} onClick={() => changeResultsPage(1)}>Next</button>
+                  </div>
+                </div>}
+              </div>}
+              {workspaceTab === "analyze" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Analyze canvas">
+                {!selectedAnalysisUri.includes("compare-table") && (
+                  <nav aria-label="Analyze breadcrumbs" className="flex shrink-0 flex-wrap items-start justify-start gap-2 border-b bg-background px-4 py-2">
+                    {renderRootBreadcrumb(false, analysisTable?.trailStyle, false)}
+                    {analyzeBreadcrumbTrail.map((crumb, index) => renderPathBreadcrumb(crumb, index, false, analysisTable?.trailStyle, false))}
+                  </nav>
+                )}
+                {selectedAnalysisUri.includes("compare-table") && <div className="flex items-center gap-2 border-b px-3 py-2 text-sm">
+                  <label htmlFor="maestro-compare-facet">Compare facet</label>
+                  <select id="maestro-compare-facet" value={effectiveCompareFacet} onChange={(event) => setCompareFacet(event.target.value)} className="min-w-0 max-w-md flex-1 rounded-md border bg-background px-2 py-1">
+                    {availableCompareFacets.map((facet) => <option key={facet.key} value={facet.key}>{facet.label}</option>)}
+                  </select>
+                </div>}
+                {!selectedAnalysisUri.includes("compare-table") && <div role="toolbar" aria-label="Analyze table actions" className="flex shrink-0 items-center gap-2 border-b bg-muted/30 px-3 py-1 text-muted-foreground">
+                  <button type="button" className="inline-flex items-center gap-1.5 rounded border border-border/60 bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground disabled:cursor-not-allowed" title="Export (coming soon)" aria-label="Export" disabled><Download aria-hidden="true" className="size-4"/>Export</button>
+                </div>}
+                {analysisError && <p role="alert" className="p-3 text-sm text-destructive">{analysisError}</p>}
+                {analysisValuesError && <p role="alert" className="p-3 text-xs text-amber-600">Facet values could not be loaded: {analysisValuesError}</p>}
+                {analysisLoading && !analysisTable && <p className="p-3 text-xs text-muted-foreground">Building analysis using the selected XSLT…</p>}
+                <div className="min-h-0 flex-1 overflow-auto">
+                  {analysisTable && isCompareAnalysis && analyzeHistogram && (
+                    <div className="min-h-full space-y-4 p-4" aria-label="Compare Histogram">
+                      <div className="flex flex-wrap items-baseline justify-between gap-3">
+                        <h2 className="text-sm font-medium">Compare Histogram</h2>
+                        <span className="text-xs text-muted-foreground">Checked cells per column · {analysisTable.rows.length} visible results</span>
+                      </div>
+                      {histogramColumns.length ? (
+                        <div className="h-[min(65vh,540px)] min-h-64 w-full" role="img" aria-label={histogramColumns.map((bar) => `${bar.label}: ${bar.count}`).join(", ")}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={histogramColumns} margin={{top:12,right:20,bottom:48,left:4}}>
+                              <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--border)" />
+                              <XAxis dataKey="label" interval={0} angle={-30} textAnchor="end" height={90} tick={{fontSize:11}} />
+                              <YAxis allowDecimals={false} domain={[0, "dataMax"]} tick={{fontSize:11}} />
+                              <ChartTooltip formatter={(value) => [value, "Checked"]} cursor={{fill:"var(--muted)", opacity:0.35}} />
+                              <Bar dataKey="count" name="Checked" fill="var(--chart-1)" radius={[3,3,0,0]} maxBarSize={90}/>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      ) : <p className="text-sm text-muted-foreground">No comparison columns available.</p>}
+                    </div>
+                  )}
+                  {analysisTable && !(isCompareAnalysis && analyzeHistogram) && <Table className="border-collapse text-xs" style={{...analysisTable.tableStyle, tableLayout:"fixed", width: 36 + analysisTable.columns.reduce((sum, col, i) => sum + (analysisColumnWidths[col.nodeId || `${col.kind}:${col.label}`] ?? (i === 0 ? 240 : 190)), 0)}} aria-label={selectedAnalysisUri.includes("compare-table") ? "Compare Table" : "Table"}>
+                    <colgroup>
+                      <col style={{width:36}}/>
+                      {analysisTable.columns.map((col) => <col key={col.nodeId || `${col.kind}:${col.label}`} style={{width:analysisColumnWidths[col.nodeId || `${col.kind}:${col.label}`] ?? (col.kind === "result" ? 240 : 190)}}/>)}
+                    </colgroup>
+                    <TableHeader className="sticky top-0 z-20 bg-background"><TableRow>
+                      <TableHead scope="col" className="w-9 min-w-9 border px-1 py-1 text-center align-middle" style={analysisTable.headerStyle}>
+                        <input type="checkbox" aria-label="Select all results on this page" className="size-4 cursor-pointer align-middle accent-primary" checked={analysisAllSelected} disabled={!analysisRowKeys.length} onChange={(event) => setAnalysisSelection({ pageKey: analysisSelectionPageKey, keys: event.currentTarget.checked ? analysisRowKeys : [] })} />
+                      </TableHead>
+                      {analysisTable.columns.map((col, i) => <TableHead key={col.nodeId || `result-${i}`} scope="col" className="relative border px-1.5 py-1 pr-3 align-top text-left font-medium" style={{...analysisTable.headerStyle, ...col.headerStyle}}>
+                        {col.kind === "result" && !selectedAnalysisUri.includes("compare-table")
+                          ? "Results"
+                          : col.kind === "breadcrumb" ? (() => {
+                          const header = analyzeTableHeaderNodes.find((crumb) => crumb.id === col.nodeId);
+                          return header ? renderPathBreadcrumb(header, activeBreadcrumbIndex + 1, true, col.breadcrumbStyle) : col.label;
+                        })() : col.kind === "value" && /^[a-z][a-z0-9+.-]*:/i.test(col.label) ? toLabel(col.label, "OBJECT") : col.label}
+                        <span role="separator" tabIndex={0} aria-label={`Resize ${col.label || "Results"} column`} aria-orientation="vertical" title="Drag to resize column; use Left/Right arrows for fine adjustment" className="absolute right-0 top-0 z-30 h-full w-2 cursor-col-resize touch-none hover:bg-sky-300/40 focus:bg-sky-300/40 focus:outline-2 focus:outline-sky-500" onPointerDown={(event) => beginAnalysisColumnResize(event, col.nodeId || `${col.kind}:${col.label}`, analysisColumnWidths[col.nodeId || `${col.kind}:${col.label}`] ?? (col.kind === "result" ? 240 : 190))} onKeyDown={(event) => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); const key = col.nodeId || `${col.kind}:${col.label}`; setAnalysisColumnWidths((current) => ({...current, [key]: Math.max(88, Math.min(900, (current[key] ?? (col.kind === "result" ? 240 : 190)) + (event.key === "ArrowRight" ? 16 : -16)))})); }}/>
+                      </TableHead>)}
+                    </TableRow></TableHeader><TableBody>
+                      {analysisTable.rows.map((row, rowIndex) => <TableRow key={`${row.uri}:${rowIndex}`} className="hover:bg-accent/40" style={analysisTable.rowStyle}>
+                        <TableCell className="w-9 min-w-9 border px-1 py-1 text-center align-middle" style={analysisTable.cellStyle}>
+                          <input type="checkbox" aria-label={`Select ${row.label}`} className="size-4 cursor-pointer align-middle accent-primary" checked={analysisSelectedKeys.includes(analysisRowKeys[rowIndex] ?? "")} onChange={(event) => toggleAnalysisRow(analysisRowKeys[rowIndex], event.currentTarget.checked)} />
+                        </TableCell>
+                        <TableHead scope="row" className="max-w-72 border px-1.5 py-1 text-left font-normal" style={analysisTable.cellStyle}>
+                          <button type="button" className="max-w-full break-words text-left text-primary hover:underline" onClick={() => { setSelectedUri(row.uri); setWorkspaceTab("browse"); setCentralTab("results"); }}>{row.label}</button>
+                        </TableHead>
+                        {row.cells.map((cell, index) => <TableCell key={analysisTable.columns[index + 1]?.nodeId || analysisTable.columns[index + 1]?.label || index} className="max-w-80 border px-1.5 py-1 align-top" style={{...analysisTable.cellStyle,...cell.cellStyle}}>
+                          {selectedAnalysisUri.includes("compare-table") ? (cell.checked ? <Check className="size-4 text-emerald-600" aria-label="Present"/> : null) : (() => {
+                            const column = analysisTable.columns[index + 1];
+                            const header = analyzeTableHeaderNodes.find((crumb) => crumb.id === column?.nodeId);
+                            if (!header) return <span className="text-muted-foreground">—</span>;
+                            const direction = header.name === "property-of" ? "reverse" : "forward";
+                            // Reuse the exact typed terms that Browse badges consume.
+                            // Prefer the dedicated projection, but retain already-loaded
+                            // Browse badges while the current page projection is pending.
+                            const currentResult = visibleResultsPage.find((item) => item.uri === row.uri);
+                            const scopes = [...(currentResult?.scopeValues ?? []), ...(readyAnalysisValues?.get(row.uri) ?? [])];
+                            const scope = [...scopes].reverse().find((value) => value.property === header.uri && value.direction === direction);
+                            const values = scope?.values.filter((value) => value.value && value.value !== "-") ?? [];
+                            return values.length && scope
+                              ? <div className="flex flex-wrap gap-0.5">{values.map((value, j) => renderScopeValueBadge(scope, value, j, {valueOnly: true, style: cell.badgeStyle}))}</div>
+                              : <span className="text-muted-foreground">—</span>;
+                          })()}
+                        </TableCell>)}
+                      </TableRow>)}
+                    </TableBody></Table>}
+                  {!analysisLoading && !analysisTable && !analysisError && <p className="p-3 text-sm text-muted-foreground">Choose an analysis from the ribbon.</p>}
+                </div>
+                <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-3 py-2 text-xs">
+                  <span className="text-muted-foreground">Page {resultsUiPage+1}{effectiveResultsTotalCount !== null ? ` · ${effectiveResultsTotalCount.toLocaleString()} results` : " · many results"}</span>
+                  <div className="flex items-center gap-2"><label htmlFor="analyze-page-size">Per page</label>
+                    <select id="analyze-page-size" value={effectivePageSize} onChange={(event) => { const n = Number(event.target.value); maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(n)); setResultsPageSize(n);setResultsUiPage(0);}} className="rounded border bg-background px-2 py-1">
+                      {resultsPageSizeOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                    <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={resultsUiPage===0 || isSearching} onClick={() => changeResultsPage(-1)}>Previous</button>
+                    <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={isSearching || (effectiveResultsTotalCount === null ? (results.length <= (resultsUiPage+1)*resultsPageSize && (resultsPageComplete || resultsBatchRequestPending.current)) : resultsUiPage+1 >= Math.ceil(effectiveResultsTotalCount/resultsPageSize))} onClick={() => changeResultsPage(1)}>Next</button>
+                  </div>
+                </div>
+              </div>}
+
+              {workspaceTab === "browse" && centralTab === "results" && (
                 <div
                   id="central-panel-results"
                   role="tabpanel"
@@ -11751,7 +12476,7 @@ onMouseLeave={() => {
                           : "border-border"
                       }`}
                     >
-                      {showResultBadges && (
+                      {showResultBadges && item.termType === "uri" && (
                         <div
                           className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-t-[5px] bg-sky-100 px-3 py-2 text-xs font-medium text-sky-950 dark:bg-sky-950/60 dark:text-sky-100"
                           aria-label="Record classes"
@@ -11832,20 +12557,7 @@ onMouseLeave={() => {
                         <div className="flex flex-wrap items-center gap-1.5 border-t border-border px-3 py-2" aria-label="Selected property values">
                           {item.scopeValues!.filter((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward") &&
                             (scopeValue.direction !== "forward" || !MOVIE_RELEASE_PROPERTIES.some((iri) => iri === scopeValue.property) || selectedBadgePropertySet.has(scopeValue.property))).map((scopeValue) => scopeValue.values.map((term, termIndex) => {
-                                const propertyLabel = toLabel(scopeValue.property);
-                                const visiblePropertyLabel = scopeValue.direction === "reverse" ? `${propertyLabel} of` : propertyLabel;
-                                const displayValue = term.type === "uri" ? toLabel(term.value) : term.value;
-                                const label = `${visiblePropertyLabel}: ${displayValue}${term.lang ? ` @${term.lang}` : ""}${term.datatype ? `^^${term.datatype}` : ""}`;
-                                return (
-                                  <Tooltip><TooltipTrigger render={<button type="button"
-                                    key={`${scopeValue.direction}:${scopeValue.property}:${term.value}:${term.lang ?? ""}:${term.datatype ?? ""}:${termIndex}`}
-                                    onClick={() => navigateResultBadge(scopeValue.property, term, scopeValue.direction)}
-                                    className="inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md bg-muted px-2 py-1 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                                  >
-                                    <span className="font-medium text-foreground">{visiblePropertyLabel}</span>
-                                    <span className="max-w-[240px] truncate">{displayValue}</span>
-                                  </button>} /><TooltipContent>{label}</TooltipContent></Tooltip>
-                                );
+                                return renderScopeValueBadge(scopeValue, term, termIndex);
                               }))}
                         </div>
                       )}
@@ -11874,7 +12586,7 @@ onMouseLeave={() => {
                 </div>
               )}
 
-              {centralTab === "chat" && (
+              {workspaceTab === "browse" && centralTab === "chat" && (
                 <div
                   id="central-panel-chat"
                   role="region"
@@ -11892,7 +12604,7 @@ onMouseLeave={() => {
                 </div>
               )}
 
-              {centralTab === "groups" && selectedGroupByOption && (
+              {workspaceTab === "browse" && centralTab === "groups" && selectedGroupByOption && (
                 <div id="central-panel-groups" role="tabpanel" aria-labelledby="central-tab-groups" className="flex min-h-0 flex-1 flex-col overflow-hidden">
                   {groupByOptions.length > 0 ? (
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -11967,7 +12679,7 @@ onMouseLeave={() => {
                 </div>
               )}
               {/* Drag the separator to resize the Results / Query Tree split. */}
-              {queryTreeOpen && <div
+              {workspaceTab === "browse" && queryTreeOpen && <div
                 role="separator"
                 aria-orientation="horizontal"
                 aria-label="Resize Query Tree height"
@@ -11994,7 +12706,7 @@ onMouseLeave={() => {
                 className="z-10 flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center border-y border-border bg-muted/70 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               ><span className="h-0.5 w-10 rounded-full bg-muted-foreground/60" /></div>}
               {/* Query Tree pane: its height is user-resizable and persisted in IndexedDB. */}
-              <div
+              {workspaceTab === "browse" && <div
                 id="central-panel-query-tree"
                 role="region"
                 aria-label="Query Tree"
@@ -12022,8 +12734,8 @@ onMouseLeave={() => {
                       .map((node) => <Fragment key={node.id}>{renderQueryNode(node)}</Fragment>)}
                   </ul>
                 </div>
-              </div>
-              <div className="group/header shrink-0 border-t bg-muted p-3">
+              </div>}
+              {workspaceTab === "browse" && <div className="group/header shrink-0 border-t bg-muted p-3">
                 {centralTab === "chat" ? (
                   <div id="maestro-assistant-composer-slot" className="w-full" />
                 ) : (<>
@@ -12135,10 +12847,10 @@ onMouseLeave={() => {
                 </div>
                 {searchError && endpointReadyForQuery && <p className="mt-2 text-sm text-destructive">{searchError}{searchError.includes("Could not load graphs from the personal SPARQL store") && <> Check that your <a href={personalSparqlEndpoint || undefined} target="_blank" rel="noreferrer" className="underline underline-offset-2">personal graph server</a> is online.</>}</p>}
                 </>)}
-              </div>
+              </div>}
             </section>
             </ResizablePanel>
-            <ResizableHandle withHandle />
+            {workspaceTab === "browse" && <><ResizableHandle withHandle />
             <ResizablePanel defaultSize={30} minSize={18} className="min-w-0">
             <section className="flex h-full min-h-0 min-w-0 flex-col">
               <Collapsible open={recordControlsOpen} onOpenChange={setRecordControlsOpen} className="shrink-0 border-b">
@@ -12167,7 +12879,7 @@ onMouseLeave={() => {
                   </div>}
                   {recordControlsOpen && selectedUri && <div className="ml-auto inline-flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/record-header:opacity-100 focus-within:opacity-100">
                     <QueryInspectorButton
-                      query={recordDebug.xml || `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" addr="${escapeXmlText(queryTree.attributes.addr ?? "")}"><value datatype="uri">${escapeXmlText(selectedUri)}</value><view type="${FCT_VIEW_TYPES.DESCRIBE}" limit="30" offset="0"/></query>`}
+                      query={recordRootDebugQuery}
                       filename="record-describe.xml" label="Record queries" toolbarButton
                       extraQueries={[
                         { id: "record-describe-sparql", label: "Record SELECT SPARQL", query: recordDebug.sparql || "Record SELECT has not executed.", filename: "record-select.sparql", language: "sparql" },
@@ -12319,7 +13031,40 @@ onMouseLeave={() => {
               {recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && !recordDescriptionError && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && (!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || (!currentFormattedRecordHtml && !recordFormatError)))) ? (
                 <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status">Loading formatted record…</div>
               ) : currentFormattedRecordHtml ? (
-                <div ref={formattedRecordContainerRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
+                <>
+                  <div ref={formattedRecordContainerRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
+                  {recordServiceDom && recordServices.length > 0 && createPortal(recordServices.map((service) => (
+                    <button key={service.uri} type="button" role="tab" aria-selected={recordServiceTab === service.uri}
+                      onClick={() => {
+                        setRecordServiceTab(service.uri);
+                        if (!recordServiceResults[service.uri]) {
+                          const first = service.operations.find((op) => op.requires.length === 0);
+                          if (first) void invokeRecordService(service, first);
+                        }
+                      }}
+                      className={`rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent ${recordServiceTab === service.uri ? "bg-accent" : ""}`}>
+                      {service.label}
+                    </button>
+                  )), recordServiceDom.tabs)}
+                  {recordServiceDom && createPortal(recordServices.map((service) => {
+                    const result = recordServiceResults[service.uri];
+                    const args = recordServiceArguments[service.uri] ?? {};
+                    return <section key={service.uri} role="tabpanel" hidden={recordServiceTab !== service.uri} className="py-4" aria-label={service.label}>
+                      <div className="mb-3 flex flex-wrap gap-2">
+                        {service.operations.map((operation) => <button key={operation.uri} type="button"
+                          className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+                          disabled={Boolean(result?.loading) || operation.requires.some((name) => !args[name])}
+                          onClick={() => void invokeRecordService(service, operation)} title={operation.requires.some((name) => !args[name]) ? "Find the book first to resolve the required identifier" : operation.label}>
+                          {operation.label}
+                        </button>)}
+                      </div>
+                      {result?.loading && <p role="status" className="text-sm text-muted-foreground">Loading {result.name}…</p>}
+                      {result?.error && <p role="alert" className="text-sm text-destructive">{result.error}</p>}
+                      {result?.html && <div className="max-h-[36rem] overflow-auto rounded-md border bg-background p-3" dangerouslySetInnerHTML={{__html:result.html}} />}
+                      {!result && <p className="text-sm text-muted-foreground">Select an action to retrieve service data.</p>}
+                    </section>;
+                  }), recordServiceDom.host)}
+                </>
               ) : (
               <section id="maestro-record-viewer" className="min-h-0 flex-1 overflow-auto p-4">
                 {describedPropertyRows.length > 0 && <section>
@@ -12347,7 +13092,7 @@ onMouseLeave={() => {
                                   ...(value.lang ? { lang: value.lang } : {}),
                                 }, item.direction === "property-of" ? "reverse" : "forward")}
                               ><span className="break-all">{value.termType === "uri"
-                                ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`}\u0000${value.value}`) ?? value.value)
+                                ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`}\u0000${value.value}`) ?? value.value)
                                 : value.value}</span></button>} /><TooltipContent>{`${toLabel(item.property)}${item.direction === "property-of" ? " of" : ""}: ${value.value}${value.lang ? ` @${value.lang}` : ""}${value.datatype ? `^^${value.datatype}` : ""}`}</TooltipContent></Tooltip>
                             )}
                           </td>
@@ -12381,7 +13126,7 @@ onMouseLeave={() => {
                                   ...(value.lang ? { lang: value.lang } : {}),
                                 }, item.direction === "property-of" ? "reverse" : "forward")}
                               ><span className="break-all">{value.termType === "uri"
-                                ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${selectedEndpointId}`}\u0000${value.value}`) ?? value.value)
+                                ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`}\u0000${value.value}`) ?? value.value)
                                 : value.value}</span></button>} /><TooltipContent>{`${toLabel(item.property)}${item.direction === "property-of" ? " of" : ""}: ${value.value}${value.lang ? ` @${value.lang}` : ""}${value.datatype ? `^^${value.datatype}` : ""}`}</TooltipContent></Tooltip>
                             )}
                           </td>
@@ -12398,7 +13143,7 @@ onMouseLeave={() => {
               </section>
               )}
             </section>
-            </ResizablePanel>
+            </ResizablePanel></>}
           </ResizablePanelGroup>
 
       </div>

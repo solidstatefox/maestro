@@ -116,6 +116,20 @@ export function rememberNamespaceMetadata(input: unknown) {
   persist();
 }
 
+/** Replace the active community prefix map; never overwrite actual RDF labels. */
+export function setNamespacePrefixSource(prefixes: Record<string, string>) {
+  namespaceToPrefix.clear();
+  for (const item of KNOWN_NAMESPACE_METADATA) namespaceToPrefix.set(item.namespace, item.prefix);
+  for (const [prefix, namespace] of Object.entries(prefixes)) {
+    if (!/^[a-z][a-z0-9_.-]*$/i.test(prefix) || !/^https?:\/\//i.test(namespace)) continue;
+    if (!namespaceToPrefix.has(namespace)) namespaceToPrefix.set(namespace, prefix);
+  }
+  // The older labels were computed with a different prefix source.
+  uriToShortform.clear();
+  nextNamespaceNumber = 1;
+  persist();
+}
+
 /** Return the known human-readable title of a namespace, when available. */
 export function toNamespaceLabel(namespace: string): string | undefined {
   return namespaceToLabel.get(namespace);

@@ -11,6 +11,20 @@ function isSafeIri(value: unknown): value is string {
     !/[<>"{}|^`\\\u0000-\u0020]/.test(value);
 }
 
+type RecordSelectTerm = { iri?: unknown; termType?: unknown; datatype?: unknown; lang?: unknown };
+
+function safeRecordSelectTerm(term: RecordSelectTerm): string | null {
+  const { iri, termType = "uri", lang } = term;
+  const datatype = term.datatype === "string" ? undefined : term.datatype;
+  if (termType === "uri") return isSafeIri(iri) ? `<${iri}>` : null;
+  if (termType !== "literal" || typeof iri !== "string" || iri.length > 4096 ||
+      /[\u0000-\u001f]/.test(iri) || (datatype !== undefined && !isSafeIri(datatype)) ||
+      (lang !== undefined && (typeof lang !== "string" || !/^[A-Za-z]+(?:-[A-Za-z0-9]+)*$/.test(lang))) ||
+      (datatype && lang)) return null;
+  const lexical = JSON.stringify(iri);
+  return lang ? `${lexical}@${lang}` : datatype ? `${lexical}^^<${datatype}>` : lexical;
+}
+
 function uniqueIris(value: unknown, max: number): string[] | null {
   if (!Array.isArray(value) || value.length > max || !value.every(isSafeIri)) return null;
   return [...new Set(value)];
@@ -307,40 +321,72 @@ export async function POST(request: Request) {
     // The request is assembled server-side from validated IRIs and a bounded limit.
     // Never accept an arbitrary client-supplied SPARQL query for this operation.
     if (body?.recordSelect && typeof body.recordSelect === "object") {
-      const { iri, limit, graphs } = body.recordSelect as { iri?: unknown; limit?: unknown; graphs?: unknown };
+      const { iri, termType = "uri", datatype, lang, limit, graphs, focusPredicate } = body.recordSelect as RecordSelectTerm & { limit?: unknown; graphs?: unknown; focusPredicate?: unknown };
       const namedGraphs = graphs === undefined ? [] : uniqueIris(graphs, 500);
-      if (!isSafeIri(iri) || !Number.isInteger(limit) || typeof limit !== "number" || limit < 1 || limit > 10000 || !namedGraphs) {
-        return NextResponse.json({ error: "A valid Record URI, limit (1–10000), and optional graph IRI list are required." }, { status: 400 });
+      const record = safeRecordSelectTerm({ iri, termType, datatype, lang });
+      if (!record || !Number.isInteger(limit) || typeof limit !== "number" || limit < 1 || limit > 10000 || !namedGraphs ||
+          (focusPredicate !== undefined && !isSafeIri(focusPredicate))) {
+        return NextResponse.json({ error: "A valid Record RDF term, limit (1–10000), and optional graph IRI list are required." }, { status: 400 });
       }
-      const record = `<${iri}>`;
       const graphPrefix = namedGraphs.length ? `VALUES ?recordGraph { ${iriList(namedGraphs)} } GRAPH ?recordGraph { ` : "";
       const graphSuffix = namedGraphs.length ? " }" : "";
-      const query = `SELECT ?subject ?predicate ?object ?labelResource ?labelPredicate (?valueLabel AS ?label) WHERE {
-        { SELECT ?subject ?predicate ?object WHERE {
-          ${graphPrefix}{ ${record} ?predicate ?object . BIND(${record} AS ?subject) }
-          UNION { ?subject ?predicate ${record} . BIND(${record} AS ?object) }${graphSuffix}
-        } LIMIT ${limit} }
-        BIND(IF(?subject = ${record}, ?object, ?subject) AS ?labelResource)
-        OPTIONAL {
-          FILTER(isIRI(?labelResource))
-          VALUES ?labelPredicate {
-            <http://www.w3.org/2000/01/rdf-schema#label>
-            <http://www.w3.org/2004/02/skos/core#prefLabel>
-            <http://schema.org/name>
-            <https://schema.org/name>
-            <http://xmlns.com/foaf/0.1/name>
-            <http://purl.org/dc/terms/title>
-          }
-          ?labelResource ?labelPredicate ?valueLabel .
-          FILTER(isLiteral(?valueLabel))
-          # Retain other-language names as a fallback; the client prefers English.
-
-        }
-      }`;
-      diagnosticOperation = "Record SELECT with URI labels";
+      // The RDF object of a literal Record is the literal itself, never an
+      // invented IRI. Incoming Roles are the only RDF triples it can have.
+      // Avoid the expensive cross-product of an unrestricted literal scan and
+      // optional URI-label joins on large public stores such as URIBurner.
+      let query = termType === "literal"
+        ? `SELECT ?subject ?predicate ?object WHERE {
+             { SELECT ?subject ?predicate WHERE {
+                 ${graphPrefix}?subject ?predicate ${record} .${graphSuffix}
+               } LIMIT ${limit} }
+             BIND(${record} AS ?object)
+           }`
+        : `SELECT ?subject ?predicate ?object ?labelResource ?labelPredicate (?valueLabel AS ?label) WHERE {
+             { SELECT ?subject ?predicate ?object WHERE {
+               ${graphPrefix}{ ${record} ?predicate ?object . BIND(${record} AS ?subject) }
+               UNION { ?subject ?predicate ${record} . BIND(${record} AS ?object) }${graphSuffix}
+             } LIMIT ${limit} }
+             BIND(IF(?subject = ${record}, ?object, ?subject) AS ?labelResource)
+             OPTIONAL {
+               FILTER(isIRI(?labelResource))
+               VALUES ?labelPredicate {
+                 <http://www.w3.org/2000/01/rdf-schema#label>
+                 <http://www.w3.org/2004/02/skos/core#prefLabel>
+                 <http://schema.org/name>
+                 <https://schema.org/name>
+                 <http://xmlns.com/foaf/0.1/name>
+                 <http://purl.org/dc/terms/title>
+               }
+               ?labelResource ?labelPredicate ?valueLabel .
+               FILTER(isLiteral(?valueLabel))
+             }
+           }`;
+      diagnosticOperation = termType === "literal" ? "Literal Record incoming Roles" : "Record SELECT with URI labels";
       diagnosticQuery = query;
-      const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs);
-      const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
+      let result: SparqlQueryResult;
+      let focusedFallback = false;
+      try {
+        // Don't make the user wait a full 20 seconds for a global Roles scan
+        // when the focus property already establishes a useful incoming role.
+        const scanTimeout = termType === "literal" && focusPredicate
+          ? Math.min(queryTimeoutMs ?? 20000, 5000) : queryTimeoutMs;
+        result = await querySparql(fctEndpoint, query, scanTimeout);
+      } catch (error) {
+        if (termType !== "literal" || !focusPredicate ||
+            !/timeout|abort|UND_ERR_CONNECT_TIMEOUT/i.test(String(error instanceof Error ? error.message + " " + String(error.cause) : error))) throw error;
+        focusedFallback = true;
+        query = `SELECT ?subject ?predicate ?object WHERE {
+          { SELECT ?subject WHERE {
+            ${graphPrefix}?subject <${focusPredicate}> ${record} .${graphSuffix}
+          } LIMIT ${limit} }
+          BIND(<${focusPredicate}> AS ?predicate)
+          BIND(${record} AS ?object)
+        }`;
+        diagnosticQuery = query;
+        result = await querySparql(fctEndpoint, query, queryTimeoutMs);
+      }
+      const { responseText, response, key } = result;
+      const incomplete = focusedFallback || response.status === 206 || isVirtuosoAnytime(response, responseText);
       if (!response.ok && !incomplete) {
         return NextResponse.json({ error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}: ${responseText.trim().slice(0, 1000)}` }, { status: response.status, headers: upstreamDiagnosticHeaders(response) });
       }

@@ -10127,8 +10127,8 @@ useEffect(() => {
           </ButtonGroup>
 
           {/* One address: [graph]@[graph server], with no gap around the at-sign. */}
-          <div role="group" aria-label="Graph address: graphsite at graph server" className="flex min-w-0 flex-1 items-stretch overflow-hidden rounded-md border border-input bg-background focus-within:ring-1 focus-within:ring-ring">
-            <div className="group/graph-input flex min-w-0 max-w-3xl flex-1 items-stretch overflow-hidden bg-transparent">
+          <div role="group" aria-label="Graph address: graphsite at graph server" className="flex w-fit max-w-full min-w-0 flex-none items-stretch overflow-hidden rounded-md border border-input bg-background focus-within:ring-1 focus-within:ring-ring">
+            <div className="group/graph-input flex w-[min(42rem,48vw)] min-w-0 flex-none items-stretch overflow-hidden bg-transparent">
               <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={() => void openGraphInfo()}
@@ -10200,13 +10200,13 @@ useEffect(() => {
                         type="button"
                         disabled={isCheckingEndpoints || fctEndpoints.length === 0}
                         aria-label="Choose graph server"
-                        className="flex w-fit min-w-0 max-w-full items-center gap-2 rounded-none bg-transparent px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex w-max min-w-0 max-w-[min(28rem,38vw)] items-center gap-2 rounded-none bg-transparent px-4 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <EndpointStatusIcon status={selectedEndpointStatus} />
                         <span className="min-w-0 truncate">{fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
                         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                       </button></DropdownMenuTrigger>} /><TooltipContent>{"Choose which FCT endpoint receives queries"}</TooltipContent></Tooltip>
-                      <DropdownMenuContent align="start" className="z-50 w-80 max-w-[calc(100vw-2rem)]">
+                      <DropdownMenuContent align="start" className="z-50 w-max min-w-80 max-w-[calc(100vw-2rem)]">
                         {fctEndpoints.length === 0 ? <DropdownMenuLabel>{isCheckingEndpoints ? "Loading endpoints…" : "No endpoints configured"}</DropdownMenuLabel> : [...new Set(fctEndpoints.map((endpoint) => endpoint.group || "Endpoints"))].map((group) => (
                           <Fragment key={group}>
                             <DropdownMenuLabel>{group}</DropdownMenuLabel>
@@ -10252,7 +10252,7 @@ useEffect(() => {
                   )}
             </div>
           </div>
-          <div className="shrink-0">
+          <div className="ml-auto shrink-0">
         <Tabs value={workspaceTab} onValueChange={(tab) => { if (tab === "browse" || tab === "view" || tab === "analyze") { setWorkspaceTab(tab); if (tab !== "browse") setCentralTab("results"); } }} className="shrink-0" aria-label="Maestro ribbon">
           <TabsList aria-label="Maestro ribbon tabs">
             <TabsTrigger value="browse" className="cursor-pointer">Browse</TabsTrigger>

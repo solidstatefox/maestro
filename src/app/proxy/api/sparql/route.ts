@@ -353,16 +353,32 @@ export async function POST(request: Request) {
       if (!/^SELECT\b/i.test(innerSelect)) {
         return NextResponse.json({ error: "The FCT list-values compiler did not generate a SELECT query." }, { status: 400 });
       }
-      const sourcePattern = namedGraphs.length
-        ? `VALUES ?recordGraph { ${iriList(namedGraphs)} } GRAPH ?recordGraph { ?node ?predicate ?object . }`
+      // A blank-node Record exposes both outgoing properties and incoming roles.
+      // Both branches use the *same* bound ?node from the FCT-derived SELECT;
+      // result-set-local blank-node labels are never interpolated into queries.
+      // Avoid joining the two directions together (which would multiply rows).
+      const recordGraphPrefix = namedGraphs.length ? `VALUES ?recordGraph { ${iriList(namedGraphs)} } ` : "";
+      const outgoingPattern = namedGraphs.length
+        ? `${recordGraphPrefix}GRAPH ?recordGraph { ?node ?predicate ?object . }`
         : `?node ?predicate ?object .`;
-      const query = `${preamble}SELECT ?node ?predicate ?object WHERE {
+      const incomingPattern = namedGraphs.length
+        ? `${recordGraphPrefix}GRAPH ?recordGraph { ?object ?predicate ?node . }`
+        : `?object ?predicate ?node .`;
+      const query = `${preamble}SELECT ?node ?direction ?predicate ?object WHERE {
         { ${innerSelect} }
         BIND(?c1 AS ?node)
         FILTER(isBlank(?node))
         OPTIONAL {
-          ${sourcePattern}
-          FILTER(!isLiteral(?object) || LANG(?object) = "" || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)}))
+          {
+            ${outgoingPattern}
+            FILTER(!isLiteral(?object) || LANG(?object) = "" || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)}))
+            BIND("property" AS ?direction)
+          }
+          UNION
+          {
+            ${incomingPattern}
+            BIND("property-of" AS ?direction)
+          }
         }
       } LIMIT ${limit}`;
       diagnosticOperation = "FCT-path blank-node Record SELECT";

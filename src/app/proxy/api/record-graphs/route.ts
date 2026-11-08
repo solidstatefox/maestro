@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { getConfiguredFctEndpoints, resolveConfiguredFctEndpoint, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
 import { parseRdfDocument } from "@/lib/rdf-to-sparql";
@@ -62,6 +63,33 @@ async function discover(endpoint: string, iri: string): Promise<string[]> {
   graphDiscoveryCache.set(cacheKey, { expires: Date.now() + GRAPH_CACHE_MS, graphs });
   return [...graphs];
 }
+/** Bind the blank node in the same SPARQL request that discovers its graphs.
+ * Never use a result-set-local blank-node label in a separate query. */
+async function discoverBoundBlankNodes(endpoint: string, xml: string, parent: string, predicate: string): Promise<string[]> {
+  if (xml.length > 100_000 || !validIri(parent) || !validIri(predicate) ||
+      !xml.includes(parent) || !xml.includes(predicate)) {
+    throw new Error("Invalid FCT-derived blank-node graph binding.");
+  }
+  const compiled = compileFctXmlToSparql(xml);
+  if (compiled.view !== "list-values" || compiled.limit > 10000 || compiled.offset !== 0) {
+    throw new Error("Blank-node graph discovery requires a bounded list-values FCT query.");
+  }
+  const compiledText = compiled.query.trim();
+  const preambleMatch = compiledText.match(/^((?:(?:DEFINE|PREFIX|BASE)\s+[^\n]*\n)*)/i);
+  const preamble = preambleMatch?.[1] ?? "";
+  const innerSelect = compiledText.slice(preamble.length).trim();
+  if (!/^SELECT\b/i.test(innerSelect)) throw new Error("Invalid blank-node SELECT binding.");
+  // A node's provenance includes graphs containing outgoing properties OR
+  // incoming roles. Both branches share the FCT-bound ?node in this query.
+  const query = `${preamble}SELECT DISTINCT ?src WHERE {
+    { ${innerSelect} }
+    BIND(?c1 AS ?node)
+    FILTER(isBlank(?node))
+    GRAPH ?src { { ?node ?p ?o } UNION { ?s ?p ?node } }
+  } ORDER BY ?src LIMIT 500`;
+  return readUris(await execute(endpoint, query, "application/sparql-results+json", "discover-blank-node", 15000), "src");
+}
+
 async function authors(endpoint: string, graphs: string[]): Promise<GraphAuthor[]> {
   if (!graphs.length) return [];
   // Graph-name metadata may live in the default graph or a named metadata graph.
@@ -86,7 +114,10 @@ export async function POST(request: Request) {
   const started = Date.now();
   try {
     const body = await request.json().catch(() => null);
-    if (!validIri(body?.iri)) return NextResponse.json({ error: "Invalid record IRI." }, { status: 400 });
+    const blankQuery = typeof body?.queryXml === "string" ? body.queryXml : "";
+    const blankIdentity = Boolean(blankQuery);
+    if (blankIdentity ? (!validIri(body?.parent) || !validIri(body?.predicate)) : !validIri(body?.iri))
+      return NextResponse.json({ error: "A valid resource IRI or FCT-derived blank-node binding is required." }, { status: 400 });
     const endpoints = await getConfiguredFctEndpoints(request);
     // The live query's graph-server address is authoritative, not the
     // fct_endpoint cookie (which may be stale after restoring a share URL).
@@ -97,10 +128,15 @@ export async function POST(request: Request) {
       : selectConfiguredFctEndpoint(request, endpoints);
     const endpoint = configured && server.startsWith("http") ? { ...configured, url: server } : configured;
     if (!endpoint) return NextResponse.json({ error: server ? `Graph server from query addr is not configured: ${server}` : "No configured graph server." }, { status: 503 });
-    const iri: string = body.iri;
+    const iri: string = blankIdentity ? "" : body.iri;
+    // Graph membership is always verified on the selected graph server. For
+    // blank nodes, the complete FCT path binds the node in each request.
+    const discoverRecordGraphs = () => blankIdentity
+      ? discoverBoundBlankNodes(endpoint.url, blankQuery, body.parent, body.predicate)
+      : discover(endpoint.url, iri);
     if (body.operation === "graphs") {
       // Do not block the Graph dropdown on a metadata query.
-      const graphs = await discover(endpoint.url, iri);
+      const graphs = await discoverRecordGraphs();
       return NextResponse.json({ graphs }, { headers: { "Cache-Control": "no-store" } });
     }
     if (body.operation === "authors") {
@@ -109,18 +145,19 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Invalid author graph selection." }, { status: 400 });
       // Verify author graph names against physical graph membership; never
       // execute arbitrary named graph metadata lookups supplied by the client.
-      const available = await discover(endpoint.url, iri);
+      const available = await discoverRecordGraphs();
       const allowed = requested.filter((graph: string) => available.includes(graph));
       const graphAuthors = await authors(endpoint.url, allowed);
       return NextResponse.json({ authors: graphAuthors }, { headers: { "Cache-Control": "no-store" } });
     }
     if (body.operation === "describe") {
+      if (blankIdentity) return NextResponse.json({ error: "Use the FCT-derived blank-node Record SELECT for graph-filtered descriptions." }, { status: 400 });
       const graph: unknown = body.graph;
       const authorGraph: unknown = body.authorGraph;
       if (typeof graph !== "string" || (graph && !validIri(graph)) ||
           typeof authorGraph !== "string" || (authorGraph && !validIri(authorGraph)))
         return NextResponse.json({ error: "Invalid graph or author graph selection." }, { status: 400 });
-      const available = await discover(endpoint.url, iri);
+      const available = await discoverRecordGraphs();
       // A graph family ignores the fragment of its named graph IRI.
       // The author selection is the exact physical named graph IRI (#ID included).
       // Neither condition introduces a regex or unsupported FROM NAMED syntax.

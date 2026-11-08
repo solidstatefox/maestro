@@ -1,4 +1,5 @@
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
+import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
@@ -637,8 +638,8 @@ export async function POST(request: Request) {
           return serializeProjectionResource(candidate) ? candidate : null;
         })
       : null;
-    if (suppliedResources && suppliedResources.length > 100)
-      return fctError(`list-values received ${suppliedResources.length} resources; maximum 100 per request.`, 400);
+    if (suppliedResources && suppliedResources.length > LIST_VALUES_MAX_RESOURCES)
+      return fctError(`list-values received ${suppliedResources.length} resources; maximum ${LIST_VALUES_MAX_RESOURCES} per request.`, 400);
     if (suppliedResources && suppliedResources.some((term) => term === null))
       return fctError(`list-values received ${suppliedResources.filter((term) => term === null).length} invalid RDF terms; verify URI schemes, literal datatypes, and term types.`, 400);
     if (suppliedResources) {

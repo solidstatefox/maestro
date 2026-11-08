@@ -1,6 +1,8 @@
 "use client";
 
 import { FCT_VIEW_TYPES, type FctViewType } from "@/lib/fct-view-types";
+import maestroLanguages from "@/data/maestro-languages.json";
+import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { rememberNamespaceMetadata, rememberShortforms, setNamespacePrefixSource, toLabel } from "@/lib/uri-labels";
@@ -67,33 +69,7 @@ hljs.registerLanguage("xml", xmlLanguage);
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
 hljs.registerLanguage("sparql", sqlLanguage);
 
-const MAESTRO_ALPHABET_LANGUAGES = [
-  { code: "en", name: "English" },
-  { code: "zh", name: "Chinese" },
-  { code: "hi", name: "Hindi" },
-  { code: "es", name: "Spanish" },
-  { code: "fr", name: "French" },
-  { code: "ar", name: "Arabic" },
-  { code: "bn", name: "Bengali" },
-  { code: "pt", name: "Portuguese" },
-  { code: "ru", name: "Russian" },
-  { code: "ur", name: "Urdu" },
-  { code: "id", name: "Indonesian" },
-  { code: "de", name: "German" },
-  { code: "ja", name: "Japanese" },
-  { code: "sw", name: "Swahili" },
-  { code: "mr", name: "Marathi" },
-  { code: "te", name: "Telugu" },
-  { code: "tr", name: "Turkish" },
-  { code: "ta", name: "Tamil" },
-  { code: "vi", name: "Vietnamese" },
-  { code: "ko", name: "Korean" },
-  { code: "it", name: "Italian" },
-  { code: "th", name: "Thai" },
-  { code: "fa", name: "Persian" },
-  { code: "pl", name: "Polish" },
-  { code: "nl", name: "Dutch" },
-] as const;
+const MAESTRO_ALPHABET_LANGUAGES = maestroLanguages;
 
 /** Display an Anytime result marker only for a widget whose most recent query was incomplete. */
 
@@ -344,6 +320,9 @@ type FctResult = {
   columns?: FctResponseColumn[];
   matches: FctMatch[];
   scopeValues?: ScopeValue[];
+  // URI anchor projected in the same FCT SELECT as a blank-node focus.
+  // Not a display badge and not dependent on list-values enrichment.
+  recordAnchor?: { parent: string; predicate: string };
   termType?: "uri" | "literal" | "bnode";
   datatype?: string;
   lang?: string;
@@ -371,26 +350,52 @@ function listValuesQueryClone(xml: string, columns: ListValueProjection[]): stri
 }
 
 /**
- * Derive a blank-node Record from the live Results path, not from a badge URI
- * in isolation. The outgoing relationship immediately before the active
- * reverse role binds the blank node. Keep all ancestor FCT constraints and
- * bind the role's URI to the clicked badge, then put list-values at that node.
- * This preserves sibling blank-node identity in the single Record SELECT.
+ * Derive a blank-node Record query from the actual Results FCT path.
+ *
+ * A reverse-role badge can be a sibling of <view> (the usual Results shape)
+ * or the view-bearing relationship itself. In either case bind the badge URI
+ * on that exact <property-of> node and leave the complete FCT constraints
+ * intact. The view must focus on the blank node, not on the URI badge.
+ *
+ * Blank nodes opened from an unrelated URI Record table do not have a matching
+ * Results path: only that explicit navigation may use a standalone URI anchor.
  */
 function blankNodeRecordListValuesQuery(
   sourceXml: string, predicate: string, parentUri: string, limit: number,
+  allowDirectAnchorFallback = false,
 ): string {
   const doc = new DOMParser().parseFromString(sourceXml, "application/xml");
   if (doc.querySelector("parsererror")) throw new Error("Invalid Results FCT XML.");
   const ns = "http://openlinksw.com/services/facets/1.0";
   const view = Array.from(doc.getElementsByTagNameNS(ns, "view"))[0];
   if (!view || !view.parentElement) throw new Error("Results query has no view carrier.");
-  const activeRole = view.parentElement;
-  const forward = activeRole.parentElement;
-  if (activeRole.localName !== "property-of" || activeRole.getAttribute("iri") !== predicate ||
-      !forward || forward.localName !== "property" || forward.getAttribute("iri") !== predicate) {
-    // Blank nodes opened from a URI Record property table may have no matching
-    // breadcrumb role. Build an equivalent FCT path anchored at that parent.
+  const carrier = view.parentElement;
+  const hasRolePredicate = (node: Element) =>
+    node.localName === "property-of" && node.getAttribute("iri") === predicate &&
+    node.getAttribute("project") !== "yes";
+
+  // Most commonly the role is an immediate sibling of <view> inside the
+  // property that binds the blank node. Do not move <view> in this case.
+  const siblingRole = Array.from(carrier.children).find(hasRolePredicate);
+  // Alternatively, <view> may be carried by the reverse relationship itself;
+  // its immediate parent binds the blank node when it is a forward property.
+  const carrierRole = hasRolePredicate(carrier) && carrier.parentElement?.localName === "property"
+    ? carrier : null;
+  const selectedRole = siblingRole ?? carrierRole;
+
+  if (selectedRole && !allowDirectAnchorFallback) {
+    const value = doc.createElementNS(ns, "value");
+    value.setAttribute("datatype", "uri");
+    value.textContent = parentUri;
+    selectedRole.appendChild(value);
+    if (selectedRole === carrierRole) {
+      // The selected role binds the parent URI; focus the outgoing property
+      // that binds the blank node, retaining the rest of the original path.
+      carrier.parentElement!.appendChild(view);
+    }
+  } else if (allowDirectAnchorFallback) {
+    // A blank node clicked in a URI Record table is not necessarily in the
+    // active Results path. Build a separate URI-anchored path only for it.
     const root = doc.documentElement;
     while (root.firstChild) root.removeChild(root.firstChild);
     const value = doc.createElementNS(ns, "value");
@@ -402,15 +407,9 @@ function blankNodeRecordListValuesQuery(
     root.appendChild(property);
     property.appendChild(view);
   } else {
-    // The active role is the URI-valued badge and the forward relationship
-    // immediately above it identifies the definition blank node.
-    const value = doc.createElementNS(ns, "value");
-    value.setAttribute("datatype", "uri");
-    value.textContent = parentUri;
-    // Keep any existing role filters; constrain this exact node, not a sibling.
-    activeRole.appendChild(value);
-    forward.appendChild(view);
+    throw new Error("The selected reverse-property badge is not present at the active Results view scope.");
   }
+
   view.setAttribute("type", FCT_VIEW_TYPES.LIST_VALUES);
   view.setAttribute("limit", String(limit));
   view.setAttribute("offset", "0");
@@ -611,6 +610,10 @@ const dbActivity = getText("db-activity");
         }
       }
     }
+    const recordRole = first.termType === "bnode"
+      ? parsedScopeValues.find((scope) => scope.direction === "reverse" && scope.values.some((value) => value.type === "uri"))
+      : undefined;
+    const recordParent = recordRole?.values.find((value) => value.type === "uri")?.value;
     const item: FctResult = {
       uri: first.value,
       title,
@@ -621,9 +624,13 @@ const dbActivity = getText("db-activity");
       columns,
       matches: excerpt ? [{ excerpt, columns: columns.slice(1) }] : [],
       ...(parsedScopeValues.length > 0 ? { scopeValues: parsedScopeValues } : {}),
+      ...(recordParent && recordRole ? { recordAnchor: { parent: recordParent, predicate: recordRole.property } } : {}),
     };
     if (resultType === FCT_VIEW_TYPES.LIST_COUNT && second) item.columns = columns;
-    if (third && resultType === FCT_VIEW_TYPES.TEXT) item.matches = [{ excerpt: third.value, columns: columns.slice(2) }];
+    // In TEXT views c2 is the excerpt. Later columns can be independent
+    // structural Record-identity projections, not additional excerpts.
+    if (third && resultType === FCT_VIEW_TYPES.TEXT && second?.attributes?.var !== "c2" && !excerpt)
+      item.matches = [{ excerpt: third.value, columns: columns.slice(2) }];
     return [item];
   });
   const facetItems = rowColumns.flatMap((columns) => {
@@ -4418,20 +4425,20 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   const [widgetTimeouts, setWidgetTimeouts] = useState<Record<MaestroTimeoutCategory, number>>(() => readMaestroWidgetTimeouts());
   const [timeoutEditorOpen, setTimeoutEditorOpen] = useState(false);
   const [recordDescribeIncomplete, setRecordDescribeIncomplete] = useState(false);
+  // Group By member rows are not part of the ordinary Results page. Preserve
+  // their RDF term type and badge-derived parent when opening their Record.
   const currentRecordIdentity = results.find((item) => item.uri === selectedUri)
+    ?? Object.values(groupMembers).flatMap((group) => group.results).find((item) => item.uri === selectedUri)
     ?? groupValues.find((item) => item.uri === selectedUri);
-  const blankNodeTerm = currentRecordIdentity?.termType === "bnode" || explicitBlankNodeAnchor?.label === selectedUri;
+  const blankNodeTerm = currentRecordIdentity?.termType === "bnode" ||
+    /^(?:nodeID:\/\/|_:)/i.test(selectedUri) || explicitBlankNodeAnchor?.label === selectedUri;
   const blankNodeFocus = getPropertyPath().at(-1);
-  // The reverse relationship badge supplies the URI parent of a blank node in
-  // the Results pane. The Record table supplies that anchor directly on click.
-  const inferredBlankNodeAnchor = blankNodeTerm && blankNodeFocus?.name === "property"
-    ? currentRecordIdentity?.scopeValues?.find((scope) => scope.direction === "reverse" && scope.property === blankNodeFocus.uri)
-      ?.values.find((term) => term.type === "uri")?.value
-    : undefined;
+  // Record identity is supplied by the Results SELECT, never inferred from
+  // optional card badges. Explicit navigation from a URI Record stays valid.
   const blankNodeAnchor = explicitBlankNodeAnchor?.label === selectedUri
     ? { parent: explicitBlankNodeAnchor.parent, predicate: explicitBlankNodeAnchor.predicate }
-    : inferredBlankNodeAnchor && blankNodeFocus?.uri
-      ? { parent: inferredBlankNodeAnchor, predicate: blankNodeFocus.uri }
+    : blankNodeTerm && currentRecordIdentity?.recordAnchor
+      ? currentRecordIdentity.recordAnchor
       : null;
   const currentRecordDescriptionKey = [selectedUri, blankNodeTerm ? "bnode" : currentRecordIdentity?.termType ?? "uri", blankNodeAnchor?.parent ?? "", blankNodeAnchor?.predicate ?? "", currentRecordIdentity?.datatype ?? "", currentRecordIdentity?.lang ?? "", selectedEndpointId, queryTree.attributes.addr ?? "",
     queryTree.attributes.graph ?? "", queryTree.attributes.inference ?? "", queryTree.attributes["same-as"] ?? "",
@@ -4445,7 +4452,9 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     type: rootUriWithoutPath ? FCT_VIEW_TYPES.LIST : FCT_VIEW_TYPES.TEXT,
     limit: String(resultsBatchSize),
     offset: String(resultsOffset),
-    badges: "no", // list-values independently enriches the paginated Results page.
+    // Capture the URI parent from the SAME result set as the blank-node term.
+    // Optional list-values badges can still be loaded/hidden separately.
+    badges: getActiveViewRoleFilters(queryTree).length > 0 ? "yes" : "no",
     order: orderResults ? "yes" : "no",
   }));
   const resultsCountRequestIdentity = `${selectedEndpointId}\u0000${resultsCountSparql ?? ""}`;
@@ -4693,19 +4702,23 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
         const data = await readFctResponse(response);
         if (cancelled) return;
         rememberShortforms(data?.shortforms);
-        const rawResults: FctResult[] = Array.isArray(data.results) ? data.results : [];
+        const focusPredicate = getPropertyPath().at(-1)?.uri;
+        const rawResults: FctResult[] = (Array.isArray(data.results) ? data.results : []).map((item: FctResult) => {
+          if (item.termType !== "bnode" || !focusPredicate) return item;
+          const structuralRole = item.scopeValues?.find((value) => value.direction === "reverse" && value.property === focusPredicate);
+          const parent = structuralRole?.values.find((value) => value.type === "uri")?.value;
+          return parent ? { ...item, recordAnchor: { parent, predicate: focusPredicate } } : item;
+        });
         const uniqueResults = new Map<string, FctResult>();
         for (const item of rawResults) {
           const previous = uniqueResults.get(item.uri);
           uniqueResults.set(item.uri, previous
-            ? { ...previous, ...item, matches: [...previous.matches, ...item.matches] }
+            ? { ...previous, ...item, recordAnchor: previous.recordAnchor ?? item.recordAnchor, matches: [...previous.matches, ...item.matches] }
             : { ...item, matches: [...item.matches] });
         }
-        const enrichmentScopeForPage = `list-values-projected-v1\u0000${selectedEndpointId}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
-        const nextResults = Array.from(uniqueResults.values()).map((item) => {
-          const saved = showResultBadges ? resultsEnrichmentCacheRef.current.get(enrichmentScopeForPage + item.uri) : undefined;
-          return saved ? { ...item, scopeValues: saved } : item;
-        });
+        // Preserve the parent binding from the primary FCT response. Badge
+        // enrichment runs independently and only fills display values.
+        const nextResults = Array.from(uniqueResults.values());
 
         // Enrichment may take much longer than the FCT response. Never allow
         // a completed request for an older breadcrumb/endpoint to repopulate
@@ -4722,7 +4735,8 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
           const merged = new Map(current.map((item) => [item.uri, item]));
           for (const item of nextResults) {
             const prior = merged.get(item.uri);
-            merged.set(item.uri, prior ? { ...prior, ...item, matches: [...prior.matches, ...item.matches] } : item);
+            merged.set(item.uri, prior ? { ...prior, ...item, scopeValues: prior.scopeValues?.length ? prior.scopeValues : item.scopeValues,
+              recordAnchor: item.recordAnchor ?? prior.recordAnchor, matches: [...prior.matches, ...item.matches] } : item);
           }
           return Array.from(merged.values());
         });
@@ -4791,113 +4805,91 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    // Every Results card needs rdf:type for its Category banner, regardless of
-    // which Properties the user has chosen to show as additional badges.
+    // Transport batching is internal: a new page only enriches resources
+    // missing from the scoped cache. Earlier pages are never re-requested.
     const selectedForward = [...new Set([
-      ...(showResultBadges ? [RDF_TYPE_URI] : []),
+      RDF_TYPE_URI,
       ...(resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000") : []),
     ])];
     const selectedReverse = resultBadgeRolesKey ? resultBadgeRolesKey.split("\u0000") : [];
-
-    if (!showResultBadges || !endpointReadyForQuery || !results.length ||
-        (!selectedForward.length && !selectedReverse.length)) {
-      setResults((current) => {
-        if (!current.some((item) => (item.scopeValues?.length ?? 0) > 0)) return current;
-        return current.map((item) => ({ ...item, scopeValues: [] }));
-      });
+    if (!showResultBadges || !endpointReadyForQuery || !results.length || !resultsListValuesXml) {
+      // Enrichment is presentation data. Transient endpoint readiness and badge
+      // visibility must not erase FCT-projected Record identity or cached badges.
       return () => controller.abort();
     }
 
-    // Even if the Results SELECT projects an rdf:type column, that projection
-    // may carry only one of a resource's classes. Fetch all selected property
-    // values so the class banner can display every rdf:type.
-
-    const resourceUris = [...new Set(results.map((item) => item.uri).filter(Boolean))];
     const relationships: ScopeValue[] = [
       ...selectedForward.map((property) => ({
-        property,
-        label: toLabel(property),
-        direction: "forward" as const,
-        values: [{ value: "-" }],
+        property, label: toLabel(property), direction: "forward" as const, values: [{ value: "-" }],
       })),
       ...selectedReverse.map((property) => ({
-        property,
-        label: toLabel(property),
-        direction: "reverse" as const,
-        values: [{ value: "-" }],
+        property, label: toLabel(property), direction: "reverse" as const, values: [{ value: "-" }],
       })),
     ];
-
-    const enrichmentScope = `list-values-projected-v1\u0000${selectedEndpointId}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
+    const enrichmentScope = `list-values-projected-v2\u0000${selectedEndpointId}\u0000${serializeFctQuery(setQueryViewAttributes(queryTree, { offset: "0", limit: "0" }))}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
     const cache = resultsEnrichmentCacheRef.current;
+    // The projection endpoint accepts URI and literal terms, not blank-node
+    // display labels. Blank-node Record identity comes from the primary SELECT.
+    const resources = [...new Map(results.filter((item) => item.uri && item.termType !== "bnode")
+      .map((item) => [item.uri, { type: item.termType === "literal" ? "literal" : "uri", value: item.uri,
+        ...(item.datatype ? { datatype: item.datatype } : {}), ...(item.lang ? { lang: item.lang } : {}) }])).values()];
+    const missing = resources.filter((term) => !cache.has(enrichmentScope + term.value));
+    // Do not place '-' placeholder rows in authoritative Result state.
+    // A previously loaded card must remain stable while enrichment is pending.
     setResults((current) => current.map((item) => {
       const saved = cache.get(enrichmentScope + item.uri);
-      // Do not replace a successfully enriched card with placeholder values.
-      if (saved) return { ...item, scopeValues: saved };
-      if ((item.scopeValues ?? []).some((scope) => scope.values.some((v) => v.value !== "-"))) return item;
-      return {
-        ...item,
-        scopeValues: relationships.map((relationship) => ({
-          ...relationship, values: relationship.values.map((value) => ({ ...value })),
-        })),
-      };
+      return saved && item.scopeValues !== saved ? { ...item, scopeValues: saved } : item;
     }));
+    if (!missing.length) return () => { cancelled = true; controller.abort(); };
 
     void (async () => {
       try {
-        const queryXml = resultsListValuesXml;
-        const response = await cachedFetchFct("/proxy/api/fct", {
-          method: "POST",
-          cache: "no-store",
-          headers: {
-            "Content-Type": "application/json",
-            ...proxyDebugHeaders("results-enrichment", `ResultsListValues:${proxyDebugFingerprint(`${resultBadgeUrisKey}:${resultBadgePropertiesKey}:${resultBadgeRolesKey}`)}`),
-          },
-          body: JSON.stringify({ queryXml, resources: resourceUris }),
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]),
-        });
-        const xml = await response.text();
-        if (!response.ok) throw new Error(`list-values returned HTTP ${response.status}: ${xml.slice(0, 300)}`);
-        const responseDocument = new DOMParser().parseFromString(xml, "application/xml");
-        const executedSparql = Array.from(responseDocument.getElementsByTagName("*"))
-          .find((node) => node.localName === "sparql")?.textContent || "";
-        if (!cancelled) setResultListValuesDebug({ xml: queryXml, sparql: executedSparql });
-        const parsed = parseListValuesXml(xml);
-        const grouped = new Map<string, Map<string, ScopeValue>>();
-        for (const item of results) {
-          const resourceGroups = new Map<string, ScopeValue>();
-          const projected = parsed.get(item.uri) ?? [];
-          for (const relationship of relationships) {
-            const key = `${item.uri}\u0000${relationship.direction}\u0000${relationship.property}`;
-            resourceGroups.set(key, projected.find((v) => v.direction === relationship.direction && v.property === relationship.property) ?? {
-              ...relationship, values: [{ value: "-" }],
-            });
+        // Keep this limit aligned with the proxy's request contract. It is
+        // transport backpressure, not the FCT view limit or a Sheet setting.
+        const maxResourcesPerRequest = LIST_VALUES_MAX_RESOURCES;
+        for (let start = 0; start < missing.length; start += maxResourcesPerRequest) {
+          if (cancelled || controller.signal.aborted) return;
+          const batch = missing.slice(start, start + maxResourcesPerRequest);
+          const queryXml = resultsListValuesXml;
+          const response = await cachedFetchFct("/proxy/api/fct", {
+            method: "POST", cache: "no-store",
+            headers: {
+              "Content-Type": "application/json",
+              ...proxyDebugHeaders("results-enrichment", `ResultsListValues:${proxyDebugFingerprint(`${resultBadgeUrisKey}:${resultBadgePropertiesKey}:${resultBadgeRolesKey}`)}:${start / maxResourcesPerRequest + 1}`),
+            },
+            body: JSON.stringify({ queryXml, resources: batch }),
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]),
+          });
+          const xml = await response.text();
+          if (!response.ok) throw new Error(`list-values batch ${start / maxResourcesPerRequest + 1} returned HTTP ${response.status}: ${xml.slice(0, 300)}`);
+          const responseDocument = new DOMParser().parseFromString(xml, "application/xml");
+          const executedSparql = Array.from(responseDocument.getElementsByTagName("*"))
+            .find((node) => node.localName === "sparql")?.textContent || "";
+          if (!cancelled) setResultListValuesDebug({ xml: queryXml, sparql: executedSparql });
+          const parsed = parseListValuesXml(xml);
+          if (cancelled) return;
+          for (const term of batch) {
+            const projected = parsed.get(term.value) ?? [];
+            const values = relationships.map((relationship) =>
+              projected.find((value) => value.direction === relationship.direction && value.property === relationship.property)
+              ?? { ...relationship, values: [{ value: "-" }] });
+            cache.set(enrichmentScope + term.value, values);
           }
-          grouped.set(item.uri, resourceGroups);
+          if (cache.size > 2500) {
+            for (const key of Array.from(cache.keys()).slice(0, cache.size - 2000)) cache.delete(key);
+          }
+          setResults((current) => current.map((item) => {
+            const saved = cache.get(enrichmentScope + item.uri);
+            return saved && item.scopeValues !== saved ? { ...item, scopeValues: saved } : item;
+          }));
         }
-        if (cancelled) return;
-        for (const uri of resourceUris) {
-          cache.set(enrichmentScope + uri, [...(grouped.get(uri)?.values() ?? [])]);
-        }
-        // Keep the cache bounded across long browsing sessions.
-        if (cache.size > 2500) {
-          for (const key of Array.from(cache.keys()).slice(0, cache.size - 2000)) cache.delete(key);
-        }
-        setResults((current) => current.map((item) => {
-          const saved = cache.get(enrichmentScope + item.uri);
-          return saved ? { ...item, scopeValues: saved } : item;
-        }));
       } catch (error) {
         if (cancelled || controller.signal.aborted) return;
         console.warn("Results badge enrichment failed:", error);
       }
     })();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [showResultBadges, resultBadgeUrisKey, resultBadgePropertiesKey, resultBadgeRolesKey, selectedEndpointId, endpointReadyForQuery, propertyFacets, roleFacets, resultsListValuesXml]);
+    return () => { cancelled = true; controller.abort(); };
+  }, [showResultBadges, resultBadgeUrisKey, resultBadgePropertiesKey, resultBadgeRolesKey, selectedEndpointId, endpointReadyForQuery, resultsListValuesXml]);
 
   // Some Virtuoso endpoints return a successful grouped A-Z response while
   // omitting an initial visibly represented in the Results list. Verify such
@@ -5033,6 +5025,9 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
           const memberTree = createGroupMemberQuery(queryTree, selectedGroupByOption, groupValue);
           const memberXml = serializeFctQuery(setQueryViewAttributes(memberTree, {
             type: FCT_VIEW_TYPES.TEXT, limit: String(resultsBatchSize), offset: "0",
+            // Group By member Records need their URI parent binding in the
+            // same SELECT as the blank node, independently of card badges.
+            badges: getActiveViewRoleFilters(memberTree).length ? "yes" : "no",
           }));
           const request = (body: string, label: string) => cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store",
@@ -5046,11 +5041,17 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
           const data = await request(memberXml, "GroupsMembers");
           if (!cancelled) {
             rememberShortforms(data?.shortforms);
-            const rawResults: FctResult[] = Array.isArray(data.results) ? data.results : [];
+            const focusPredicate = getPropertyPath().at(-1)?.uri;
+            const rawResults: FctResult[] = (Array.isArray(data.results) ? data.results : []).map((item: FctResult) => {
+              if (item.termType !== "bnode" || !focusPredicate) return item;
+              const role = item.scopeValues?.find((scope) => scope.direction === "reverse" && scope.property === focusPredicate);
+              const parent = role?.values.find((value) => value.type === "uri")?.value;
+              return parent ? { ...item, recordAnchor: { parent, predicate: focusPredicate } } : item;
+            });
             const uniqueResults = new Map<string, FctResult>();
             for (const item of rawResults) {
               const previous = uniqueResults.get(item.uri);
-              uniqueResults.set(item.uri, previous ? { ...previous, ...item, matches: [...previous.matches, ...item.matches] } : { ...item, matches: [...item.matches] });
+              uniqueResults.set(item.uri, previous ? { ...previous, ...item, recordAnchor: previous.recordAnchor ?? item.recordAnchor, matches: [...previous.matches, ...item.matches] } : { ...item, matches: [...item.matches] });
             }
             groupMemberRequestStates.current.set(key, "loaded");
             setGroupMembers((current) => ({ ...current, [key]: { results: Array.from(uniqueResults.values()), count: uniqueResults.size, loading: false, error: "" } }));
@@ -5467,6 +5468,23 @@ setGraphFacets(graphs);
   const recordRootDebugValue = `<value datatype="${escapeXmlText(selectedRecordTermType === "uri" ? "uri" : selectedRecordLanguage ? "string" : recordFocusValueDatatype ?? "string")}"${selectedRecordLanguage ? ` xml:lang="${escapeXmlText(selectedRecordLanguage)}"` : ""}>${escapeXmlText(selectedUri)}</value>`;
   const recordRootDebugQuery = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" addr="${escapeXmlText(queryTree.attributes.addr ?? "")}">${recordRootDebugValue}<view type="${FCT_VIEW_TYPES.DESCRIBE}" limit="${recordDescriptionQueryLimit}" offset="0"/></query>`;
 
+  // The bound-node query is also the identity used by graph provenance.
+  // A nodeID:// display label must never be interpolated as an RDF IRI; each
+  // operation rebinds the node through the authoritative FCT property path.
+  const blankNodeGraphQueryXml = selectedRecordTermType === "bnode" && blankNodeAnchor
+    ? (() => {
+        try {
+          return blankNodeRecordListValuesQuery(
+            serializeFctQuery(queryTree), blankNodeAnchor.predicate, blankNodeAnchor.parent,
+            recordDescriptionQueryLimit, explicitBlankNodeAnchor?.label === selectedUri,
+          );
+        } catch { return ""; }
+      })()
+    : "";
+  const graphDiscoveryIdentity = selectedRecordTermType === "bnode"
+    ? { queryXml: blankNodeGraphQueryXml, parent: blankNodeAnchor?.parent, predicate: blankNodeAnchor?.predicate }
+    : { iri: selectedUri };
+
   // The graph membership request is independent of optional author metadata.
   // Always send the authoritative query address; endpoint selection must not
   // race the fct_endpoint cookie when a share URL restores a different server.
@@ -5477,7 +5495,7 @@ setGraphFacets(graphs);
     setSelectedRecordAuthor("");
     setRecordGraphError("");
     setRecordAuthorError("");
-    if (!selectedUri || !selectedEndpointId || selectedRecordTermType !== "uri") { setLoadingRecordGraphs(false); return; }
+    if (!selectedUri || !selectedEndpointId || (selectedRecordTermType === "bnode" && !blankNodeGraphQueryXml) || selectedRecordTermType === "literal") { setLoadingRecordGraphs(false); return; }
     const controller = new AbortController();
     setLoadingRecordGraphs(true);
     void (async () => {
@@ -5486,7 +5504,7 @@ setGraphFacets(graphs);
           method: "POST", cache: "no-store",
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-discovery", "RecordGraphs") },
-          body: JSON.stringify({ iri: selectedUri, addr: queryTree.attributes.addr, operation: "graphs" }),
+          body: JSON.stringify({ ...graphDiscoveryIdentity, addr: queryTree.attributes.addr, operation: "graphs" }),
         });
         const data = await response.json() as { graphs?: string[]; error?: string };
         if (!response.ok) throw new Error(data.error || "Could not discover record graphs.");
@@ -5503,7 +5521,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedRecordTermType, selectedEndpointId, queryTree.attributes.addr, queryRefreshRevision]);
+  }, [selectedUri, selectedRecordTermType, blankNodeGraphQueryXml, selectedEndpointId, queryTree.attributes.addr, queryRefreshRevision]);
 
   // Load author provenance only after the user selects a graph family.
   // Slow metadata queries must never delay the Graph dropdown.
@@ -5522,7 +5540,7 @@ setGraphFacets(graphs);
         const response = await maestroQueryFetch("/proxy/api/record-graphs", {
           method: "POST", cache: "no-store", signal: controller.signal,
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-author-discovery", "RecordAuthors") },
-          body: JSON.stringify({ iri: selectedUri, addr: queryTree.attributes.addr, operation: "authors", graphs: graphsInSelectedFamily }),
+          body: JSON.stringify({ ...graphDiscoveryIdentity, addr: queryTree.attributes.addr, operation: "authors", graphs: graphsInSelectedFamily }),
         });
         const data = await response.json() as { authors?: RecordGraphAuthor[]; error?: string };
         if (!response.ok) throw new Error(data.error || "Could not discover graph authors.");
@@ -5534,7 +5552,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedRecordGraph, recordGraphs, queryTree.attributes.addr, queryRefreshRevision]);
+  }, [selectedUri, selectedRecordGraph, recordGraphs, blankNodeGraphQueryXml, queryTree.attributes.addr, queryRefreshRevision]);
 
   // Membership discovery does not change an unfiltered DESCRIBE. Only selected
   // graph/author filters need the discovered list, avoiding a second record load.
@@ -5585,11 +5603,12 @@ setGraphFacets(graphs);
           throw new Error("No named graphs are available for the selected Record graph or author.");
         }
         if (selectedRecordTermType === "bnode") {
-          if (!blankNodeAnchor) throw new Error("This blank node has no URI parent badge. Enable reverse-property badges to identify its parent before opening its Record.");
+          if (!blankNodeAnchor) throw new Error("This blank node has no parent binding in its Results query response. A Record needs its FCT-path parent binding, not an optional badge.");
           // Retrieve ALL siblings in one result set. Labels distinguish them
           // only within this response; never interpolate one into SPARQL.
           const blankRecordQueryXml = blankNodeRecordListValuesQuery(
             serializeFctQuery(queryTree), blankNodeAnchor.predicate, blankNodeAnchor.parent, recordDescriptionQueryLimit,
+            explicitBlankNodeAnchor?.label === selectedUri,
           );
           const response = await cachedFetchFct("/proxy/api/sparql", {
             method: "POST", cache: "no-store", signal: controller.signal,
@@ -5614,22 +5633,23 @@ setGraphFacets(graphs);
             if (node?.type !== "bnode" || !node.value) continue;
             const id = `_:${node.value}`;
             const group = siblings.get(id) ?? { rows: [], triples: [] };
-            // Keep the tab even if no outgoing values survive the preferred-language filter.
+            // Keep the tab even when no outgoing values survive the language filter.
             if (!predicate?.value || !object) { siblings.set(id, group); continue; }
+            const direction: "property" | "property-of" = binding.direction?.value === "property-of" ? "property-of" : "property";
             const valueType = object.type === "uri" ? "uri" : object.type === "bnode" ? "bnode" : "literal";
             const objectValue = valueType === "bnode" ? `_:${object.value}` : object.value;
-            group.rows.push({ property: predicate.value, value: objectValue, direction: "property", termType: valueType,
+            group.rows.push({ property: predicate.value, value: objectValue, direction, termType: valueType,
               ...(object.datatype ? { datatype: object.datatype } : {}),
               ...(object["xml:lang"] ? { lang: object["xml:lang"] } : {}) });
             const objectAttrs = ` termType="${valueType}"${object.datatype ? ` datatype="${escapeXmlText(object.datatype)}"` : ""}${object["xml:lang"] ? ` xml:lang="${escapeXmlText(object["xml:lang"])}"` : ""}`;
-            group.triples.push(`<fct:row><fct:column termType="bnode">${escapeXmlText(id)}</fct:column><fct:column termType="uri">${escapeXmlText(predicate.value)}</fct:column><fct:column${objectAttrs}>${escapeXmlText(objectValue)}</fct:column></fct:row>`);
+            group.triples.push(`<fct:row direction="${direction}"><fct:column termType="bnode">${escapeXmlText(id)}</fct:column><fct:column termType="uri">${escapeXmlText(predicate.value)}</fct:column><fct:column${objectAttrs}>${escapeXmlText(objectValue)}</fct:column></fct:row>`);
             siblings.set(id, group);
           }
           const incomplete = Boolean(payload.incomplete) || (payload.results?.bindings?.length ?? 0) >= recordDescriptionQueryLimit;
           const records: BlankNodeRecord[] = Array.from(siblings, ([id, group]) => ({
             id,
             rows: [...new Map(group.rows.map((row) => [
-              [row.property, row.value, row.termType, row.datatype ?? "", row.lang ?? ""].join("\u0000"), row,
+              [row.direction, row.property, row.value, row.termType, row.datatype ?? "", row.lang ?? ""].join("\u0000"), row,
             ])).values()],
             xml: `<fct:facets xmlns:fct="${fctNs}"><fct:complete>${incomplete ? "no" : "yes"}</fct:complete><fct:result type="describe">${group.triples.join("")}</fct:result></fct:facets>`,
           }));
@@ -9596,7 +9616,7 @@ useEffect(() => {
           JSON.stringify([term.value, term.type, term.datatype ?? "", term.lang ?? ""]), term,
         ])).values());
         const byUri = new Map<string, ScopeValue[]>();
-        const maxResourcesPerRequest = 100;
+        const maxResourcesPerRequest = LIST_VALUES_MAX_RESOURCES;
         for (let start = 0; start < uniqueResources.length; start += maxResourcesPerRequest) {
           if (controller.signal.aborted) return;
           const resources = uniqueResources.slice(start, start + maxResourcesPerRequest);
@@ -10180,10 +10200,10 @@ useEffect(() => {
                         type="button"
                         disabled={isCheckingEndpoints || fctEndpoints.length === 0}
                         aria-label="Choose graph server"
-                        className="flex w-80 min-w-0 max-w-full items-center gap-2 rounded-none bg-transparent px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex w-fit min-w-0 max-w-full items-center gap-2 rounded-none bg-transparent px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <EndpointStatusIcon status={selectedEndpointStatus} />
-                        <span className="min-w-0 flex-1 truncate">{fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
+                        <span className="min-w-0 truncate">{fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
                         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                       </button></DropdownMenuTrigger>} /><TooltipContent>{"Choose which FCT endpoint receives queries"}</TooltipContent></Tooltip>
                       <DropdownMenuContent align="start" className="z-50 w-80 max-w-[calc(100vw-2rem)]">
@@ -12546,19 +12566,19 @@ onMouseLeave={() => {
                           : "border-border"
                       }`}
                     >
-                      {showResultBadges && item.termType === "uri" && (
+                      {showResultBadges && item.termType === "uri" && recordClasses.length > 0 && (
                         <div
                           className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-t-[5px] bg-sky-100 px-3 py-2 text-xs font-medium text-sky-950 dark:bg-sky-950/60 dark:text-sky-100"
                           aria-label="Record classes"
                         >
-                          {recordClasses.length > 0 ? recordClasses.map((classIri, classIndex) => (
+                          {recordClasses.map((classIri, classIndex) => (
                             <Fragment key={classIri}>
                               {classIndex > 0 && <span className="text-sky-600/70 dark:text-sky-300/70" aria-hidden="true">·</span>}
                               <button type="button" title={`Show all records of class ${classIri}`}
                                 onClick={() => navigateResultBadge(RDF_TYPE_URI, { value: classIri, type: "uri" }, "forward", true)}
                                 className="cursor-pointer break-words rounded px-1 hover:bg-sky-200 hover:text-sky-950 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring dark:hover:bg-sky-800 dark:hover:text-sky-100">{toLabel(classIri, "Class")}</button>
                             </Fragment>
-                          )) : <span className="font-normal italic text-sky-700/75 dark:text-sky-200/75">no type</span>}
+                          ))}
                         </div>
                       )}
                       <div className="flex items-start gap-2 p-3">
@@ -12621,9 +12641,9 @@ onMouseLeave={() => {
                         </div>
                       )}
 
-                      {(item.scopeValues?.some((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward")) ?? false) && (
+                      {(showResultBadges && (item.scopeValues?.some((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward") && scopeValue.values.some((term) => term.value && term.value !== "-")) ?? false)) && (
                         <div className="flex flex-wrap items-center gap-1.5 border-t border-border px-3 py-2" aria-label="Selected property values">
-                          {item.scopeValues!.filter((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward")).map((scopeValue) => scopeValue.values.map((term, termIndex) => {
+                          {item.scopeValues!.filter((scopeValue) => !(scopeValue.property === RDF_TYPE_URI && scopeValue.direction === "forward")).map((scopeValue) => scopeValue.values.filter((term) => term.value && term.value !== "-").map((term, termIndex) => {
                                 return renderScopeValueBadge(scopeValue, term, termIndex);
                               }))}
                         </div>
@@ -12683,7 +12703,9 @@ onMouseLeave={() => {
                         {visibleGroupValues.map((groupValue) => {
                           const groupValueLabel = groupValue.termType === "uri" ? toLabel(groupValue.uri, "OBJECT") : groupValue.title || groupValue.uri;
                           const memberKey = `${selectedGroupByOption!.key}::${groupValueKey(groupValue)}`;
-                          const members = groupMembers[memberKey] ?? { results: [], loading: true, error: "" };
+                          // A missing member state is not evidence of an active request.
+                          // In particular, an aborted request must not leave this card spinning forever.
+                          const members = groupMembers[memberKey] ?? { results: [], loading: false, error: "Group members have not been loaded." };
                           const selectedRelationshipNode = findQueryNode(queryTree.children, selectedGroupByOption!.nodeId);
                           const expectedBinding = groupValueBinding(groupValue);
                           const bound = (selectedRelationshipNode?.children ?? []).some((child) => child.name === "value" && child.text === expectedBinding.text && (child.attributes.datatype ?? "uri") === expectedBinding.datatype && (child.attributes["xml:lang"] ?? "") === (expectedBinding.lang ?? ""));
@@ -13010,7 +13032,7 @@ onMouseLeave={() => {
                     </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  {recordGraphError && endpointReadyForQuery && <span className="text-xs text-destructive" title={recordGraphError}>Graph discovery failed</span>}{loadingRecordAuthors && <span className="text-xs text-muted-foreground">Loading authors…</span>}{recordAuthorError && <span className="text-xs text-destructive" title={recordAuthorError}>Author metadata unavailable</span>}
+                  {recordGraphError && endpointReadyForQuery && <span className="text-xs text-destructive" title={recordGraphError}>Graph discovery failed: {recordGraphError}</span>}{loadingRecordAuthors && <span className="text-xs text-muted-foreground">Loading authors…</span>}{recordAuthorError && <span className="text-xs text-destructive" title={recordAuthorError}>Author metadata unavailable</span>}
                 </div>}
                 {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div id="record_button_bar" className="mt-3 flex flex-wrap items-center gap-2">
                   {recordPolicy && <>

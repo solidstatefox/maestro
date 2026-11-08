@@ -313,7 +313,10 @@ function compileConstraints(
         patterns.push({ kind: "not-exists", patterns: excludedPatterns });
       } else {
         patterns.push(relationshipPattern);
-        if (isViewScope && state.badgeColumns && node.attributes.iri) {
+        // Badge projections belong only to relationships directly beside the active <view>.
+        // isViewScope can also be true at the root while traversing the
+        // breadcrumb path; that must not project ancestor predicates as badges.
+        if (isViewScope && nodes.some((sibling) => sibling.name === "view") && state.badgeColumns && node.attributes.iri) {
           state.badgeColumns.push({
             colName: `badge_${state.badgeColumns.length + 1}`,
             property: node.attributes.iri,
@@ -325,7 +328,11 @@ function compileConstraints(
         // Retain the outer focus so COUNT(DISTINCT outer focus) measures how
         // many records have each facet value.
         if (node.children.some((child) => child.name === "view")) state.targetParent = subject;
-        compileConstraints(node.children, related, patterns, errors, state, false);
+        // The children immediately beside <view> are the focus-scope roles
+        // and properties. Their bound terms may be projected as Record
+        // identity columns without projecting the outer breadcrumb path.
+        compileConstraints(node.children, related, patterns, errors, state,
+          node.children.some((child) => child.name === "view"));
       }
     } else if (node.name === "class") {
       const classIri = iri(node.attributes.iri ?? "");
@@ -934,13 +941,18 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     }
     if (badgesEnabled && state.badgeColumns?.length) {
       for (const badgeCol of state.badgeColumns) {
-        projections.push({ expression: termExpr(badgeCol.variable), as: variable(badgeCol.colName) });
+        // A focus can have several URI parents. SAMPLE chooses one anchor
+        // without multiplying the paginated focus/excerpt rows.
+        projections.push({ expression: { kind: "aggregate", name: "SAMPLE", distinct: false, expression: termExpr(badgeCol.variable) }, as: variable(badgeCol.colName) });
       }
     }
     const orderByList: SparqlOrder[] | undefined = shouldOrder
       ? [entityRankOrder(target)]
       : undefined;
-    query = buildSelectQuery({ directives, distinct: true, projections, where: indexedWhere, orderBy: orderByList, limit, offset });
+    query = buildSelectQuery({ directives, distinct: true, projections, where: indexedWhere, orderBy: orderByList,
+      ...(badgesEnabled && state.badgeColumns?.length ? { groupBy: [termExpr(target),
+        ...(searchText && textPatterns ? [termExpr(variable("txt1"))] : [])] } : {}),
+      limit, offset });
   } else if (view === FCT_VIEW_TYPES.LIST || view === FCT_VIEW_TYPES.LIST_VALUES) {
     // Virtuoso FCT list view selects the RDF term. Its SQL/XML response
     // wrapper resolves the human-readable label; do not call the SQL-only

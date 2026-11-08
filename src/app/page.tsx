@@ -419,6 +419,22 @@ function blankNodeRecordListValuesQuery(
   return new XMLSerializer().serializeToString(doc);
 }
 
+/** Rebind root-level blank nodes through the current Results page, not a URI parent. */
+function rootBlankNodeRecordQuery(sourceXml: string): string {
+  const doc = new DOMParser().parseFromString(sourceXml, "application/xml");
+  if (doc.querySelector("parsererror")) throw new Error("Invalid Results FCT XML.");
+  const ns = "http://openlinksw.com/services/facets/1.0";
+  const view = Array.from(doc.getElementsByTagNameNS(ns, "view"))[0];
+  if (!view || view.parentElement !== doc.documentElement) {
+    throw new Error("Root blank-node Records require a root-level Results view.");
+  }
+  // Keep the search, class/property filters, index letter, page and ordering.
+  // Each blank node is rebound and described inside one SPARQL response.
+  view.setAttribute("type", FCT_VIEW_TYPES.LIST_VALUES);
+  view.removeAttribute("badges");
+  return new XMLSerializer().serializeToString(doc);
+}
+
 /** Read the bounded, typed cells of the Maestro FCT list-values extension. */
 function parseListValuesXml(xml: string): Map<string, ScopeValue[]> {
   const doc = new DOMParser().parseFromString(xml, "application/xml");
@@ -5602,19 +5618,24 @@ setGraphFacets(graphs);
           throw new Error("No named graphs are available for the selected Record graph or author.");
         }
         if (selectedRecordTermType === "bnode") {
-          if (!blankNodeAnchor) throw new Error("This blank node has no parent binding in its Results query response. A Record needs its FCT-path parent binding, not an optional badge.");
-          // Retrieve ALL siblings in one result set. Labels distinguish them
-          // only within this response; never interpolate one into SPARQL.
-          const blankRecordQueryXml = blankNodeRecordListValuesQuery(
-            serializeFctQuery(queryTree), blankNodeAnchor.predicate, blankNodeAnchor.parent, recordDescriptionQueryLimit,
-            explicitBlankNodeAnchor?.label === selectedUri,
-          );
+          const rootBlankNode = !blankNodeAnchor && getPropertyPath().length === 0;
+          if (!blankNodeAnchor && !rootBlankNode) {
+            throw new Error("This blank node has no parent binding in its Results query response. A non-root Record needs its FCT-path parent binding.");
+          }
+          // The same FCT path rebinds the node in the query that describes it.
+          // Root nodes have no parent URI; use the actual paged Results query.
+          const blankRecordQueryXml = rootBlankNode
+            ? rootBlankNodeRecordQuery(resultsRequestXml)
+            : blankNodeRecordListValuesQuery(
+                serializeFctQuery(queryTree), blankNodeAnchor!.predicate, blankNodeAnchor!.parent,
+                recordDescriptionQueryLimit, explicitBlankNodeAnchor?.label === selectedUri,
+              );
           const response = await cachedFetchFct("/proxy/api/sparql", {
             method: "POST", cache: "no-store", signal: controller.signal,
             headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-blank-node-siblings", "RecordDescription") },
             body: JSON.stringify({ recordBlankNodes: {
               queryXml: blankRecordQueryXml,
-              parent: blankNodeAnchor.parent, predicate: blankNodeAnchor.predicate,
+              ...(blankNodeAnchor ? { parent: blankNodeAnchor.parent, predicate: blankNodeAnchor.predicate } : { root: true }),
               preferredLanguage: preferredAlphabetLanguage, limit: recordDescriptionQueryLimit,
               ...(selectedRecordGraph || selectedRecordAuthor ? { graphs: selectedGraphs } : {}),
             } }),
@@ -5654,6 +5675,8 @@ setGraphFacets(graphs);
           }));
           // The returned blank-node label is not portable between calls; only
           // use it to choose an initial tab if the endpoint happens to reuse it.
+          // A label match is useful within one endpoint session but not a
+          // portable RDF identity; expose all candidates as selectable tabs.
           const initialIndex = Math.max(0, records.findIndex((record) => record.id === selectedUri));
           setBlankNodeRecords(records);
           setActiveBlankNodeTab(initialIndex);
@@ -5767,7 +5790,7 @@ setGraphFacets(graphs);
     }
     void loadDescription();
     return () => { cancelled = true; controller.abort(); };
-  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, blankNodeAnchor?.parent, blankNodeAnchor?.predicate, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, preferredAlphabetLanguage, queryRefreshRevision]);
+  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, blankNodeAnchor?.parent, blankNodeAnchor?.predicate, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, preferredAlphabetLanguage, queryRefreshRevision, resultsRequestXml]);
 
   // The separate Record graph dropdown loader already knows which named graphs
   // contain this resource. Reuse that list for a single background label query;
@@ -12328,7 +12351,7 @@ onMouseLeave={() => {
                     </button>
                   ))}
                   {isLoadingAlphabet && <span className="text-xs text-muted-foreground">Fetching letter filters...</span>}
-                  {alphabetError && <span className="text-xs text-destructive" title={alphabetError}>{Object.values(alphabetCounts).some((count) => count > 0) ? "Alphabet partial" : "Alphabet unavailable"}</span>}
+                  {alphabetError && !Object.values(alphabetCounts).some((count) => count > 0) && <span className="text-xs text-destructive" title={alphabetError}>Alphabet unavailable</span>}
                 </div>
               )}
 
@@ -12380,12 +12403,29 @@ onMouseLeave={() => {
                 </div>
               )}
               {workspaceTab === "view" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Views">
-                <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-4 py-3">
-                  <div className="flex items-center gap-2">{(() => {
-                    const icon = viewFeature ? (viewFeature === "formats" ? "layout-grid" : "network") : (viewXsltMetadata.icon ?? selectedView?.icon);
-                    const Icon = (!viewFeature && (viewXsltMetadata.title === "Graph Servers" || selectedView?.label === "Graph Servers")) ? Server : icon === "server" ? Server : icon === "database" ? Database : icon === "globe" ? Globe : icon === "layout-grid" ? LayoutGrid : Network;
-                    return <Icon className="size-5 text-muted-foreground" aria-hidden="true"/>;
-                  })()}<h2 className="font-semibold">{viewFeature ? viewFeature.charAt(0).toUpperCase() + viewFeature.slice(1) : selectedView ? (viewXsltMetadata.title || selectedView.label) : "View"}</h2></div>
+                <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-4 py-3">
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label="Alphabetical filter for View results">
+                    <IncompleteWidgetIndicator source="alphabet" />
+                    {(alphabetPreflight === "available" || Boolean(alphabetIndex)) ? <>
+                      {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0 || alphabetIndex === letter).map((letter) => (
+                        <button key={letter} type="button" title={`Letter ${letter}`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={alphabetIndex === letter}
+                          disabled={alphabetIndex !== letter && (isLoadingAlphabet || !alphabetCounts[letter])}
+                          className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${alphabetIndex === letter ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
+                          onClick={() => {
+                            setNodeAttribute("query-view", "indexLabels", alphabetLabelUris);
+                            setNodeAttribute("query-view", "indexLang", preferredAlphabetLanguage);
+                            setNodeAttribute("query-view", "index", alphabetIndex === letter ? null : letter);
+                            setResultsUiPage(0); setResults([]); setResultsPage(resultsBatchSize, 0);
+                          }}>
+                          <span className="font-medium">{letter}</span>
+                          <Separator orientation="vertical" className="mx-1 h-4 bg-current opacity-30 data-vertical:self-center" />
+                          <span className={`tabular-nums font-normal ${alphabetIndex === letter ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
+                        </button>
+                      ))}
+                    </> : null}
+                    {isLoadingAlphabet && <span className="text-xs text-muted-foreground">Fetching letter filters...</span>}
+                    {alphabetError && !Object.values(alphabetCounts).some((count) => count > 0) && <span className="text-xs text-destructive" title={alphabetError}>Alphabet unavailable</span>}
+                  </div>
                   {!viewFeature && discoveredViews.length > 1 && <select aria-label="Select view" className="rounded border bg-background px-2 py-1 text-sm" value={selectedViewUri} onChange={(event) => setSelectedViewUri(event.currentTarget.value)}>
                     {discoveredViews.map((view) => <option key={view.uri} value={view.uri}>{view.label}</option>)}
                   </select>}
@@ -13088,6 +13128,7 @@ onMouseLeave={() => {
                       describedPropertyCount > 0 ? `${shortenCount(describedPropertyCount)} properties` : null,
                       describedRoleCount > 0 ? `${shortenCount(describedRoleCount)} roles` : null,
                       displayedRecord.length > 0 ? `${shortenCount(displayedRecord.length)} values` : null,
+                      selectedRecordTermType === "bnode" && blankNodeRecords.length > 0 ? `${shortenCount(blankNodeRecords.length)} sibling blank nodes` : null,
                     ].filter((part): part is string => part !== null).join(" · ")}
                   </span>
                 ) : <span />}
@@ -13161,7 +13202,6 @@ onMouseLeave={() => {
               <section id="maestro-record-viewer" className="min-h-0 flex-1 overflow-auto p-4">
                 {selectedRecordTermType === "bnode" && blankNodeRecords.length > 0 && (
                   <div className="mb-4" aria-label="Sibling blank-node records">
-                    <p className="mb-2 text-xs text-muted-foreground">{blankNodeRecords.length} blank-node record{blankNodeRecords.length === 1 ? "" : "s"} for {toLabel(blankNodeAnchor?.predicate ?? "")} of {toLabel(blankNodeAnchor?.parent ?? "")}</p>
                     <Tabs value={String(activeBlankNodeTab)} onValueChange={(value) => {
                       const index = Number(value);
                       const node = blankNodeRecords[index];

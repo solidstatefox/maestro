@@ -1,6 +1,7 @@
 import { FCT_VIEW_TYPES, isFctViewType, type FctViewType } from "./fct-view-types";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { normalizeFctValue } from "./fct-value-policy";
+import { buildVirtuosoFullTextExpression } from "./virtuoso-full-text";
 
 type XmlNode = {
   name: string;
@@ -225,19 +226,8 @@ function valueTerm(node: XmlNode): SparqlTerm | null {
 }
 
 function searchTerms(searchText: string): SparqlTerm | null {
-  const terms = searchText.match(/[\p{L}\p{N}_]+\*?/gu) ?? [];
-  if (!terms.length) return null;
-  // Match Virtuoso FCT's documented convention: quote a single token (keeping
-  // a trailing * as a prefix wildcard), and AND together multiple tokens.
-  if (terms.length === 1) {
-    const token = terms[0].replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    return literalTerm(`"${token}"`);
-  }
-  // Quote every operand, not only one-word searches. An unquoted numeric
-  // operand such as 2 in "Terminator 2: Judgement Day" can make Virtuoso's
-  // free-text parser reject an otherwise valid Boolean expression (XM029).
-  // Retain AND semantics while treating each token as a lexical search term.
-  return literalTerm(`(${terms.map((term) => `"${term.toUpperCase()}"`).join(" AND ")})`);
+  const expression = buildVirtuosoFullTextExpression(searchText);
+  return expression === null ? null : literalTerm(expression);
 }
 
 /** Entity-rank ordering from the Virtuoso faceted-views documentation: ORDER BY DESC ( <LONG::IRI_RANK> (?s) ). Requires the Facet (fct) VAD. */
@@ -814,36 +804,25 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
     ], where: scopedWhere, groupBy: [termExpr(target)], orderBy: shouldOrder ? [{ expression: termExpr(variable("n")), direction: "DESC" }] : undefined, limit, offset });
   } else if (view === FCT_VIEW_TYPES.ALPHABET) {
-    // Count distinct resources by *case-folded* initial. Summing separately
-    // grouped 'A' and 'a' counts overcounts a resource having both labels.
-    // Match exactly the TEXT view's predicate, language and literal rules.
-    const name = variable("maestroIndexLabel");
-    const predicate = variable("maestroIndexPredicate");
-    const predicates = indexLabelPredicates(viewNode);
-    const labelLookup: SparqlPattern[] = [
-      { kind: "triple", subject: target, predicate, object: name },
-      { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
-      indexLanguageFilter(name, indexLanguage(viewNode)),
-    ];
-    const literalFocus = viewParent?.name === "property";
-    const lexical: SparqlExpression = literalFocus
-      ? { kind: "function", name: "IF", args: [
-          { kind: "function", name: "isLiteral", args: [termExpr(target)] },
-          { kind: "function", name: "STR", args: [termExpr(target)] },
-          { kind: "function", name: "STR", args: [termExpr(name)] },
-        ] }
-      : { kind: "function", name: "STR", args: [termExpr(name)] };
-    const letter: SparqlExpression = { kind: "function", name: "UCASE", args: [
-      { kind: "function", name: "SUBSTR", args: [
-        lexical,
-        termExpr({ kind: "raw-term", value: "1" }),
-        termExpr({ kind: "raw-term", value: "1" }),
-      ] },
+    // The large DBpedia Virtuoso graph fails with SR319 for UCASE(SUBSTR(...))
+    // grouping, and 26 VALUES prefix tests are much slower. Use the empirically
+    // faster expression-based grouping without UCASE or ORDER BY; the client
+    // normalizes letters and displays A-Z in a fixed sequence.
+    // Use rdfs:label alone to avoid expensive predicate-variable joins.
+    // Both grouped counts and active-letter results honor indexLang and include
+    // language-neutral labels so their populations stay consistent.
+    const name = variable("maestroLabel");
+    const labelPredicate = iriTerm(DEFAULT_INDEX_LABEL);
+    const letter: SparqlExpression = { kind: "function", name: "SUBSTR", args: [
+      { kind: "function", name: "STR", args: [termExpr(name)] },
+      termExpr({ kind: "raw-term", value: "1" }),
+      termExpr({ kind: "raw-term", value: "1" }),
     ] };
     const labelPatterns: SparqlPattern[] = [
-      ...(literalFocus ? [{ kind: "optional", patterns: labelLookup } satisfies SparqlPattern] : labelLookup),
+      { kind: "triple", subject: target, predicate: labelPredicate, object: name },
+      indexLanguageFilter(name, indexLanguage(viewNode)),
       { kind: "filter", expression: { kind: "function", name: "REGEX", args: [
-        letter, termExpr(literalTerm("^[A-Z]$")),
+        letter, termExpr(literalTerm("^[A-Za-z]$")),
       ] } },
     ];
     const alphabetWhere: SparqlPattern[] = graphTerm
@@ -852,7 +831,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     query = buildSelectQuery({ directives, projections: [
       { expression: letter, as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(target) }, as: variable("n") },
-    ], where: alphabetWhere, groupBy: [letter], limit: 26, offset: 0 });
+    ], where: alphabetWhere, groupBy: [letter], limit: 256, offset: 0 });
   } else if (view === FCT_VIEW_TYPES.YEARS || view === FCT_VIEW_TYPES.MONTHS || view === FCT_VIEW_TYPES.WEEKS) {
     const functionName = view === FCT_VIEW_TYPES.YEARS ? "sql::year" : view === FCT_VIEW_TYPES.MONTHS ? "sql::round_month" : "sql::round_week";
     const bucket: SparqlExpression = { kind: "function", name: functionName, args: [termExpr(target)] };
@@ -948,14 +927,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     if (searchText && textPatterns) {
       const tokens = searchText.match(/[\p{L}\p{N}_]+/gu) ?? [];
       const vector: SparqlExpression = { kind: "function", name: "bif:vector", args: tokens.map((token) => termExpr(literalTerm(token.toUpperCase()))) };
-      // The alphabet counts DISTINCT focus values. A focus can have several
-      // matching full-text labels, yielding different excerpts. SELECT DISTINCT
-      // over (focus, excerpt) would otherwise show that focus multiple times,
-      // even though the alphabet rightly counts it once.
-      projections.push({ expression: {
-        kind: "aggregate", name: "SAMPLE", distinct: false,
-        expression: { kind: "function", name: "bif:search_excerpt", args: [vector, termExpr(variable("txt1"))] },
-      }, as: variable("c2") });
+      projections.push({ expression: { kind: "function", name: "bif:search_excerpt", args: [vector, termExpr(variable("txt1"))] }, as: variable("c2") });
     }
     if (badgesEnabled && state.badgeColumns?.length) {
       for (const badgeCol of state.badgeColumns) {
@@ -968,10 +940,8 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       ? [entityRankOrder(target)]
       : undefined;
     query = buildSelectQuery({ directives, distinct: true, projections, where: indexedWhere, orderBy: orderByList,
-      // Group by the focus, never by the full-text hit (?txt1): multiple
-      // matching labels must not create extra Results rows for one value.
-      ...(searchText || (badgesEnabled && state.badgeColumns?.length)
-        ? { groupBy: [termExpr(target)] } : {}),
+      ...(badgesEnabled && state.badgeColumns?.length ? { groupBy: [termExpr(target),
+        ...(searchText && textPatterns ? [termExpr(variable("txt1"))] : [])] } : {}),
       limit, offset });
   } else if (view === FCT_VIEW_TYPES.LIST || view === FCT_VIEW_TYPES.LIST_VALUES) {
     // Virtuoso FCT list view selects the RDF term. Its SQL/XML response

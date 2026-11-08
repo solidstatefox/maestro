@@ -1,5 +1,6 @@
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
 import { normalizeFctValue } from "./fct-value-policy";
+import { buildVirtuosoFullTextExpression } from "./virtuoso-full-text";
 
 type CompilerState = {
   nextVariable: number;
@@ -38,15 +39,6 @@ function valueTerm(node: FctQueryNode): string | null {
   }
   const datatypeIri = iriTerm(datatype);
   return datatypeIri ? `${lexical}^^${datatypeIri}` : null;
-}
-
-function textSearchExpression(text: string): string | null {
-  // FCT's default text view tokenizes the search string and combines the terms
-  // with AND inside bif:contains. Keep punctuation out of the SPARQL expression
-  // so user input cannot escape the literal or inject search operators.
-  const terms = text.match(/[\p{L}\p{N}_]+/gu) ?? [];
-  if (!terms.length) return null;
-  return `(${terms.map((term) => term.toLocaleUpperCase("en-US")).join(" AND ")})`;
 }
 
 function nextVariable(state: CompilerState): string {
@@ -132,7 +124,7 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
       case "text": {
         const text = node.text?.trim() ?? "";
         if (!text) break;
-        const expression = textSearchExpression(text);
+        const expression = buildVirtuosoFullTextExpression(text);
         if (!expression) {
           state.errors.push("The FCT text filter cannot be represented as a SPARQL full-text expression.");
           break;
@@ -184,36 +176,27 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
   }
 
   // Mirror the view-level alphabet selection in scalar result counts.
-  const findView = (nodes: FctQueryNode[], parent: FctQueryNode | null = null): { view: FctQueryNode; parent: FctQueryNode | null } | null => {
+  const findView = (nodes: FctQueryNode[]): FctQueryNode | null => {
     for (const node of nodes) {
-      if (node.name === "view") return { view: node, parent };
-      const nested = findView(node.children, node);
+      if (node.name === "view") return node;
+      const nested = findView(node.children);
       if (nested) return nested;
     }
     return null;
   };
-  const foundView = findView(tree.children);
-  const viewNode = foundView?.view;
+  const viewNode = findView(tree.children);
   const indexLetter = viewNode?.attributes.index?.trim() ?? "";
   if (indexLetter) {
     if (!/^[A-Z]$/.test(indexLetter)) return null;
     const props = [...new Set((viewNode?.attributes.indexLabels || "http://www.w3.org/2000/01/rdf-schema#label").split(/[\s,]+/).filter(Boolean))];
     if (!props.length || props.length > 20 || props.some((prop) => !iriTerm(prop))) return null;
     const available = props.map((prop) => `<${prop}>`).join(", ");
+    state.patterns.push(`${state.viewVariable} ?maestroIndexPredicate ?maestroIndexLabel .`);
+    state.patterns.push(`FILTER (?maestroIndexPredicate IN (${available}))`);
     const indexLang = (viewNode?.attributes.indexLang || "en").toLowerCase();
     if (!/^[a-z]{2,3}$/.test(indexLang)) return null;
-    const labels = `${state.viewVariable} ?maestroIndexPredicate ?maestroIndexLabel .
-      FILTER (?maestroIndexPredicate IN (${available}))
-      FILTER (LANGMATCHES(LANG(?maestroIndexLabel), "${indexLang}") || LANG(?maestroIndexLabel) = "")`;
-    if (foundView?.parent?.name === "property") {
-      // A forward property may yield literals. TEXT matches literal lexical
-      // values directly, and requires a label only when the value is an IRI.
-      state.patterns.push(`OPTIONAL { ${labels} }`);
-      state.patterns.push(`FILTER ((isLiteral(${state.viewVariable}) && STRSTARTS(UCASE(STR(${state.viewVariable})), "${indexLetter}")) || (isIRI(${state.viewVariable}) && STRSTARTS(UCASE(STR(?maestroIndexLabel)), "${indexLetter}")))`);
-    } else {
-      state.patterns.push(labels);
-      state.patterns.push(`FILTER (STRSTARTS(UCASE(STR(?maestroIndexLabel)), "${indexLetter}"))`);
-    }
+    state.patterns.push(`FILTER (LANGMATCHES(LANG(?maestroIndexLabel), "${indexLang}") || LANG(?maestroIndexLabel) = "")`);
+    state.patterns.push(`FILTER (STRSTARTS(UCASE(STR(?maestroIndexLabel)), "${indexLetter}"))`);
   }
 
   let whereBody = state.patterns.join("\n  ");

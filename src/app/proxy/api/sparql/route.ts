@@ -324,12 +324,14 @@ export async function POST(request: Request) {
     // The Record properties are projected inside the SAME request so that
     // blank-node identity is never compared between independent result sets.
     if (body?.recordBlankNodes && typeof body.recordBlankNodes === "object") {
-      const { queryXml, parent, predicate, preferredLanguage, limit, graphs } = body.recordBlankNodes as {
-        queryXml?: unknown; parent?: unknown; predicate?: unknown;
+      const { queryXml, parent, predicate, root, preferredLanguage, limit, graphs } = body.recordBlankNodes as {
+        queryXml?: unknown; parent?: unknown; predicate?: unknown; root?: unknown;
         preferredLanguage?: unknown; limit?: unknown; graphs?: unknown;
       };
       const namedGraphs = graphs === undefined ? [] : uniqueIris(graphs, 500);
-      if (!isSafeIri(parent) || !isSafeIri(predicate) || !namedGraphs ||
+      const rootFocus = root === true;
+      if ((!rootFocus && (!isSafeIri(parent) || !isSafeIri(predicate))) ||
+          (rootFocus && (parent !== undefined || predicate !== undefined)) || !namedGraphs ||
           typeof queryXml !== "string" || queryXml.length > 100_000 ||
           typeof preferredLanguage !== "string" || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage) ||
           typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 10000) {
@@ -338,9 +340,12 @@ export async function POST(request: Request) {
       let compiled;
       try {
         compiled = compileFctXmlToSparql(queryXml);
-        if (compiled.view !== "list-values" || compiled.limit > limit || compiled.offset !== 0 ||
-            !queryXml.includes(parent) || !queryXml.includes(predicate)) {
-          throw new Error("The blank-node Record query must be a bounded, parent-constrained list-values query.");
+        if (compiled.view !== "list-values" || compiled.limit > limit ||
+            (!rootFocus && (compiled.offset !== 0 || !queryXml.includes(parent as string) || !queryXml.includes(predicate as string)))) {
+          throw new Error("The blank-node Record query must be a bounded, scoped list-values query.");
+        }
+        if (rootFocus && compiled.target !== "?s1") {
+          throw new Error("A root blank-node Record requires a root-level FCT view.");
         }
       } catch (error) {
         return NextResponse.json({ error: `Invalid blank-node list-values query: ${error instanceof Error ? error.message : String(error)}` }, { status: 400 });

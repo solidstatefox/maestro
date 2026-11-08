@@ -3878,22 +3878,47 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
     const clone = setQueryViewAttributes(queryTree, {
       type: FCT_VIEW_TYPES.ASK, index: "", limit: "1", offset: "0",
     });
-    const addLabelAtViewScope = (nodes: FctQueryNode[]): FctQueryNode[] => {
-      if (nodes.some((node) => node.name === "view")) return [
+    const addLabelAtViewScope = (nodes: FctQueryNode[], parentName = "query"): FctQueryNode[] => {
+      // Literal values at a forward-property focus do not have RDF labels.
+      // The alphabet query includes them, so the preflight must too.
+      if (nodes.some((node) => node.name === "view")) return parentName === "property" ? nodes : [
         ...nodes,
         { id: "alphabet-preflight-label", name: "property", attributes: { iri: alphabetLabelUris }, children: [] },
       ];
-      return nodes.map((node) => ({ ...node, children: addLabelAtViewScope(node.children) }));
+      return nodes.map((node) => ({ ...node, children: addLabelAtViewScope(node.children, node.name) }));
     };
     return serializeFctQuery({ ...clone, children: addLabelAtViewScope(clone.children) });
   })();
-  // Show the same locally compiled SPARQL that the FCT proxy executes for
-  // this alphabet request. Keep failures visible in Code Block for diagnosis.
+  // Each alphabet badge now uses the same letter-restricted WHERE clause as
+  // the Results view. Virtuoso's grouped uppercase-initial aggregate produced
+  // incorrect totals on DBpedia, whereas the scalar Z count returned 3.
+  const alphabetCountSparqlForLetter = (letter: string): string => {
+    const letterXml = alphabetQueryXml
+      .replace('type="alphabet"', 'type="text"')
+      .replace('index=""', `index="${letter}"`);
+    const compiled = compileFctXmlToSparql(letterXml);
+    const start = compiled.query.indexOf("WHERE {");
+    const end = compiled.query.lastIndexOf("\n}");
+    const select = compiled.query.indexOf("SELECT");
+    if (start < 0 || end < start || select < 0 || !/^\?[A-Za-z_][A-Za-z0-9_]*$/.test(compiled.target)) {
+      throw new Error(`Cannot derive the ${letter} alphabet count from Results SPARQL.`);
+    }
+    return `${compiled.query.slice(0, select)}SELECT (COUNT(DISTINCT ${compiled.target}) AS ?ct)\n${compiled.query.slice(start, end + 2)}`;
+  };
+  // The Code Block shows the actual count query for the selected letter (or
+  // A as an example when none is selected); the other 25 differ only by letter.
   const alphabetSparql = (() => {
     try {
-      return compileFctXmlToSparql(alphabetQueryXml).query;
+      const selected = queryTree.children.flatMap((node) => {
+        const collect = (item: FctQueryNode): string[] => item.name === "view"
+          ? [item.attributes.index ?? ""]
+          : item.children.flatMap(collect);
+        return collect(node);
+      }).find((letter) => /^[A-Z]$/.test(letter));
+      const letter = selected || "A";
+      return `# Alphabet count for ${letter}; Maestro executes one scalar query per letter A–Z.\n${alphabetCountSparqlForLetter(letter)}`;
     } catch (error) {
-      return `# Alphabet SPARQL compilation failed: ${error instanceof Error ? error.message : String(error)}`;
+      return `# Alphabet count SPARQL compilation failed: ${error instanceof Error ? error.message : String(error)}`;
     }
   })();
   const currentView = (() => {
@@ -4011,25 +4036,45 @@ const [defaultLeftTab, setDefaultLeftTab] = useState<"facets" | "personal" | "co
         }
         setAlphabetPreflight("available");
         setIsLoadingAlphabet(true);
-        const response = await cachedFetchFct("/proxy/api/fct", {
-          method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("alphabet-facet", "AlphabetSystemFacet") },
-          body: alphabetQueryXml,
-        });
-        const payload = await readFctResponse(response);
-        if (!controller.signal.aborted) {
-          setMaestroIncompleteResults("alphabet", { incomplete: payload.incomplete, requestId: "", message: payload.warning || payload.sqlMessage || "" });
-        }
+        // The grouped first-letter aggregate is not equivalent to the scalar
+        // letter-restricted count on Virtuoso (observed on DBpedia: Z=1 vs 3).
+        // Derive each count from the exact TEXT Results selection, including
+        // its scope, label predicates, and language restriction.
+        const letters = Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
         const next: Record<string, number> = {};
-        for (const row of payload.rows) {
-          const rawKey = (row[0]?.value ?? "").trim();
-          const match = /^(?:["']?)([A-Za-z])(?:["']?)$/.exec(rawKey);
-          const key = match?.[1].toUpperCase();
-          const count = Number(row[1]?.value ?? 0);
-          if (key && Number.isFinite(count) && count >= 0) next[key] = (next[key] ?? 0) + count;
-        }
+        const failures: string[] = [];
+        const countLetter = async (letter: string): Promise<void> => {
+          const sparql = alphabetCountSparqlForLetter(letter);
+          const response = await cachedFetchFct("/proxy/api/sparql", {
+            method: "POST", cache: "no-store", signal: controller.signal,
+            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("alphabet-letter-count", `AlphabetCount:${letter}`) },
+            body: JSON.stringify({ facetValueCount: { sparql } }),
+          });
+          if (!response.ok) throw new Error(`Letter ${letter}: HTTP ${response.status}`);
+          const payload = await response.json();
+          const count = Number(payload.count);
+          if (payload.incomplete || !Number.isSafeInteger(count) || count < 0) {
+            throw new Error(`Letter ${letter}: incomplete or invalid count`);
+          }
+          next[letter] = count;
+        };
+        // Limit concurrent full-text aggregates against public SPARQL endpoints.
+        let cursor = 0;
+        await Promise.all(Array.from({ length: 3 }, async () => {
+          while (!controller.signal.aborted && cursor < letters.length) {
+            const letter = letters[cursor++];
+            try { await countLetter(letter); }
+            catch (error) {
+              if (!controller.signal.aborted) failures.push(error instanceof Error ? error.message : String(error));
+            }
+          }
+        }));
         if (!controller.signal.aborted) {
+          setMaestroIncompleteResults("alphabet", {
+            incomplete: failures.length > 0, requestId: "", message: failures.join("; "),
+          });
           setAlphabetCounts(next);
+          if (failures.length) setAlphabetError(`${failures.length} alphabet letter counts could not be verified.`);
           if (!Object.values(next).some((count) => count > 0)) setAlphabetPreflight("unavailable");
         }
       } catch (error) {
@@ -4893,52 +4938,6 @@ const [roleFacetWarning, setRoleFacetWarning] = useState("");
 
   // Some Virtuoso endpoints return a successful grouped A-Z response while
   // omitting an initial visibly represented in the Results list. Verify such
-  // missing initials with an independent scalar distinct-record count, rather
-  // than guessing the count from page data or advertising an invented total.
-  const alphabetProbeAttemptedRef = useRef(new Set<string>());
-  const latestAlphabetProbeQueryRef = useRef(alphabetQueryXml);
-  latestAlphabetProbeQueryRef.current = alphabetQueryXml;
-  useEffect(() => {
-    if (!endpointReadyForQuery || isLoadingAlphabet || !results.length || !alphabetError) return;
-    const candidateLetters = Array.from(new Set(results.flatMap((item) =>
-      [item.title, toLabel(item.uri, "Class")].map((label) => label?.trim().charAt(0).toUpperCase() ?? "")
-    ))).filter((letter) => /^[A-Z]$/.test(letter) && !alphabetCounts[letter]).slice(0, 5);
-    if (!candidateLetters.length) return;
-    const whereIndex = alphabetSparql.indexOf("WHERE {");
-    const groupIndex = alphabetSparql.lastIndexOf("\nGROUP BY");
-    const targetMatch = alphabetSparql.match(/COUNT\(DISTINCT (\?[a-zA-Z0-9_]+)\)/);
-    if (whereIndex < 0 || groupIndex < 0 || !targetMatch) return;
-    const whereBlock = alphabetSparql.slice(whereIndex, groupIndex);
-    const closingBrace = whereBlock.lastIndexOf("}");
-    if (closingBrace < 0) return;
-    const controller = new AbortController();
-    for (const letter of candidateLetters) {
-      const probeKey = `${selectedEndpointId}\u0000${alphabetQueryXml}\u0000${letter}`;
-      if (alphabetProbeAttemptedRef.current.has(probeKey)) continue;
-      alphabetProbeAttemptedRef.current.add(probeKey);
-      const constrainedWhere = `${whereBlock.slice(0, closingBrace)}  FILTER (STRSTARTS(UCASE(STR(?maestroLabel)), "${letter}"))\n${whereBlock.slice(closingBrace)}`;
-      const scalarSparql = `SELECT (COUNT(DISTINCT ${targetMatch[1]}) AS ?ct)\n${constrainedWhere}`;
-      void (async () => {
-        try {
-          const response = await cachedFetchFct("/proxy/api/sparql", {
-            method: "POST", cache: "no-store", signal: controller.signal,
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("alphabet-missing-letter", `AlphabetProbe:${letter}`) },
-            body: JSON.stringify({ facetValueCount: { sparql: scalarSparql } }),
-          });
-          const payload = await response.json();
-          const count = Number(payload.count);
-          if (response.ok && Number.isSafeInteger(count) && count > 0 && !controller.signal.aborted && latestAlphabetProbeQueryRef.current === alphabetQueryXml) {
-            setAlphabetCounts((current) => ({ ...current, [letter]: Math.max(current[letter] ?? 0, count) }));
-          }
-        } catch (error) {
-          if (!controller.signal.aborted) console.warn(`Alphabet verification for ${letter} failed`, error);
-        }
-      })();
-    }
-    // Let already-issued independent probes complete; their results are only
-    // applied when the same alphabet query remains active.
-  }, [results, alphabetCounts, alphabetQueryXml, alphabetSparql, alphabetError, isLoadingAlphabet, selectedEndpointId, endpointReadyForQuery]);
-
   useEffect(() => {
     setGroupUiPage(0);
     setGroupBatchOffset(0);

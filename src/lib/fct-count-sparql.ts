@@ -184,27 +184,36 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
   }
 
   // Mirror the view-level alphabet selection in scalar result counts.
-  const findView = (nodes: FctQueryNode[]): FctQueryNode | null => {
+  const findView = (nodes: FctQueryNode[], parent: FctQueryNode | null = null): { view: FctQueryNode; parent: FctQueryNode | null } | null => {
     for (const node of nodes) {
-      if (node.name === "view") return node;
-      const nested = findView(node.children);
+      if (node.name === "view") return { view: node, parent };
+      const nested = findView(node.children, node);
       if (nested) return nested;
     }
     return null;
   };
-  const viewNode = findView(tree.children);
+  const foundView = findView(tree.children);
+  const viewNode = foundView?.view;
   const indexLetter = viewNode?.attributes.index?.trim() ?? "";
   if (indexLetter) {
     if (!/^[A-Z]$/.test(indexLetter)) return null;
     const props = [...new Set((viewNode?.attributes.indexLabels || "http://www.w3.org/2000/01/rdf-schema#label").split(/[\s,]+/).filter(Boolean))];
     if (!props.length || props.length > 20 || props.some((prop) => !iriTerm(prop))) return null;
     const available = props.map((prop) => `<${prop}>`).join(", ");
-    state.patterns.push(`${state.viewVariable} ?maestroIndexPredicate ?maestroIndexLabel .`);
-    state.patterns.push(`FILTER (?maestroIndexPredicate IN (${available}))`);
     const indexLang = (viewNode?.attributes.indexLang || "en").toLowerCase();
     if (!/^[a-z]{2,3}$/.test(indexLang)) return null;
-    state.patterns.push(`FILTER (LANGMATCHES(LANG(?maestroIndexLabel), "${indexLang}") || LANG(?maestroIndexLabel) = "")`);
-    state.patterns.push(`FILTER (STRSTARTS(UCASE(STR(?maestroIndexLabel)), "${indexLetter}"))`);
+    const labels = `${state.viewVariable} ?maestroIndexPredicate ?maestroIndexLabel .
+      FILTER (?maestroIndexPredicate IN (${available}))
+      FILTER (LANGMATCHES(LANG(?maestroIndexLabel), "${indexLang}") || LANG(?maestroIndexLabel) = "")`;
+    if (foundView?.parent?.name === "property") {
+      // A forward property may yield literals. TEXT matches literal lexical
+      // values directly, and requires a label only when the value is an IRI.
+      state.patterns.push(`OPTIONAL { ${labels} }`);
+      state.patterns.push(`FILTER ((isLiteral(${state.viewVariable}) && STRSTARTS(UCASE(STR(${state.viewVariable})), "${indexLetter}")) || (isIRI(${state.viewVariable}) && STRSTARTS(UCASE(STR(?maestroIndexLabel)), "${indexLetter}")))`);
+    } else {
+      state.patterns.push(labels);
+      state.patterns.push(`FILTER (STRSTARTS(UCASE(STR(?maestroIndexLabel)), "${indexLetter}"))`);
+    }
   }
 
   let whereBody = state.patterns.join("\n  ");

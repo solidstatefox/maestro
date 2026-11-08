@@ -263,3 +263,9 @@
     schema:url "www.3lgm2.de" ;
     dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it> ;
     schema:position "37"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities#dbnary> a schema:EntryPoint ;
+    rdfs:label "DBnary (Wiktionary)" ;
+    schema:url <https://kaiko.getalp.org/sparql> ;
+    dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities> ;
+    schema:position "38"^^xsd:integer .

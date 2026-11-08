@@ -78,15 +78,17 @@ export async function POST(request: Request) {
       if (!safeIri(body.template)) return NextResponse.json({ error: "A valid XSLT template URI is required." }, { status: 400 });
       // Load the graph-stored XSLT 3.0 stylesheet; the SaxonJS proxy
       // compiles it to SEF, and Maestro validates its rendered commands.
-      const query = `PREFIX rdf: <${RDF}>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?templateXslt WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} { ${sparqlIri(body.template)} (rdf:value|mui:templateContent) ?templateXslt . FILTER(CONTAINS(STR(?templateXslt), 'xsl:stylesheet')) } } LIMIT 1`;
+      const query = `PREFIX rdf: <${RDF}>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?templateXslt ?enrichmentXslt WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} { ${sparqlIri(body.template)} (rdf:value|mui:templateContent) ?templateXslt . FILTER(CONTAINS(STR(?templateXslt), 'xsl:stylesheet')) OPTIONAL { ${sparqlIri(body.template)} mui:enrichmentTemplate ?enrichmentTemplate . ?enrichmentTemplate (rdf:value|mui:templateContent) ?enrichmentXslt . } } } LIMIT 1`;
       const payload = await queryPersonalSparql(query, 20000, request);
       const templateXslt = get((payload.results?.bindings?.[0] ?? {}) as BindingRow, "templateXslt");
       if (!templateXslt) return NextResponse.json({ error: `Template ${body.template} has no XSLT stylesheet in ${getShapesGraph(request)}. Reload the updated ./graph policy documents into the Personal graph store.` }, { status: 404 });
+      const enrichmentXslt = get((payload.results?.bindings?.[0] ?? {}) as BindingRow, "enrichmentXslt");
+      if (enrichmentXslt.length > 250000) return NextResponse.json({ error: "Formatter enrichment XSLT is too large." }, { status: 413 });
       if (templateXslt.length > 250000) return NextResponse.json({ error: "XSLT template is too large." }, { status: 413 });
       // Resolve the actual installed runtime version instead of trusting a version copied into the template.
       const nextPackage = JSON.parse(await readFile(resolve(process.cwd(), "node_modules/next/package.json"), "utf8")) as { name?: unknown; version?: unknown };
       if (nextPackage.name !== "next" || typeof nextPackage.version !== "string") throw new Error("Could not determine the installed Next.js package name and version.");
-      return NextResponse.json({ templateXslt, nextName: nextPackage.name, nextVersion: nextPackage.version, debugSparql: query });
+      return NextResponse.json({ templateXslt, enrichmentXslt, nextName: nextPackage.name, nextVersion: nextPackage.version, debugSparql: query });
     }
 
     if (body.action === "facet-discover") {

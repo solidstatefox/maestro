@@ -1,4 +1,5 @@
 import { logProxyCaller } from "@/lib/proxy-debug-server";
+import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { NextResponse } from "next/server";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
@@ -280,10 +281,11 @@ export async function POST(request: Request) {
     // Record graph dropdown has already discovered. This is a separate, bounded
     // operation: the initial Record SELECT never waits for graph enumeration.
     if (body?.recordValueLabels && typeof body.recordValueLabels === "object") {
-      const { uris, graphs } = body.recordValueLabels as { uris?: unknown; graphs?: unknown };
+      const { uris, graphs, preferredLanguage } = body.recordValueLabels as { uris?: unknown; graphs?: unknown; preferredLanguage?: unknown };
       const resources = uniqueIris(uris, 128);
       const namedGraphs = uniqueIris(graphs, 500);
-      if (!resources || !namedGraphs || resources.length === 0 || namedGraphs.length === 0) {
+      if (!resources || !namedGraphs || resources.length === 0 || namedGraphs.length === 0 ||
+          typeof preferredLanguage !== "string" || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage)) {
         return NextResponse.json({ error: "Record label enrichment requires URI values and discovered graph IRIs." }, { status: 400 });
       }
       const query = `SELECT DISTINCT ?labelResource ?labelPredicate ?label WHERE {
@@ -298,7 +300,7 @@ export async function POST(request: Request) {
           <http://purl.org/dc/terms/title>
         }
         GRAPH ?labelGraph { ?labelResource ?labelPredicate ?label . }
-        FILTER(isLiteral(?label))
+        FILTER(isLiteral(?label) && (LANG(?label) = "" || LANGMATCHES(LANG(?label), ${JSON.stringify(preferredLanguage)})))
       }`;
       diagnosticOperation = "Record URI labels in discovered graphs";
       diagnosticQuery = query;
@@ -315,25 +317,88 @@ export async function POST(request: Request) {
       });
     }
 
-    // Record snapshot: page RDF triples BEFORE joining optional object labels.
-    // Project ?labelResource with each label: labels must never be attached to
-    // unrelated wikiPageWikiLink values through an inferred join key.
-    // The request is assembled server-side from validated IRIs and a bounded limit.
-    // Never accept an arbitrary client-supplied SPARQL query for this operation.
+    // A SELECT result's blank-node label cannot be reused as a SPARQL term.
+    // Instead, compile a list-values FCT query derived from the original Results
+    // path: it binds each definition blank node in ?c1 while constraining the
+    // actual reverse-role node to the parent URI shown on the Results badge.
+    // The Record properties are projected inside the SAME request so that
+    // blank-node identity is never compared between independent result sets.
+    if (body?.recordBlankNodes && typeof body.recordBlankNodes === "object") {
+      const { queryXml, parent, predicate, preferredLanguage, limit, graphs } = body.recordBlankNodes as {
+        queryXml?: unknown; parent?: unknown; predicate?: unknown;
+        preferredLanguage?: unknown; limit?: unknown; graphs?: unknown;
+      };
+      const namedGraphs = graphs === undefined ? [] : uniqueIris(graphs, 500);
+      if (!isSafeIri(parent) || !isSafeIri(predicate) || !namedGraphs ||
+          typeof queryXml !== "string" || queryXml.length > 100_000 ||
+          typeof preferredLanguage !== "string" || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage) ||
+          typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 10000) {
+        return NextResponse.json({ error: "A scoped list-values FCT query, URI parent, predicate, preferred language, limit (1–10000), and valid graph list are required." }, { status: 400 });
+      }
+      let compiled;
+      try {
+        compiled = compileFctXmlToSparql(queryXml);
+        if (compiled.view !== "list-values" || compiled.limit > limit || compiled.offset !== 0 ||
+            !queryXml.includes(parent) || !queryXml.includes(predicate)) {
+          throw new Error("The blank-node Record query must be a bounded, parent-constrained list-values query.");
+        }
+      } catch (error) {
+        return NextResponse.json({ error: `Invalid blank-node list-values query: ${error instanceof Error ? error.message : String(error)}` }, { status: 400 });
+      }
+      // Virtuoso DEFINE/PREFIX directives must be outside the nested SELECT.
+      const compiledText = compiled.query.trim();
+      const preambleMatch = compiledText.match(/^((?:(?:DEFINE|PREFIX|BASE)\s+[^\n]*\n)*)/i);
+      const preamble = preambleMatch?.[1] ?? "";
+      const innerSelect = compiledText.slice(preamble.length).trim();
+      if (!/^SELECT\b/i.test(innerSelect)) {
+        return NextResponse.json({ error: "The FCT list-values compiler did not generate a SELECT query." }, { status: 400 });
+      }
+      const sourcePattern = namedGraphs.length
+        ? `VALUES ?recordGraph { ${iriList(namedGraphs)} } GRAPH ?recordGraph { ?node ?predicate ?object . }`
+        : `?node ?predicate ?object .`;
+      const query = `${preamble}SELECT ?node ?predicate ?object WHERE {
+        { ${innerSelect} }
+        BIND(?c1 AS ?node)
+        FILTER(isBlank(?node))
+        OPTIONAL {
+          ${sourcePattern}
+          FILTER(!isLiteral(?object) || LANG(?object) = "" || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)}))
+        }
+      } LIMIT ${limit}`;
+      diagnosticOperation = "FCT-path blank-node Record SELECT";
+      diagnosticQuery = query;
+      const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs);
+      const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
+      if (!response.ok && !incomplete) {
+        return NextResponse.json({ error: `SPARQL endpoint returned HTTP ${response.status}: ${responseText.trim().slice(0, 1000)}` }, { status: response.status, headers: upstreamDiagnosticHeaders(response) });
+      }
+      const parsed = parseSparqlResults(responseText);
+      if (!parsed) return NextResponse.json({ error: "Invalid scoped blank-node Record SELECT response." }, { status: 502, headers: upstreamDiagnosticHeaders(response) });
+      if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
+      return NextResponse.json({ ...parsed, incomplete, query }, {
+        headers: { "Cache-Control": "no-store", ...sparqlResponseHeaders(response, incomplete) },
+      });
+    }
+
+    // One authoritative, language-filtered Record snapshot. This query does not
+    // join labels: URI display names are enriched asynchronously and are not
+    // Record triples. Filter inside WHERE, BEFORE LIMIT, so the limit counts
+    // eligible triples rather than multilingual values that will be discarded.
     if (body?.recordSelect && typeof body.recordSelect === "object") {
-      const { iri, termType = "uri", datatype, lang, limit, graphs, focusPredicate } = body.recordSelect as RecordSelectTerm & { limit?: unknown; graphs?: unknown; focusPredicate?: unknown };
+      const { iri, termType = "uri", datatype, lang, limit, graphs, focusPredicate, preferredLanguage } = body.recordSelect as RecordSelectTerm & { limit?: unknown; graphs?: unknown; focusPredicate?: unknown; preferredLanguage?: unknown };
       const namedGraphs = graphs === undefined ? [] : uniqueIris(graphs, 500);
       const record = safeRecordSelectTerm({ iri, termType, datatype, lang });
       if (!record || !Number.isInteger(limit) || typeof limit !== "number" || limit < 1 || limit > 10000 || !namedGraphs ||
-          (focusPredicate !== undefined && !isSafeIri(focusPredicate))) {
-        return NextResponse.json({ error: "A valid Record RDF term, limit (1–10000), and optional graph IRI list are required." }, { status: 400 });
+          (focusPredicate !== undefined && !isSafeIri(focusPredicate)) ||
+          (typeof preferredLanguage !== "string" || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage))) {
+        return NextResponse.json({ error: "A valid Record RDF term, preferred language, limit (1–10000), and optional graph IRI list are required." }, { status: 400 });
       }
       const graphPrefix = namedGraphs.length ? `VALUES ?recordGraph { ${iriList(namedGraphs)} } GRAPH ?recordGraph { ` : "";
       const graphSuffix = namedGraphs.length ? " }" : "";
-      // The RDF object of a literal Record is the literal itself, never an
-      // invented IRI. Incoming Roles are the only RDF triples it can have.
-      // Avoid the expensive cross-product of an unrestricted literal scan and
-      // optional URI-label joins on large public stores such as URIBurner.
+      // JSON.stringify escapes the validated BCP-47 language for SPARQL.
+      const allowedLiteral = `FILTER(!isLiteral(?object) || LANG(?object) = "" || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)}))`;
+      // Literal focus nodes have only incoming roles. The object is the focus
+      // literal itself, so no language filtering is applied to the focus term.
       let query = termType === "literal"
         ? `SELECT ?subject ?predicate ?object WHERE {
              { SELECT ?subject ?predicate WHERE {
@@ -341,27 +406,14 @@ export async function POST(request: Request) {
                } LIMIT ${limit} }
              BIND(${record} AS ?object)
            }`
-        : `SELECT ?subject ?predicate ?object ?labelResource ?labelPredicate (?valueLabel AS ?label) WHERE {
-             { SELECT ?subject ?predicate ?object WHERE {
-               ${graphPrefix}{ ${record} ?predicate ?object . BIND(${record} AS ?subject) }
-               UNION { ?subject ?predicate ${record} . BIND(${record} AS ?object) }${graphSuffix}
-             } LIMIT ${limit} }
-             BIND(IF(?subject = ${record}, ?object, ?subject) AS ?labelResource)
-             OPTIONAL {
-               FILTER(isIRI(?labelResource))
-               VALUES ?labelPredicate {
-                 <http://www.w3.org/2000/01/rdf-schema#label>
-                 <http://www.w3.org/2004/02/skos/core#prefLabel>
-                 <http://schema.org/name>
-                 <https://schema.org/name>
-                 <http://xmlns.com/foaf/0.1/name>
-                 <http://purl.org/dc/terms/title>
-               }
-               ?labelResource ?labelPredicate ?valueLabel .
-               FILTER(isLiteral(?valueLabel))
-             }
-           }`;
-      diagnosticOperation = termType === "literal" ? "Literal Record incoming Roles" : "Record SELECT with URI labels";
+        : `SELECT ?subject ?predicate ?object WHERE {
+             ${graphPrefix}
+               { ${record} ?predicate ?object . BIND(${record} AS ?subject) }
+               UNION { ?subject ?predicate ${record} . BIND(${record} AS ?object) }
+             ${graphSuffix}
+             ${allowedLiteral}
+           } LIMIT ${limit}`;
+      diagnosticOperation = termType === "literal" ? "Literal Record incoming Roles" : "Language-filtered Record SELECT";
       diagnosticQuery = query;
       let result: SparqlQueryResult;
       let focusedFallback = false;

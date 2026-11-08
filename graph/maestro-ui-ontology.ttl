@@ -169,6 +169,10 @@ mui:widget a owl:ObjectProperty ;
 shui:editor rdfs:subPropertyOf mui:widget .
 shui:viewer rdfs:subPropertyOf mui:widget .
 
+mui:enrichmentTemplate a owl:ObjectProperty ;
+    rdfs:label "formatter enrichment template"@en ;
+    rdfs:comment "Optional XSLT query-pivot implementation used to retrieve linked RDF data for a Record formatter."@en .
+
 mui:Provider a owl:Class ; rdfs:label "widget provider"@en .
 mui:InputShape a owl:Class ; rdfs:subClassOf sh:NodeShape ;
     rdfs:label "provider input shape"@en .

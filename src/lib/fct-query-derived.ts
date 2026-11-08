@@ -70,6 +70,32 @@ function treeNodeContainsId(nodes: FctQueryNode[], ancestorId: string, targetId:
   return nodes.some(find);
 }
 
+/** Personal facets always enumerate bound values; Configure facets use
+ * properties/properties-in to discover predicates instead. */
+function personalFacetListView(tree: FctQueryTree, forPersonalFacet: boolean): FctQueryTree {
+  return forPersonalFacet
+    ? setQueryViewAttributes(tree, { type: FCT_VIEW_TYPES.LIST, offset: "0" })
+    : tree;
+}
+
+/** Derive the actual value-list query for a selected Personal reverse-role facet.
+ * Drop only its selected <value> constraints so all candidate values appear. */
+export function createPersonalRoleValuesQuery(tree: FctQueryTree, roleNode: FctQueryNode): FctQueryTree {
+  const withoutSelectedValues = (node: FctQueryNode): FctQueryNode => ({
+    ...node,
+    attributes: { ...node.attributes },
+    children: (node.id === roleNode.id
+      ? node.children.filter((child) => child.name !== "value")
+      : node.children).map(withoutSelectedValues),
+  });
+  const snapshot: FctQueryTree = {
+    ...tree,
+    attributes: { ...tree.attributes },
+    children: tree.children.map(withoutSelectedValues),
+  };
+  return createPropertyWidgetQuery(snapshot, roleNode.attributes.iri ?? "", "reverse", roleNode.id, true);
+}
+
 export function createPropertyWidgetQuery(
   tree: FctQueryTree,
   propertyUri: string,
@@ -111,7 +137,7 @@ export function createPropertyWidgetQuery(
       return { ...node, attributes: { ...node.attributes }, children: reuseCarrier(node.children) };
     });
     const children = reuseCarrier(tree.children);
-    if (reusedCarrier) return { ...tree, attributes: { ...tree.attributes }, children };
+    if (reusedCarrier) return personalFacetListView({ ...tree, attributes: { ...tree.attributes }, children }, forPersonalFacet);
   }
 
   // For an ordinary relationship, delegate insertion/reuse to the shared query
@@ -150,7 +176,7 @@ export function createPropertyWidgetQuery(
       if (forPersonalFacet && isTargetRelationship) delete attributes.exclude;
       return { ...node, attributes, children: clearWidgetExclusion(node.children) };
     });
-    return { ...widgetTree, children: clearWidgetExclusion(widgetTree.children) };
+    return personalFacetListView({ ...widgetTree, children: clearWidgetExclusion(widgetTree.children) }, forPersonalFacet);
   }
 
   // For a reverse-role ancestor, the selected role already encloses the view;
@@ -170,7 +196,7 @@ export function createPropertyWidgetQuery(
     if (forPersonalFacet && node.id === selectedNodeId && node.name === "property-of") delete attributes.exclude;
     return [{ ...node, attributes, children: wrapAncestor(node.children) }];
   });
-  return { ...tree, attributes: { ...tree.attributes }, children: wrapAncestor(tree.children) };
+  return personalFacetListView({ ...tree, attributes: { ...tree.attributes }, children: wrapAncestor(tree.children) }, forPersonalFacet);
 }
 
 function findQueryView(nodes: FctQueryNode[]): FctQueryNode | null {
@@ -372,6 +398,7 @@ export function createDistinctCountQuery(
   propertyUri?: string,
   candidateValue?: QueryResultValue,
   viewType: typeof FCT_VIEW_TYPES.LIST_COUNT | typeof FCT_VIEW_TYPES.TEXT | typeof FCT_VIEW_TYPES.PROPERTIES | typeof FCT_VIEW_TYPES.PROPERTIES_IN | typeof FCT_VIEW_TYPES.CLASSES = FCT_VIEW_TYPES.LIST_COUNT,
+  valueRelationship?: { direction: RelationshipDirection; nodeId?: string },
 ): FctQueryTree {
   let tree: FctQueryTree = {
     ...sourceTree,
@@ -462,6 +489,20 @@ export function createDistinctCountQuery(
     });
     tree = { ...tree, children: scoped.nodes };
   } else if (kind === "value" && propertyUri) {
+    // A SPARQL result-set blank-node label cannot identify that node in a
+    // later independent query. Do not mistake it for a string literal and
+    // manufacture a false zero count; leave its count unavailable instead.
+    if (candidateValue?.termType === "bnode") {
+      return {
+        ...tree,
+        children: [...tree.children, {
+          id: "count-blank-node-identity-unavailable",
+          name: "count-blank-node-identity-unavailable",
+          attributes: {},
+          children: [],
+        }],
+      };
+    }
     const binding = candidateValue
       ? groupValueBinding(candidateValue)
       : { text: uri, datatype: "uri" };
@@ -475,6 +516,34 @@ export function createDistinctCountQuery(
       text: binding.text,
       children: [],
     };
+    // The candidate binds a particular relationship occurrence, not merely a
+    // predicate IRI. Reverse and forward edges with identical IRIs are distinct,
+    // and a breadcrumb may contain the same edge more than once.
+    const relationshipName = valueRelationship?.direction === "reverse" ? "property-of" : "property";
+    const requestedNodeId = valueRelationship?.nodeId;
+    const matches = (node: FctQueryNode): boolean =>
+      node.name === relationshipName && node.attributes.iri === propertyUri;
+
+    // Without an explicit node ID, use the relationship in the active view's
+    // *immediate* scope. If the relationship itself carries the view, use that
+    // carrier instead. Never fall back to an arbitrary matching ancestor.
+    const resolveInActiveScope = (
+      nodes: FctQueryNode[],
+      parent: FctQueryNode | null = null,
+    ): FctQueryNode | null => {
+      if (nodes.some((node) => node.id === "query-view")) {
+        return nodes.find(matches) ?? (parent && matches(parent) ? parent : null);
+      }
+      for (const node of nodes) {
+        const found = resolveInActiveScope(node.children, node);
+        if (found) return found;
+      }
+      return null;
+    };
+    const identified = requestedNodeId
+      ? findQueryNode(tree.children, requestedNodeId)
+      : resolveInActiveScope(tree.children);
+    const targetId = identified && matches(identified) ? identified.id : null;
     let inserted = false;
     const attachValue = (node: FctQueryNode): FctQueryNode => {
       const attributes = { ...node.attributes };
@@ -486,29 +555,16 @@ export function createDistinctCountQuery(
       inserted = true;
       return {
         ...node,
-        // The count compiler measures the active focus for reverse roles.
-        ...(node.name === "property-of" ? { id: `count-role-value-${encodeURIComponent(propertyUri)}` } : {}),
         attributes,
         children: existingValue ? node.children : [...node.children, valueNode],
       };
     };
-    const addValueToActiveScope = (nodes: FctQueryNode[]): FctQueryNode[] => {
-      const hasActiveView = nodes.some((node) => node.id === "query-view");
-      return nodes.map((node) => {
-        const isTargetRelationship = hasActiveView && !inserted &&
-          (node.name === "property" || node.name === "property-of") &&
-          node.attributes.iri === propertyUri;
-        if (isTargetRelationship) return attachValue(node);
-        // If the facet relationship itself is the active path carrying the
-        // view, its related variable is the view subject; constrain it there.
-        const carriesView = treeNodeContainsId([node], node.id, "query-view");
-        if (!inserted && carriesView &&
-            (node.name === "property" || node.name === "property-of") &&
-            node.attributes.iri === propertyUri) return attachValue(node);
-        return { ...node, children: addValueToActiveScope(node.children) };
+    const attachToExactNode = (nodes: FctQueryNode[]): FctQueryNode[] =>
+      nodes.map((node) => {
+        if (targetId && node.id === targetId) return attachValue(node);
+        return { ...node, children: attachToExactNode(node.children) };
       });
-    };
-    tree = { ...tree, children: addValueToActiveScope(tree.children) };
+    tree = { ...tree, children: attachToExactNode(tree.children) };
     if (!inserted) {
       // Fail closed: never silently issue a count for the whole result set
       // when the candidate value could not be attached to its relationship.

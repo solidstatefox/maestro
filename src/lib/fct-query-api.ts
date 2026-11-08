@@ -20,6 +20,7 @@ export type {
 } from "./fct-query";
 export {
   createPropertyWidgetQuery,
+  createPersonalRoleValuesQuery,
   createGroupValuesQuery,
   createGroupMemberQuery,
   createDistinctCountQuery,

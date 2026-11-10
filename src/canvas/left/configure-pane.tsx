@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 
 import { FACET_GROUPS as facets, FACET_ITEM_GAP_CLASS, PROPERTY_ROLE_ITEM_GAP_CLASS } from "@/canvas/left/facet-layout";
 
@@ -270,11 +271,18 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                               className={`ml-auto shrink-0 px-2 text-xs font-normal ${(group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError) ? "text-red-100" : "text-white/90"}`}
                               aria-live="polite"
                             >
-                              {(group === "Properties" && isLoadingProperties) || (group === "Classes" && isLoadingClasses) || (group === "Roles" && isLoadingRoles)
-                                ? "Updating…"
-                                : (group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError)
-                                  ? "Update failed"
-                                  : shortenCount(group === "Properties" ? propertyFacets.length : group === "Classes" ? classFacets.length : group === "Roles" ? roleFacets.length : items.length)}
+                              {/* A configured facet count remains valid while its next request is queued.
+                                  Mounting this pane must never create a new execution timer:
+                                  only proxy dispatch events start a scoped clock. */}
+                              {(group === "Properties" ? propertyFacets.length : group === "Roles" ? roleFacets.length : group === "Classes" ? classFacets.length : items.length) > 0
+                                ? shortenCount(group === "Properties" ? propertyFacets.length : group === "Roles" ? roleFacets.length : group === "Classes" ? classFacets.length : items.length)
+                                : (group === "Properties" && isLoadingProperties) || (group === "Classes" && isLoadingClasses) || (group === "Roles" && isLoadingRoles)
+                                  ? <ElapsedStatus label="Updating" category={group === "Properties" ? "properties" : group === "Roles" ? "roles" : "categories"}
+                                      clockScope={group === "Properties" ? "properties" : group === "Roles" ? "roles" : "categories"}
+                                      requestWaves={group === "Classes" ? 2 : 1} />
+                                  : (group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError)
+                                    ? "Update failed"
+                                    : "0"}
                             </span>} /><TooltipContent>
   {group === "Properties"
     ? propertyFacetError || propertyFacetWarning

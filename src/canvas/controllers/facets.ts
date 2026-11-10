@@ -30,6 +30,7 @@ export function useFacetsState() {
   const [ontologyClassMetadata, setOntologyClassMetadata] = useState<Record<string, OntologyClassMetadata>>({});
   const [isLoadingProperties, setIsLoadingProperties] = useState(false);
   const [isLoadingClasses, setIsLoadingClasses] = useState(false);
+  const [isLoadingCategoryTree, setIsLoadingCategoryTree] = useState(false);
   const [configureQueryTransition, setConfigureQueryTransition] = useState(false);
   const pendingConfigureFacetIdentityRef = useRef<string | null>(null);
   const [propertyFacetError, setPropertyFacetError] = useState("");
@@ -70,6 +71,8 @@ export function useFacetsState() {
     setIsLoadingProperties,
     isLoadingClasses,
     setIsLoadingClasses,
+    isLoadingCategoryTree,
+    setIsLoadingCategoryTree,
     configureQueryTransition,
     setConfigureQueryTransition,
     pendingConfigureFacetIdentityRef,

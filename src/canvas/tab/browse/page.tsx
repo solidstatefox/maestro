@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { createBreadcrumbRenderers } from "@/canvas/top/breadcrumb-renderers";
 
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
@@ -24,7 +25,7 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 
 /** BrowseResultsCanvas: Browse-only content, using the shared query and result state. */
 export function BrowseResultsCanvas({ workspace }: { workspace: WorkspaceController }) {
- const { activeQueryIdentityRef, centralTab, endpointReadyForQuery, expandedUris, facetHoverPreview, initialBrowseTriggered, isRootView, isSearching, liveQueryHasText, navigateResultBadge, results, resultsLoadedQueryIdentityRef, search, searchError, selectedUri, setExpandedUris, setSelectedUri, showResultBadges, tutorialMode, urlStateInitialized, visibleResultsPage, workspaceTab } = workspace;
+ const { activeQueryIdentityRef, centralTab, endpointReadyForQuery, expandedUris, facetHoverPreview, initialBrowseTriggered, isRootView, isSearching, liveQueryHasText, navigateResultBadge, results, resultsLoadedQueryIdentityRef, resultsBatchRequestPending, resultsPageComplete, resultsUiPage, resultsPageSize, search, searchError, selectedUri, setExpandedUris, setSelectedUri, showResultBadges, tutorialMode, urlStateInitialized, visibleResultsPage, workspaceTab } = workspace;
  const { recordStates } = workspace;
  const stateFilteredResults = visibleResultsPage; // Server applies state filters before LIMIT/OFFSET.
  const { renderScopeValueBadge } = createBreadcrumbRenderers(workspace);
@@ -37,7 +38,7 @@ export function BrowseResultsCanvas({ workspace }: { workspace: WorkspaceControl
                   className="flex min-h-0 flex-1 flex-col overflow-hidden"
                 >
 
-              <BrowseResults results={stateFilteredResults} selectedUri={selectedUri} expandedUris={expandedUris} setExpandedUris={setExpandedUris} showResultBadges={showResultBadges} isRootView={isRootView} liveQueryHasText={liveQueryHasText} search={search} searchError={searchError} isLoading={isSearching || !urlStateInitialized || !endpointReadyForQuery || !initialBrowseTriggered || resultsLoadedQueryIdentityRef.current !== activeQueryIdentityRef.current} facetHoverPreview={facetHoverPreview} tutorialMode={tutorialMode} onSelectResult={setSelectedUri} onNavigateClass={(iri) => navigateResultBadge(RDF_TYPE_URI, { value: iri, type: "uri" }, "forward", true)} renderBadge={(scope, term, index) => renderScopeValueBadge(scope, term, index)} />
+              <BrowseResults results={stateFilteredResults} selectedUri={selectedUri} expandedUris={expandedUris} setExpandedUris={setExpandedUris} showResultBadges={showResultBadges} isRootView={isRootView} liveQueryHasText={liveQueryHasText} search={search} searchError={searchError} isLoading={isSearching || resultsBatchRequestPending.current || (!resultsPageComplete && resultsUiPage * resultsPageSize >= results.length) || !urlStateInitialized || !endpointReadyForQuery || !initialBrowseTriggered || resultsLoadedQueryIdentityRef.current !== activeQueryIdentityRef.current} facetHoverPreview={facetHoverPreview} tutorialMode={tutorialMode} onSelectResult={setSelectedUri} onNavigateClass={(iri) => navigateResultBadge(RDF_TYPE_URI, { value: iri, type: "uri" }, "forward", true)} renderBadge={(scope, term, index) => renderScopeValueBadge(scope, term, index)} />
                 </div>
               )}
 </>;
@@ -61,15 +62,15 @@ export function BrowseChatCanvas({ workspace }: { workspace: WorkspaceController
 
 /** BrowseGroupsCanvas: Browse-only content, using the shared query and result state. */
 export function BrowseGroupsCanvas({ workspace }: { workspace: WorkspaceController }) {
- const { activeLeafId, centralTab, groupByOptions, groupCardRefs, groupMembers, groupValues, groupValuesError, groupValuesLoading, queryTree, results, selectedGroupByOption, selectedUri, setPropertyValue, setRoleValue, setSelectedUri, visibleGroupValues, workspaceTab } = workspace;
+ const { activeLeafId, centralTab, groupByOptions, groupCardRefs, groupMembers, groupValues, groupValuesError, groupValuesLoading, isLoadingClasses, isGroupByCategory, queryTree, results, selectedGroupByOption, selectedUri, setPropertyValue, setRoleValue, setSelectedUri, visibleGroupValues, workspaceTab } = workspace;
  return <>
 {workspaceTab === "browse" && centralTab === "groups" && selectedGroupByOption && (
                 <div id="central-panel-groups" role="tabpanel" aria-labelledby="central-tab-groups" className="flex min-h-0 flex-1 flex-col overflow-hidden">
                   {groupByOptions.length > 0 ? (
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                      {groupValuesLoading ? <p className="shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground">Loading group values from Virtuoso FCT…</p> : null}
+                      {groupValuesLoading ? <p className="shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground"><ElapsedStatus label="Loading group values" category="groups" /></p> : null}
                       {groupValuesError ? <p className="shrink-0 rounded-md border border-destructive/40 p-3 text-sm text-destructive">{groupValuesError}</p> : null}
-                      {!groupValuesLoading && !groupValuesError && groupValues.length === 0 ? <p className="shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground">No values found for this relationship in the current scope.</p> : null}
+                      {!groupValuesLoading && !groupValuesError && groupValues.length === 0 && !(isGroupByCategory && isLoadingClasses) ? <p className="shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground">No values found for this relationship in the current scope.</p> : null}
                       <div className="min-w-0 flex-1 overflow-y-auto p-3">
                         <div className="flex flex-col gap-3">
                         {visibleGroupValues.map((groupValue) => {
@@ -95,7 +96,7 @@ export function BrowseGroupsCanvas({ workspace }: { workspace: WorkspaceControll
                               <QueryInspectorButton query={serializeFctQuery(createGroupMemberQuery(queryTree, selectedGroupByOption!, groupValue))} filename={`group-${groupValueLabel.replace(/[^a-z0-9_-]+/gi, "-")}.xml`} />
                             </header>
                             <div className="flex flex-col gap-1 p-2">
-                              {members.error ? <p className="px-2 py-2 text-xs text-destructive">{members.error}</p> : members.loading ? <p className="px-2 py-2 text-xs text-muted-foreground">Loading matching Results items…</p> : members.results.length > 0 ? members.results.map((item) => <button key={item.uri} type="button" onClick={() => setSelectedUri(item.uri)} className={`flex min-w-0 flex-col rounded-md px-2 py-2 text-left hover:bg-accent/50 ${selectedUri === item.uri ? "bg-accent/40" : ""}`}><span className="break-words text-sm font-medium cursor-pointer">{item.termType === "uri" ? toLabel(item.uri, "Class") : item.title || item.uri}</span><span className="mt-0.5 break-all text-xs text-muted-foreground">{item.uri}</span></button>) : <p className="px-2 py-2 text-xs text-muted-foreground">No Results items match this value.</p>}
+                              {members.error ? <p className="px-2 py-2 text-xs text-destructive">{members.error}</p> : members.loading ? <p className="px-2 py-2 text-xs text-muted-foreground"><ElapsedStatus label="Loading matching Results items" category="groups" /></p> : members.results.length > 0 ? members.results.map((item) => <button key={item.uri} type="button" onClick={() => setSelectedUri(item.uri)} className={`flex min-w-0 flex-col rounded-md px-2 py-2 text-left hover:bg-accent/50 ${selectedUri === item.uri ? "bg-accent/40" : ""}`}><span className="break-words text-sm font-medium cursor-pointer">{item.termType === "uri" ? toLabel(item.uri, "Class") : item.title || item.uri}</span><span className="mt-0.5 break-all text-xs text-muted-foreground">{item.uri}</span></button>) : <p className="px-2 py-2 text-xs text-muted-foreground">No Results items match this value.</p>}
                             </div>
                           </article>;
                         })}

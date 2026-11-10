@@ -175,7 +175,7 @@ export function useRecordPresentationState(preferredAlphabetLanguage: string) {
 /** Record paging and pending panel-size preferences. */
 export function useRecordPageSettings() {
   const [recordDescriptionPage, setRecordDescriptionPage] = useState(0);
-  const [recordDescriptionPageSize, setRecordDescriptionPageSize] = useState<number>(20);
+  const [recordDescriptionPageSize, setRecordDescriptionPageSize] = useState<number>(5);
   const [recordDescriptionQueryLimit, setRecordDescriptionQueryLimit] = useState<number>(10000);
   const [pendingRecordDescriptionLimit, setPendingRecordDescriptionLimit] = useState<number | null>(null);
   const [pendingCenterBatchLimit, setPendingCenterBatchLimit] = useState<number | null>(null);

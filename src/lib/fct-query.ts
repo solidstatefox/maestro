@@ -1147,9 +1147,10 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     const tree = state.tree;
     const scope = findViewParent(tree.children);
     if (!scope) return;
+    // An imported/query-restored role can have any node ID. Identify the
+    // binding by its position in the active scope and IRI, not an ID prefix.
     const target = scope.children.find((node) =>
-      node.name === "property-of" && node.id.startsWith("role-filter-") &&
-      node.attributes.iri === normalizedUri,
+      node.name === "property-of" && node.attributes.iri === normalizedUri,
     );
     const findAncestorRole = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
       for (const node of nodes) {

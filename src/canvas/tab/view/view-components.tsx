@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import type { MouseEvent } from "react";
 import { Network } from "lucide-react";
 import type { FeatureKind } from "@/lib/feature-view-xslt";
@@ -19,11 +20,11 @@ export interface ViewPageProps {
 }
 export function ViewPage({ viewFeature, viewFeatureLoading, viewFeatureError, viewFeatureCount, viewFeatureHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, viewRenderError, viewHtml, onSelectEndpoint, onRefreshEndpoint }: ViewPageProps) {
   return <div className="min-h-0 flex-1 overflow-auto p-4">
-                  {viewFeature ? (viewFeatureLoading ? <p className="text-sm text-muted-foreground">Locating {viewFeature}…</p>
+                  {viewFeature ? (viewFeatureLoading ? <p className="text-sm text-muted-foreground"><ElapsedStatus label={`Locating ${viewFeature}`} category="policies" clockScope="views" /></p>
                     : viewFeatureError ? <p role="alert" className="text-sm text-destructive">{viewFeatureError}</p>
                     : viewFeatureCount === 0 ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">No applicable {viewFeature} found for the current query context.</p>
                     : <div className="maestro-discovered-view" dangerouslySetInnerHTML={{ __html: viewFeatureHtml }}/>)
-                    : viewDiscoveryLoading ? <p className="text-sm text-muted-foreground">Locating views…</p>
+                    : viewDiscoveryLoading ? <p className="text-sm text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></p>
                     : viewDiscoveryError ? <p role="alert" className="text-sm text-destructive">{viewDiscoveryError}</p>
                     : !selectedView ? <div className="mx-auto max-w-lg rounded-lg border border-dashed p-8 text-center">
                         <Network className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden="true"/>

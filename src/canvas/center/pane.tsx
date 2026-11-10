@@ -1,5 +1,8 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
+import { Ban } from "lucide-react";
 import { useEffect, useState } from "react";
+import { parseAlphabetSelections, toggleAlphabetSelection } from "@/lib/alphabet-selections";
 import { createBreadcrumbRenderers } from "@/canvas/top/breadcrumb-renderers";
 import { BrowseQueryTreeCanvas, BrowseGroupsCanvas, BrowseChatCanvas, BrowseResultsCanvas } from "@/canvas/tab/browse/page";
 import { ViewTabCanvas } from "@/canvas/tab/view/page";
@@ -327,23 +330,23 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                   subsequent filters eliminate its count or the alphabet preflight fails. */}
               {workspaceTab === "browse" && centralTab === "results" && (alphabetPreflight === "available" || Boolean(alphabetIndex)) && (
                 <div id="maestro-alphabet" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2" aria-label="Alphabetical browse by selected label properties">
-                  <IncompleteWidgetIndicator source="alphabet" />
-                  {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0 || alphabetIndex === letter).map((letter) => (
-                    <button key={letter} type="button" title={`Letter ${letter}`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={alphabetIndex === letter}
-                      disabled={alphabetIndex !== letter && (isLoadingAlphabet || !alphabetCounts[letter])}
-                      className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${alphabetIndex === letter ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
-                      onClick={() => {
+                  {!isLoadingAlphabet && <IncompleteWidgetIndicator source="alphabet" />}
+                  {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0 || parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)).map((letter) => (
+                    <button key={letter} type="button" title={`Letter ${letter}; Shift-click excludes the letter; multiple selections are OR`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)}
+                      disabled={isLoadingAlphabet || (!alphabetCounts[letter] && !parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`))}
+                      className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
+                      onClick={(event) => {
                         setNodeAttribute("query-view", "indexLabels", alphabetLabelUris);
                         setNodeAttribute("query-view", "indexLang", preferredAlphabetLanguage);
-                        setNodeAttribute("query-view", "index", alphabetIndex === letter ? null : letter);
+                        setNodeAttribute("query-view", "index", toggleAlphabetSelection(alphabetIndex, letter, event.shiftKey) || null);
                         setResultsUiPage(0); setResults([]); setResultsPage(resultsBatchSize, 0);
                       }}>
-                      <span className="font-medium">{letter}</span>
+                      <span className="font-medium">{parseAlphabetSelections(alphabetIndex).includes(`!${letter}`) ? <><Ban aria-label="Excluded" className="mr-1 inline size-3.5" />{letter}</> : letter}</span>
                       <Separator orientation="vertical" className="mx-1 h-4 bg-current opacity-30 data-vertical:self-center" />
-                      <span className={`tabular-nums font-normal ${alphabetIndex === letter ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
+                      <span className={`tabular-nums font-normal ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
                     </button>
                   ))}
-                  {isLoadingAlphabet && <span className="text-xs text-muted-foreground">Fetching letter filters...</span>}
+                  {isLoadingAlphabet && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Fetching alphabet" category="alphabet" clockScope="alphabet" requestWaves={26} /></span>}
                   {alphabetError && !Object.values(alphabetCounts).some((count) => count > 0) && <span className="text-xs text-destructive" title={alphabetError}>Alphabet unavailable</span>}
                 </div>
               )}

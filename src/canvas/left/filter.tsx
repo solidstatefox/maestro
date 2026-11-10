@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { readAutoConfiguredFacetKeys, type FacetAutofillCandidates, type AutoConfiguredFacetKey } from "@/canvas/left/configure";
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -590,9 +591,23 @@ export function PersonalRoleWidget({
       { ...(isGroupByRole ? { sort: "count" } : {}), limit: String(limit) },
     ));
   const roleOrderLikeGroups = Boolean(groupBy);
-  const selectedKeys = (roleNode.children ?? [])
-    .filter((child) => child.name === "value" && Boolean(child.text))
-    .map((child) => fctTermKey(child.text ?? "", child.attributes.datatype, child.attributes["xml:lang"]));
+  // The Configure role filter and the view-bearing role can have the same
+  // predicate but different node IDs. Their selected values describe the same
+  // binding and must be reflected in the Personal role facet.
+  const roleSelectionNodes = getPersonalRoleFacetNodes(tree).filter((node) => node.attributes.iri === uri);
+  const selectedValueNodes = roleSelectionNodes.flatMap((node) =>
+    node.children.filter((child) => child.name === "value" && Boolean(child.text)));
+  const selectedValueNodesByKey = new Map(selectedValueNodes.map((node) =>
+    [fctTermKey(node.text ?? "", node.attributes.datatype, node.attributes["xml:lang"]), node] as const));
+  const selectedKeys = [...selectedValueNodesByKey.keys()];
+  const selectedValuesFromQuery: FctResult[] = [...selectedValueNodesByKey.values()].map((node) => {
+    const term = node.text ?? "";
+    const datatype = node.attributes.datatype;
+    const lang = node.attributes["xml:lang"];
+    const endpointValue = values.find((value) => fctTermKey(groupValueBinding(value).text, groupValueBinding(value).datatype, groupValueBinding(value).lang) ===
+      fctTermKey(term, datatype, lang));
+    return endpointValue ?? { uri: term, title: term, termType: datatype === "uri" ? "uri" : "literal", ...(datatype ? { datatype } : {}), ...(lang ? { lang } : {}), matches: [] };
+  });
 
   // Publish this widget's own result count and request status to its header.
   // The global Roles facet list is a different query and can have a different count.
@@ -648,7 +663,7 @@ export function PersonalRoleWidget({
     const valueKey = fctTermKey(binding.text, binding.datatype, binding.lang);
     // Keep a selected value available to uncheck even if the current query has
     // become empty; hide only confirmed zero-count alternatives.
-    return selectedKeys.includes(valueKey) || count !== 0;
+    return !selectedKeys.includes(valueKey) && count !== 0;
   });
   const pageCount = Math.max(1, Math.ceil(visibleValues.length / 10));
   const pageValues = visibleValues.slice(page * 10, (page + 1) * 10);
@@ -657,7 +672,7 @@ export function PersonalRoleWidget({
   }, [pageCount]);
   return (
     <div className="min-h-0 flex-1 overflow-auto p-2">
-      {loading && <p className="px-2 py-1 text-xs text-muted-foreground" aria-live="polite">Updating…</p>}
+      {loading && <p className="px-2 py-1 text-xs text-muted-foreground" aria-live="polite"><ElapsedStatus label="Updating…" category="personal" clockScope="personal" /></p>}
       {error && <Tooltip><TooltipTrigger render={<p className="px-2 py-1 text-xs text-destructive">Update failed: {error}</p>} /><TooltipContent>{error}</TooltipContent></Tooltip>}
       {!loading && !error && visibleValues.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">No matching values for this role.</p>}
       {visibleValues.length > 10 && (
@@ -665,6 +680,21 @@ export function PersonalRoleWidget({
           <button type="button" className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40" disabled={page === 0} onClick={() => setPage((current) => Math.max(0, current - 1))}>Previous</button>
           <span className="text-muted-foreground">{page + 1}/{pageCount}</span>
           <button type="button" className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40" disabled={page >= pageCount - 1} onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}>Next</button>
+        </div>
+      )}
+      {selectedValuesFromQuery.length > 0 && (
+        <div className="mb-2 rounded-md border border-input bg-background p-2" aria-label="Selected role values">
+          <div className="mb-1 text-xs font-medium text-muted-foreground">Selected</div>
+          <div className={FACET_ITEM_GAP_CLASS}>
+            {selectedValuesFromQuery.map((value, index) => {
+              const binding = groupValueBinding(value);
+              return <label key={`${binding.text}:${binding.datatype ?? ""}:${binding.lang ?? ""}:${index}`} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50">
+                <input type="checkbox" checked onChange={() => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, false)}
+                  className="mt-0.5 size-4 shrink-0 accent-current" aria-label={`Remove selected role value ${value.title || value.uri}`} />
+                <span className="min-w-0 flex-1 break-words">{value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}</span>
+              </label>;
+            })}
+          </div>
         </div>
       )}
       <div className={`${FACET_ITEM_GAP_CLASS} ${loading ? "opacity-45" : ""}`}>
@@ -741,7 +771,7 @@ export function useGraphFacetNavigationState() {
   const [propertiesPage, setPropertiesPage] = useState(0);
   const [classesPage, setClassesPage] = useState(0);
   const [graphsPage, setGraphsPage] = useState(0);
-  const [graphSort, setGraphSort] = useState<"count-desc" | "count-asc" | "label-asc" | "label-desc">("count-desc");
+  const [graphSort, setGraphSort] = useState<"count-desc" | "count-asc" | "label-asc" | "label-desc">("label-asc");
   const [graphSortPickerExpanded, setGraphSortPickerExpanded] = useState(false);
   const [graphListSparql, setGraphListSparql] = useState("");
   const [graphText, setGraphText] = useState("");

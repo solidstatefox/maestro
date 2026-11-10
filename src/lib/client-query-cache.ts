@@ -1,3 +1,6 @@
+import { readMaestroConcurrency } from "./maestro-concurrency";
+import { maestroQueryClockScope } from "./maestro-query-execution-clock";
+import { unwrapMaestroQueryEvents } from "./client-query-events";
 import { setMaestroIncompleteResults } from "./maestro-incomplete-results";
 import { applyFctQueryTimeout, configuredTimeoutMs } from "./maestro-query-timeouts";
 /**
@@ -101,6 +104,8 @@ export async function setClientCachedResponse(
   contentType: string,
   status: number
 ): Promise<void> {
+  // Only successful HTTP responses may enter either browser cache tier.
+  if (status < 200 || status >= 300) return;
   const record: CachedResponseRecord = {
     key,
     body,
@@ -132,9 +137,42 @@ export async function clearClientQueryCache(): Promise<void> {
 
 /** In-flight Maestro query operations, shared by query listeners and the Refresh/Abort control. */
 const pendingQueryControllers = new Set<AbortController>();
+export type PendingMaestroQuery = { id: number; label: string; state: "queued" | "active" };
+const pendingQueryDetails = new Map<AbortController, PendingMaestroQuery>();
+let nextPendingQueryId = 0;
+const pendingQueryDetailListeners = new Set<(queries: PendingMaestroQuery[]) => void>();
+function notifyPendingQueryDetails() {
+  const snapshot = [...pendingQueryDetails.values()];
+  for (const listener of pendingQueryDetailListeners) listener(snapshot);
+}
+export function subscribePendingMaestroQueryDetails(listener: (queries: PendingMaestroQuery[]) => void): () => void {
+  pendingQueryDetailListeners.add(listener);
+  listener([...pendingQueryDetails.values()]);
+  return () => { pendingQueryDetailListeners.delete(listener); };
+}
+export function cancelIndividualMaestroQuery(id: number): void {
+  for (const [controller, detail] of pendingQueryDetails) {
+    if (detail.id !== id) continue;
+    controller.abort();
+    pendingQueryControllers.delete(controller);
+    pendingQueryDetails.delete(controller);
+    notifyPendingQueries();
+    return;
+  }
+}
+function labelMaestroRequest(input: RequestInfo | URL, init?: RequestInit): string {
+  const headers = new Headers(init?.headers);
+  const component = headers.get("x-maestro-debug-component") || "";
+  const source = headers.get("x-maestro-debug-source") || "";
+  if (component && source && component.toLowerCase() !== source.toLowerCase()) return `${component} · ${source}`;
+  return component || source || (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url).split("?")[0].split("/").pop() || "Query";
+}
+
+let queryPipelineStopped = false;
 const pendingQueryListeners = new Set<(count: number) => void>();
 function notifyPendingQueries() {
   for (const listener of pendingQueryListeners) listener(pendingQueryControllers.size);
+  notifyPendingQueryDetails();
 }
 export function subscribePendingMaestroQueries(listener: (count: number) => void): () => void {
   pendingQueryListeners.add(listener);
@@ -142,13 +180,40 @@ export function subscribePendingMaestroQueries(listener: (count: number) => void
   return () => { pendingQueryListeners.delete(listener); };
 }
 export function abortPendingMaestroQueries(): void {
-  for (const controller of [...pendingQueryControllers]) controller.abort();
+  // Cancel all queued work in one transaction. Prevent a canceled job from
+  // draining the next old job into a newly freed slot during teardown.
+  schedulerTearingDown = true;
+  try {
+    for (const job of [...requestQueue]) job.abort();
+    requestQueue.length = 0;
+    for (const controller of [...pendingQueryControllers]) controller.abort();
+    // Old request finalizers must not consume capacity in the next pipeline.
+    browserQueueGeneration++;
+    activeProxyRequests = 0;
+  } finally {
+    schedulerTearingDown = false;
+    // The X must immediately revert to Refresh, even before abort finalizers run.
+    pendingQueryControllers.clear();
+    pendingQueryDetails.clear();
+    notifyPendingQueries();
+  }
+}
+/** Cancel without altering loaded results; do not allow delayed effect timers to restart queries. */
+export function stopPendingMaestroQueries(): void {
+  queryPipelineStopped = true;
+  abortPendingMaestroQueries();
+}
+/** Called at the beginning of a genuinely new query pipeline. */
+export function resumePendingMaestroQueries(): void {
+  queryPipelineStopped = false;
 }
 async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
-  operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  operation: (signal: AbortSignal) => Promise<T>, label = "Query"): Promise<T> {
+  if (queryPipelineStopped) throw new DOMException("Query execution stopped", "AbortError");
   const controller = new AbortController();
   const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   pendingQueryControllers.add(controller);
+  pendingQueryDetails.set(controller, { id: ++nextPendingQueryId, label, state: "queued" });
   notifyPendingQueries();
   try {
     const result = await operation(combinedSignal);
@@ -156,6 +221,7 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
     return result;
   } finally {
     pendingQueryControllers.delete(controller);
+    pendingQueryDetails.delete(controller);
     notifyPendingQueries();
   }
 }
@@ -166,7 +232,6 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
  * use at most one slot per endpoint. Every queued request is abortable.
  */
 type ScheduledRequest = {
-  endpoint: string;
   background: boolean;
   signal?: AbortSignal | null;
   run: () => Promise<Response>;
@@ -174,44 +239,27 @@ type ScheduledRequest = {
   reject: (reason: unknown) => void;
   abort: () => void;
 };
-const endpointSlots = new Map<string, { total: number; background: number }>();
+let activeProxyRequests = 0;
+let browserQueueGeneration = 0;
 const requestQueue: ScheduledRequest[] = [];
-function queryEndpointKey(url: string, init?: RequestInit): string {
-  const body = typeof init?.body === "string" ? init.body : "";
-  let address = "";
-  if (body.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(body) as { queryXml?: string; facetValueCount?: { addr?: string }; addr?: string };
-      address = parsed.facetValueCount?.addr ?? parsed.addr ??
-        parsed.queryXml?.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
-    } catch { /* XML / malformed JSON is routed to a conservative pool */ }
-  } else {
-    address = body.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
-  }
-  const explicit = init?.headers ? new Headers(init.headers).get("x-maestro-graph-server") ?? "" : "";
-  const server = explicit || (address.includes("@") ? address.slice(address.indexOf("@") + 1) : "");
-  return server || "default-graph-server";
-}
+let schedulerTearingDown = false;
 function isBackgroundQuery(init?: RequestInit): boolean {
   const headers = new Headers(init?.headers);
   const label = `${headers.get("x-maestro-debug-source") ?? ""} ${headers.get("x-maestro-debug-component") ?? ""}`.toLowerCase();
   return /count|alphabet|breadcrumb-preview|facet-load|facet-value|facet-page|classes|properties|roles|graphs/.test(label);
 }
 function dispatchScheduledRequests(): void {
-  for (let i = 0; i < requestQueue.length;) {
+  if (schedulerTearingDown) return;
+  const limit = readMaestroConcurrency().proxyConnections;
+  for (let i = 0; i < requestQueue.length && activeProxyRequests < limit;) {
     const job = requestQueue[i];
     if (job.signal?.aborted) { requestQueue.splice(i, 1); job.abort(); continue; }
-    const slots = endpointSlots.get(job.endpoint) ?? { total: 0, background: 0 };
-    if (slots.total >= 2 || (job.background && slots.background >= 1)) { i++; continue; }
     requestQueue.splice(i, 1);
-    slots.total++;
-    if (job.background) slots.background++;
-    endpointSlots.set(job.endpoint, slots);
+    const generation = browserQueueGeneration;
+    activeProxyRequests++;
     void job.run().then(job.resolve, job.reject).finally(() => {
       job.signal?.removeEventListener("abort", job.abort);
-      slots.total--;
-      if (job.background) slots.background--;
-      if (!slots.total) endpointSlots.delete(job.endpoint);
+      if (generation === browserQueueGeneration) activeProxyRequests = Math.max(0, activeProxyRequests - 1);
       dispatchScheduledRequests();
     });
   }
@@ -221,7 +269,6 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   if (!/\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) return fetch(input, init);
   const background = isBackgroundQuery(init);
-  const endpoint = queryEndpointKey(url, init);
   return new Promise<Response>((resolve, reject) => {
     let started = false;
     let canceled = false;
@@ -233,7 +280,13 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
       reject(new DOMException("Query canceled", "AbortError"));
       dispatchScheduledRequests();
     };
-    const job: ScheduledRequest = { endpoint, background, signal: init?.signal, run: () => { started = true; return fetch(input, init); }, resolve, reject, abort };
+    const clockScope = maestroQueryClockScope(init?.headers ? new Headers(init.headers) : undefined);
+    const job: ScheduledRequest = { background, signal: init?.signal, run: () => {
+      started = true;
+      const headers = new Headers(init?.headers);
+      headers.set("x-maestro-query-events", "1");
+      return fetch(input, { ...init, headers }).then(response => unwrapMaestroQueryEvents(response, clockScope, init?.signal));
+    }, resolve, reject, abort };
     if (init?.signal?.aborted) { reject(new DOMException("Query canceled", "AbortError")); return; }
     init?.signal?.addEventListener("abort", abort, { once: true });
     // Foreground requests jump ahead of background jobs already queued.
@@ -340,7 +393,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
   }
 
   const response = await monitoredProxyFetch(input, init);
-  if (response.ok && response.status === 200 && response.headers.get("x-maestro-incomplete") !== "true") {
+  if (response.ok && response.headers.get("x-maestro-incomplete") !== "true") {
     try {
       const clone = response.clone();
       const bodyText = await clone.text();
@@ -355,7 +408,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
 
 /** Track query requests so a live FCT change or user Abort cancels outstanding work. */
 export function maestroQueryFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  return trackMaestroQuery(init?.signal, (signal) => maestroQueryFetchImpl(input, { ...init, signal }));
+  return trackMaestroQuery(init?.signal, (signal) => maestroQueryFetchImpl(input, { ...init, signal }), labelMaestroRequest(input, init));
 }
 export function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -366,5 +419,5 @@ export function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Pr
       body.includes('"selectEndpointId"') || body.includes('"selectEndpointUrl"') || body.includes('"health"')) {
     return cachedFetchFctImpl(input, init);
   }
-  return trackMaestroQuery(init?.signal, (signal) => cachedFetchFctImpl(input, { ...init, signal }));
+  return trackMaestroQuery(init?.signal, (signal) => cachedFetchFctImpl(input, { ...init, signal }), labelMaestroRequest(input, init));
 }

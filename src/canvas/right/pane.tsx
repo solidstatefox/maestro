@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 import { RecordStateButtons, RecordStarButton } from "@/canvas/right/record-state-buttons";
 
@@ -14,6 +15,7 @@ import { getMaestroComponentPortals } from "@/components/maestro-xslt-components
 import { toLabel } from "@/lib/uri-labels";
 
 import { Separator } from "@/components/ui/separator";
+import { RecordValuePages } from "@/components/ui/record-value-pages";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -21,7 +23,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Check, ChevronDown, ChevronRight, LoaderCircle, ClipboardCheck, CircleFadingCheck, Download, Eye } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, LoaderCircle, ClipboardCheck, ClockFading, Download, Eye } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 
 import { ResizableHandle, ResizablePanel } from "@/components/ui/resizable";
@@ -215,7 +217,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                   {recordFormatEnabled && Boolean(currentFormattedRecordHtml) && formattedRecordButtonsHtml.record_title_icon && (
                     <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_title_icon }} />
                   )}
-                  {recordDescribeIncomplete && <Tooltip><TooltipTrigger render={<span role="img" tabIndex={0} aria-label="Incomplete record description" className="inline-flex shrink-0"><CircleFadingCheck className="size-4" /></span>} /><TooltipContent>Virtuoso returned an incomplete DESCRIBE for this record.</TooltipContent></Tooltip>}
+                  {recordDescribeIncomplete && <Tooltip><TooltipTrigger render={<span role="img" tabIndex={0} aria-label="Incomplete record description" className="inline-flex shrink-0"><ClockFading className="size-4" /></span>} /><TooltipContent>Virtuoso returned an incomplete DESCRIBE for this record.</TooltipContent></Tooltip>}
                   {selectedUri ? (
                     <Tooltip><TooltipTrigger render={<button
                       type="button"
@@ -268,7 +270,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                       <DropdownMenuItem onSelect={() => { setSelectedRecordGraph(""); setRecordDescriptionPage(0); setFormattedRecordHtml(""); }}>All graphs</DropdownMenuItem>
                       <DropdownMenuSeparator />
                       {recordGraphOptions.map((graph) => <DropdownMenuItem key={graph} onSelect={() => { setSelectedRecordGraph(graph); setSelectedRecordAuthor(""); setRecordDescriptionPage(0); setFormattedRecordHtml(""); }} title={graph}>{toLabel(graph)}</DropdownMenuItem>)}
-                      {!recordGraphs.length && <DropdownMenuLabel>{loadingRecordGraphs ? "Loading graphs…" : "No named graphs found"}</DropdownMenuLabel>}
+                      {!recordGraphs.length && <DropdownMenuLabel>{loadingRecordGraphs ? <ElapsedStatus label="Loading graphs" category="record" clockScope="recordGraphs" /> : "No named graphs found"}</DropdownMenuLabel>}
                     </DropdownMenuContent>
                   </DropdownMenu>
                   </div>
@@ -288,7 +290,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                     </DropdownMenu>
                   </div>
                   {recordStates.enabled && selectedRecordTermType !== "bnode" && <RecordStateButtons states={recordStates} />}
-                  {recordGraphError && endpointReadyForQuery && <span className="text-xs text-destructive" title={recordGraphError}>Graph discovery failed: {recordGraphError}</span>}{loadingRecordAuthors && <span className="text-xs text-muted-foreground">Loading authors…</span>}{recordAuthorError && <span className="text-xs text-destructive" title={recordAuthorError}>Author metadata unavailable</span>}
+                  {recordGraphError && endpointReadyForQuery && <span className="text-xs text-destructive" title={recordGraphError}>Graph discovery failed: {recordGraphError}</span>}{loadingRecordAuthors && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Loading authors" category="record" clockScope="recordAuthors" /></span>}{recordAuthorError && <span className="text-xs text-destructive" title={recordAuthorError}>Author metadata unavailable</span>}
                 </div>}
                 {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div id="record_button_bar" className="mt-3 flex flex-wrap items-center gap-2">
                   {recordPolicy && <>
@@ -372,7 +374,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                 </CollapsibleContent>
               </Collapsible>
               {selectedRecordTermType !== "bnode" && recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && !recordDescriptionError && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && (!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || (!currentFormattedRecordHtml && !recordFormatError)))) ? (
-                <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status">Loading formatted record…</div>
+                <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status"><ElapsedStatus label="Loading formatted record" category="record" clockScope="policies" /></div>
               ) : selectedRecordTermType !== "bnode" && currentFormattedRecordHtml ? (
                 <>
                   <div ref={formattedRecordContainerRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
@@ -402,7 +404,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                           {operation.label}
                         </button>)}
                       </div>
-                      {result?.loading && <p role="status" className="text-sm text-muted-foreground">Loading {result.name}…</p>}
+                      {result?.loading && <p role="status" className="text-sm text-muted-foreground"><ElapsedStatus label={`Loading ${result.name}`} category="policies" clockScope="policies" /></p>}
                       {result?.error && <p role="alert" className="text-sm text-destructive">{result.error}</p>}
                       {result?.html && <div className="max-h-[36rem] overflow-auto rounded-md border bg-background p-3" dangerouslySetInnerHTML={{__html:result.html}} />}
                       {!result && <p className="text-sm text-muted-foreground">Select an action to retrieve service data.</p>}
@@ -440,10 +442,17 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                       </tr>
                     </thead>
                     <tbody>
-                      {describedPropertyRows.flatMap((item) => item.values.map((value, index) => (
-                        <tr key={`${item.property}-${index}`} className="border-b">
-                          {index === 0 && <td rowSpan={item.values.length} className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium"><button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400" title={`Open ${item.property} as a URI query`} onClick={() => openRecordPropertyUri(item.property)}>{toLabel(item.property)}</button></td>}
+                      {describedPropertyRows.map((item) => (
+                        <tr key={`${item.property}`} className="border-b">
+                          <td className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium">
+                            <button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"
+                              title={`Open ${item.property} as a URI query`}
+                              onClick={() => openRecordPropertyUri(item.property)}>{toLabel(item.property)}</button>
+                          </td>
                           <td className="break-all px-3 py-3 align-top">
+                            <RecordValuePages pageSize={5} id={`${item.property}-values`}>
+                              {item.values.map((value, index) => (
+                                <div key={`${item.property}-${value.termType}-${value.value}-${index}`} className="min-w-0 break-all">
                             {value.termType === "bnode" ? (
                               item.direction === "property" && selectedRecordTermType === "uri" ?
                                 <button type="button" className="cursor-pointer text-primary hover:underline" title="Open blank-node Record and its sibling nodes" onClick={() => {
@@ -462,9 +471,12 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                                 ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`}\u0000${value.value}`) ?? value.value)
                                 : value.value}</span></button>} /><TooltipContent>{`${toLabel(item.property)}${item.direction === "property-of" ? " of" : ""}: ${value.value}${value.lang ? ` @${value.lang}` : ""}${value.datatype ? `^^${value.datatype}` : ""}`}</TooltipContent></Tooltip>
                             )}
+                                </div>
+                              ))}
+                            </RecordValuePages>
                           </td>
                         </tr>
-                      )))}
+                      ))}
                     </tbody>
                   </table>
                 </section>}
@@ -478,10 +490,17 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                       </tr>
                     </thead>
                     <tbody>
-                      {describedRoleRows.flatMap((item) => item.values.map((value, index) => (
-                        <tr key={`${item.property}-of-${index}`} className="border-b">
-                          {index === 0 && <td rowSpan={item.values.length} className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium"><button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400" title={`Open ${item.property} as a URI query`} onClick={() => openRecordPropertyUri(item.property)}>{toLabel(item.property)} of</button></td>}
+                      {describedRoleRows.map((item) => (
+                        <tr key={`${item.property}-of`} className="border-b">
+                          <td className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium">
+                            <button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"
+                              title={`Open ${item.property} as a URI query`}
+                              onClick={() => openRecordPropertyUri(item.property)}>{toLabel(item.property)} of</button>
+                          </td>
                           <td className="break-all px-3 py-3 align-top">
+                            <RecordValuePages pageSize={5} id={`${item.property}-of-values`}>
+                              {item.values.map((value, index) => (
+                                <div key={`${item.property}-${value.termType}-${value.value}-${index}`} className="min-w-0 break-all">
                             {value.termType === "bnode" ? (
                               item.direction === "property" && selectedRecordTermType === "uri" ?
                                 <button type="button" className="cursor-pointer text-primary hover:underline" title="Open blank-node Record and its sibling nodes" onClick={() => {
@@ -500,9 +519,12 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                                 ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`}\u0000${value.value}`) ?? value.value)
                                 : value.value}</span></button>} /><TooltipContent>{`${toLabel(item.property)}${item.direction === "property-of" ? " of" : ""}: ${value.value}${value.lang ? ` @${value.lang}` : ""}${value.datatype ? `^^${value.datatype}` : ""}`}</TooltipContent></Tooltip>
                             )}
+                                </div>
+                              ))}
+                            </RecordValuePages>
                           </td>
                         </tr>
-                      )))}
+                      ))}
                     </tbody>
                   </table>
                 </section>}
@@ -510,7 +532,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                   <p className="mt-4 text-sm text-muted-foreground">
                     {describedRecord.length > 0
                       ? "No values match the preferred language in this Record view. Change Preferred language in the Sheet to see other language-tagged literals."
-                      : recordDescriptionError || (isDescribing ? "Loading record…" : selectedUri ? "No description data returned." : "Select a result to describe it.")}
+                      : recordDescriptionError || (isDescribing ? <ElapsedStatus label="Loading record" category="record" clockScope="record" /> : selectedUri ? "No description data returned." : "Select a result to describe it.")}
                   </p>
                 )}
               </section>

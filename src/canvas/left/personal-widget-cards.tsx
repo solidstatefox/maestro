@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
@@ -189,7 +190,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                 className={`shrink-0 text-xs ${widget.error ? "text-destructive" : "text-muted-foreground"}`}
                 aria-live="polite"
               >
-                {widget.loading ? "Updating…" : widget.error ? "Update failed" : widget.values.length}
+                {widget.loading ? <ElapsedStatus label="Updating…" category="personal" clockScope="personal" /> : widget.error ? "Update failed" : widget.values.length}
               </span>} /><TooltipContent>{widget.error || undefined}</TooltipContent></Tooltip>
             </header>
             <div className="min-h-0 flex-1 overflow-auto p-2">

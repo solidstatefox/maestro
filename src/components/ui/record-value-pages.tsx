@@ -3,6 +3,29 @@
 import * as React from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
+/** Shared inline value truncation. A value's full text and click targets remain in the DOM. */
+function ClampedRecordValue({ children }: { children: React.ReactNode }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const [overflows, setOverflows] = React.useState(false);
+  const textRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const element = textRef.current;
+    if (!element) return;
+    const check = () => {
+      if (!expanded) setOverflows(element.scrollHeight > element.clientHeight + 2);
+    };
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [children, expanded]);
+  return <div className="min-w-0">
+    <div ref={textRef} className={expanded ? "min-w-0 break-words" : "min-w-0 break-words line-clamp-3"}>{children}</div>
+    {(overflows || expanded) && <button type="button" className="mt-0.5 text-xs text-muted-foreground hover:text-foreground hover:underline"
+      aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "less" : "more ..."}</button>}
+  </div>;
+}
+
 /**
  * Pure presentation for XSLT-provided RDF values. No RDF or SPARQL logic here.
  * Children are the links/literals selected and formatted by the stylesheet.
@@ -11,11 +34,13 @@ export function RecordValuePages({
   children,
   pageSize = 5,
   className = "",
+  layout = "stack",
   id,
 }: {
   children?: React.ReactNode;
   pageSize?: number;
   className?: string;
+  layout?: "stack" | "wrap";
   id?: string;
 }) {
   const values = React.Children.toArray(children).filter(React.isValidElement);
@@ -26,11 +51,17 @@ export function RecordValuePages({
   const start = current * size;
   return (
     <div id={id} className={`min-w-0 ${className}`}>
-      <div className="flex min-w-0 flex-col gap-1.5">
+      <div className={layout === "wrap" ? "min-w-0 leading-8" : "flex min-w-0 flex-col gap-1.5"}>
         {values.slice(start, start + size).map((value, i) => (
-          <div className="min-w-0 break-words" key={(value as React.ReactElement).key ?? start + i}>
-            {value}
-          </div>
+          layout === "wrap" ? (
+            <span className="inline-block max-w-full align-baseline mr-1.5" key={(value as React.ReactElement).key ?? start + i}>
+              {value}
+            </span>
+          ) : (
+            <ClampedRecordValue key={(value as React.ReactElement).key ?? start + i}>
+              {value}
+            </ClampedRecordValue>
+          )
         ))}
       </div>
       {pages > 1 && (

@@ -292,6 +292,7 @@ export function MaestroWorkspace() {
     isSearching,
     isValidatingRecord,
     leftPanelLimit,
+    leftWidgetLimits,
     liveQueryHasText,
     loadHistoryQuery,
     loadingRecordAuthors,
@@ -647,7 +648,7 @@ export function MaestroWorkspace() {
           key={widget.uri}
           propertyUri={widget.uri}
           sortByCount={centralTab === "groups" && groupByPropertyUri === `forward:${widget.uri}`}
-          limit={leftPanelLimit}
+          limit={leftWidgetLimits.personalFacets}
           groupBy={centralTab === "groups" && selectedGroupByOption && groupedPersonalFacetUri === widget.uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined}
           setPersonalWidgets={setPersonalWidgets}
           endpointReady={endpointReadyForQuery}

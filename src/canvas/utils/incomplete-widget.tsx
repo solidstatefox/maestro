@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CircleFadingCheck } from "lucide-react";
+import { ClockFading } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getMaestroIncompleteResults, subscribeMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 
@@ -17,7 +17,7 @@ export function IncompleteWidgetIndicator({ source }: { source: string }) {
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="inline-flex shrink-0 items-center" role="img" aria-label="Incomplete Virtuoso results" tabIndex={0}>
-        <CircleFadingCheck className="size-4" aria-hidden="true" />
+        <ClockFading className="size-4" aria-hidden="true" />
       </span>} />
       <TooltipContent className="z-[100] max-w-xs break-words">
         <span className="font-medium">Incomplete Virtuoso Anytime results</span>

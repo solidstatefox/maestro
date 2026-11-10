@@ -309,11 +309,12 @@ function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath
                   )}
                   {breadcrumbExcluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                   {breadcrumbBaseLabel}
-                  {breadcrumbBoundValues.map((value) => (
-                    <span key={value.id} className="ml-1.5 inline-flex items-baseline gap-1">
-  {renderValueOperator(value)}
-  <span>{boundValueLabel(value)}</span>
-</span>
+                  {breadcrumbBoundValues.map((value, index) => (
+                    <span key={value.id} className="ml-1 inline-flex items-baseline gap-1">
+                      {index > 0 && <span>,</span>}
+                      {index === 0 || value.attributes.op !== breadcrumbBoundValues[0]?.attributes.op ? renderValueOperator(value) : null}
+                      <span>{boundValueLabel(value)}</span>
+                    </span>
                   ))}
                   {breadcrumbHasSuccessor && !breadcrumbIsRole ? "’s" : ""}
                 </button>} /><TooltipContent>{`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}</TooltipContent></Tooltip>

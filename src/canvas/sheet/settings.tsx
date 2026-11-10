@@ -76,6 +76,14 @@ export const RESULTS_BATCH_SIZE_OPTIONS = [100, 200, 300, 400, 500, 1000, 2000] 
 /** LIMIT applied to every left-panel widget: Categories, Personal facets, Graphs, and Configure Properties/Roles. */
 export const LEFT_PANEL_LIMIT_STORAGE_KEY = "maestro-left-panel-limit";
 export const DEFAULT_LEFT_PANEL_LIMIT = 30;
+export const LEFT_WIDGET_LIMIT_OPTIONS = [30, ...RESULTS_BATCH_SIZE_OPTIONS] as const;
+export const LEFT_WIDGET_LIMIT_KEYS = ["categories", "graphs", "personalFacets", "properties", "roles"] as const;
+export type LeftWidgetLimitKey = (typeof LEFT_WIDGET_LIMIT_KEYS)[number];
+export const LEFT_WIDGET_LIMIT_LABELS: Record<LeftWidgetLimitKey, string> = {
+  categories: "Categories", graphs: "Graphs", personalFacets: "Personal Facets", properties: "Properties", roles: "Roles",
+};
+export const leftWidgetLimitStorageKey = (key: LeftWidgetLimitKey) => `maestro-left-panel-limit-${key}`;
+
 export const CENTER_PANEL_LIMIT_STORAGE_KEY = "maestro-center-panel-limit";
 export const CENTER_GROUP_LIMIT_STORAGE_KEY = "maestro-center-group-limit";
 export const RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY = "maestro-right-panel-describe-limit";

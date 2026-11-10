@@ -1,3 +1,7 @@
+import { currentProxyClient, withProxyClient } from "@/lib/maestro-proxy-client-preferences";
+import { weightMaestroQuery } from "@/lib/graph-server-query-scheduler";
+import { streamProxyQuery, MAESTRO_EVENT_HEADER } from "@/lib/proxy-query-stream";
+import { traceVirtuosoDispatch } from "@/lib/proxy-query-events";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { NextResponse } from "next/server";
@@ -194,7 +198,7 @@ async function querySparql(endpoint: string, query: string, configuredTimeoutMs?
   const timeoutMs = configuredTimeoutMs ?? 20000;
   const sparqlUrl = endpoint;
   const key = queryCacheKey("sparql", sparqlUrl.toString(), query);
-  const pendingKey = `${key}:${timeoutMs}`;
+  const pendingKey = `${currentProxyClient()}:${key}:${timeoutMs}`;
   const cached = getQueryCache<string>(key);
   if (cached !== undefined) {
     return {
@@ -215,7 +219,7 @@ async function querySparql(endpoint: string, query: string, configuredTimeoutMs?
   const requestPromise = (async () => {
     const response = await withGraphServerSlot(
       endpoint, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive", requestSignal,
-      () => fetch(sparqlUrl, {
+      () => traceVirtuosoDispatch(() => fetch(sparqlUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -224,7 +228,7 @@ async function querySparql(endpoint: string, query: string, configuredTimeoutMs?
       body: new URLSearchParams({ query, ...(configuredTimeoutMs ? { timeout: String(configuredTimeoutMs) } : {}) }).toString(),
       cache: "no-store",
       signal: requestSignal ? AbortSignal.any([requestSignal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
-    }));
+    })), weightMaestroQuery(query, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive"));
     return { responseText: await response.text(), response, key };
   })();
   if (!requestSignal) inFlightSparqlRequests.set(pendingKey, requestPromise);
@@ -272,7 +276,7 @@ function safeEndpointForDiagnostics(endpoint: string): string {
   }
 }
 
-export async function POST(request: Request) {
+async function handlePost(request: Request) {
   logProxyCaller(request, "sparql.POST");
   let diagnosticEndpoint = "";
   let diagnosticOperation = "parse request";
@@ -717,4 +721,11 @@ export async function POST(request: Request) {
     proxyLog("error", "sparql.POST.failed", { operation: diagnosticOperation, endpoint: diagnostics.endpoint, error: diagnostics.error, err: error });
     return proxyFailure(request, "sparql.POST", error, { operation: diagnosticOperation, endpoint: diagnostics.endpoint });
   }
+}
+
+export async function POST(request: Request): Promise<Response> {
+  if (request.headers.get(MAESTRO_EVENT_HEADER) === "1") {
+    return streamProxyQuery(request, () => withProxyClient(request, () => handlePost(request)));
+  }
+  return withProxyClient(request, () => handlePost(request));
 }

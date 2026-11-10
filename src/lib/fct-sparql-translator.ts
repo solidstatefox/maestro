@@ -309,6 +309,23 @@ function compileConstraints(
         ? { kind: "triple", subject, predicate, object: related, ...(options.length ? { options } : {}) }
         : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) };
       const isExcluded = ["yes", "true", "1"].includes((node.attributes.exclude ?? "").trim().toLowerCase());
+      // Every bound value is an independent existential match of the same
+      // predicate. Two values on one relationship mean A AND B, not that one
+      // ?value variable must simultaneously equal two different terms.
+      // Preserve the first binding as the view-bearing/badge variable.
+      const valueChildren = node.children.filter((child) => child.name === "value");
+      const primaryValue = valueChildren[0];
+      const primaryChildren = valueChildren.length < 2 ? node.children : node.children.filter(
+        (child) => child.name !== "value" || child === primaryValue);
+      const appendOtherValueMatches = (destination: SparqlPattern[], innerState: typeof state) => {
+        for (const otherValue of valueChildren.slice(1)) {
+          const otherRelated = variable(`s${innerState.next++}`);
+          destination.push(node.name === "property"
+            ? { kind: "triple", subject, predicate, object: otherRelated, ...(options.length ? { options } : {}) }
+            : { kind: "triple", subject: otherRelated, predicate, object: subject, ...(options.length ? { options } : {}) });
+          compileConstraints([otherValue], otherRelated, destination, errors, innerState, false);
+        }
+      };
       // An excluded predicate without any bound values means that this
       // relationship must not exist (e.g., Not rdf:type). With bound values,
       // exclude only the specific property/value combination.
@@ -318,7 +335,8 @@ function compileConstraints(
         // merely negating the value comparison after a positive triple match.
         const excludedPatterns: SparqlPattern[] = [relationshipPattern];
         const nestedState = { ...state };
-        compileConstraints(node.children, related, excludedPatterns, errors, nestedState, false);
+        compileConstraints(primaryChildren, related, excludedPatterns, errors, nestedState, false);
+        appendOtherValueMatches(excludedPatterns, nestedState);
         state.next = nestedState.next;
         patterns.push({ kind: "not-exists", patterns: excludedPatterns });
       } else {
@@ -341,8 +359,9 @@ function compileConstraints(
         // The children immediately beside <view> are the focus-scope roles
         // and properties. Their bound terms may be projected as Record
         // identity columns without projecting the outer breadcrumb path.
-        compileConstraints(node.children, related, patterns, errors, state,
+        compileConstraints(primaryChildren, related, patterns, errors, state,
           node.children.some((child) => child.name === "view"));
+        appendOtherValueMatches(patterns, state);
       }
     } else if (node.name === "state") {
       const uri = node.text.trim();
@@ -618,59 +637,62 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
   const buildIndexedTextWhere = (): SparqlPattern[] => {
       // The view-level alphabet index constrains label values, not URI initials.
       // Every label property selected beside the root search input is eligible.
-      const selectedLetter = (viewNode?.attributes.index ?? "").trim();
-      if (selectedLetter && !/^[A-Z]$/.test(selectedLetter))
-        throw new Error("The alphabet index must be A–Z or empty.");
+      // Comma-separated alphabet terms: A,B,!C means A OR B OR NOT EXISTS(C).
+      // A single letter retains the legacy semantics of the Browse alphabet.
+      const rawIndex = (viewNode?.attributes.index ?? "").trim();
+      const selections = rawIndex ? [...new Set(rawIndex.split(",").map((value) => value.trim()).filter(Boolean))] : [];
+      if (selections.length > 26 || selections.some((value) => !/^!?[A-Z]$/.test(value)))
+        throw new Error("Alphabet index values must be letters A–Z, optionally preceded by !, separated by commas.");
       let indexedWhere: SparqlPattern[] = [...scopedWhere];
-      if (selectedLetter) {
+      if (selections.length) {
         const predicates = indexLabelPredicates(viewNode);
         const name = variable("maestroIndexLabel");
         const predicate = variable("maestroIndexPredicate");
-        const startsWithLetter = (value: SparqlTerm): SparqlPattern => ({
-          kind: "filter",
-          expression: { kind: "function", name: "STRSTARTS", args: [
+        const beginsWith = (value: SparqlTerm, letter: string): SparqlExpression => ({
+          kind: "function", name: "STRSTARTS", args: [
             { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(value)] }] },
-            termExpr(literalTerm(selectedLetter)),
-          ] },
+            termExpr(literalTerm(letter)),
+          ],
         });
-        const resourceLabelPatterns: SparqlPattern[] = [
+        const existsLabel = (letter: string): SparqlPattern[] => [
           { kind: "triple", subject: target, predicate, object: name },
           { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
-          startsWithLetter(name),
+          { kind: "filter", expression: beginsWith(name, letter) },
           indexLanguageFilter(name, indexLanguage(viewNode)),
         ];
-        // A forward property can bind a literal or an IRI. Keep the focus
-        // variable in the outer query scope: Virtuoso rejects FILTERs over a
-        // variable assigned only outside a UNION branch (SP031). An OPTIONAL
-        // label lookup handles IRIs without excluding literal values.
-        const labelPatterns: SparqlPattern[] = viewParent?.name === "property"
-          ? [
-              { kind: "optional", patterns: [
-                { kind: "triple", subject: target, predicate, object: name },
-                { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
-                indexLanguageFilter(name, indexLanguage(viewNode)),
-              ] },
-              { kind: "filter", expression: binary("||",
-                binary("&&",
-                  { kind: "function", name: "isLiteral", args: [termExpr(target)] },
-                  { kind: "function", name: "STRSTARTS", args: [
-                    { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(target)] }] },
-                    termExpr(literalTerm(selectedLetter)),
-                  ] },
-                ),
-                binary("&&",
-                  { kind: "function", name: "isIRI", args: [termExpr(target)] },
-                  { kind: "function", name: "STRSTARTS", args: [
-                    { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(name)] }] },
-                    termExpr(literalTerm(selectedLetter)),
-                  ] },
-                ),
-              ) },
-            ]
-          : resourceLabelPatterns;
+        const branches: SparqlPattern[][] = [];
+        for (const selected of selections) {
+          const excluded = selected.startsWith("!");
+          const letter = excluded ? selected.slice(1) : selected;
+          if (viewParent?.name !== "property") {
+            branches.push(excluded
+              ? [{ kind: "not-exists", patterns: existsLabel(letter) }]
+              : existsLabel(letter));
+          } else if (excluded) {
+            // Literal focus values need no label relation. URI values are
+            // excluded only when one of their configured label predicates matches.
+            branches.push([{ kind: "filter", expression: binary("&&",
+              { kind: "function", name: "isLiteral", args: [termExpr(target)] },
+              binary("=", beginsWith(target, letter), termExpr({ kind: "raw-term", value: "false" })),
+            ) }]);
+            branches.push([
+              { kind: "filter", expression: { kind: "function", name: "isIRI", args: [termExpr(target)] } },
+              { kind: "not-exists", patterns: existsLabel(letter) },
+            ]);
+          } else {
+            branches.push([
+              { kind: "filter", expression: binary("&&", { kind: "function", name: "isLiteral", args: [termExpr(target)] }, beginsWith(target, letter)) },
+            ]);
+            branches.push([
+              { kind: "filter", expression: { kind: "function", name: "isIRI", args: [termExpr(target)] } },
+              ...existsLabel(letter),
+            ]);
+          }
+        }
+        const alphabetPatterns: SparqlPattern[] = branches.length === 1 ? branches[0] : [{ kind: "union", branches }];
         indexedWhere = graphTerm
-          ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...labelPatterns] }]
-          : [...where, ...labelPatterns];
+          ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...alphabetPatterns] }]
+          : [...where, ...alphabetPatterns];
       }
       const indexedPatterns = indexedWhere[0]?.kind === "graph" ? indexedWhere[0].patterns : indexedWhere;
       indexedWhere = graphTerm
@@ -695,9 +717,18 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     }
     query = buildSelectQuery({
       directives,
-      projections: [{ expression: termExpr(variable("g")), as: variable("c1") }],
+      projections: [
+        { expression: termExpr(variable("g")), as: variable("c1") },
+        { expression: { kind: "aggregate", name: "MAX", distinct: false,
+            expression: { kind: "function", name: "<LONG::IRI_RANK>", args: [termExpr(target)] } },
+          as: variable("bestRank") },
+      ],
       where: [{ kind: "graph", graph: variable("g"), patterns: discoveryWhere }],
-      orderBy: [entityRankOrder(target)],
+      groupBy: [termExpr(variable("g"))],
+      orderBy: [
+        { expression: termExpr(variable("bestRank")), direction: "DESC" },
+        { expression: termExpr(variable("g")), direction: "ASC" },
+      ],
       limit: 1,
       offset: 0,
     });
@@ -708,8 +739,8 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
   } else if (graphOnly) {
     // The Graphs view is the live view's result-set WHERE, evaluated per named
     // graph. The projected graph is associated with each matching focus item.
-    // Group BEFORE pagination: otherwise ten result rows can represent just
-    // two unique graphs, making "Page 1 of N" internally inconsistent.
+    // Query distinct graph URIs directly, bounded by the Graphs Sheet LIMIT.
+    // Client-side paging is independent of the number of rows requested.
     const resultPatterns = buildIndexedTextWhere();
     const graphWhere: SparqlPattern[] = [{
       kind: "graph", graph: variable("g"), patterns: resultPatterns,
@@ -717,24 +748,17 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     if (graphTerm) graphWhere.push({ kind: "filter", expression: binary("=", termExpr(variable("g")), termExpr(graphTerm)) });
     if (countOnly) {
       query = buildSelectQuery({ directives, projections: [countProjection(variable("g"))], where: graphWhere });
-    } else if ((viewNode?.attributes.sample ?? "").toLowerCase() === "yes") {
-      // Lightweight Anytime recovery: emit matching named graph IRIs directly,
-      // without a potentially expensive GROUP BY, COUNT or IRI_RANK sort.
-      query = buildSelectQuery({ directives, distinct: true,
-        projections: [{ expression: termExpr(variable("g")), as: variable("c1") }],
-        where: graphWhere, limit, offset });
     } else {
+      // Graphs is discovery, not ranking: one URI per matching named graph.
+      // Distinct is bounded by the Sheet's Graphs LIMIT; no blocking aggregate.
+      // IRI_RANK is reserved for discoverGraph (the auto-fill LIMIT 1 branch).
       query = buildSelectQuery({
         directives,
-        projections: [
-          { expression: termExpr(variable("g")), as: variable("c1") },
-          { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(target) }, as: variable("n") },
-          { expression: { kind: "aggregate", name: "MAX", distinct: false, expression: { kind: "function", name: "<LONG::IRI_RANK>", args: [termExpr(target)] } }, as: variable("bestRank") },
-        ],
+        distinct: true,
+        projections: [{ expression: termExpr(variable("g")), as: variable("c1") }],
         where: graphWhere,
-        groupBy: [termExpr(variable("g"))],
-        orderBy: [{ expression: termExpr(variable("bestRank")), direction: "DESC" }, { expression: termExpr(variable("g")), direction: "ASC" }],
-        limit, offset,
+        limit,
+        offset,
       });
     }
 

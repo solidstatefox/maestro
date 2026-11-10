@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 
 import { renderPersonalWidgetCards } from "@/canvas/left/personal-widget-cards";
 import { PersonalStatesWidget } from "@/canvas/left/states-widget";
@@ -18,7 +19,8 @@ import { toLabel } from "@/lib/uri-labels";
 
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 
-import type { ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { GraphUriTree, buildGraphUriTree, graphTreeParentKeys } from "@/canvas/left/graph-uri-tree";
 import { ButtonGroup } from "@/components/ui/button-group";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -27,7 +29,7 @@ import { Toggle } from "@/components/ui/toggle";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Bot, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, List, Network, Trash2, UsersRound, X, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ClipboardList } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, List, Network, Trash2, UsersRound, Search, X, ArrowDownAZ, ArrowDownZA, ClipboardList } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 
@@ -38,6 +40,8 @@ import { serializeFctQuery, createPersonalRoleValuesQuery, createDistinctCountQu
 import type { FilterPaneWorkspace } from "@/canvas/controllers/workspace-interfaces";
 
 export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWorkspace }) {
+  const [graphTreeMode, setGraphTreeMode] = useState(false);
+  const [expandedGraphNodes, setExpandedGraphNodes] = useState<Set<string>>(() => new Set());
   const {
     FACET_PAGE_SIZE,
     activeLeafId,
@@ -47,6 +51,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
     bindGraph,
     categoriesIncomplete,
     categoriesTreeMode,
+    startCategoryNameSearch,
     categoriesWidgetRef,
     categoryPageCount,
     categoryTreeAllCollapsed,
@@ -75,13 +80,16 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
     groupBatchSize,
     groupByOptions,
     groupByPropertyUri,
+    workspaceTab,
     groupedRoleUri,
     handleFacetShiftClick,
     isFacetExcluded,
     isGroupByCategory,
     isLoadingClasses,
+    isLoadingCategoryTree,
     isLoadingGraphs,
     leftPanelLimit,
+    leftWidgetLimits,
     navigateToPropertyPath,
     pagedUnselectedClasses,
     personalRoleFacetNodes,
@@ -108,13 +116,23 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
     toggleClass,
     visibleClassDisplayFacets,
   } = workspace;
+  // Sorting is presentation-only. Do not rerun the SPARQL query when a sort
+  // control changes; the lightweight graph projection does not fetch counts.
+  const sortedGraphFacets = useMemo(() => [...graphFacets].sort((a, b) => {
+    const comparison = (a.label || a.uri).localeCompare(b.label || b.uri);
+    return graphSort === "label-desc" ? -comparison : comparison;
+  }), [graphFacets, graphSort]);
+  const graphTreeNodes = useMemo(() => buildGraphUriTree(sortedGraphFacets), [sortedGraphFacets]);
+  const graphParentKeys = useMemo(() => graphTreeParentKeys(graphTreeNodes), [graphTreeNodes]);
+  const graphTreeAllCollapsed = graphParentKeys.length > 0 && graphParentKeys.every((key) => !expandedGraphNodes.has(key));
+  const activeGraphPageCount = graphTreeMode ? Math.max(1, Math.ceil(graphTreeNodes.length / FACET_PAGE_SIZE)) : graphPageCount;
   return <>
 {defaultLeftTab === "personal" && (
                   <div className="space-y-3">
                     {recordStates.enabled && recordStates.hasStates && <PersonalStatesWidget states={recordStates} />}
                     <article ref={categoriesWidgetRef} className={`flex min-w-0 flex-col ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
                       <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
-                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><h2 className="text-sm font-semibold">Categories</h2><QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.CLASSES)) : undefined} countFilename="categories-first-item-count.sparql" /><Tooltip><TooltipTrigger render={<button
+                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><h2 className="text-sm font-semibold">Categories</h2><Tooltip><TooltipTrigger render={<button type="button" onClick={startCategoryNameSearch} aria-label="Search for categories by name" className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Search className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Start a new search for resources by Category name</TooltipContent></Tooltip><QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.CLASSES)) : undefined} countFilename="categories-first-item-count.sparql" /><Tooltip><TooltipTrigger render={<button
                           type="button"
                           aria-pressed={categoriesTreeMode}
                           onClick={() => { setQueryAttribute("classTree", categoriesTreeMode ? "false" : "true"); setExpandedCategoryNodes(new Set()); setClassesPage(0); }}
@@ -145,8 +163,11 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                           className={`text-xs ${classFacetError ? "text-destructive" : "text-muted-foreground"}`}
                           aria-live="polite"
                         >
-                          {isLoadingClasses
-                            ? (categoriesTreeMode ? "Building tree…" : "Updating…")
+                          {isLoadingClasses || (categoriesTreeMode && isLoadingCategoryTree)
+                            ? <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                                {isLoadingClasses ? <ElapsedStatus label="Fetching categories" category="categories" clockScope="categories" requestWaves={2} /> : null}
+                                {categoriesTreeMode && isLoadingCategoryTree ? <ElapsedStatus label="Building tree" category="categories" clockScope="categoryTree" /> : null}
+                              </span>
                             : classFacetError
                               ? "Update failed"
                               : shortenCount(visibleClassDisplayFacets.length)}
@@ -159,7 +180,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       ) : (
                         <>
                           {selectedClassDisplayFacets.length > 0 && (
-                            <div className="mt-2 mb-2 rounded-md border border-border/70 bg-background/80 p-2">
+                            <div className="mx-2 mt-2 mb-2 rounded-md border border-border/70 bg-background/80 p-2">
                               <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">Selected</div>
                               <div className={FACET_ITEM_GAP_CLASS}>
                                 {selectedClassDisplayFacets.map((item) => {
@@ -311,7 +332,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                   <QueryInspectorButton
                                     query={serializeFctQuery(setQueryViewAttributes(
                                       createPersonalRoleValuesQuery(queryTree, roleNode),
-                                      { ...(isGroupByRole ? { sort: "count" } : {}), limit: String(leftPanelLimit) },
+                                      { ...(isGroupByRole ? { sort: "count" } : {}), limit: String(leftWidgetLimits.roles) },
                                     ))}
                                     filename="personal-role-values-fct-query.xml"
                                     label="View Personal role values query"
@@ -320,14 +341,14 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                       queryTree,
                                       serializeFctQuery(setQueryViewAttributes(
                                         createPersonalRoleValuesQuery(queryTree, roleNode),
-                                        { ...(isGroupByRole ? { sort: "count" } : {}), limit: String(leftPanelLimit) },
+                                        { ...(isGroupByRole ? { sort: "count" } : {}), limit: String(leftWidgetLimits.roles) },
                                       )),
                                       uri,
                                       roleWidgetStatuses[roleNode.id]?.sampleValue,
                                       { direction: "reverse", nodeId: roleNode.id },
                                     )}
                                   />
-                                  {!excluded && (
+                                  {workspaceTab === "browse" && !excluded && (
                                     <Tooltip><TooltipTrigger render={<button
                                       type="button"
                                       disabled={!canGroupByRole}
@@ -364,13 +385,13 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                               aria-live="polite"
                             >
                               {roleWidgetStatuses[roleNode.id]?.loading ?? true
-                                ? "Updating…"
+                                ? <ElapsedStatus label="Updating…" category="roles" />
                                 : roleWidgetStatuses[roleNode.id]?.error
                                   ? "Update failed"
                                   : shortenCount(roleWidgetStatuses[roleNode.id]?.count ?? 0)}
                             </span>} /><TooltipContent>{roleWidgetStatuses[roleNode.id]?.error || undefined}</TooltipContent></Tooltip>
                           </header>
-                          {endpointReadyForQuery && <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} groupBy={centralTab === "groups" && selectedGroupByOption && groupedRoleUri === uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined} limit={leftPanelLimit} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} endpointReady={endpointReadyForQuery} refreshRevision={queryRefreshRevision} />}
+                          {endpointReadyForQuery && <PersonalRoleWidget tree={queryTree} roleNode={roleNode} label={label.trim()} isGroupByRole={groupedRoleUri === uri} groupBy={centralTab === "groups" && selectedGroupByOption && groupedRoleUri === uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined} limit={leftWidgetLimits.roles} onGroupValueClick={scrollToGroupForFacetValue} setRoleWidgetStatuses={setRoleWidgetStatuses} endpointReady={endpointReadyForQuery} refreshRevision={queryRefreshRevision} />}
                         </article>
                       );
                     })}
@@ -379,7 +400,19 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       <header className="group/header flex items-center gap-2 px-2 py-2">
                         <div className="flex min-w-0 flex-1 items-center gap-1">
                           <IncompleteWidgetIndicator source="graphs" /><h2 className="text-sm font-semibold">Graphs</h2>
-                          <QueryInspectorButton query={`${queryWithoutPagingXml()}\n<!-- FCT API option: graphOnly=true -->`} filename="graphs-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
+                          <QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.GRAPHS)}\n<!-- FCT API option: graphOnly=true -->`} filename="graphs-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
+                          <Tooltip><TooltipTrigger render={<button
+                            type="button" aria-pressed={graphTreeMode}
+                            onClick={() => { setGraphTreeMode((mode) => !mode); setGraphsPage(0); setExpandedGraphNodes(new Set()); }}
+                            className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${graphTreeMode ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`}
+                            aria-label={graphTreeMode ? "Show graphs as a flat list" : "Show graphs as a URI-prefix tree"}
+                          >{graphTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{graphTreeMode ? "Show flat graph list" : "Show graph tree"}</TooltipContent></Tooltip>
+                          {graphTreeMode && <Tooltip><TooltipTrigger render={<button
+                            type="button" disabled={graphParentKeys.length === 0}
+                            onClick={() => setExpandedGraphNodes(graphTreeAllCollapsed ? new Set(graphParentKeys) : new Set())}
+                            className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 group-hover/header:disabled:opacity-40"
+                            aria-label={graphTreeAllCollapsed ? "Open all graphs" : "Collapse all graphs"}
+                          >{graphTreeAllCollapsed ? <ChevronsUpDown className="size-4" aria-hidden="true" /> : <ChevronsDownUp className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{graphTreeAllCollapsed ? "Open all" : "Collapse all"}</TooltipContent></Tooltip>}
                           {queryTree.attributes.graph && (
                             <Tooltip><TooltipTrigger render={<button
                               type="button"
@@ -400,8 +433,6 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                           >
                             <ButtonGroup className="inline-flex w-28 shrink-0 items-center [&>*+*]:border-l [&>*+*]:border-input">
                               {[...([
-                                { value: "count-asc", label: "Count: lowest first", Icon: ArrowDown01 },
-                                { value: "count-desc", label: "Count: highest first", Icon: ArrowDown10 },
                                 { value: "label-asc", label: "Label: A to Z", Icon: ArrowDownAZ },
                                 { value: "label-desc", label: "Label: Z to A", Icon: ArrowDownZA },
                               ] as const)].sort((left, right) => left.value === graphSort ? -1 : right.value === graphSort ? 1 : 0).map(({ value, label, Icon }) => (
@@ -429,7 +460,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                             </ButtonGroup>
                           </div>
                           <span className="ml-auto shrink-0 text-xs text-muted-foreground" aria-live="polite">
-                            {isLoadingGraphs ? "Updating…" : shortenCount(graphFacets.length)}
+                            {isLoadingGraphs ? <ElapsedStatus label="Updating…" category="graphs" /> : shortenCount(graphFacets.length)}
                           </span>
                         </div>
                       </header>
@@ -447,11 +478,11 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       )}
                       {graphFacets.length === 0 ? (
                         <p className="px-2 text-xs text-muted-foreground">
-                          {isLoadingGraphs ? "Loading graphs…" : "No graph rows returned. Check the incomplete indicator for timeout details."}
+                          {isLoadingGraphs ? <ElapsedStatus label="Loading graphs" category="graphs" /> : "No graph rows returned. Check the incomplete indicator for timeout details."}
                         </p>
                       ) : (
                         <>
-                          {(graphsPage > 0 || graphHasMore || (graphPageCount !== null && graphPageCount > 1)) && (
+                          {(activeGraphPageCount > 1) && (
                             <div className="mt-2 mb-2 flex items-center justify-between gap-2 text-xs">
                               <button
                                 type="button"
@@ -462,29 +493,36 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                 Previous
                               </button>
                               <span className="text-muted-foreground">
-                                {formatPagePosition(graphsPage, graphPageCount)}
+                                {formatPagePosition(graphsPage, activeGraphPageCount)}
                               </span>
                               <button
                                 type="button"
                                 className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
-                                onClick={() => setGraphsPage((page) => graphPageCount === null ? page + 1 : Math.min(graphPageCount - 1, page + 1))}
-                                disabled={isLoadingGraphs || (graphPageCount === null ? !graphHasMore : graphsPage >= graphPageCount - 1)}
+                                onClick={() => setGraphsPage((page) => Math.min(activeGraphPageCount - 1, page + 1))}
+                                disabled={isLoadingGraphs || graphsPage >= activeGraphPageCount - 1}
                               >
                                 Next
                               </button>
                             </div>
                           )}
                           <div className={FACET_ITEM_GAP_CLASS}>
-                            {graphFacets.slice(0, FACET_PAGE_SIZE).filter((item) => item.uri !== queryTree.attributes.graph).map((item) => (
-                              <label key={item.uri} className="flex min-w-0 items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50 cursor-pointer">
-                                <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri} onChange={() => bindGraph(item.uri)} aria-label={`Bind graph ${item.label}`} className="mt-0.5 size-4 shrink-0 accent-current" />
-                                <span className="min-w-0 flex-1">
-                                  <span className="block break-words">{item.label}</span>
-                                  <Tooltip><TooltipTrigger render={<span className="block break-all text-xs text-muted-foreground">{item.uri}</span>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
-                                </span>
-                                <Tooltip><TooltipTrigger render={<span className="shrink-0 text-xs text-muted-foreground">{shortenCount(item.count)}</span>} /><TooltipContent>{`${item.count} matching resources`}</TooltipContent></Tooltip>
-                              </label>
-                            ))}
+                            {(() => {
+                              const pageGraphs = sortedGraphFacets.slice(graphsPage * FACET_PAGE_SIZE, (graphsPage + 1) * FACET_PAGE_SIZE)
+                                .filter((item) => item.uri !== queryTree.attributes.graph);
+                              const graphRow = (item: (typeof graphFacets)[number]) => (
+                                <label key={item.uri} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50">
+                                  <input type="radio" name="maestro-query-graph-personal" checked={queryTree.attributes.graph === item.uri}
+                                    onChange={() => bindGraph(item.uri)} aria-label={`Bind graph ${item.label}`}
+                                    className="mt-0.5 size-4 shrink-0 accent-current" />
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block break-words">{item.label}</span>
+                                    <Tooltip><TooltipTrigger render={<span className="block break-all text-xs text-muted-foreground">{item.uri}</span>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
+                                  </span>
+                                  {item.count > 0 && <Tooltip><TooltipTrigger render={<span className="shrink-0 text-xs text-muted-foreground">{shortenCount(item.count)}</span>} /><TooltipContent>{`${item.count} matching resources`}</TooltipContent></Tooltip>}
+                                </label>
+                              );
+                              return graphTreeMode ? <GraphUriTree nodes={graphTreeNodes.slice(graphsPage * FACET_PAGE_SIZE, (graphsPage + 1) * FACET_PAGE_SIZE)} expanded={expandedGraphNodes} setExpanded={setExpandedGraphNodes} selectedUri={queryTree.attributes.graph ?? ""} onSelect={bindGraph} /> : pageGraphs.map(graphRow);
+                            })()}
                           </div>
                         </>
                       )}

@@ -218,3 +218,82 @@ mui:templateCall
     rdfs:comment "The SPARQL translation of the saved vfct:historyQueryXML query, stored as text for inspection and reuse."@en ;
     rdfs:domain rdfs:Resource ;
     rdfs:range xsd:string .
+
+
+# Human-readable descriptions for ontology classes and properties.
+mui:CardGridWidget
+  rdfs:label 'Card Grid Widget'@en ;
+  dcterms:description "Card Grid Widget class in the Maestro vocabulary."@en .
+
+mui:ClassPolicy
+  dcterms:description "Declares how instances of one or more classes are presented. A policy points at one SHACL node shape per surface. Only the record shape carries sh:targetClass, so a renderer that looks shapes up by target always finds the canonical shape; item shapes are reached through the policy."@en .
+
+mui:InputShape
+  dcterms:description "Input Shape class in the Maestro vocabulary."@en .
+
+mui:Provider
+  dcterms:description "Provider class in the Maestro vocabulary."@en .
+
+mui:RdfTranscoderWidget
+  dcterms:description "Rdf Transcoder Widget class in the Maestro vocabulary."@en .
+
+mui:RecordViewerWidget
+  rdfs:label 'Record Viewer Widget'@en ;
+  dcterms:description "Record Viewer Widget class in the Maestro vocabulary."@en .
+
+mui:Surface
+  dcterms:description "A place in Maestro's UI where one RDF resource is presented."@en .
+
+mui:XsltTemplate
+  dcterms:description "An XSLT 1.0 stylesheet that formats FCT DESCRIBE XML while preserving Maestro rendering and actions. The stylesheet is stored as an RDF literal."@en .
+
+mui:accepts
+  dcterms:description "accepts property in the Maestro vocabulary."@en .
+
+mui:action
+  dcterms:description "Declares a constrained interaction routed through Maestro's approved live-query update API. The initial interpreter accepts only a direct allowlisted fctQueryTreeApi method call with literal or approved data-binding arguments; template content is never evaluated as unrestricted JavaScript or TypeScript."@en .
+
+mui:data
+  dcterms:description "In a Maestro XSLT result template, the value is the full property URI whose value(s) in the current query scope populate the element."@en .
+
+mui:enrichmentTemplate
+  dcterms:description "Optional XSLT query-pivot implementation used to retrieve linked RDF data for a Record formatter."@en .
+
+mui:forClass
+  dcterms:description "A class whose instances this policy presents. A policy may cover several equivalent classes."@en .
+
+mui:forSurface
+  dcterms:description "Annotates a mui:surfaceShape sub-property with the surface it serves."@en .
+
+mui:itemShape
+  dcterms:description "The shape for result set items. By convention it lists exactly the property shapes of the record shape that carry a property role, except mui:IdentifierRole and mui:CodeRole, which are technical and record-viewer only. Exactly one per policy."@en .
+
+mui:query
+  dcterms:description "In a Maestro XSLT result template, the value is the id of an embedded XML query whose results instantiate the component."@en .
+
+mui:querySparql
+  dcterms:description "The SPARQL translation of the saved vfct:historyQueryXML query, stored as text for inspection and reuse."@en .
+
+mui:readOnly
+  dcterms:description "True when users must not edit the values: they are system-managed or come from a source Maestro does not write to. On a node shape it applies to every property shape unless overridden."@en .
+
+mui:recordShape
+  dcterms:description "The shape for the record viewer. Lists every property shape, with groups and sh:order. Exactly one per policy."@en .
+
+mui:surfaceShape
+  dcterms:description "The SHACL node shape a renderer applies to a focus node on some surface."@en .
+
+mui:syntax
+  dcterms:description "The language of a code value, such as xml, sparql, json or turtle. Used with mui:CodeRole so a viewer can pick highlighting."@en .
+
+mui:templateCall
+  dcterms:description "An XSLT-result instruction for a bounded sandbox query operation or a queued live query edit. Calls are validated by Maestro and never run as JavaScript."@en .
+
+mui:templateContent
+  dcterms:description "The XSLT stylesheet source. Store the stylesheet as a literal; RDF/XML CDATA is only a serialization detail."@en .
+
+mui:transcoder
+  dcterms:description "transcoder property in the Maestro vocabulary."@en .
+
+mui:widget
+  dcterms:description "On a policy shape, the requested widget class; on a Provider, a concrete implementation resource."@en .

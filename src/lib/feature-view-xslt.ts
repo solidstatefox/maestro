@@ -14,13 +14,15 @@ export const FEATURE_VIEW_XSLT: Record<FeatureKind, string> = {
       <xsl:apply-templates select="result"/>
     </section>
   </xsl:template>
-  <xsl:template match="result"><article class="rounded-lg border bg-card p-4 space-y-2">
+  <xsl:template match="result"><article data-feature-uri="{@uri}" class="rounded-lg border bg-card p-4 space-y-2"><xsl:if test="string-length(@target) &gt; 0"><div class="w-full border-b border-border/50 bg-muted/40 px-2 py-1 text-xs font-medium text-muted-foreground"><xsl:choose><xsl:when test="contains(@target, '#')"><xsl:call-template name="last-fragment"><xsl:with-param name="value" select="substring-after(@target, '#')"/></xsl:call-template></xsl:when><xsl:otherwise><xsl:call-template name="last-fragment"><xsl:with-param name="value" select="@target"/></xsl:call-template></xsl:otherwise></xsl:choose></div></xsl:if>
     <h3 class="font-medium"><xsl:value-of select="@label"/></h3>
     <xsl:if test="string-length(@description) &gt; 0"><p class="text-sm text-muted-foreground"><xsl:value-of select="@description"/></p></xsl:if>
     <xsl:if test="string-length(@target) &gt; 0"><p class="break-all text-xs text-muted-foreground">Target class: <xsl:value-of select="@target"/></p></xsl:if>
     <xsl:if test="string-length(@detail) &gt; 0"><p class="break-all text-xs text-muted-foreground">Shape: <xsl:value-of select="@detail"/></p></xsl:if>
     <p class="break-all text-xs text-muted-foreground"><xsl:value-of select="@uri"/></p>
+  <button type="button" data-feature-code="true" class="mt-2 rounded border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">Code</button>
   </article></xsl:template>
+<xsl:template name="last-fragment"><xsl:param name="value"/><xsl:choose><xsl:when test="contains($value, '/')"><xsl:call-template name="last-fragment"><xsl:with-param name="value" select="substring-after($value, '/')"/></xsl:call-template></xsl:when><xsl:otherwise><xsl:value-of select="$value"/></xsl:otherwise></xsl:choose></xsl:template>
 </xsl:stylesheet>`,
   formats: `${common}
   <xsl:template match="/results">
@@ -28,12 +30,14 @@ export const FEATURE_VIEW_XSLT: Record<FeatureKind, string> = {
       <xsl:apply-templates select="result"/>
     </section>
   </xsl:template>
-  <xsl:template match="result"><article class="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border bg-card px-3 py-2 text-sm">
+  <xsl:template match="result"><article data-feature-uri="{@uri}" class="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border bg-card px-3 py-2 text-sm"><xsl:if test="string-length(@target) &gt; 0"><div class="w-full border-b border-border/50 bg-muted/40 px-2 py-1 text-xs font-medium text-muted-foreground"><xsl:choose><xsl:when test="contains(@target, '#')"><xsl:call-template name="last-fragment"><xsl:with-param name="value" select="substring-after(@target, '#')"/></xsl:call-template></xsl:when><xsl:otherwise><xsl:call-template name="last-fragment"><xsl:with-param name="value" select="@target"/></xsl:call-template></xsl:otherwise></xsl:choose></div></xsl:if>
     <strong class="min-w-40"><xsl:value-of select="@label"/></strong>
     <xsl:if test="string-length(@detail) &gt; 0"><code class="text-xs text-muted-foreground"><xsl:value-of select="@detail"/></code></xsl:if>
     <xsl:if test="string-length(@target) &gt; 0"><span class="text-xs text-muted-foreground"><xsl:value-of select="@target"/></span></xsl:if>
     <xsl:if test="string-length(@description) &gt; 0"><p class="text-sm text-muted-foreground"><xsl:value-of select="@description"/></p></xsl:if>
+  <button type="button" data-feature-code="true" class="mt-2 rounded border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">Code</button>
   </article></xsl:template>
+<xsl:template name="last-fragment"><xsl:param name="value"/><xsl:choose><xsl:when test="contains($value, '/')"><xsl:call-template name="last-fragment"><xsl:with-param name="value" select="substring-after($value, '/')"/></xsl:call-template></xsl:when><xsl:otherwise><xsl:value-of select="$value"/></xsl:otherwise></xsl:choose></xsl:template>
 </xsl:stylesheet>`,
   transcoders: `${common}
   <xsl:template match="/results">
@@ -41,13 +45,15 @@ export const FEATURE_VIEW_XSLT: Record<FeatureKind, string> = {
       <xsl:apply-templates select="result"/>
     </section>
   </xsl:template>
-  <xsl:template match="result"><article class="space-y-2 rounded-lg border bg-card p-4">
+  <xsl:template match="result"><article data-feature-uri="{@uri}" class="space-y-2 rounded-lg border bg-card p-4"><xsl:if test="string-length(@target) &gt; 0"><div class="w-full border-b border-border/50 bg-muted/40 px-2 py-1 text-xs font-medium text-muted-foreground"><xsl:choose><xsl:when test="contains(@target, '#')"><xsl:call-template name="last-fragment"><xsl:with-param name="value" select="substring-after(@target, '#')"/></xsl:call-template></xsl:when><xsl:otherwise><xsl:call-template name="last-fragment"><xsl:with-param name="value" select="@target"/></xsl:call-template></xsl:otherwise></xsl:choose></div></xsl:if>
     <h3 class="font-medium"><xsl:value-of select="@label"/></h3>
     <xsl:if test="string-length(@description) &gt; 0"><p class="text-sm text-muted-foreground"><xsl:value-of select="@description"/></p></xsl:if>
     <div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
       <span>Input: <xsl:value-of select="@target"/></span><span>Output: <xsl:value-of select="@detail"/></span>
     </div>
     <p class="break-all text-xs text-muted-foreground"><xsl:value-of select="@uri"/></p>
+  <button type="button" data-feature-code="true" class="mt-2 rounded border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">Code</button>
   </article></xsl:template>
+<xsl:template name="last-fragment"><xsl:param name="value"/><xsl:choose><xsl:when test="contains($value, '/')"><xsl:call-template name="last-fragment"><xsl:with-param name="value" select="substring-after($value, '/')"/></xsl:call-template></xsl:when><xsl:otherwise><xsl:value-of select="$value"/></xsl:otherwise></xsl:choose></xsl:template>
 </xsl:stylesheet>`,
 };

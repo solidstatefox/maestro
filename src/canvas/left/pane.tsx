@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { ConfigureWorkspaceContent } from "@/canvas/left/configure-pane";
 import { FilterWorkspaceContent } from "@/canvas/left/filter-pane";
 
@@ -220,7 +221,10 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
                     {(isLoadingProperties && propertyFacets.length === 0) ||
                     (isLoadingRoles && roleFacets.length === 0) ? (
                       <span role="status" aria-live="polite" className="px-2 text-xs text-muted-foreground">
-                        Fetching configure controls…
+                        <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+                          {isLoadingProperties && propertyFacets.length === 0 ? <ElapsedStatus label="Fetching properties" category="properties" clockScope="properties" /> : null}
+                          {isLoadingRoles && roleFacets.length === 0 ? <ElapsedStatus label="Fetching roles" category="roles" clockScope="roles" /> : null}
+                        </span>
                       </span>
                     ) : null}
                     {(!isLoadingProperties && propertyFacets.length === 0 && propertyFacetError) || (!isLoadingRoles && roleFacets.length === 0 && roleFacetError) ? (

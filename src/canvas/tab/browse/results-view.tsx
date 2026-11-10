@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { Fragment, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { CornerDownLeft } from "lucide-react";
 import { RDF_TYPE_URI } from "@/canvas/utils/query-controller";
@@ -135,7 +136,7 @@ export function BrowseResults({ results, selectedUri, expandedUris, setExpandedU
                     {searchError
                       ? "Search could not be completed."
                       : isLoading
-                        ? "Locating..."
+                        ? <ElapsedStatus label="Locating" category="results" clockScope="results" />
                         : !search.trim()
                           ? "No resources returned for the initial empty-text query."
                           : "No matching results."}

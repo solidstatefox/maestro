@@ -82,6 +82,10 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
           } else if (name === "data-favicon-fallback" && element.localName.toLowerCase() === "img") {
             try { const url = new URL(attribute.value); if (url.protocol !== "https:") element.removeAttribute(attribute.name); }
             catch { element.removeAttribute(attribute.name); }
+          } else if (name === "data-feature-code" && element.localName.toLowerCase() === "button" && attribute.value === "true") {
+            // Code viewer action is delegated and URI-validated by the Features view.
+          } else if (name === "data-feature-uri" && element.localName.toLowerCase() === "article") {
+            // React validates this URI before requesting code from the authenticated personal store.
           } else if (name === "data-endpoint-select" && element.localName.toLowerCase() === "button") {
             // The delegated View handler validates the registry ID before selection.
           } else if (name === "data-endpoint-refresh" && element.localName.toLowerCase() === "button") {

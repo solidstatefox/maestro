@@ -1,6 +1,6 @@
 "use client";
 
-import { RESULTS_BATCH_SIZE_OPTIONS, LEFT_PANEL_LIMIT_STORAGE_KEY, CENTER_PANEL_LIMIT_STORAGE_KEY, CENTER_GROUP_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY, RIGHT_PANEL_PAGE_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS, RIGHT_PANEL_PAGE_LIMIT_OPTIONS } from "@/canvas/sheet/settings";
+import { RESULTS_BATCH_SIZE_OPTIONS, LEFT_WIDGET_LIMIT_KEYS, LEFT_WIDGET_LIMIT_OPTIONS, LEFT_WIDGET_LIMIT_LABELS, CENTER_PANEL_LIMIT_STORAGE_KEY, CENTER_GROUP_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY, RIGHT_PANEL_PAGE_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS, RIGHT_PANEL_PAGE_LIMIT_OPTIONS } from "@/canvas/sheet/settings";
 
 import { getLocalStorageUsageBytes, formatStorageBytes } from "@/canvas/sheet/settings";
 
@@ -97,6 +97,8 @@ import type { SettingsPaneWorkspace } from "@/canvas/controllers/workspace-inter
 export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }) {
   const {
     authSession,
+    queryConcurrency,
+    changeQueryConcurrency,
     bookmarkImportFileRef,
     browserLogLevel,
     browserLogging,
@@ -115,6 +117,8 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     isImportingBookmarks,
     isLoadingHistoryQuery,
     leftPanelLimit,
+    leftWidgetLimits,
+    setLeftWidgetLimit,
     loadHistoryQuery,
     localStorageUsageBytes,
     orderResults,
@@ -318,6 +322,26 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                   className="shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
                 >Reset Auto</button>} /><TooltipContent>{"Reset Auto-configure learning history and saved candidates"}</TooltipContent></Tooltip>
               </div>
+              <div className="rounded-md border p-3 space-y-3">
+                <Label>Query concurrency</Label>
+                <p className="text-xs text-muted-foreground">Proxy connections limit the number of simultaneous browser requests, including requests waiting inside the proxy. Queries per graph server is a total ceiling, not a guaranteed dispatch count. Heavy queries (including COUNT, DISTINCT and GROUP BY) have their own smaller concurrent limit. The proxy reports actual Virtuoso dispatch times; changes take effect without reloading.</p>
+                {([
+                  ["proxyConnections", "Proxy connections", 1, 16],
+                  ["lightPerServer", "Queries per graph server", 1, 16],
+                  ["heavyPerServer", "Heavy queries per graph server", 1, 8],
+                ] as const).map(([key, label, min, max]) => (
+                  <div key={key} className="flex items-center justify-between gap-3">
+                    <Label htmlFor={`query-concurrency-${key}`} className="text-xs">{label}</Label>
+                    <select id={`query-concurrency-${key}`} value={queryConcurrency[key]}
+                      onChange={(event) => changeQueryConcurrency({ ...queryConcurrency, [key]: Number(event.currentTarget.value) })}
+                      className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+                      {Array.from({ length: max - min + 1 }, (_, i) => i + min)
+                        .filter((n) => key !== "heavyPerServer" || n <= queryConcurrency.lightPerServer)
+                        .map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
               <Collapsible open={timeoutEditorOpen} onOpenChange={setTimeoutEditorOpen} className="rounded-md border">
                 <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-accent/40">
                   <Label className="cursor-pointer">Query timeouts</Label>
@@ -347,26 +371,18 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                 <CollapsibleContent className="space-y-4 border-t px-3 pb-4 pt-3">
                   <section className="space-y-3">
                     <h3 className="text-xs font-semibold text-muted-foreground">Left panel</h3>
-              <div className="flex items-center justify-between gap-3 rounded-md border p-3">
-                <div className="min-w-0">
-                  <Label htmlFor="left-panel-limit">Left panel limit</Label>
-                  <p className="mt-1 text-xs text-muted-foreground">LIMIT for Categories, Personal facets, Graphs, and the Properties and Roles configure lists.</p>
+              <p className="text-xs text-muted-foreground">Maximum items requested from each widget's query. Display pagination remains ten items per page.</p>
+              {LEFT_WIDGET_LIMIT_KEYS.map((key) => (
+                <div key={key} className="flex items-center justify-between gap-3 rounded-md border p-3">
+                  <Label htmlFor={`left-limit-${key}`}>{LEFT_WIDGET_LIMIT_LABELS[key]}</Label>
+                  <select id={`left-limit-${key}`} aria-label={`${LEFT_WIDGET_LIMIT_LABELS[key]} query LIMIT`}
+                    value={leftWidgetLimits[key]}
+                    onChange={(event) => setLeftWidgetLimit(key, Number(event.currentTarget.value))}
+                    className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm">
+                    {LEFT_WIDGET_LIMIT_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
+                  </select>
                 </div>
-                <select
-                  id="left-panel-limit"
-                  aria-label="Left panel widget limit"
-                  value={pendingLeftPanelLimit ?? leftPanelLimit}
-                  onChange={(event) => {
-                    const limit = Number(event.currentTarget.value);
-                    if (!RESULTS_BATCH_SIZE_OPTIONS.includes(limit as typeof RESULTS_BATCH_SIZE_OPTIONS[number])) return;
-                    maestroStorageSet(LEFT_PANEL_LIMIT_STORAGE_KEY, String(limit));
-                    setPendingLeftPanelLimit(limit);
-                  }}
-                  className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
-                >
-                  {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
-                </select>
-              </div>
+              ))}
                   </section>
                   <section className="space-y-3 border-t pt-3">
                     <h3 className="text-xs font-semibold text-muted-foreground">Center panel</h3>

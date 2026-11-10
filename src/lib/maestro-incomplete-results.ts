@@ -12,3 +12,9 @@ export function setMaestroIncompleteResults(source: string, state: Omit<Incomple
   statuses.set(source, { ...state, source, observedAt: Date.now() });
   for (const observer of observers) observer();
 }
+
+/** Incomplete states belong to the previous live-query pipeline. */
+export function resetMaestroIncompleteResults(): void {
+  statuses.clear();
+  for (const observer of observers) observer();
+}

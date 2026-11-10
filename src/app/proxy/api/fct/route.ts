@@ -1,3 +1,7 @@
+import { currentProxyClient, withProxyClient } from "@/lib/maestro-proxy-client-preferences";
+import { weightMaestroQuery } from "@/lib/graph-server-query-scheduler";
+import { streamProxyQuery, MAESTRO_EVENT_HEADER } from "@/lib/proxy-query-stream";
+import { traceVirtuosoDispatch } from "@/lib/proxy-query-events";
 import { compileScopedStateFederation } from "@/lib/scoped-state-federation";
 import { createHash } from "node:crypto";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
@@ -157,13 +161,14 @@ async function executeSparql(endpoint: string, query: string, accept = "applicat
       key,
     };
   }
-  const pending = requestSignal ? undefined : inFlightFctSparql.get(key);
+  const pendingKey = `${currentProxyClient()}:${key}`;
+  const pending = requestSignal ? undefined : inFlightFctSparql.get(pendingKey);
   if (pending) return pending;
 
   const requestPromise = (async (): Promise<ExecutedSparql> => {
     const response = await withGraphServerSlot(
       endpoint, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive", requestSignal,
-      () => fetch(url, {
+      () => traceVirtuosoDispatch(() => fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -174,15 +179,15 @@ async function executeSparql(endpoint: string, query: string, accept = "applicat
       signal: requestSignal
         ? AbortSignal.any([requestSignal, AbortSignal.timeout(Math.max(120000, timeoutMs * 3))])
         : AbortSignal.timeout(Math.max(120000, timeoutMs * 3)),
-    }));
+    })), weightMaestroQuery(query, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive"));
     const text = await response.text();
     return { response, text, key };
   })();
-  if (!requestSignal) inFlightFctSparql.set(key, requestPromise);
+  if (!requestSignal) inFlightFctSparql.set(pendingKey, requestPromise);
   try {
     return await requestPromise;
   } finally {
-    if (!requestSignal && inFlightFctSparql.get(key) === requestPromise) inFlightFctSparql.delete(key);
+    if (!requestSignal && inFlightFctSparql.get(pendingKey) === requestPromise) inFlightFctSparql.delete(pendingKey);
   }
 }
 
@@ -538,7 +543,7 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
+async function handlePost(request: Request) {
   logProxyCaller(request, "fct.POST");
   let stage: "compile" | "execute" = "compile";
   try {
@@ -840,4 +845,12 @@ export async function POST(request: Request) {
     const message = describeUpstreamError(error, "Failed to compile or execute the FCT query as SPARQL.");
     return fctError(message, stage === "compile" ? 400 : /aborted due to timeout|timed? out/i.test(message) ? 504 : 502);
   }
+}
+
+
+export async function POST(request: Request): Promise<Response> {
+  if (request.headers.get(MAESTRO_EVENT_HEADER) === "1") {
+    return streamProxyQuery(request, () => withProxyClient(request, () => handlePost(request)));
+  }
+  return withProxyClient(request, () => handlePost(request));
 }

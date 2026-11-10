@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
 import { FACET_ITEM_GAP_CLASS } from "@/canvas/left/facet-layout";
 import type { PersonalStatesPage } from "@/canvas/controllers/personal-record-states";
@@ -23,7 +24,7 @@ export function PersonalStatesWidget({ states }: { states: PersonalStatesPage })
         <span className="shrink-0 text-xs text-muted-foreground">{shortenCount(states.counts[name] ?? 0)}</span>
       </label>)}
     </div>
-    {states.loading && <p className="px-2 py-1 text-xs text-muted-foreground">Loading States…</p>}
+    {states.loading && <p className="px-2 py-1 text-xs text-muted-foreground"><ElapsedStatus label="Loading States" category="personal" clockScope="states" /></p>}
     {states.error && <p className="px-2 py-1 text-xs text-destructive" role="alert">{states.error}</p>}
   </article>;
 }

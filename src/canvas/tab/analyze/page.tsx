@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { createBreadcrumbRenderers } from "@/canvas/top/breadcrumb-renderers";
 import { RESULTS_PAGE_SIZE_STORAGE_KEY } from "@/canvas/sheet/settings";
 
@@ -38,7 +39,7 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                 </div>}
                 {analysisError && <p role="alert" className="p-3 text-sm text-destructive">{analysisError}</p>}
                 {analysisValuesError && <p role="alert" className="p-3 text-xs text-amber-600">Facet values could not be loaded: {analysisValuesError}</p>}
-                {analysisLoading && !analysisTable && <p className="p-3 text-xs text-muted-foreground">Building analysis using the selected XSLT…</p>}
+                {analysisLoading && !analysisTable && <p className="p-3 text-xs text-muted-foreground"><ElapsedStatus label="Building analysis" category="other" clockScope="analysis" /></p>}
                 <div className="min-h-0 flex-1 overflow-auto">
                   {analysisTable && isCompareAnalysis && analyzeHistogram && <AnalyzeHistogram histogramColumns={histogramColumns} visibleCount={analysisTable.rows.length} />}
                   {analysisTable && !(isCompareAnalysis && analyzeHistogram) && <MaestroAnalysisDataTable

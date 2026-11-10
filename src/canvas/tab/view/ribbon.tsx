@@ -1,4 +1,5 @@
 "use client";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import type { ReactNode, Dispatch, SetStateAction } from "react";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
 import { Server, Database, Globe, LayoutGrid, Network, ShieldCheck, FileCode2, ArrowLeftRight, Blocks } from "lucide-react";
@@ -35,7 +36,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
                 <Icon className={`size-7 ${active ? "stroke-[2.5]" : ""}`} aria-hidden="true" />{title}
               </button>;
             })}
-            {viewDiscoveryLoading && <span className="px-3 text-xs text-muted-foreground">Locating views…</span>}
+            {viewDiscoveryLoading && <span className="px-3 text-xs text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></span>}
             {!viewDiscoveryLoading && !discoveredViews.length && <span className="px-3 text-xs text-muted-foreground">No perspectives found</span>}
           </div> },
           { id: "features", label: "Features", content: <div className="flex h-full flex-wrap items-center gap-1" role="toolbar" aria-label="View features">

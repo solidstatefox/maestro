@@ -19,7 +19,7 @@ import { usePublishState } from "@/canvas/controllers/publish";
 import { useChatState } from "@/canvas/controllers/chat";
 
 import { createHistoryActionRestorer, deriveHistoryAction } from "@/canvas/utils/history";
-import { DEFAULT_RESULTS_PAGE_SIZE, RESULTS_PAGE_SIZE_STORAGE_KEY, RESULTS_BATCH_SIZE_OPTIONS, LEFT_PANEL_LIMIT_STORAGE_KEY, DEFAULT_LEFT_PANEL_LIMIT, CENTER_PANEL_LIMIT_STORAGE_KEY, CENTER_GROUP_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY, RIGHT_PANEL_PAGE_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS, RIGHT_PANEL_PAGE_LIMIT_OPTIONS } from "@/canvas/sheet/settings";
+import { DEFAULT_RESULTS_PAGE_SIZE, RESULTS_PAGE_SIZE_STORAGE_KEY, RESULTS_BATCH_SIZE_OPTIONS, LEFT_PANEL_LIMIT_STORAGE_KEY, DEFAULT_LEFT_PANEL_LIMIT, LEFT_WIDGET_LIMIT_KEYS, LEFT_WIDGET_LIMIT_OPTIONS, leftWidgetLimitStorageKey, type LeftWidgetLimitKey, CENTER_PANEL_LIMIT_STORAGE_KEY, CENTER_GROUP_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY, RIGHT_PANEL_PAGE_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS, RIGHT_PANEL_PAGE_LIMIT_OPTIONS } from "@/canvas/sheet/settings";
 
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
@@ -93,9 +93,12 @@ import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightL
 import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
-import { MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
+import { MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, abortPendingMaestroQueries, stopPendingMaestroQueries, resumePendingMaestroQueries, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
+import { DEFAULT_MAESTRO_CONCURRENCY, readMaestroConcurrency, writeMaestroConcurrency, syncMaestroConcurrency, type MaestroConcurrency } from "@/lib/maestro-concurrency";
 import { MAESTRO_TIMEOUT_CATEGORIES, readMaestroWidgetTimeouts, writeMaestroWidgetTimeouts, type MaestroTimeoutCategory } from "@/lib/maestro-query-timeouts";
 import { setMaestroIncompleteResults, getMaestroIncompleteResults, subscribeMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
+import { resetMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
+import { resetMaestroQueryExecutionClocks } from "@/lib/maestro-query-execution-clock";
 import { initializeMaestroStorage, maestroStorageGet, maestroStorageSet, clearMaestroStorage } from "@/lib/maestro-storage";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -159,7 +162,7 @@ const facets = {
 const FACET_ITEM_GAP_CLASS = "space-y-0.5";
 const PROPERTY_ROLE_ITEM_GAP_CLASS = "space-y-0";
 /** Row window for the Categories tree query (type="classes" tree="yes"): one row per class/parent edge. */
-const CATEGORY_TREE_QUERY_LIMIT = 500;
+
 const RDFS_LABEL_URI = "http://www.w3.org/2000/01/rdf-schema#label";
 
 /** Common RDF vocabulary properties used as human-readable names or labels. */
@@ -186,6 +189,7 @@ const TEXT_SEARCH_NAME_PROPERTIES = [
 
 /** Shared workspace lifecycle and query orchestration. The FCT query API remains authoritative. */
 export function useWorkspaceController() {
+  const [isSpongingUri, setIsSpongingUri] = useState(false);
   const {
     authSession, setAuthSession, personalPoliciesReady, setPersonalPoliciesReady,
     personalPoliciesSeedError, setPersonalPoliciesSeedError, loginDialogOpen, setLoginDialogOpen,
@@ -258,7 +262,7 @@ export function useWorkspaceController() {
     setIsLoadingRoles, isLoadingGraphs, setIsLoadingGraphs, roleFacetError,
     setRoleFacetError, expandedCategoryNodes, setExpandedCategoryNodes, ontologyClassMetadata,
     setOntologyClassMetadata, isLoadingProperties, setIsLoadingProperties, isLoadingClasses,
-    setIsLoadingClasses, configureQueryTransition, setConfigureQueryTransition, pendingConfigureFacetIdentityRef,
+    setIsLoadingClasses, isLoadingCategoryTree, setIsLoadingCategoryTree, configureQueryTransition, setConfigureQueryTransition, pendingConfigureFacetIdentityRef,
     propertyFacetError, setPropertyFacetError, classFacetError, setClassFacetError,
     propertyFacetWarning, setPropertyFacetWarning, classFacetWarning, setClassFacetWarning,
     categoriesIncomplete, setCategoriesIncomplete, roleFacetWarning, setRoleFacetWarning,
@@ -711,7 +715,7 @@ useEffect(() => {
     removeClass,
     insertNode,
     setSearchText: setSearch,
-    resetQuery,
+    resetQuery: resetQueryStore,
     setQueryAttribute,
     setNodeAttribute,
     setRoleFilter,
@@ -720,6 +724,7 @@ useEffect(() => {
     refresh: refreshQuery,
     deleteNode,
   } = useQuerySessionController();
+
 
   useEffect(() => {
     setGraphsPage(0);
@@ -795,11 +800,11 @@ useEffect(() => {
     .join(", ") || "no properties";
   
   const signalOptions = [
-    { mode: "uri" as const, Icon: SignalZero, label: "URI — use the entered URI as the fixed subject" },
-    { mode: "exact" as const, Icon: SignalLow, label: `Exact name — match ${selectedNamePropertyLabel} exactly` },
+    { mode: "uri" as const, Icon: Signal, label: "URI — use the entered URI as the fixed subject" },
+    { mode: "exact" as const, Icon: SignalHigh, label: `Exact name — match ${selectedNamePropertyLabel} exactly` },
     { mode: "name" as const, Icon: SignalMedium, label: `Name — search using ${selectedNamePropertyLabel}` },
-    { mode: "all" as const, Icon: SignalHigh, label: "All fields — search text across all properties" },
-    { mode: "clear" as const, Icon: Signal, label: "No text — remove the text constraint from the query" },
+    { mode: "all" as const, Icon: SignalLow, label: "All fields — search text across all properties" },
+    { mode: "clear" as const, Icon: SignalZero, label: "No text — remove the text constraint from the query" },
   ];
   const ActiveSignalIcon = signalOptions.find(({ mode }) => mode === textSearchMode)?.Icon ?? Signal;
   
@@ -1489,8 +1494,8 @@ useEffect(() => {
   useEffect(() => {
     if (resultsPageSize !== effectivePageSize) {
       setResultsPageSize(effectivePageSize);
-      setResultsUiPage(0);
-      setGroupUiPage(0);
+      // Keep the restored page on URL hydration; reset only when the user
+      // explicitly changes the page-size selector.
       maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(effectivePageSize));
     }
   }, [resultsPageSize, effectivePageSize]);
@@ -1551,6 +1556,39 @@ useEffect(() => {
     setLeftPanelLimitState(size);
     setGraphsPage(0);
     maestroStorageSet(LEFT_PANEL_LIMIT_STORAGE_KEY, String(size));
+  }, []);
+
+  // Independent query LIMITs. The shared historical preference is used only when migrating
+  // previously saved settings; FACET_PAGE_SIZE remains an unrelated UI pagination size.
+  const [leftWidgetLimits, setLeftWidgetLimits] = useState<Record<LeftWidgetLimitKey, number>>({
+    categories: DEFAULT_LEFT_PANEL_LIMIT, graphs: DEFAULT_LEFT_PANEL_LIMIT,
+    personalFacets: DEFAULT_LEFT_PANEL_LIMIT, properties: DEFAULT_LEFT_PANEL_LIMIT, roles: DEFAULT_LEFT_PANEL_LIMIT,
+  });
+  useEffect(() => {
+    let active = true;
+    void initializeMaestroStorage().then(() => {
+      if (!active) return;
+      const legacy = Number(maestroStorageGet(LEFT_PANEL_LIMIT_STORAGE_KEY));
+      const fallback = Number.isFinite(legacy) && legacy > 0 ? legacy : DEFAULT_LEFT_PANEL_LIMIT;
+      setLeftWidgetLimits((current) => {
+        const next = { ...current };
+        for (const key of LEFT_WIDGET_LIMIT_KEYS) {
+          const value = Number(maestroStorageGet(leftWidgetLimitStorageKey(key)));
+          next[key] = Number.isFinite(value) && value > 0 ? value : fallback;
+        }
+        return next;
+      });
+    });
+    return () => { active = false; };
+  }, []);
+  const setLeftWidgetLimit = useCallback((key: LeftWidgetLimitKey, size: number) => {
+    if (!LEFT_WIDGET_LIMIT_OPTIONS.some((option) => option === size)) return;
+    setLeftWidgetLimits((current) => ({ ...current, [key]: size }));
+    maestroStorageSet(leftWidgetLimitStorageKey(key), String(size));
+    if (key === "graphs") setGraphsPage(0);
+    if (key === "categories") setClassesPage(0);
+    if (key === "properties") setPropertiesPage(0);
+    if (key === "roles") setRolesPage(0);
   }, []);
 
   const queryXml = serializeFctQuery(queryTree);
@@ -1734,8 +1772,7 @@ useEffect(() => {
       }
     }
     if (restored) {
-      // Endpoint selection is synchronized with the proxy cookie by the async navigation/restore caller.
-      // Do not set selectedEndpointId here: doing so alone can make the dropdown disagree with the server receiving queries.
+      // Endpoint selection is authoritative in the restored query addr.
       if (typeof restored.selectedFacet === "string" && restored.selectedFacet.length < 100) setSelectedFacet(restored.selectedFacet);
       if (typeof restored.propertiesPage === "number" && Number.isFinite(restored.propertiesPage)) setPropertiesPage(Math.max(0, Math.floor(restored.propertiesPage)));
       if (typeof restored.classesPage === "number" && Number.isFinite(restored.classesPage)) setClassesPage(Math.max(0, Math.floor(restored.classesPage)));
@@ -1750,7 +1787,11 @@ useEffect(() => {
       if (restored.workspaceTab === "browse" || restored.workspaceTab === "view" || restored.workspaceTab === "analyze") setWorkspaceTab(restored.workspaceTab);
       const toolbarToggles = readToolbarToggleState(restored);
       setQueryTreeOpen(toolbarToggles.queryTreeOpen);
-      setShowResultBadges(toolbarToggles.showResultBadges);
+      setShowResultBadges(
+        typeof restored.showResultBadges === "boolean" || typeof restored.badgesToggle === "boolean"
+          ? toolbarToggles.showResultBadges
+          : maestroStorageGet("maestro-show-result-badges") === "true",
+      );
       if (restored.breadcrumbBadgeMode === "classes" || restored.breadcrumbBadgeMode === "records") {
         setBreadcrumbBadgeMode(restored.breadcrumbBadgeMode);
         maestroStorageSet("maestro-breadcrumb-badge-mode", restored.breadcrumbBadgeMode);
@@ -1821,6 +1862,10 @@ useEffect(() => {
     return restoredQueryFromUrl;
   }
 
+  useEffect(() => {
+    if (urlStateInitialized) maestroStorageSet("maestro-show-result-badges", showResultBadges ? "true" : "false");
+  }, [urlStateInitialized, showResultBadges]);
+
   // Restore the initial share URL once. Subsequent state changes only rewrite
   // the address bar; they never navigate or rerun this initializer.
   useEffect(() => {
@@ -1828,7 +1873,9 @@ useEffect(() => {
     // Select the URL tab before restoring any query or saved UI state.
     const tabFromUrl = params.get("tab");
     if (tabFromUrl === "browse" || tabFromUrl === "view" || tabFromUrl === "analyze") setWorkspaceTab(tabFromUrl);
-    restoreQueryAndUiState(params.get("q"), readShareableUiState(), params.get("history"));
+    const initialUiState = readShareableUiState();
+    restoreQueryAndUiState(params.get("q"), initialUiState, params.get("history"));
+    if (!initialUiState) setShowResultBadges(maestroStorageGet("maestro-show-result-badges") === "true");
     // An explicit ?tab= wins over a possibly older workspaceTab in saved state.
     if (tabFromUrl === "browse" || tabFromUrl === "view" || tabFromUrl === "analyze") setWorkspaceTab(tabFromUrl);
     setUrlStateInitialized(true);
@@ -2013,7 +2060,7 @@ useEffect(() => {
   ];
   const selectedGroupByOption = groupByOptions.find((option) => option.key !== "" && option.key === groupByPropertyUri) ?? null;
   useEffect(() => {
-    if (groupByPropertyUri && !groupByOptions.some((option) => option.key === groupByPropertyUri)) {
+    if (urlStateInitialized && endpointReadyForQuery && groupByPropertyUri && !groupByOptions.some((option) => option.key === groupByPropertyUri)) {
       // Opening Code Block does not mutate the FCT query. Ignore transient
       // facet-option gaps during that pane switch; restore the grouping when
       // returning to Results instead of treating the pane switch as deselection.
@@ -2095,12 +2142,15 @@ useEffect(() => {
         sort: sortByCount ? "count" : "",
         // tree="yes" adds every superclass up to the root, so the view returns one row per
         // (class, parent) edge and needs a much larger window than the flat list.
-        limit: String(classTree ? CATEGORY_TREE_QUERY_LIMIT : leftPanelLimit),
+        limit: String(viewType === FCT_VIEW_TYPES.CLASSES ? leftWidgetLimits.categories
+          : viewType === FCT_VIEW_TYPES.PROPERTIES ? leftWidgetLimits.properties
+          : viewType === FCT_VIEW_TYPES.PROPERTIES_IN ? leftWidgetLimits.roles
+          : viewType === FCT_VIEW_TYPES.GRAPHS ? leftWidgetLimits.graphs : leftPanelLimit),
         offset: "0",
         ...(classTree ? { tree: "yes" } : {}),
       }),
     ),
-  [queryTree, leftPanelLimit],
+  [queryTree, leftPanelLimit, leftWidgetLimits.categories, leftWidgetLimits.properties, leftWidgetLimits.roles, leftWidgetLimits.graphs],
 );
   // Snapshot the semantic facet requests. Effects depend on their serialized XML,
   // not queryWithoutPagingXml's callback identity (which changes on every tree edit).
@@ -2189,7 +2239,6 @@ useEffect(() => {
     setQueryViewAttributes(queryTree, { type: FCT_VIEW_TYPES.TEXT, limit: "1000", offset: "0" }),
   );
 
-  
   const resultsEnrichmentCacheRef = useRef(new Map<string, ScopeValue[]>());
   
   
@@ -2253,6 +2302,50 @@ useEffect(() => {
     ))
   );
 
+  // History navigation holds the old pipeline suspended while the RDF History
+  // item and potentially a different graph server are being restored.
+  const historyRestoreInProgressRef = useRef(false);
+
+  // Query pipeline barrier: cancel prior requests (including scheduler queue),
+  // clear their clocks and incomplete statuses before new render effects fetch.
+  // A results-page offset changes queryRevision but NOT the semantic query.
+  // Never tear down Configure, Categories, or already-loaded batches for paging.
+  // Refresh increments the query revision too, even when XML is unchanged.
+  useLayoutEffect(() => {
+    if (historyRestoreInProgressRef.current) return;
+    abortPendingMaestroQueries();
+    resumePendingMaestroQueries();
+    resetMaestroQueryExecutionClocks();
+    resetMaestroIncompleteResults();
+    // Clear visible data immediately, not after the next request settles.
+    setResults([]);
+    setResultsTotalCount(null);
+    setResultsPageMatchCount(0);
+    setResultsPageComplete(false);
+    resultsLoadedQueryIdentityRef.current = "";
+    resultsBatchRequestPending.current = false;
+    setGroupValues([]);
+    setGroupMembers({});
+    setGroupValuesError("");
+    setPropertyFacetError("");
+    setRoleFacetError("");
+    setClassFacetError("");
+    setIsLoadingProperties(endpointReadyForQuery);
+    setIsLoadingRoles(endpointReadyForQuery);
+    setIsLoadingClasses(endpointReadyForQuery);
+    setIsLoadingCategoryTree(endpointReadyForQuery && categoriesTreeMode);
+    // The Alphabet effect, not query-tree initialization, owns its loading
+    // state. In particular, a canceled prior request must not leave letters
+    // disabled while the next ASK preflight is being scheduled.
+    setIsLoadingAlphabet(false);
+    setAlphabetPreflight("checking");
+    setAlphabetCounts({});
+    setAlphabetError("");
+    alphabetCountsQueryRef.current = "";
+  }, [queryCountXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+
+
+  
   // A URL load or an attempted query against a non-green server triggers
   // exactly one selected-server health check. No startup failover or bulk scans.
   
@@ -2388,7 +2481,13 @@ useEffect(() => {
         if (!controller.signal.aborted) setIsLoadingAlphabet(false);
       }
     })();
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      // Aborted operations intentionally skip their finally setter. Release
+      // the previous request's loading state even when no replacement starts
+      // (e.g. Home with no Alphabet index, or an endpoint becoming unavailable).
+      setIsLoadingAlphabet(false);
+    };
   }, [alphabetQueryXml, alphabetAskQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
   useEffect(() => {
@@ -2407,7 +2506,7 @@ activeQueryIdentityRef.current = queryIdentity;
 }, [queryCountXml, selectedEndpointId, endpointReadyForQuery]);
 
 useEffect(() => {
-  if (!urlStateInitialized) return;
+  if (!urlStateInitialized || !endpointReadyForQuery) return;
   const nextIdentity = `${selectedEndpointId}\u0000${queryCountXml}`;
   const previousIdentity = previousResultsQueryIdentityRef.current;
 
@@ -2437,6 +2536,7 @@ useEffect(() => {
   queryResultsXml,
   selectedEndpointId,
   urlStateInitialized,
+  endpointReadyForQuery,
   resultsOffset,
   resultsBatchSize,
   setResultsPage,
@@ -2511,6 +2611,73 @@ useEffect(() => {
     navigateToPropertyPath(targetId);
   }
 
+  /** Home always starts a fresh query pipeline, even if already at Home.
+   * Reset the old transport and counters synchronously, before changing the
+   * query tree; the revision also invalidates requests when the XML is equal. */
+  function resetHomeQuery() {
+    abortPendingMaestroQueries();
+    resetMaestroQueryExecutionClocks();
+    resetMaestroIncompleteResults();
+    setIsLoadingAlphabet(false);
+    setAlphabetPreflight("checking");
+    setAlphabetCounts({});
+    setAlphabetError("");
+    alphabetCountsQueryRef.current = "";
+    clearWidgetsForViewChange();
+    resetQueryStore();
+    setQueryRefreshRevision((revision) => revision + 1);
+  }
+
+  /** New root text search for RDF classes, initiated by the Categories header. */
+  function startCategoryNameSearch() {
+    // Reset the complete old pipeline, then atomically install a fresh root
+    // query.  Do not use setTextSearchMode against the previous tree: React
+    // renders do not guarantee the reset tree has become visible yet.
+    resetHomeQuery();
+    const existingView = findQueryNode(queryTree.children, "query-view");
+    const nextView: FctQueryNode = existingView
+      ? { ...existingView, attributes: { ...existingView.attributes, type: FCT_VIEW_TYPES.TEXT, offset: "0" }, children: [] }
+      : { id: "query-view", name: "view", attributes: { type: FCT_VIEW_TYPES.TEXT, limit: "30", offset: "0" }, children: [] };
+    replaceQueryTree({ ...queryTree, children: [
+      { id: "query-text", name: "text", text: "", attributes: { property: selectedNamePropertyUris.join(" "), match: "loose", resourceTypes: "class" }, children: [] },
+      nextView,
+    ] });
+    setSelectedSearchResourceTypes(["class"]);
+    setSelectedSignalMode("name");
+    selectedSignalModeRef.current = "name";
+    searchDraftRef.current = "";
+    setSearchDraft("");
+    setSavedSearchDraft("");
+    setDefaultLeftTab("personal");
+    setCentralTab("results");
+    setRootSearchExpanded(true);
+    setNamePropertyMenuOpen(false);
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>('input[aria-label="Search results"]')?.focus());
+  }
+
+  /** X: stop transport/queue work without refreshing or discarding loaded data. */
+  function cancelMaestroPage() {
+    stopPendingMaestroQueries();
+    setIsLoadingProperties(false);
+    setIsLoadingRoles(false);
+    setIsLoadingClasses(false);
+    setIsLoadingCategoryTree(false);
+    setIsLoadingGraphs(false);
+    setIsLoadingAlphabet(false);
+    setIsSearching(false);
+    setIsCountingResults(false);
+    setGroupValuesLoading(false);
+    setLoadingRecordGraphs(false);
+    setLoadingRecordAuthors(false);
+    setIsLoadingRecordPolicy(false);
+    setIsDescribing(false);
+    setViewDiscoveryLoading(false);
+    setViewFeatureLoading(false);
+    setIsValidatingRecord(false);
+    setConfigureQueryTransition(false);
+    resultsBatchRequestPending.current = false;
+  }
+
   /** Toolbar Refresh repeats the current query, checking only a non-green server. */
   async function refreshMaestroPage() {
     const selected = fctEndpoints.find((item) => item.id === selectedEndpointId);
@@ -2583,14 +2750,15 @@ useEffect(() => {
     selectedUri,
   );
   const { recordDescriptionPage, setRecordDescriptionPage, recordDescriptionPageSize, setRecordDescriptionPageSize, recordDescriptionQueryLimit, setRecordDescriptionQueryLimit, pendingRecordDescriptionLimit, setPendingRecordDescriptionLimit, pendingCenterBatchLimit, setPendingCenterBatchLimit, pendingLeftPanelLimit, setPendingLeftPanelLimit, pendingGroupsBatchLimit, setPendingGroupsBatchLimit } = useRecordPageSettings();
-  const previousSettingsRevisionRef = useRef<number | null>(null);
+  const previousSettingsRevisionRef = useRef<string | null>(null);
   useEffect(() => {
+    const semanticRevision = `${queryCountXml}\u0000${queryRefreshRevision}`;
     if (previousSettingsRevisionRef.current === null) {
-      previousSettingsRevisionRef.current = queryRevision;
+      previousSettingsRevisionRef.current = semanticRevision;
       return;
     }
-    if (previousSettingsRevisionRef.current === queryRevision) return;
-    previousSettingsRevisionRef.current = queryRevision;
+    if (previousSettingsRevisionRef.current === semanticRevision) return;
+    previousSettingsRevisionRef.current = semanticRevision;
     if (pendingRecordDescriptionLimit !== null) {
       setRecordDescriptionQueryLimit(pendingRecordDescriptionLimit);
       setPendingRecordDescriptionLimit(null);
@@ -2611,7 +2779,7 @@ useEffect(() => {
       setGroupUiPage(0);
       setPendingGroupsBatchLimit(null);
     }
-  }, [queryRevision, pendingRecordDescriptionLimit, pendingCenterBatchLimit, pendingLeftPanelLimit, pendingGroupsBatchLimit, setResultsPage]);
+  }, [queryCountXml, queryRefreshRevision, pendingRecordDescriptionLimit, pendingCenterBatchLimit, pendingLeftPanelLimit, pendingGroupsBatchLimit, setResultsPage]);
   
   const RECORD_DESCRIPTION_PAGE_SIZE = recordDescriptionPageSize;
   
@@ -2653,6 +2821,8 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   
   
   
+  const [queryConcurrency, setQueryConcurrency] = useState<MaestroConcurrency>(() => readMaestroConcurrency());
+  const [queryConcurrencyHydrated, setQueryConcurrencyHydrated] = useState(false);
   const [widgetTimeouts, setWidgetTimeouts] = useState<Record<MaestroTimeoutCategory, number>>(() => readMaestroWidgetTimeouts());
   
   
@@ -2725,7 +2895,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         }
         const hasStates = queryTreeHasStates(queryTree);
         const response = hasStates
-          ? await fetch("/proxy/api/fct", {
+          ? await cachedFetchFct("/proxy/api/fct", {
               method: "POST", cache: "no-store", signal: controller.signal,
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ queryXml, countOnly: true }),
@@ -2788,6 +2958,25 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     return () => { disposed = true; };
   }, []);
 
+  // Hydrate first, then publish the browser's limits. Login/restore changes
+  // trigger a fresh sync; changes in Sheet update the proxy immediately.
+  useEffect(() => {
+    let disposed = false;
+    void initializeMaestroStorage().then(() => {
+      if (!disposed) { setQueryConcurrency(readMaestroConcurrency()); setQueryConcurrencyHydrated(true); }
+    });
+    return () => { disposed = true; };
+  }, []);
+  useEffect(() => {
+    if (!queryConcurrencyHydrated) return;
+    void syncMaestroConcurrency(queryConcurrency).catch(error => console.warn("[Maestro] Query quota sync failed", error));
+  }, [authSession, queryConcurrency, queryConcurrencyHydrated]);
+  function changeQueryConcurrency(next: MaestroConcurrency) {
+    const updated = { ...next, heavyPerServer: Math.min(next.heavyPerServer, next.lightPerServer) };
+    setQueryConcurrency(updated);
+    writeMaestroConcurrency(updated);
+  }
+
   function changeWidgetTimeout(category: MaestroTimeoutCategory, seconds: number) {
     const next = { ...widgetTimeouts, [category]: seconds };
     setWidgetTimeouts(next);
@@ -2801,15 +2990,16 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   // starts both Configure spinners. Keep a short visible interval even when
   // cached FCT responses complete before the next browser paint.
   
-  const previousConfigureQueryRevisionRef = useRef(queryRevision);
+  const previousConfigureQueryRevisionRef = useRef(`${queryCountXml}\u0000${queryRefreshRevision}`);
   const previouslyVisibleConfigureButtonsRef = useRef({ properties: false, roles: false });
   useLayoutEffect(() => {
-    if (previousConfigureQueryRevisionRef.current === queryRevision) return;
-    previousConfigureQueryRevisionRef.current = queryRevision;
+    const semanticRevision = `${queryCountXml}\u0000${queryRefreshRevision}`;
+    if (previousConfigureQueryRevisionRef.current === semanticRevision) return;
+    previousConfigureQueryRevisionRef.current = semanticRevision;
     setConfigureQueryTransition(true);
     const timer = window.setTimeout(() => setConfigureQueryTransition(false), 450);
     return () => window.clearTimeout(timer);
-  }, [queryRevision]);
+  }, [queryCountXml, queryRefreshRevision]);
 
   // Facet arrays can be cleared synchronously with a query change. Retain only
   // the buttons that were visible before that change until the spinner settles.
@@ -2933,6 +3123,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     setSearchError("");
 
     const timer = setTimeout(async () => {
+      if (controller.signal.aborted) return;
       setIsSearching(true);
       setSearchError("");
 
@@ -2942,7 +3133,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           queryLength: resultsRequestXml.length,
         });
         const response = await (queryTreeHasStates(queryTree)
-          ? fetch("/proxy/api/fct", {
+          ? cachedFetchFct("/proxy/api/fct", {
               method: "POST", cache: "no-store", signal: controller.signal,
               headers: { "Content-Type": "text/xml; charset=utf-8" }, body: resultsRequestXml,
             })
@@ -3001,7 +3192,8 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
 
         setSelectedUri((current) => current || nextResults[0]?.uri || "");
       } catch (error) {
-        if (cancelled) return;
+        // A user pressing X must preserve already-loaded results.
+        if (cancelled || controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) return;
 
         setResults([]);
         resultsLoadedQueryIdentityRef.current = "";
@@ -3151,7 +3343,18 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
 
   // Some Virtuoso endpoints return a successful grouped A-Z response while
   // omitting an initial visibly represented in the Results list. Verify such
+  const lastGroupResetIdentityRef = useRef<string | null>(null);
   useEffect(() => {
+    // Don't erase share-URL group position during the first successful restore.
+    // Only changes after the initial ready identity reset grouping/pagination.
+    if (!urlStateInitialized || !endpointReadyForQuery) return;
+    const identity = `${queryCountXml}\0${selectedGroupByOption?.key ?? ""}\0${queryRefreshRevision}`;
+    if (lastGroupResetIdentityRef.current === null) {
+      lastGroupResetIdentityRef.current = identity;
+      return;
+    }
+    if (lastGroupResetIdentityRef.current === identity) return;
+    lastGroupResetIdentityRef.current = identity;
     setGroupUiPage(0);
     setGroupBatchOffset(0);
     setGroupHasMoreBatches(false);
@@ -3159,7 +3362,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     setGroupMembers({});
     groupMemberRequestStates.current.clear();
     setGroupValuesError("");
-  }, [queryCountXml, selectedGroupByOption?.key, queryRefreshRevision]);
+  }, [urlStateInitialized, endpointReadyForQuery, queryCountXml, selectedGroupByOption?.key, queryRefreshRevision]);
 
   // Load group values through FCT itself. This query is a clone of the current
   // tree with the selected relationship used to enumerate its values.
@@ -3191,7 +3394,32 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         if (!cancelled) setMaestroIncompleteResults("groups", { incomplete: data.incomplete, requestId: "", message: data.warning || data.sqlMessage || "" });
         if (!cancelled) {
           // Column 1 is the value, column 2 the facet's own distinct count (ct / n).
-          const nextGroupValues: FctResult[] = (Array.isArray(data.results) ? data.results : []).filter((item) => Boolean(item.uri) && (item.columns?.length ?? 0) >= 2);
+          const responseValues: FctResult[] = (Array.isArray(data.results) ? data.results : []).filter((item) => Boolean(item.uri) && (item.columns?.length ?? 0) >= 2);
+          // Virtuoso's classes facet can omit grouped rows although the same
+          // Categories widget already has valid class/count pairs. Reuse the
+          // existing facet projection only for Category grouping and only when
+          // the group response is empty; do not fabricate zero-count groups.
+          // Only established class and current result counts can fill an
+          // unexpectedly empty grouped Categories response.
+          const knownGroupClasses = new Map(classFacets
+            .filter((item) => item.uri && Number.isFinite(item.count) && item.count >= 0)
+            .map((item) => [item.uri, { uri: item.uri, label: item.label, count: item.count }]));
+          if (effectiveResultsTotalCount !== null) {
+            for (const iri of getClassesAtNode(getPropertyPath().at(-1)?.id ?? null)) {
+              knownGroupClasses.set(iri, { uri: iri, label: knownGroupClasses.get(iri)?.label ?? toLabel(iri, "Class"), count: effectiveResultsTotalCount });
+            }
+          }
+          const nextGroupValues: FctResult[] = responseValues.length || !isGroupByCategory
+            ? responseValues
+            : [...knownGroupClasses.values()]
+                .slice(groupBatchOffset, groupBatchOffset + groupBatchSize)
+                .map((item): FctResult => ({
+                  uri: item.uri, title: item.label || toLabel(item.uri, "Class"), termType: "uri", matches: [],
+                  columns: [
+                    { value: item.uri, termType: "uri", attributes: { datatype: "uri" }, raw: {} },
+                    { value: String(item.count), datatype: "http://www.w3.org/2001/XMLSchema#integer", attributes: { var: "ct" }, raw: {} },
+                  ],
+                }));
           setGroupHasMoreBatches(nextGroupValues.length >= groupBatchSize);
           setGroupValues((current) => {
             if (groupBatchOffset === 0) return nextGroupValues;
@@ -3209,7 +3437,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       }
     })();
     return () => { cancelled = true; controller.abort(); };
-  }, [centralTab, search, queryCountXml, groupByPropertyUri, selectedGroupByOption?.key, groupBatchSize, groupBatchOffset, queryRefreshRevision]);
+  }, [centralTab, search, queryCountXml, groupByPropertyUri, selectedGroupByOption?.key, groupBatchSize, groupBatchOffset, queryRefreshRevision, classFacets, effectiveResultsTotalCount, getPropertyPath]);
 
   // Each group member list is another FCT request: clone the complete source
   // query, bind only this group's value to the selected relationship, and keep
@@ -3312,7 +3540,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     replaceFacetAutofillCandidates("property", []);
     replaceFacetAutofillCandidates("property-in", []);
     setFacetAutofillCandidates({ property: [], "property-in": [] });
-  }, [search, queryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+  }, [search, queryCountXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
   // Categories owns its own request, debounce, cancellation, data, error and
   // loading state. It does not wait for Properties or Roles.
@@ -3417,11 +3645,13 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   // Its output is intersected with the authoritative flat class list at render time.
   useEffect(() => {
     if (!categoriesTreeMode || (!search.trim() && !endpointReadyForQuery)) {
+      setIsLoadingCategoryTree(false);
       setClassTreeEdges([]);
       return;
     }
     let cancelled = false;
     const controller = new AbortController();
+    setIsLoadingCategoryTree(true);
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
@@ -3455,10 +3685,12 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
             requestId: "",
             message: [previous?.message, "Superclass hierarchy unavailable; displaying only classes from the flat list.", error instanceof Error ? error.message : String(error)].filter(Boolean).join("; "),
           });
+        } finally {
+          if (!cancelled) setIsLoadingCategoryTree(false);
         }
       })();
     }, 250);
-    return () => { cancelled = true; window.clearTimeout(timer); controller.abort(); };
+    return () => { cancelled = true; window.clearTimeout(timer); controller.abort(); setIsLoadingCategoryTree(false); };
   }, [categoriesTreeMode, classFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
   // Properties has a completely separate request lifecycle from Categories and Roles.
@@ -3550,44 +3782,11 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     };
   }, [search, roleFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
-  // Categories knows its total from the loaded facet array. Graphs is server-
-  // paginated, so request just the number of matching named graphs separately;
-  // never fetch every graph merely to calculate the last page.
-  useEffect(() => {
-    setGraphTotalCount(null);
-    if (!endpointReadyForQuery || !selectedEndpointId) return;
-    let cancelled = false;
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        const graphViewTree = setQueryViewAttributes(queryTree, {
-          type: FCT_VIEW_TYPES.GRAPHS, limit: "1", offset: "0",
-        });
-        const liveAddr = graphViewTree.attributes.addr ?? "";
-        const at = liveAddr.indexOf("@");
-        if (at < 0) throw new Error("Graph-count query has no graph server address.");
-        const graphQueryXml = serializeFctQuery({
-          ...graphViewTree,
-          attributes: { ...graphViewTree.attributes, addr: liveAddr.slice(at) },
-        });
-        const response = await maestroQueryFetch("/proxy/api/fct", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-count", "GraphList:total") },
-          body: JSON.stringify({ queryXml: graphQueryXml, countOnly: true }),
-          signal: controller.signal,
-        });
-        const data = parseFctResponse(await response.text());
-        if (!response.ok || data.error || data.incomplete || !Number.isSafeInteger(data.count) || (data.count ?? -1) < 0)
-          throw new Error(data.error ?? "Graph page count is unavailable.");
-        if (!cancelled) setGraphTotalCount(data.count!);
-      } catch (error) {
-        // An incomplete total must never be displayed as an exact page count.
-        if (!cancelled && !(error instanceof Error && error.name === "AbortError"))
-          console.info("Could not determine the number of matching graph pages.", error);
-      }
-    })();
-    return () => { cancelled = true; controller.abort(); };
-  }, [queryWithoutPagingXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+  // Graphs is a bounded discovery widget, not an aggregate/count workload.
+  // Display the graph URIs returned within the Sheet limit. If there are more
+  // than the cap, the incomplete indicator explains that the list is bounded.
+  // Never run COUNT(DISTINCT ?g) in parallel just to render the widget.
+  useEffect(() => { setGraphTotalCount(null); }, [queryCountXml, leftWidgetLimits.graphs, selectedEndpointId, queryRefreshRevision]);
 
   // Fetch only the graph page the user requested; never scan the entire result set.
   useEffect(() => {
@@ -3607,13 +3806,13 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     async function loadGraphPage() {
       try {
         // Match Categories pagination: display at most ten graphs per page.
-        const limit = FACET_PAGE_SIZE;
-        const offset = graphsPage * limit;
+        const limit = leftWidgetLimits.graphs;
+        const offset = 0;
         // Graphs must search across ALL named graphs containing this result
         // set, even after preprocessing has selected a graph in the live addr.
         // Only this clone is unscoped; the authoritative live query is untouched.
         const graphViewTree = setQueryViewAttributes(queryTree, {
-          type: FCT_VIEW_TYPES.GRAPHS, sort: graphSort, limit: String(limit), offset: String(offset),
+          type: FCT_VIEW_TYPES.GRAPHS, limit: String(limit), offset: String(offset),
         });
         const liveAddr = graphViewTree.attributes.addr ?? "";
         const at = liveAddr.indexOf("@");
@@ -3642,28 +3841,8 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         if (!response.ok && !data.incomplete) throw new Error(data.error ?? "Failed to load graphs for the current query.");
         if (data.error && !data.incomplete) throw new Error(data.error);
         if (cancelled) return;
-        // An Anytime timeout can interrupt the aggregate before it emits its
-        // first graph. Retry a count-free graph projection and keep its rows.
-        if (data.incomplete && (!Array.isArray(data.graphs) || data.graphs.length === 0)) {
-          const sampleTree = setQueryViewAttributes(graphViewTree, { type: FCT_VIEW_TYPES.GRAPHS,
-            sample: "yes", limit: String(limit), offset: String(offset) });
-          const sampleAddr = sampleTree.attributes.addr ?? "";
-          const sampleXml = serializeFctQuery({ ...sampleTree, attributes: {
-            ...sampleTree.attributes, addr: sampleAddr.slice(sampleAddr.indexOf("@")),
-          } });
-          try {
-            const retry = await maestroQueryFetch("/proxy/api/fct", {
-              method: "POST", cache: "no-store",
-              headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("graph-list-anytime", "GraphList") },
-              body: sampleXml, signal: controller.signal,
-            });
-            const sampled = parseFctResponse(await retry.text());
-            if (!cancelled && sampled.graphs.length > 0) {
-              data.graphs = sampled.graphs;
-              setGraphListSparql(sampled.sparql ?? "");
-            }
-          } catch { /* Preserve the first incomplete result and its indicator. */ }
-        }
+        // Retain any rows Virtuoso emitted under Anytime, even when incomplete.
+        // No retry is necessary: the primary graph projection has no blocking aggregate.
         //const graphs = Array.isArray(data.graphs) ? [...new Set(data.graphs.filter((value: unknown): value is string => typeof value === "string"))] : [];
        // setGraphFacets(graphs.map((uri: string) => ({ uri, label: uri, count: 0 })));
 
@@ -3702,7 +3881,7 @@ setGraphFacets(graphs);
     }
     void loadGraphPage();
     return () => { cancelled = true; controller.abort(); };
-  }, [graphsPage, graphSort, queryWithoutPagingXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+  }, [leftWidgetLimits.graphs, queryCountXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
 
 
   // Defensively merge duplicate resource rows by URI. The API normally groups
@@ -3751,6 +3930,12 @@ setGraphFacets(graphs);
       setSelectedUri(visibleResultsPage[0].uri);
     }
   }, [centralTab, resultsOffset, resultsPageSize, resultsUiPage, visibleResultsPage, selectedUri, explicitBlankNodeAnchor?.label]);
+
+  useEffect(() => {
+    if (!urlStateInitialized || isSearching || !resultsPageComplete || results.length === 0) return;
+    const lastLoadedPage = Math.max(0, Math.ceil(allLoadedResults.length / resultsPageSize) - 1);
+    if (resultsUiPage > lastLoadedPage) setResultsUiPage(lastLoadedPage);
+  }, [urlStateInitialized, isSearching, resultsPageComplete, results.length, resultsPageSize, resultsUiPage]);
 
   const selectedResult = visibleResultsPage.find((item) => item.uri === selectedUri);
   const selectedGroupRecord = groupValues.find((item) => item.uri === selectedUri);
@@ -3815,7 +4000,7 @@ setGraphFacets(graphs);
         for (let attempt = 0; attempt < 3; attempt++) {
           const response = await maestroQueryFetch("/proxy/api/record-graphs", {
             method: "POST", cache: "no-store",
-            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
+            signal: controller.signal,
             headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-discovery", "RecordGraphs") },
             body: JSON.stringify({ ...graphDiscoveryIdentity, addr: queryTree.attributes.addr, operation: "graphs" }),
           });
@@ -5937,11 +6122,9 @@ useEffect(() => {
   // A total from a separate aggregate does not establish that a partial
   // graph-list page contains its promised ten members. Never advertise a
   // precise Page X of Y in that situation.
-  const graphPageCount = graphTotalCount === null || graphListIncomplete ||
-    (!isLoadingGraphs && graphFacets.length < FACET_PAGE_SIZE &&
-      graphTotalCount > graphsPage * FACET_PAGE_SIZE + graphFacets.length)
-    ? null
-    : Math.max(1, Math.ceil(graphTotalCount / FACET_PAGE_SIZE));
+  // The Sheet controls the query LIMIT; ten is only the number displayed per UI page.
+  // Graphs are fetched once up to leftPanelLimit and paged locally, just like the other facets.
+  const graphPageCount = Math.max(1, Math.ceil(graphFacets.length / FACET_PAGE_SIZE));
   useEffect(() => {
     if (graphPageCount !== null) setGraphsPage((current) => Math.min(current, graphPageCount - 1));
   }, [graphPageCount]);
@@ -6266,6 +6449,40 @@ useEffect(() => {
 
   async function navigateQueryHistory(direction: "backward" | "forward") {
     if (historyNavigationPending !== null) return;
+    historyRestoreInProgressRef.current = true;
+    // History navigation is a new query pipeline, not a pagination operation.
+    // Cancel immediately, before the asynchronous History lookup begins.
+    stopPendingMaestroQueries();
+    resetMaestroQueryExecutionClocks();
+    resetMaestroIncompleteResults();
+    setResults([]);
+    setResultsTotalCount(null);
+    setResultsPageMatchCount(0);
+    setResultsPageComplete(false);
+    resultsLoadedQueryIdentityRef.current = "";
+    resultsBatchRequestPending.current = false;
+    setGroupValues([]);
+    setGroupMembers({});
+    setPropertyFacets([]);
+    setRoleFacets([]);
+    setClassFacets([]);
+    setClassTreeEdges([]);
+    setGraphFacets([]);
+    setPropertyFacetError("");
+    setRoleFacetError("");
+    setClassFacetError("");
+    setIsLoadingProperties(false);
+    setIsLoadingRoles(false);
+    setIsLoadingClasses(false);
+    setIsLoadingCategoryTree(false);
+    setIsLoadingGraphs(false);
+    setIsLoadingAlphabet(false);
+    setAlphabetCounts({});
+    setAlphabetPreflight("checking");
+    setIsSearching(false);
+    setIsCountingResults(false);
+    setGroupValuesLoading(false);
+    setConfigureQueryTransition(false);
     setHistoryNavigationPending(direction);
     try {
       const response = await fetch("/proxy/api/query-favorites", {
@@ -6303,6 +6520,8 @@ useEffect(() => {
       pendingHistoryVisitRef.current = null;
       setRootSearchExpanded(false);
       restoreQueryAndUiState(payload.queryXml, restoredUiState, payload.historyId);
+      // Even the same serialized query must start a new execution generation.
+      setQueryRefreshRevision((revision) => revision + 1);
 
       // Keep the current browser URL synchronized without navigating. The URL
       // remains a reflection of app state; it is not the source used to restore it.
@@ -6315,6 +6534,7 @@ useEffect(() => {
       const message = error instanceof Error ? error.message : "Could not navigate query History.";
       toast.add({ title: "Could not navigate query History", description: message, type: "error" });
     } finally {
+      historyRestoreInProgressRef.current = false;
       setHistoryNavigationPending(null);
     }
   }
@@ -7154,9 +7374,10 @@ useEffect(() => {
                 {node.id === "query-view" ? "Results view" : facetHoverPreview?.kind === "record" && node.id === rootPreviewNodeId ? facetHoverPreview.label : queryNodeLabel(node)}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
               </span>} /><TooltipContent>{node.attributes.iri ?? node.name}</TooltipContent></Tooltip>
             )}
-            {inlineValues.map((value) => (
-              <span key={value.id} className="ml-1.5 inline-flex max-w-full items-baseline gap-1 align-baseline">
-                {renderValueOperator(value)}
+            {inlineValues.map((value, index) => (
+              <span key={value.id} className="ml-1 inline-flex max-w-full items-baseline gap-1 align-baseline">
+                {index > 0 && <span>,</span>}
+                {index === 0 || value.attributes.op !== inlineValues[0]?.attributes.op ? renderValueOperator(value) : null}
                 <Tooltip><TooltipTrigger render={<span
                   className="min-w-0 break-words"
                 >
@@ -7297,12 +7518,41 @@ useEffect(() => {
   const rootBadgeLabelOk = Boolean(rootSummaryForLabel && !rootSummaryForLabel.zeroClasses && rootSummaryForLabel.label && rootSummaryForLabel.label !== "—");
   const rootBadgePossessive = rootPossessiveEligible && rootBadgeLabelOk ? "’s" : "";
 
+  async function spongeCurrentUri(): Promise<void> {
+    const uri = rootSearchText;
+    const endpoint = fctEndpoints.find((entry) => entry.id === selectedEndpointId)?.url;
+    if (!endpoint || !/^https?:\/\//i.test(uri)) {
+      toast.add({ title: "Sponge URI", description: "Choose URIBurner and enter an HTTP(S) resource URI.", type: "error" });
+      return;
+    }
+    setIsSpongingUri(true);
+    try {
+      const timeoutMs = readMaestroWidgetTimeouts().other * 1000;
+      const response = await fetch("/proxy/api/sponge", {
+        method: "POST", cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uri, endpoint, timeoutMs }),
+      });
+      const payload = await response.json() as { error?: string; authorizationRequired?: boolean };
+      if (!response.ok) {
+        throw new Error(payload.authorizationRequired
+          ? "URIBurner requires authorization for this operation. No credentials were sent."
+          : payload.error || `URIBurner returned HTTP ${response.status}.`);
+      }
+      toast.add({ title: "URIBurner sponge requested", description: "Refreshing Maestro's URI query.", type: "success" });
+      await refreshMaestroPage();
+    } catch (error) {
+      toast.add({ title: "URIBurner sponge failed", description: error instanceof Error ? error.message : String(error), type: "error" });
+    } finally { setIsSpongingUri(false); }
+  }
+
   const searchInputGroup = (
                   <ButtonGroup
                     aria-label="Search text and signal controls"
                     className="min-w-0 flex-1 rounded-none border-0 [&>*+*]:border-l [&>*+*]:border-input [&>span]:border-l-0 [&>input]:min-w-0 [&>input]:flex-1 [&>input]:rounded-none [&>input]:border-0 [&>input]:bg-background [&>input]:px-3 [&>input]:py-2 [&>input]:text-sm"
                   >
                     {textSearchMode === "uri" ? (
+                      <>
                       <Tooltip><TooltipTrigger render={<span
                         role="img"
                         aria-label="URI"
@@ -7310,6 +7560,10 @@ useEffect(() => {
                       >
                         <GlobeCode className="size-4" aria-hidden="true" />
                       </span>} /><TooltipContent>{"URI"}</TooltipContent></Tooltip>
+                      {/^https?:\/\//i.test(rootSearchText) && /(?:^|\.)uriburner\.com$/i.test((() => { try { return new URL(fctEndpoints.find((entry) => entry.id === selectedEndpointId)?.url ?? "").hostname; } catch { return ""; } })()) && (
+                        <Tooltip><TooltipTrigger render={<button type="button" disabled={isSpongingUri} onClick={() => void spongeCurrentUri()} aria-label="Sponge URI with URIBurner" className="flex h-10 shrink-0 items-center gap-1 px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"><WandSparkles className="size-4" aria-hidden="true" />{isSpongingUri ? "Sponging…" : "Sponge"}</button>} /><TooltipContent>Ask URIBurner to dereference this URI, then refresh the query</TooltipContent></Tooltip>
+                      )}
+                      </>
                     ) : (
                       <DropdownMenu
                         open={namePropertyMenuOpen}
@@ -7534,7 +7788,8 @@ useEffect(() => {
     setViewFeatureLoading(true);
     setViewFeatureError("");
     setViewFeatureHtml("");
-    const timer = setTimeout(() => controller.abort(), 16000);
+    // Hierarchy discovery may query the graph server and dereference linked ontology RDF.
+    const timer = setTimeout(() => controller.abort(), 28000);
     void (async () => {
       try {
         const response = await fetch("/proxy/api/view-features", {
@@ -7888,6 +8143,7 @@ useEffect(() => {
   
 
     return {
+    queryActivityPending: isSearching || isCountingResults || isLoadingProperties || isLoadingRoles || isLoadingClasses || isLoadingCategoryTree || isLoadingGraphs || isLoadingAlphabet || groupValuesLoading || loadingRecordGraphs || loadingRecordAuthors || isLoadingRecordPolicy || isDescribing || viewDiscoveryLoading || viewFeatureLoading || isValidatingRecord,
     FACET_PAGE_SIZE,
     RECORD_DESCRIPTION_PAGE_SIZE,
     activeBlankNodeTab,
@@ -8069,6 +8325,7 @@ useEffect(() => {
     isGroupByCategory,
     isImportingBookmarks,
     isLoadingAlphabet,
+    isLoadingCategoryTree,
     isLoadingClasses,
     isLoadingGraphs,
     isLoadingHistoryQuery,
@@ -8083,6 +8340,8 @@ useEffect(() => {
     isSearching,
     isValidatingRecord,
     leftPanelLimit,
+    leftWidgetLimits,
+    setLeftWidgetLimit,
     liveQueryHasText,
     loadHistoryQuery,
     loadingRecordAuthors,
@@ -8171,9 +8430,11 @@ useEffect(() => {
     recordValidation,
     refreshFailedEndpointAndRetry,
     refreshMaestroPage,
+    cancelMaestroPage,
     refreshQuery,
     renderQueryNode,
-    resetQuery,
+    resetQuery: resetHomeQuery,
+    startCategoryNameSearch,
     restoreHistoryActionItem,
     results,
     resultsBatchRequestPending,
@@ -8371,6 +8632,8 @@ useEffect(() => {
     visibleGroupValues,
     visibleResultsPage,
     widgetTimeouts,
+    queryConcurrency,
+    changeQueryConcurrency,
     workspaceTab,
     findPropertyPathNode,
     personalWidgetCardRefs,

@@ -1,7 +1,8 @@
+import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 /**
  * First Maestro View: a genuine XSLT 1.0 transformation of the graph-server
  * results supplied by the personal dataspace registry, scoped by the live FCT query.
- * XSLT 1.0 is intentionally used for native browser XSLTProcessor support.
+ * The renderer uses Maestro-bundled SaxonJS rather than browser XSLT facilities.
  */
 export type GraphServerViewEntry = {
   uri: string;
@@ -42,10 +43,7 @@ export const GRAPH_SERVER_VIEW_XSLT = `<?xml version="1.0" encoding="UTF-8"?>
   </xsl:template>
 </xsl:stylesheet>`;
 
-export function renderGraphServerXslt(servers: GraphServerViewEntry[]): string {
-  if (typeof DOMParser === "undefined" || typeof XSLTProcessor === "undefined") {
-    throw new Error("This browser does not support the XSLTProcessor required for Graph Servers View.");
-  }
+export async function renderGraphServerXslt(servers: GraphServerViewEntry[]): Promise<string> {
   const input = document.implementation.createDocument(null, "graphServers");
   const root = input.documentElement;
   for (const server of servers) {
@@ -62,12 +60,8 @@ export function renderGraphServerXslt(servers: GraphServerViewEntry[]): string {
     element.setAttribute("httpStatus", server.httpStatus === null ? "Unknown" : String(server.httpStatus));
     root.appendChild(element);
   }
-  const stylesheet = new DOMParser().parseFromString(GRAPH_SERVER_VIEW_XSLT, "application/xml");
-  if (stylesheet.querySelector("parsererror")) throw new Error("Graph Servers XSLT is not well-formed XML.");
-  const processor = new XSLTProcessor();
-  processor.importStylesheet(stylesheet);
-  const fragment = processor.transformToFragment(input, document);
-  const output = document.createElement("div");
-  output.appendChild(fragment);
-  return output.innerHTML;
+  return await transformWithMaestroSaxon(
+    GRAPH_SERVER_VIEW_XSLT,
+    new XMLSerializer().serializeToString(input),
+  );
 }

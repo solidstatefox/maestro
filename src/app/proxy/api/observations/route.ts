@@ -2,19 +2,19 @@ import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { isIP } from "node:net";
 import { recordUriObservations } from "@/lib/uri-registry";
-import { getSelectedFctEndpoint } from "@/lib/personal-sparql";
+import { getConfiguredFctEndpoints, resolveFctEndpointFromAddr } from "@/lib/personal-sparql";
 
 
 export async function POST(request: Request) {
   try {
-    const endpoint = await getSelectedFctEndpoint(request);
-    if (!endpoint) return NextResponse.json({ error: "No graphs are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
-
     const body = await request.json().catch(() => null) as {
       observations?: unknown;
+      addr?: unknown;
       _debug?: { source?: unknown; component?: unknown; requestId?: unknown };
     } | null;
     logProxyCaller(request, "observations.POST", body?._debug);
+    const endpoint = resolveFctEndpointFromAddr(await getConfiguredFctEndpoints(request), body?.addr);
+    if (!endpoint) return NextResponse.json({ error: "Observations require a registered graph server in query addr." }, { status: 400 });
     if (!Array.isArray(body?.observations)) {
       return NextResponse.json({ error: "Expected an observations array." }, { status: 400 });
     }

@@ -1,3 +1,4 @@
+import { canonicalQueryIdentityXml } from "@/lib/query-identity";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
@@ -279,7 +280,7 @@ export async function POST(request: Request) {
       if (!queryXml || !/^\s*(?:<\?xml[^>]*>\s*)?<query\b/i.test(queryXml)) {
         return NextResponse.json({ error: "A serialized FCT <query> document is required to save the bookmark." }, { status: 400 });
       }
-      const queryHash = `sha256:${createHash("sha256").update(queryXml, "utf8").digest("hex")}`;
+      const queryHash = `sha256:${createHash("sha256").update(canonicalQueryIdentityXml(queryXml), "utf8").digest("hex")}`;
       const querySparql = compileFctXmlToSparql(queryXml).query;
       // This timestamp marks when the History item was saved as a Bookmark.
       const bookmarkCreated = new Date().toISOString();
@@ -401,7 +402,7 @@ export async function POST(request: Request) {
     if (!queryXml || !/^\s*(?:<\?xml[^>]*>\s*)?<query\b/i.test(queryXml)) {
       return NextResponse.json({ error: "A serialized FCT <query> document is required." }, { status: 400 });
     }
-    const queryHash = `sha256:${createHash("sha256").update(queryXml, "utf8").digest("hex")}`;
+    const queryHash = `sha256:${createHash("sha256").update(canonicalQueryIdentityXml(queryXml), "utf8").digest("hex")}`;
     if (action === "visit") {
       const stateUrl = typeof body.stateUrl === "string" ? body.stateUrl.trim() : "";
       if (stateUrl && !/^https?:\/\//i.test(stateUrl)) return NextResponse.json({ error: "The History state URL must use HTTP or HTTPS." }, { status: 400 });
@@ -423,27 +424,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ historyId: id });
     }
     if (action === "check") {
-      // Prefer the active History item when available. Its restored query can
-      // serialize differently from the XML originally hashed at bookmark time.
-      let bookmarkId: string | null = null;
-      if (historyId) {
-        const currentAsk = `PREFIX rdf: <${RDF_NS}> PREFIX schema: <${SCHEMA_NS}> PREFIX bookmark: <${BOOKMARK_NS}> ASK WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} rdf:type bookmark:Bookmark ; schema:identifier ?hash . } }`;
-        if (await askPersonal(currentAsk)) bookmarkId = historyId;
-      }
-      if (!bookmarkId) {
-        const lookup = await queryPersonal(`PREFIX schema: <${SCHEMA_NS}> SELECT ?bookmark WHERE { GRAPH ${bookmarkGraph} { ?bookmark schema:identifier ${sparqlString(queryHash)} . } } LIMIT 1`);
-        bookmarkId = lookup.results?.bindings?.[0]?.bookmark?.value ?? null;
-      }
-      return NextResponse.json({ bookmarked: Boolean(bookmarkId), hash: queryHash, historyId: bookmarkId });
+      // App-bar bookmark state is determined solely by the current live query hash.
+      // Do not infer it from History, Record state, or XML similarity.
+      const ask = `PREFIX schema: <${SCHEMA_NS}> ASK WHERE { GRAPH ${bookmarkGraph} { ?bookmark schema:identifier ${sparqlString(queryHash)} . } }`;
+      const bookmarked = await askPersonal(ask);
+      if (!bookmarked) return NextResponse.json({ bookmarked: false, hash: queryHash, historyId: null });
+      // Recover the matching resource for the existing Remove Bookmark action.
+      const lookup = await queryPersonal(`PREFIX schema: <${SCHEMA_NS}> SELECT ?bookmark WHERE { GRAPH ${bookmarkGraph} { ?bookmark schema:identifier ${sparqlString(queryHash)} . } } LIMIT 1`);
+      const bookmarkId = lookup.results?.bindings?.[0]?.bookmark?.value ?? null;
+      return NextResponse.json({ bookmarked: true, hash: queryHash, historyId: bookmarkId });
     }
     if (action === "unbookmark") {
-      if (historyId) {
-        const currentAsk = `PREFIX rdf: <${RDF_NS}> PREFIX schema: <${SCHEMA_NS}> PREFIX bookmark: <${BOOKMARK_NS}> ASK WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} rdf:type bookmark:Bookmark ; schema:identifier ?hash . } }`;
-        if (await askPersonal(currentAsk)) {
-          await updatePersonal(`DELETE { GRAPH ${bookmarkGraph} { ?linkedSubject ?predicate ?object } } WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} (<${BOOKMARK_NS}recalls>|<${DCTERMS_NS}references>|<${VFCT_NS}savedQuery>|<${VFCT_NS}child>|<${VFCT_NS}attribute>)* ?linkedSubject . ?linkedSubject ?predicate ?object } }`);
-          return NextResponse.json({ removed: true, hash: queryHash, historyId });
-        }
-      }
       const ask = `PREFIX schema: <${SCHEMA_NS}> ASK WHERE { GRAPH ${bookmarkGraph} { ?bookmark schema:identifier ${sparqlString(queryHash)} . } }`;
       const bookmarked = await askPersonal(ask);
       if (!bookmarked) return NextResponse.json({ removed: false, error: "No bookmark hash matches this query." }, { status: 404 });

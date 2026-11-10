@@ -41,7 +41,10 @@ function trimCache<T>(cache: Map<string, T>) {
   }
 }
 
-const observationQueue = new Map<string, { uri: string; isNamedGraph: boolean }>();
+const observationQueue = new Map<string, { uri: string; isNamedGraph: boolean; addr: string }>();
+let observationQueryAddr = "";
+/** Keep observations bound to the query that supplied the URI, not mutable cookies. */
+export function setObservationQueryAddr(addr: string) { observationQueryAddr = addr; }
 let observationLifecycleListenersRegistered = false;
 let observationFlushInFlight = false;
 const OBSERVATION_BATCH_SIZE = 500;
@@ -54,12 +57,15 @@ function registerObservationFlushOnPageExit() {
 
 async function flushUriObservations(useBeacon = false) {
   if (typeof window === "undefined" || observationFlushInFlight || observationQueue.size === 0) return;
-  const batch = Array.from(observationQueue.values()).slice(0, OBSERVATION_BATCH_SIZE);
+  const firstAddr = observationQueue.values().next().value?.addr ?? "";
+  if (!firstAddr) return;
+  const batch = Array.from(observationQueue.values()).filter(item => item.addr === firstAddr).slice(0, OBSERVATION_BATCH_SIZE);
   for (const item of batch) observationQueue.delete(item.uri);
   observationFlushInFlight = true;
   const debug = proxyDebugHeaders("uri-observations", "UriLabelObservationBatch");
   const payload = JSON.stringify({
     observations: batch,
+    addr: firstAddr,
     _debug: {
       source: debug["X-Maestro-Debug-Source"],
       component: debug["X-Maestro-Debug-Component"],
@@ -148,7 +154,7 @@ export function rememberShortforms(input: unknown) {
     if (!uri) continue;
     const isNamedGraph = record.isNamedGraph === true || /^(graph|ggg):\/\//i.test(uri);
     const priorObservation = observationQueue.get(uri);
-    observationQueue.set(uri, { uri, isNamedGraph: isNamedGraph || priorObservation?.isNamedGraph === true });
+    observationQueue.set(uri, { uri, isNamedGraph: isNamedGraph || priorObservation?.isNamedGraph === true, addr: observationQueryAddr });
     registerObservationFlushOnPageExit();
     if (label && label !== uri && uriToLabel.get(uri) !== label) {
       uriToLabel.set(uri, label);

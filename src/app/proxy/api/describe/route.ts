@@ -1,7 +1,7 @@
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
-import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
+import { getConfiguredFctEndpoints, resolveFctEndpointFromAddr } from "@/lib/personal-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
 
 function isSafeIri(value: unknown): value is string {
@@ -17,8 +17,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "A valid resource IRI is required for DESCRIBE." }, { status: 400 });
     }
     const endpoints = await getConfiguredFctEndpoints(request);
-    const endpoint = selectConfiguredFctEndpoint(request, endpoints);
-    if (!endpoint) return NextResponse.json({ error: "No graphs are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
+    const endpoint = resolveFctEndpointFromAddr(endpoints, body?.addr);
+    if (!endpoint) return NextResponse.json({ error: "DESCRIBE requires a registered graph server in query addr." }, { status: 503 });
 
     const sparqlUrl = new URL("/sparql", endpoint.url);
     const query = `DESCRIBE <${body.iri}>`;

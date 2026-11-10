@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
+import { getShapesGraph, queryPersonalSparql, waitForPersonalGraphSeed } from "@/lib/personal-sparql";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
 import { requirePersonalLogin } from "@/lib/personal-guard";
@@ -45,6 +45,8 @@ export async function POST(request: Request) {
     if (!body || typeof body.action !== "string") {
       return NextResponse.json({ error: "A policy action is required." }, { status: 400 });
     }
+    // Login reloads CLEAR and repopulate the SHACL graph. Do not read it midway.
+    await waitForPersonalGraphSeed(request);
 
     if (body.action === "discover") {
       const types = Array.isArray(body.recordTypes) ? [...new Set(body.recordTypes.filter(safeIri))] : [];
@@ -52,6 +54,7 @@ export async function POST(request: Request) {
       const values = types.map(sparqlIri).join(" ");
       const shapesGraph = sparqlIri(getShapesGraph(request));
       const query = `PREFIX rdf: <${RDF}>\nPREFIX sh: <${SH}>\nPREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?class ?policy ?policyLabel ?recordShape ?template ?templateLabel WHERE { GRAPH ${shapesGraph} { VALUES ?class { ${values} } ?policy a mui:ClassPolicy ; mui:forClass ?class ; mui:recordShape ?recordShape ; mui:widget ?widgetClass ; rdfs:label ?policyLabel .
+  FILTER EXISTS { ?recordShape ?shapePredicate ?shapeValue }
   OPTIONAL { ?provider a mui:Provider ; mui:widget ?template ; mui:accepts ?inputShape .
     ?inputShape a mui:InputShape .
     ?inputShape sh:class ?class .

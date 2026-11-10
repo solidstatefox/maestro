@@ -1,3 +1,4 @@
+import { ALL_GRAPHS } from "./graph-address-mode";
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
 import { normalizeFctValue } from "./fct-value-policy";
 import { buildVirtuosoFullTextExpression } from "./virtuoso-full-text";
@@ -185,6 +186,10 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
     return null;
   };
   const viewNode = findView(tree.children);
+  const preferredLanguage = (viewNode?.attributes.indexLang ?? "en").toLowerCase();
+  if (preferredLanguage !== "all" && !/^[a-z]{2,3}$/.test(preferredLanguage)) return null;
+  // Same literal-focus restriction as Results; do not filter URI resources.
+  if (preferredLanguage !== "all") state.patterns.push(`FILTER (!isLiteral(${state.viewVariable}) || LANG(${state.viewVariable}) = "" || LANGMATCHES(LANG(${state.viewVariable}), "${preferredLanguage}"))`);
   const indexLetter = viewNode?.attributes.index?.trim() ?? "";
   if (indexLetter) {
     if (!/^[A-Z]$/.test(indexLetter)) return null;
@@ -193,15 +198,13 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
     const available = props.map((prop) => `<${prop}>`).join(", ");
     state.patterns.push(`${state.viewVariable} ?maestroIndexPredicate ?maestroIndexLabel .`);
     state.patterns.push(`FILTER (?maestroIndexPredicate IN (${available}))`);
-    const indexLang = (viewNode?.attributes.indexLang || "en").toLowerCase();
-    if (!/^[a-z]{2,3}$/.test(indexLang)) return null;
-    state.patterns.push(`FILTER (LANGMATCHES(LANG(?maestroIndexLabel), "${indexLang}") || LANG(?maestroIndexLabel) = "")`);
+    if (preferredLanguage !== "all") state.patterns.push(`FILTER (LANGMATCHES(LANG(?maestroIndexLabel), "${preferredLanguage}") || LANG(?maestroIndexLabel) = "")`);
     state.patterns.push(`FILTER (STRSTARTS(UCASE(STR(?maestroIndexLabel)), "${indexLetter}"))`);
   }
 
   let whereBody = state.patterns.join("\n  ");
   const graph = tree.attributes.graph?.trim();
-  if (graph) {
+  if (graph && graph !== ALL_GRAPHS) {
     const graphIri = iriTerm(graph);
     if (!graphIri) return null;
     whereBody = `GRAPH ${graphIri} {\n    ${whereBody.replace(/\n/g, "\n    ")}\n  }`;

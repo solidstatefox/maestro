@@ -2,6 +2,7 @@ import { FCT_VIEW_TYPES, isFctViewType, type FctViewType } from "./fct-view-type
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { normalizeFctValue } from "./fct-value-policy";
 import { buildVirtuosoFullTextExpression } from "./virtuoso-full-text";
+import { ALL_GRAPHS } from "./graph-address-mode";
 
 type XmlNode = {
   name: string;
@@ -20,6 +21,8 @@ export type CompiledFctQuery = {
   target: string;
   graphOnly: boolean;
   countOnly: boolean;
+  /** Scoped personal-state constraints, resolved against session graphs on the server. */
+  stateBindings: Array<{ variable: string; uri: string }>;
   /** A literal-focused DESCRIBE projects incoming Roles as SPARQL SELECT triples. */
   describeLiteral?: boolean;
   badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse" }>;
@@ -42,7 +45,7 @@ type SparqlExpression =
   | { kind: "term"; term: SparqlTerm }
   | { kind: "binary"; operator: string; left: SparqlExpression; right: SparqlExpression }
   | { kind: "function"; name: string; args: SparqlExpression[] }
-  | { kind: "aggregate"; name: "COUNT" | "SAMPLE"; distinct: boolean; expression: SparqlExpression }
+  | { kind: "aggregate"; name: "COUNT" | "SAMPLE" | "MAX"; distinct: boolean; expression: SparqlExpression }
   | { kind: "in"; value: SparqlExpression; options: SparqlTerm[] };
 
 type SparqlPattern =
@@ -54,6 +57,7 @@ type SparqlPattern =
   | { kind: "not-exists"; patterns: SparqlPattern[] }
   | { kind: "optional"; patterns: SparqlPattern[] }
   | { kind: "graph"; graph: SparqlTerm; patterns: SparqlPattern[] }
+  | { kind: "subquery"; query: SparqlSelectQuery }
   | { kind: "quad-map"; map: SparqlTerm; graph: SparqlTerm; patterns: SparqlPattern[] };
 
 type SparqlProjection = { expression: SparqlExpression; as?: SparqlTerm };
@@ -153,6 +157,7 @@ function serializePattern(pattern: SparqlPattern, depth = 0): string {
     case "not-exists": return `${indent}FILTER NOT EXISTS {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "optional": return `${indent}OPTIONAL {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "graph": return `${indent}GRAPH ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
+    case "subquery": return `${indent}{\n${serializeSparqlQuery(new SparqlQueryDocument(pattern.query)).split("\n").map((line) => `${indent}  ${line}`).join("\n")}\n${indent}}`;
     case "quad-map": return `${indent}quad map ${serializeTerm(pattern.map)} { graph ${serializeTerm(pattern.graph)} {\n${pattern.patterns.map((item) => serializePattern(item, depth + 2)).join("\n")}\n${indent}  } }`;
   }
 }
@@ -235,13 +240,28 @@ function entityRankOrder(term: SparqlTerm): SparqlOrder {
   return { expression: { kind: "function", name: "<LONG::IRI_RANK>", args: [termExpr(term)] }, direction: "DESC" };
 }
 
-function fullTextPatterns(searchText: string, textProperty?: string): SparqlPattern[] | null {
+function fullTextPatterns(searchText: string, textProperty?: string, exact = false, resourceTypes = ""): SparqlPattern[] | null {
   const search = searchTerms(searchText);
   if (!search) return null;
   const patterns: SparqlPattern[] = [
     { kind: "triple", subject: variable("s1"), predicate: variable("txtp1"), object: variable("txt1") },
+    // Keep Virtuoso's full-text index as the candidate generator for both name modes.
     { kind: "full-text", value: variable("txt1"), search },
+    ...(exact ? [{ kind: "filter", expression: binary("=",
+      { kind: "function", name: "LCASE", args: [{ kind: "function", name: "STR", args: [termExpr(variable("txt1"))] }] },
+      termExpr(literalTerm(searchText.toLowerCase()))) } satisfies SparqlPattern] : []),
   ];
+  // Resource-type restriction is part of the authoritative FCT <text> node,
+  // not a post-processing filter. Keep it independent of selected label predicates.
+  const types = resourceTypes.split(/[\s,]+/).filter(Boolean);
+  if (types.length) {
+    if (types.some((type) => type !== "class" && type !== "property")) throw new Error("Unsupported text resourceTypes value.");
+    const classTypes = ["http://www.w3.org/2000/01/rdf-schema#Class", "http://www.w3.org/2002/07/owl#Class"];
+    const propertyTypes = ["http://www.w3.org/1999/02/22-rdf-syntax-ns#Property", "http://www.w3.org/2002/07/owl#ObjectProperty", "http://www.w3.org/2002/07/owl#DatatypeProperty", "http://www.w3.org/2002/07/owl#AnnotationProperty"];
+    const eligible = [...new Set(types.flatMap((type) => type === "class" ? classTypes : propertyTypes))];
+    patterns.push({ kind: "triple", subject: variable("s1"), predicate: iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")!, object: variable("searchResourceType") });
+    patterns.push({ kind: "filter", expression: { kind: "in", value: termExpr(variable("searchResourceType")), options: eligible.map((uri) => iri(uri)!) } });
+  }
   const property = (textProperty ?? "").trim();
   // An omitted text/@property (or property="none") searches any property.
   // Otherwise accept a whitespace- or comma-separated list of predicate IRIs.
@@ -260,7 +280,7 @@ function compileConstraints(
   subject: SparqlTerm,
   patterns: SparqlPattern[],
   errors: string[],
-  state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null; badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }> },
+  state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null; stateBindings: Array<{ variable: string; uri: string }>; badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }> },
   isViewScope = true,
 ): void {
   for (const node of nodes) {
@@ -324,6 +344,13 @@ function compileConstraints(
         compileConstraints(node.children, related, patterns, errors, state,
           node.children.some((child) => child.name === "view"));
       }
+    } else if (node.name === "state") {
+      const uri = node.text.trim();
+      if (node.attributes.type !== "uri" || !iri(uri)) errors.push("The FCT <state> must have type=\"uri\" and a valid state URI.");
+      else if (!["New", "Seen", "Starred", "Hidden"].some((name) => uri === `gttp://ggg.maestro.ecosys/ns/ui#${name}`))
+        errors.push("Unknown FCT state URI.");
+      else if (subject.kind !== "variable") errors.push("FCT <state> needs a bound resource variable.");
+      else state.stateBindings.push({ variable: serializeTerm(subject), uri });
     } else if (node.name === "class") {
       const classIri = iri(node.attributes.iri ?? "");
       if (!classIri) errors.push("The FCT <class> node has a missing or invalid IRI.");
@@ -413,15 +440,27 @@ const DEFAULT_INDEX_LABEL = "http://www.w3.org/2000/01/rdf-schema#label";
 // use the same alphabet semantics as the preferred-language Sheet setting.
 function indexLanguage(view: XmlNode | null): string {
   const language = (view?.attributes.indexLang || "en").toLowerCase();
-  if (!/^[a-z]{2,3}$/.test(language)) throw new Error("Invalid alphabet language code.");
+  if (language !== "all" && !/^[a-z]{2,3}$/.test(language)) throw new Error("Invalid alphabet language code.");
   return language;
 }
-function indexLanguageFilter(value: SparqlTerm, language: string): SparqlPattern {
+function indexLanguageFilter(value: SparqlTerm, language: string): Extract<SparqlPattern, { kind: "filter" }> {
+  if (language === "all") return { kind: "filter", expression: binary("=", termExpr(literalTerm("all")), termExpr(literalTerm("all"))) };
   const lang: SparqlExpression = { kind: "function", name: "LANG", args: [termExpr(value)] };
   return { kind: "filter", expression: binary("||",
     { kind: "function", name: "LANGMATCHES", args: [lang, termExpr(literalTerm(language))] },
     binary("=", lang, termExpr(literalTerm(""))),
   ) };
+}
+// Restrict language-tagged literal result terms before paging. URI and blank-node
+// resources stay visible; untagged literals are retained for every language.
+function preferredValueLanguageFilter(value: SparqlTerm, view: XmlNode | null): SparqlPattern[] {
+  const language = indexLanguage(view);
+  if (language === "all") return [];
+  const isResource = binary("||",
+    { kind: "function", name: "isIRI", args: [termExpr(value)] },
+    { kind: "function", name: "isBlank", args: [termExpr(value)] },
+  );
+  return [{ kind: "filter", expression: binary("||", isResource, indexLanguageFilter(value, language).expression) }];
 }
 function indexLabelPredicates(view: XmlNode | null): string[] {
   const list = (view?.attributes.indexLabels || DEFAULT_INDEX_LABEL).split(/[\s,]+/).filter(Boolean);
@@ -431,7 +470,7 @@ function indexLabelPredicates(view: XmlNode | null): string[] {
   return values;
 }
 
-export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false): CompiledFctQuery {
+export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false, discoverGraph = false, countFreeFacet = false): CompiledFctQuery {
   if (!xml.trim()) throw new Error("The FCT query XML is empty.");
   const validation = XMLValidator.validate(xml);
   if (validation !== true) {
@@ -504,11 +543,13 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     next: number;
     target: SparqlTerm | null;
     targetParent: SparqlTerm | null;
+    stateBindings: Array<{ variable: string; uri: string }>;
     badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }>;
   } = {
     next: 2,
     target: null,
     targetParent: null,
+    stateBindings: [],
     badgeColumns: badgesEnabled ? [] : undefined,
   };
   compileConstraints(root.children, variable("s1"), constraints, errors, state);
@@ -519,7 +560,7 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   const describeLiteral = view === FCT_VIEW_TYPES.DESCRIBE && Boolean(rootLiteralNode) &&
     !root.children.some((node) => node.name === "property" || node.name === "property-of");
   const textNodeProperty = textNode?.attributes.property;
-  const textPatterns = searchText ? fullTextPatterns(searchText, textNodeProperty) : null;
+  const textPatterns = searchText ? fullTextPatterns(searchText, textNodeProperty, textNode?.attributes.match === "exact", textNode?.attributes.resourceTypes ?? "") : null;
   if (searchText && !textPatterns) throw new Error("The text search contains no searchable terms.");
   const where: SparqlPattern[] = [...(textPatterns ?? []), ...constraints];
   // A fixed subject expressed by a top-level <value> still needs a triple
@@ -569,138 +610,134 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     throw new Error('The query addr attribute must use "graph@graphserver" syntax (graph may be empty).');
   }
   const graph = address.slice(0, delimiter).trim();
-  const graphTerm = graph ? iri(graph) : null;
-  if (graph && !graphTerm) throw new Error("The graph portion of query addr is not a valid IRI.");
+  const graphTerm = graph && graph !== ALL_GRAPHS ? iri(graph) : null;
+  if (graph && graph !== ALL_GRAPHS && !graphTerm) throw new Error("The graph portion of query addr is not a valid IRI.");
   const scopedWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: where } satisfies SparqlPattern] : where;
   const directives = queryDirectives(root);
   const countProjection = (term: SparqlTerm): SparqlProjection => ({ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(term) }, as: variable("n") });
+  const buildIndexedTextWhere = (): SparqlPattern[] => {
+      // The view-level alphabet index constrains label values, not URI initials.
+      // Every label property selected beside the root search input is eligible.
+      const selectedLetter = (viewNode?.attributes.index ?? "").trim();
+      if (selectedLetter && !/^[A-Z]$/.test(selectedLetter))
+        throw new Error("The alphabet index must be A–Z or empty.");
+      let indexedWhere: SparqlPattern[] = [...scopedWhere];
+      if (selectedLetter) {
+        const predicates = indexLabelPredicates(viewNode);
+        const name = variable("maestroIndexLabel");
+        const predicate = variable("maestroIndexPredicate");
+        const startsWithLetter = (value: SparqlTerm): SparqlPattern => ({
+          kind: "filter",
+          expression: { kind: "function", name: "STRSTARTS", args: [
+            { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(value)] }] },
+            termExpr(literalTerm(selectedLetter)),
+          ] },
+        });
+        const resourceLabelPatterns: SparqlPattern[] = [
+          { kind: "triple", subject: target, predicate, object: name },
+          { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
+          startsWithLetter(name),
+          indexLanguageFilter(name, indexLanguage(viewNode)),
+        ];
+        // A forward property can bind a literal or an IRI. Keep the focus
+        // variable in the outer query scope: Virtuoso rejects FILTERs over a
+        // variable assigned only outside a UNION branch (SP031). An OPTIONAL
+        // label lookup handles IRIs without excluding literal values.
+        const labelPatterns: SparqlPattern[] = viewParent?.name === "property"
+          ? [
+              { kind: "optional", patterns: [
+                { kind: "triple", subject: target, predicate, object: name },
+                { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
+                indexLanguageFilter(name, indexLanguage(viewNode)),
+              ] },
+              { kind: "filter", expression: binary("||",
+                binary("&&",
+                  { kind: "function", name: "isLiteral", args: [termExpr(target)] },
+                  { kind: "function", name: "STRSTARTS", args: [
+                    { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(target)] }] },
+                    termExpr(literalTerm(selectedLetter)),
+                  ] },
+                ),
+                binary("&&",
+                  { kind: "function", name: "isIRI", args: [termExpr(target)] },
+                  { kind: "function", name: "STRSTARTS", args: [
+                    { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(name)] }] },
+                    termExpr(literalTerm(selectedLetter)),
+                  ] },
+                ),
+              ) },
+            ]
+          : resourceLabelPatterns;
+        indexedWhere = graphTerm
+          ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...labelPatterns] }]
+          : [...where, ...labelPatterns];
+      }
+      const indexedPatterns = indexedWhere[0]?.kind === "graph" ? indexedWhere[0].patterns : indexedWhere;
+      indexedWhere = graphTerm
+        ? [{ kind: "graph", graph: graphTerm, patterns: [...indexedPatterns, ...preferredValueLanguageFilter(target, viewNode)] }]
+        : [...indexedPatterns, ...preferredValueLanguageFilter(target, viewNode)];
+    return indexedWhere;
+  };
   let query: string;
-  if (view === FCT_VIEW_TYPES.ASK && !graphOnly && !countOnly) {
+  if (discoverGraph) {
+    // Rank the *actual focus results* of the live view, then project the named
+    // graph that supplies each result. Never rank graph IRIs or preselect an
+    // unscoped focus resource whose matching triples are elsewhere.
+    const discoveryWhere = view === FCT_VIEW_TYPES.TEXT ? buildIndexedTextWhere() :
+      [...where, ...preferredValueLanguageFilter(target, viewNode)];
+    if (view === FCT_VIEW_TYPES.PROPERTIES) {
+      discoveryWhere.push({ kind: "triple", subject: target, predicate: variable("p"), object: variable("o") });
+      discoveryWhere.push({ kind: "filter", expression: binary("!=", termExpr(variable("p")), termExpr(iriTerm(RDF_TYPE))) });
+    } else if (view === FCT_VIEW_TYPES.PROPERTIES_IN) {
+      discoveryWhere.push({ kind: "triple", subject: variable("related"), predicate: variable("p"), object: target });
+    } else if (view === FCT_VIEW_TYPES.CLASSES) {
+      discoveryWhere.push({ kind: "triple", subject: target, predicate: iriTerm(RDF_TYPE), object: variable("c") });
+    }
+    query = buildSelectQuery({
+      directives,
+      projections: [{ expression: termExpr(variable("g")), as: variable("c1") }],
+      where: [{ kind: "graph", graph: variable("g"), patterns: discoveryWhere }],
+      orderBy: [entityRankOrder(target)],
+      limit: 1,
+      offset: 0,
+    });
+  } else if (view === FCT_VIEW_TYPES.ASK && !graphOnly && !countOnly) {
     // The ASK query uses the cloned FCT scope unchanged. Clients can add
     // a label relationship as an ordinary <property> condition in that clone.
     query = buildAskQuery(directives, scopedWhere);
   } else if (graphOnly) {
-    /*
-    // OLD GRAPHS QUERY — retained for reference.
-    let graphWhere: SparqlPattern[];
-    if (searchText && textPatterns) {
-      // Match the documented Virtuoso default-quad-map pattern for text search
-      // while retaining the predicate restriction as an ordinary FILTER.
-      const textTriple = textPatterns[0];
-      const fullTextMatch = textPatterns[1];
-      graphWhere = [{ kind: "quad-map", map: { kind: "raw-term", value: "virtrdf:DefaultQuadMap" }, graph: variable("g"), patterns: [textTriple, fullTextMatch] }, ...textPatterns.slice(2), ...constraints];
-    } else {
-      graphWhere = [{ kind: "graph", graph: variable("g"), patterns: constraints.length ? constraints : [{ kind: "triple", subject: variable("s1"), predicate: variable("p0"), object: variable("o0") }] }];
-    }
-    if (graphTerm) graphWhere.push({ kind: "filter", expression: binary("=", termExpr(variable("g")), termExpr(graphTerm)) });
-    const graphSort = ["count-asc", "count-desc", "label-asc", "label-desc"].includes(viewNode?.attributes.sort ?? "")
-      ? viewNode?.attributes.sort ?? "count-desc"
-      : viewNode?.attributes.sort === "label" ? "label-asc" : "count-desc";
-    const graphLabel = variable("graphLabel");
-    const graphLabelKey: SparqlExpression = {
-      kind: "function", name: "LCASE", args: [{
-        kind: "function", name: "COALESCE", args: [
-          { kind: "function", name: "STR", args: [termExpr(graphLabel)] },
-          { kind: "function", name: "REPLACE", args: [
-            { kind: "function", name: "STR", args: [termExpr(variable("g"))] },
-            termExpr(literalTerm("^.*[/#]")), termExpr(literalTerm("")),
-          ] },
-        ],
-      }],
-    };
-    const graphCount = countProjection(variable("s1"));
-    query = buildSelectQuery({
-      directives,
-      projections: [
-        { expression: termExpr(variable("g")), as: variable("c1") },
-        { expression: graphLabelKey, as: variable("label") },
-        graphCount,
-      ],
-      where: [
-        ...graphWhere,
-        { kind: "optional", patterns: [{ kind: "triple", subject: variable("g"), predicate: iriTerm("http://www.w3.org/2000/01/rdf-schema#label"), object: graphLabel }] },
-      ],
-      groupBy: [termExpr(variable("g")), graphLabelKey],
-      orderBy: shouldOrder ? (graphSort.startsWith("count-")
-        ? [
-            { expression: termExpr(variable("n")), direction: graphSort === "count-asc" ? "ASC" : "DESC" },
-            { expression: graphLabelKey, direction: "ASC" },
-          ]
-        : [{ expression: graphLabelKey, direction: graphSort === "label-desc" ? "DESC" : "ASC" }]) : undefined,
-      limit,
-      offset,
-    });
-    */
-
-    // NEW GRAPHS QUERY — enumerate named graphs without counts or labels.
-    // GRAPHS QUERY — count matching triples per named graph.
-    const graphPatterns: SparqlPattern[] = [{
-      kind: "triple",
-      subject: variable("s1"),
-      predicate: variable("p0"),
-      object: variable("o0"),
-    }];
-
+    // The Graphs view is the live view's result-set WHERE, evaluated per named
+    // graph. The projected graph is associated with each matching focus item.
+    // Group BEFORE pagination: otherwise ten result rows can represent just
+    // two unique graphs, making "Page 1 of N" internally inconsistent.
+    const resultPatterns = buildIndexedTextWhere();
     const graphWhere: SparqlPattern[] = [{
-      kind: "graph",
-      graph: variable("g"),
-      patterns: graphPatterns,
+      kind: "graph", graph: variable("g"), patterns: resultPatterns,
     }];
-
-    if (graphTerm) {
-      graphWhere.push({
-        kind: "filter",
-        expression: binary("=", termExpr(variable("g")), termExpr(graphTerm)),
+    if (graphTerm) graphWhere.push({ kind: "filter", expression: binary("=", termExpr(variable("g")), termExpr(graphTerm)) });
+    if (countOnly) {
+      query = buildSelectQuery({ directives, projections: [countProjection(variable("g"))], where: graphWhere });
+    } else if ((viewNode?.attributes.sample ?? "").toLowerCase() === "yes") {
+      // Lightweight Anytime recovery: emit matching named graph IRIs directly,
+      // without a potentially expensive GROUP BY, COUNT or IRI_RANK sort.
+      query = buildSelectQuery({ directives, distinct: true,
+        projections: [{ expression: termExpr(variable("g")), as: variable("c1") }],
+        where: graphWhere, limit, offset });
+    } else {
+      query = buildSelectQuery({
+        directives,
+        projections: [
+          { expression: termExpr(variable("g")), as: variable("c1") },
+          { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(target) }, as: variable("n") },
+          { expression: { kind: "aggregate", name: "MAX", distinct: false, expression: { kind: "function", name: "<LONG::IRI_RANK>", args: [termExpr(target)] } }, as: variable("bestRank") },
+        ],
+        where: graphWhere,
+        groupBy: [termExpr(variable("g"))],
+        orderBy: [{ expression: termExpr(variable("bestRank")), direction: "DESC" }, { expression: termExpr(variable("g")), direction: "ASC" }],
+        limit, offset,
       });
     }
 
-    // Derive a fallback label from the graph URI. Do not join rdfs:label
-    // here: multiple labels could multiply the COUNT(*) result.
-    const graphLabel: SparqlExpression = {
-      kind: "function",
-      name: "REPLACE",
-      args: [
-        {
-          kind: "function",
-          name: "STR",
-          args: [termExpr(variable("g"))],
-        },
-        termExpr(literalTerm("^.*[/#]")),
-        termExpr(literalTerm("")),
-      ],
-    };
-
-    query = buildSelectQuery({
-      directives,
-      projections: [
-        { expression: termExpr(variable("g")), as: variable("c1") },
-        {
-          expression: {
-            kind: "aggregate",
-            name: "SAMPLE",
-            distinct: false,
-            expression: graphLabel,
-          },
-          as: variable("label"),
-        },
-        {
-          expression: {
-            kind: "aggregate",
-            name: "COUNT",
-            distinct: false,
-            expression: termExpr({ kind: "raw-term", value: "*" }),
-          },
-          as: variable("n"),
-        },
-      ],
-      where: graphWhere,
-      groupBy: [termExpr(variable("g"))],
-      orderBy: shouldOrder
-        ? [{ expression: termExpr(variable("n")), direction: "DESC" }]
-        : undefined,
-      limit,
-      offset,
-    });
 	} else if (countOnly) {
     let counted: SparqlTerm;
     let countWhere = scopedWhere;
@@ -763,7 +800,16 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
         as: variable("sampleVal"),
       });
     }
-    if (sampleClasses) {
+    if (countFreeFacet) {
+      // Recovery after a rejected aggregate. Preserve the scoped WHERE patterns,
+      // but neither compute counts nor sort by them. The list is not a count.
+      query = buildSelectQuery({
+        directives, distinct: true,
+        projections: [{ expression: termExpr(facet), as: variable("c1") }],
+        where: facetWhere,
+        limit, offset,
+      });
+    } else if (sampleClasses) {
       // Recovery path for Anytime queries interrupted before their aggregate
       // emits any class rows. Bound the raw class/resource pairs without
       // GROUP BY or ORDER BY; the client computes sampled frequencies.
@@ -799,10 +845,11 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       offset,
     });
   } else if (view === FCT_VIEW_TYPES.LIST_COUNT) {
+    const valueLanguageWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode)] } satisfies SparqlPattern] : [...where, ...preferredValueLanguageFilter(target, viewNode)];
     query = buildSelectQuery({ directives, projections: [
       { expression: termExpr(target), as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
-    ], where: scopedWhere, groupBy: [termExpr(target)], orderBy: shouldOrder ? [{ expression: termExpr(variable("n")), direction: "DESC" }] : undefined, limit, offset });
+    ], where: valueLanguageWhere, groupBy: [termExpr(target)], orderBy: shouldOrder ? [{ expression: termExpr(variable("n")), direction: "DESC" }] : undefined, limit, offset });
   } else if (view === FCT_VIEW_TYPES.ALPHABET) {
     // The large DBpedia Virtuoso graph fails with SR319 for UCASE(SUBSTR(...))
     // grouping, and 26 VALUES prefix tests are much slower. Use the empirically
@@ -867,67 +914,14 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       query = document.toString();
     }
   } else if (view === FCT_VIEW_TYPES.TEXT) {
-    // The view-level alphabet index constrains label values, not URI initials.
-    // Every label property selected beside the root search input is eligible.
-    const selectedLetter = (viewNode?.attributes.index ?? "").trim();
-    if (selectedLetter && !/^[A-Z]$/.test(selectedLetter))
-      throw new Error("The alphabet index must be A–Z or empty.");
-    let indexedWhere: SparqlPattern[] = [...scopedWhere];
-    if (selectedLetter) {
-      const predicates = indexLabelPredicates(viewNode);
-      const name = variable("maestroIndexLabel");
-      const predicate = variable("maestroIndexPredicate");
-      const startsWithLetter = (value: SparqlTerm): SparqlPattern => ({
-        kind: "filter",
-        expression: { kind: "function", name: "STRSTARTS", args: [
-          { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(value)] }] },
-          termExpr(literalTerm(selectedLetter)),
-        ] },
-      });
-      const resourceLabelPatterns: SparqlPattern[] = [
-        { kind: "triple", subject: target, predicate, object: name },
-        { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
-        startsWithLetter(name),
-        indexLanguageFilter(name, indexLanguage(viewNode)),
-      ];
-      // A forward property can bind a literal or an IRI. Keep the focus
-      // variable in the outer query scope: Virtuoso rejects FILTERs over a
-      // variable assigned only outside a UNION branch (SP031). An OPTIONAL
-      // label lookup handles IRIs without excluding literal values.
-      const labelPatterns: SparqlPattern[] = viewParent?.name === "property"
-        ? [
-            { kind: "optional", patterns: [
-              { kind: "triple", subject: target, predicate, object: name },
-              { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
-              indexLanguageFilter(name, indexLanguage(viewNode)),
-            ] },
-            { kind: "filter", expression: binary("||",
-              binary("&&",
-                { kind: "function", name: "isLiteral", args: [termExpr(target)] },
-                { kind: "function", name: "STRSTARTS", args: [
-                  { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(target)] }] },
-                  termExpr(literalTerm(selectedLetter)),
-                ] },
-              ),
-              binary("&&",
-                { kind: "function", name: "isIRI", args: [termExpr(target)] },
-                { kind: "function", name: "STRSTARTS", args: [
-                  { kind: "function", name: "UCASE", args: [{ kind: "function", name: "STR", args: [termExpr(name)] }] },
-                  termExpr(literalTerm(selectedLetter)),
-                ] },
-              ),
-            ) },
-          ]
-        : resourceLabelPatterns;
-      indexedWhere = graphTerm
-        ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...labelPatterns] }]
-        : [...where, ...labelPatterns];
-    }
+    const indexedWhere = buildIndexedTextWhere();
     const projections: SparqlProjection[] = [{ expression: termExpr(target), as: variable("c1") }];
     if (searchText && textPatterns) {
       const tokens = searchText.match(/[\p{L}\p{N}_]+/gu) ?? [];
       const vector: SparqlExpression = { kind: "function", name: "bif:vector", args: tokens.map((token) => termExpr(literalTerm(token.toUpperCase()))) };
-      projections.push({ expression: { kind: "function", name: "bif:search_excerpt", args: [vector, termExpr(variable("txt1"))] }, as: variable("c2") });
+      projections.push({ expression: textNode?.attributes.match === "exact"
+        ? { kind: "function", name: "STR", args: [termExpr(variable("txt1"))] }
+        : { kind: "function", name: "bif:search_excerpt", args: [vector, termExpr(variable("txt1"))] }, as: variable("c2") });
     }
     if (badgesEnabled && state.badgeColumns?.length) {
       for (const badgeCol of state.badgeColumns) {
@@ -943,7 +937,14 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       ...(badgesEnabled && state.badgeColumns?.length ? { groupBy: [termExpr(target),
         ...(searchText && textPatterns ? [termExpr(variable("txt1"))] : [])] } : {}),
       limit, offset });
+  } else if (view === FCT_VIEW_TYPES.LIST_STATES) {
+    // A full, unpaginated focus projection for federated personal-state joins.
+    // The state server adds the state conditions and pagination after joining.
+    query = buildSelectQuery({ directives, distinct: true,
+      projections: [{ expression: termExpr(target), as: variable("c1") }],
+      where: scopedWhere });
   } else if (view === FCT_VIEW_TYPES.LIST || view === FCT_VIEW_TYPES.LIST_VALUES) {
+    const valueLanguageWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode)] } satisfies SparqlPattern] : [...where, ...preferredValueLanguageFilter(target, viewNode)];
     // Virtuoso FCT list view selects the RDF term. Its SQL/XML response
     // wrapper resolves the human-readable label; do not call the SQL-only
     // fct_label procedure from inside SPARQL. For an explicitly count-sorted
@@ -956,7 +957,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
         { expression: termExpr(target), as: variable("c1") },
         ...(isCountSorted ? [{ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(subjectTerm) }, as: variable("ct") } as SparqlProjection] : []),
       ],
-      where: scopedWhere,
+      where: valueLanguageWhere,
       ...(isCountSorted
         ? {
             groupBy: [termExpr(target)],
@@ -987,6 +988,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     target: serializeTerm(target),
     graphOnly,
     countOnly,
+    stateBindings: state.stateBindings,
     describeLiteral,
     badgeColumns: state.badgeColumns?.map(({ colName, property, direction }) => ({ colName, property, direction })),
     ...(view === FCT_VIEW_TYPES.LIST_VALUES ? { valueColumns } : {}),

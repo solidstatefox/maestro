@@ -8,6 +8,7 @@ export const FCT_VIEW_TYPES = {
   CLASSES: "classes",
   LIST: "list",
   LIST_VALUES: "list-values",
+  LIST_STATES: "list-states",
   ASK: "ask",
   LIST_COUNT: "list-count",
   ALPHABET: "alphabet",

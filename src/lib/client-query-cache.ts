@@ -160,6 +160,90 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
   }
 }
 
+/**
+ * One queue for all browser-issued graph-server queries. Interactive results
+ * get the first free slot; low-priority counts (including alphabet counts)
+ * use at most one slot per endpoint. Every queued request is abortable.
+ */
+type ScheduledRequest = {
+  endpoint: string;
+  background: boolean;
+  signal?: AbortSignal | null;
+  run: () => Promise<Response>;
+  resolve: (value: Response) => void;
+  reject: (reason: unknown) => void;
+  abort: () => void;
+};
+const endpointSlots = new Map<string, { total: number; background: number }>();
+const requestQueue: ScheduledRequest[] = [];
+function queryEndpointKey(url: string, init?: RequestInit): string {
+  const body = typeof init?.body === "string" ? init.body : "";
+  let address = "";
+  if (body.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(body) as { queryXml?: string; facetValueCount?: { addr?: string }; addr?: string };
+      address = parsed.facetValueCount?.addr ?? parsed.addr ??
+        parsed.queryXml?.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
+    } catch { /* XML / malformed JSON is routed to a conservative pool */ }
+  } else {
+    address = body.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
+  }
+  const explicit = init?.headers ? new Headers(init.headers).get("x-maestro-graph-server") ?? "" : "";
+  const server = explicit || (address.includes("@") ? address.slice(address.indexOf("@") + 1) : "");
+  return server || "default-graph-server";
+}
+function isBackgroundQuery(init?: RequestInit): boolean {
+  const headers = new Headers(init?.headers);
+  const label = `${headers.get("x-maestro-debug-source") ?? ""} ${headers.get("x-maestro-debug-component") ?? ""}`.toLowerCase();
+  return /count|alphabet|breadcrumb-preview|facet-load|facet-value|facet-page|classes|properties|roles|graphs/.test(label);
+}
+function dispatchScheduledRequests(): void {
+  for (let i = 0; i < requestQueue.length;) {
+    const job = requestQueue[i];
+    if (job.signal?.aborted) { requestQueue.splice(i, 1); job.abort(); continue; }
+    const slots = endpointSlots.get(job.endpoint) ?? { total: 0, background: 0 };
+    if (slots.total >= 2 || (job.background && slots.background >= 1)) { i++; continue; }
+    requestQueue.splice(i, 1);
+    slots.total++;
+    if (job.background) slots.background++;
+    endpointSlots.set(job.endpoint, slots);
+    void job.run().then(job.resolve, job.reject).finally(() => {
+      job.signal?.removeEventListener("abort", job.abort);
+      slots.total--;
+      if (job.background) slots.background--;
+      if (!slots.total) endpointSlots.delete(job.endpoint);
+      dispatchScheduledRequests();
+    });
+  }
+}
+function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if ((init?.method ?? "GET").toUpperCase() !== "POST") return fetch(input, init);
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  if (!/\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) return fetch(input, init);
+  const background = isBackgroundQuery(init);
+  const endpoint = queryEndpointKey(url, init);
+  return new Promise<Response>((resolve, reject) => {
+    let started = false;
+    let canceled = false;
+    const abort = () => {
+      if (started || canceled) return; // An active fetch owns its AbortSignal.
+      canceled = true;
+      const index = requestQueue.indexOf(job);
+      if (index >= 0) requestQueue.splice(index, 1);
+      reject(new DOMException("Query canceled", "AbortError"));
+      dispatchScheduledRequests();
+    };
+    const job: ScheduledRequest = { endpoint, background, signal: init?.signal, run: () => { started = true; return fetch(input, init); }, resolve, reject, abort };
+    if (init?.signal?.aborted) { reject(new DOMException("Query canceled", "AbortError")); return; }
+    init?.signal?.addEventListener("abort", abort, { once: true });
+    // Foreground requests jump ahead of background jobs already queued.
+    if (background) requestQueue.push(job);
+    else requestQueue.splice(requestQueue.findIndex((entry) => entry.background) >= 0
+      ? requestQueue.findIndex((entry) => entry.background) : requestQueue.length, 0, job);
+    dispatchScheduledRequests();
+  });
+}
+
 /** Data-request errors are diagnostic, not endpoint connectivity status. */
 export const MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS = "maestro:graph-server-request-success";
 async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -173,7 +257,7 @@ async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit)
   const address = isFctQuery ? body.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "" : "";
   const endpointUrl = address.includes("@") ? address.slice(address.indexOf("@") + 1) : "";
   try {
-    const response = await fetch(input, init);
+    const response = await scheduledGraphFetch(input, init);
     if (!init?.signal?.aborted && typeof window !== "undefined") {
       if (response.status === 200 && endpointUrl) {
         window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, { detail: { endpointUrl } }));
@@ -240,6 +324,11 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
     setMaestroIncompleteResults(source, { incomplete, requestId, message: incomplete ? "Virtuoso ANYTIME returned incomplete results." : "" });
     return response;
   };
+  // Personal state assertions are mutable independently of the live XML.
+  // A cache hit here could display a pre-Seen or pre-Hidden result set.
+  if (urlStr.includes("/proxy/api/fct") && typeof init?.body === "string" && /<(?:[\w.-]+:)?state\b/i.test(init.body)) {
+    return track(await monitoredProxyFetch(input, init));
+  }
   const key = computeClientCacheKey(urlStr, init);
   if (!key) {
     return track(await monitoredProxyFetch(input, init));

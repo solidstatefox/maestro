@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
-import { getConfiguredFctEndpoints, resolveConfiguredFctEndpoint, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
+import { getConfiguredFctEndpoints, getSeedFctEndpoints, normalizeGraphServerUri, resolveConfiguredFctEndpoint } from "@/lib/personal-sparql";
 import { parseRdfDocument } from "@/lib/rdf-to-sparql";
 import { proxyLog, proxyFailure } from "@/lib/maestro-logger";
 
@@ -120,13 +120,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "A valid resource IRI or FCT-derived blank-node binding is required." }, { status: 400 });
     const endpoints = await getConfiguredFctEndpoints(request);
     // The live query's graph-server address is authoritative, not the
-    // fct_endpoint cookie (which may be stale after restoring a share URL).
+    // local UI state (which may lag a restored share URL).
     const addr = typeof body.addr === "string" ? body.addr : "";
     const server = addr.includes("@") ? addr.slice(addr.indexOf("@") + 1).trim() : "";
-    const configured = server
-      ? resolveConfiguredFctEndpoint(endpoints, server) ?? endpoints.find((item) => item.id === server || item.label === server)
-      : selectConfiguredFctEndpoint(request, endpoints);
-    const endpoint = configured && server.startsWith("http") ? { ...configured, url: server } : configured;
+    const normalizedServer = server ? normalizeGraphServerUri(server) : "";
+    let configured = normalizedServer
+      ? resolveConfiguredFctEndpoint(endpoints, normalizedServer) ?? endpoints.find((item) => item.id === server || item.label === server)
+      : undefined;
+    // The personal graph-server registry and the Record provenance request can
+    // observe different revisions during navigation. Recover ONLY known
+    // built-in endpoints; never turn an arbitrary addr into an HTTP target.
+    if (!configured && normalizedServer) {
+      const seedEndpoints = await getSeedFctEndpoints();
+      configured = resolveConfiguredFctEndpoint(seedEndpoints, normalizedServer);
+    }
+    const endpoint = configured && normalizedServer ? { ...configured, url: normalizedServer } : configured;
     if (!endpoint) return NextResponse.json({ error: server ? `Graph server from query addr is not configured: ${server}` : "No configured graph server." }, { status: 503 });
     const iri: string = blankIdentity ? "" : body.iri;
     // Graph membership is always verified on the selected graph server. For

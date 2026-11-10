@@ -193,11 +193,11 @@
 <xsl:function name="m:is-uri" as="xs:boolean"><xsl:param name="value" as="xs:string"/><xsl:sequence select="matches($value, '^https?://')"/></xsl:function>
 <xsl:template name="m:field"><xsl:param name="key" as="xs:string"/><xsl:param name="names" as="xs:string*"/><xsl:param name="n" as="xs:string"/>
 <xsl:variable name="values" select="m:values($names)"/>
-<xsl:if test="exists($values)"><div id="field-{$n}" class="flex flex-col gap-1 border-b border-border/60 py-3 sm:grid sm:grid-cols-[7.5rem_1fr] sm:gap-4"><dt id="field-label-{$n}" class="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground"><xsl:value-of select="$key"/></dt><dd id="field-data-{$n}" class="min-w-0 text-sm leading-relaxed text-foreground"><xsl:for-each select="$values"><xsl:choose><xsl:when test="m:is-uri(.)"><a id="field-link-{$n}-{position()}" class="text-primary underline-offset-4 hover:underline" data-maestro-record-uri="{.}" href="#"><xsl:value-of select="m:pretty(.)"/></a></xsl:when><xsl:otherwise><span id="field-text-{$n}-{position()}"><xsl:value-of select="."/></span></xsl:otherwise></xsl:choose><xsl:if test="position() ne last()"><span id="field-separator-{$n}-{position()}" class="text-muted-foreground"> · </span></xsl:if></xsl:for-each></dd></div></xsl:if>
+<xsl:if test="exists($values)"><div id="field-{$n}" class="flex flex-col gap-1 border-b border-border/60 py-3 sm:grid sm:grid-cols-[7.5rem_1fr] sm:gap-4"><dt id="field-label-{$n}" class="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground"><xsl:value-of select="$key"/></dt><dd id="field-data-{$n}" class="min-w-0 text-sm leading-relaxed text-foreground"><RecordValuePages id="record-field-paged-{$n}" pageSize="5"><xsl:for-each select="$values"><xsl:choose><xsl:when test="m:is-uri(.)"><a id="field-link-{$n}-{position()}" class="text-primary underline-offset-4 hover:underline" data-maestro-record-uri="{.}" href="#"><xsl:value-of select="m:pretty(.)"/></a></xsl:when><xsl:otherwise><span id="field-text-{$n}-{position()}"><xsl:value-of select="."/></span></xsl:otherwise></xsl:choose></xsl:for-each></RecordValuePages></dd></div></xsl:if>
 </xsl:template>
 <xsl:template name="m:extras"><xsl:param name="excluded" as="xs:string*"/>
 <xsl:variable name="other" select="$rows[fct:column[2] and fct:column[3] and not(lower-case(tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()]) = $excluded)]"/>
-<xsl:if test="exists($other)"><section id="record-additional-section" class="border-t border-border/70 px-6 py-5"><dl id="record-additional-list" class="divide-y divide-border/50"><xsl:for-each-group select="$other" group-by="normalize-space(string(fct:column[2]))"><xsl:variable name="idx" select="position()"/><xsl:variable name="prop" select="current-grouping-key()"/><div id="record-extra-{$idx}" class="grid gap-1 py-2 text-sm sm:grid-cols-[8rem_1fr]"><dt id="record-extra-label-{$idx}" class="text-xs font-medium text-muted-foreground" title="{$prop}"><xsl:value-of select="m:pretty($prop)"/></dt><dd id="record-extra-values-{$idx}" class="min-w-0 break-words"><xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. ne '']"><xsl:choose><xsl:when test="m:is-uri(.)"><a id="record-extra-link-{$idx}-{position()}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"><xsl:value-of select="m:pretty(.)"/></a></xsl:when><xsl:otherwise><span id="record-extra-value-{$idx}-{position()}"><xsl:value-of select="."/></span></xsl:otherwise></xsl:choose><xsl:if test="position() ne last()"><span id="record-extra-sep-{$idx}-{position()}"> · </span></xsl:if></xsl:for-each></dd></div></xsl:for-each-group></dl></section></xsl:if>
+<xsl:if test="exists($other)"><section id="record-additional-section" class="border-t border-border/70 px-6 py-5"><dl id="record-additional-list" class="divide-y divide-border/50"><xsl:for-each-group select="$other" group-by="normalize-space(string(fct:column[2]))"><xsl:variable name="idx" select="position()"/><xsl:variable name="prop" select="current-grouping-key()"/><div id="record-extra-{$idx}" class="grid gap-1 py-2 text-sm sm:grid-cols-[8rem_1fr]"><dt id="record-extra-label-{$idx}" class="text-xs font-medium text-muted-foreground" title="{$prop}"><xsl:value-of select="m:pretty($prop)"/></dt><dd id="record-extra-values-{$idx}" class="min-w-0 break-words"><RecordValuePages id="record-paged-values-{$idx}" pageSize="5"><xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. ne '']"><xsl:choose><xsl:when test="m:is-uri(.)"><a id="record-extra-link-{$idx}-{position()}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"><xsl:value-of select="m:pretty(.)"/></a></xsl:when><xsl:otherwise><span id="record-extra-value-{$idx}-{position()}"><xsl:value-of select="."/></span></xsl:otherwise></xsl:choose></xsl:for-each></RecordValuePages></dd></div></xsl:for-each-group></dl></section></xsl:if>
 </xsl:template>
 <xsl:template match="/">
 <xsl:variable name="title" select="(m:values(('label','title','name','headline'))[not(m:is-uri(.))], m:pretty($recordUri))[1]"/>
@@ -335,11 +335,11 @@
 <xsl:function name="m:is-uri" as="xs:boolean"><xsl:param name="value" as="xs:string"/><xsl:sequence select="matches($value, '^https?://')"/></xsl:function>
 <xsl:template name="m:field"><xsl:param name="key" as="xs:string"/><xsl:param name="names" as="xs:string*"/><xsl:param name="n" as="xs:string"/>
 <xsl:variable name="values" select="m:values($names)"/>
-<xsl:if test="exists($values)"><div id="field-{$n}" class="flex flex-col gap-1 border-b border-border/60 py-3 sm:grid sm:grid-cols-[7.5rem_1fr] sm:gap-4"><dt id="field-label-{$n}" class="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground"><xsl:value-of select="$key"/></dt><dd id="field-data-{$n}" class="min-w-0 text-sm leading-relaxed text-foreground"><xsl:for-each select="$values"><xsl:choose><xsl:when test="m:is-uri(.)"><a id="field-link-{$n}-{position()}" class="text-primary underline-offset-4 hover:underline" data-maestro-record-uri="{.}" href="#"><xsl:value-of select="m:pretty(.)"/></a></xsl:when><xsl:otherwise><span id="field-text-{$n}-{position()}"><xsl:value-of select="."/></span></xsl:otherwise></xsl:choose><xsl:if test="position() ne last()"><span id="field-separator-{$n}-{position()}" class="text-muted-foreground"> · </span></xsl:if></xsl:for-each></dd></div></xsl:if>
+<xsl:if test="exists($values)"><div id="field-{$n}" class="flex flex-col gap-1 border-b border-border/60 py-3 sm:grid sm:grid-cols-[7.5rem_1fr] sm:gap-4"><dt id="field-label-{$n}" class="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground"><xsl:value-of select="$key"/></dt><dd id="field-data-{$n}" class="min-w-0 text-sm leading-relaxed text-foreground"><RecordValuePages id="record-field-paged-{$n}" pageSize="5"><xsl:for-each select="$values"><xsl:choose><xsl:when test="m:is-uri(.)"><a id="field-link-{$n}-{position()}" class="text-primary underline-offset-4 hover:underline" data-maestro-record-uri="{.}" href="#"><xsl:value-of select="m:pretty(.)"/></a></xsl:when><xsl:otherwise><span id="field-text-{$n}-{position()}"><xsl:value-of select="."/></span></xsl:otherwise></xsl:choose></xsl:for-each></RecordValuePages></dd></div></xsl:if>
 </xsl:template>
 <xsl:template name="m:extras"><xsl:param name="excluded" as="xs:string*"/>
 <xsl:variable name="other" select="$rows[fct:column[2] and fct:column[3] and not(lower-case(tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()]) = $excluded)]"/>
-<xsl:if test="exists($other)"><section id="record-additional-section" class="border-t border-border/70 px-6 py-5"><h3 id="record-additional-title" class="mb-3 text-xs font-semibold uppercase tracking-[.18em] text-muted-foreground">Additional details</h3><dl id="record-additional-list" class="divide-y divide-border/50"><xsl:for-each-group select="$other" group-by="normalize-space(string(fct:column[2]))"><xsl:variable name="idx" select="position()"/><xsl:variable name="prop" select="current-grouping-key()"/><div id="record-extra-{$idx}" class="grid gap-1 py-2 text-sm sm:grid-cols-[8rem_1fr]"><dt id="record-extra-label-{$idx}" class="text-xs font-medium text-muted-foreground" title="{$prop}"><xsl:value-of select="m:pretty($prop)"/></dt><dd id="record-extra-values-{$idx}" class="min-w-0 break-words"><xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. ne '']"><xsl:choose><xsl:when test="m:is-uri(.)"><a id="record-extra-link-{$idx}-{position()}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"><xsl:value-of select="m:pretty(.)"/></a></xsl:when><xsl:otherwise><span id="record-extra-value-{$idx}-{position()}"><xsl:value-of select="."/></span></xsl:otherwise></xsl:choose><xsl:if test="position() ne last()"><span id="record-extra-sep-{$idx}-{position()}"> · </span></xsl:if></xsl:for-each></dd></div></xsl:for-each-group></dl></section></xsl:if>
+<xsl:if test="exists($other)"><section id="record-additional-section" class="border-t border-border/70 px-6 py-5"><h3 id="record-additional-title" class="mb-3 text-xs font-semibold uppercase tracking-[.18em] text-muted-foreground">Additional details</h3><dl id="record-additional-list" class="divide-y divide-border/50"><xsl:for-each-group select="$other" group-by="normalize-space(string(fct:column[2]))"><xsl:variable name="idx" select="position()"/><xsl:variable name="prop" select="current-grouping-key()"/><div id="record-extra-{$idx}" class="grid gap-1 py-2 text-sm sm:grid-cols-[8rem_1fr]"><dt id="record-extra-label-{$idx}" class="text-xs font-medium text-muted-foreground" title="{$prop}"><xsl:value-of select="m:pretty($prop)"/></dt><dd id="record-extra-values-{$idx}" class="min-w-0 break-words"><RecordValuePages id="record-paged-values-{$idx}" pageSize="5"><xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. ne '']"><xsl:choose><xsl:when test="m:is-uri(.)"><a id="record-extra-link-{$idx}-{position()}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"><xsl:value-of select="m:pretty(.)"/></a></xsl:when><xsl:otherwise><span id="record-extra-value-{$idx}-{position()}"><xsl:value-of select="."/></span></xsl:otherwise></xsl:choose></xsl:for-each></RecordValuePages></dd></div></xsl:for-each-group></dl></section></xsl:if>
 </xsl:template>
 <xsl:template match="/">
 <xsl:variable name="title" select="(m:values(('label','title','name'))[not(m:is-uri(.))], m:pretty($recordUri))[1]"/>
@@ -418,12 +418,12 @@
 <div id="record-extra-{position()}" class="grid gap-1 py-2 sm:grid-cols-[9rem_1fr]">
 <dt id="record-extra-key-{position()}" class="break-all text-xs font-medium text-muted-foreground" title="{$predicate}"><xsl:value-of select="tokenize($predicate, '[/#]')[last()]"/></dt>
 <dd id="record-extra-value-{position()}" class="break-words text-sm">
-<xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']">
+<RecordValuePages id="record-paged-values-{$groupIndex}" pageSize="5"><xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']">
 <xsl:choose>
 <xsl:when test="matches(., '^https?://')"><a id="record-extra-uri-{position()}-{$groupIndex}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"><xsl:value-of select="tokenize(., '[/#]')[last()]"/></a></xsl:when>
 <xsl:otherwise><span id="record-extra-text-{position()}-{$groupIndex}"><xsl:value-of select="."/></span></xsl:otherwise>
-</xsl:choose><xsl:if test="position() ne last()"><span id="record-extra-separator-{position()}-{$groupIndex}"> · </span></xsl:if>
-</xsl:for-each>
+</xsl:choose>
+</xsl:for-each></RecordValuePages>
 </dd></div>
 </xsl:for-each-group>
 </dl></section></xsl:if><footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground">DBpedia record · Maestro formatter</footer></article><svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-organisation-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"><svg:rect id="dbpedia-organisation-record-icon-1" x="4" y="2" width="16" height="20" rx="2"/><svg:path id="dbpedia-organisation-record-icon-2" d="M9 22v-4h6v4M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M16 14h.01M8 10h.01M8 14h.01"/></svg:svg></section></xsl:template></xsl:stylesheet>""" .
@@ -462,12 +462,12 @@
 <div id="record-extra-{position()}" class="grid gap-1 py-2 sm:grid-cols-[9rem_1fr]">
 <dt id="record-extra-key-{position()}" class="break-all text-xs font-medium text-muted-foreground" title="{$predicate}"><xsl:value-of select="tokenize($predicate, '[/#]')[last()]"/></dt>
 <dd id="record-extra-value-{position()}" class="break-words text-sm">
-<xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']">
+<RecordValuePages id="record-paged-values-{$groupIndex}" pageSize="5"><xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']">
 <xsl:choose>
 <xsl:when test="matches(., '^https?://')"><a id="record-extra-uri-{position()}-{$groupIndex}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"><xsl:value-of select="tokenize(., '[/#]')[last()]"/></a></xsl:when>
 <xsl:otherwise><span id="record-extra-text-{position()}-{$groupIndex}"><xsl:value-of select="."/></span></xsl:otherwise>
-</xsl:choose><xsl:if test="position() ne last()"><span id="record-extra-separator-{position()}-{$groupIndex}"> · </span></xsl:if>
-</xsl:for-each>
+</xsl:choose>
+</xsl:for-each></RecordValuePages>
 </dd></div>
 </xsl:for-each-group>
 </dl></section></xsl:if><footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground">DBpedia record · Maestro formatter</footer></article><svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-person-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"><svg:circle id="dbpedia-person-record-icon-1" cx="12" cy="8" r="5"/><svg:path id="dbpedia-person-record-icon-2" d="M20 21a8 8 0 0 0-16 0"/></svg:svg></section></xsl:template></xsl:stylesheet>""" .
@@ -481,31 +481,126 @@
 <xsl:variable name="rows" select="$ctx/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] = $predicate or tokenize(normalize-space(string(fct:column[2])), '[/#]')[last()] = $localName]"/>
 <xsl:sequence select="string-join(distinct-values($rows/fct:column[3] ! normalize-space(string(.)))[. != ''], ', ')"/>
 </xsl:function>
-<xsl:template match="/"><section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" class="mx-auto w-full max-w-2xl p-1"><article id="record-card" class="rounded-xl border bg-card text-card-foreground shadow-sm"><header id="record-header" class="border-b bg-muted/40 px-5 py-4"><p id="record-category" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">DBpedia · Place</p><h2 id="record-title" class="mt-1 break-words text-xl font-semibold"><xsl:choose><xsl:when test="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label') != ''"><xsl:value-of select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/></xsl:when><xsl:otherwise><xsl:value-of select="$recordUri"/></xsl:otherwise></xsl:choose></h2></header><dl id="record-fields" class="px-5 py-2">      <xsl:variable name="v0" select="m:values(root(.), 'http://www.w3.org/2000/01/rdf-schema#label')"/>
-      <xsl:if test="$v0 != ''"><div id="record-row-0" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"><dt id="record-key-0" class="text-xs font-medium text-muted-foreground">Name</dt><dd id="record-value-0" class="break-words text-sm"><xsl:value-of select="$v0"/></dd></div></xsl:if>      <xsl:variable name="v1" select="m:values(root(.), 'http://dbpedia.org/ontology/country')"/>
-      <xsl:if test="$v1 != ''"><div id="record-row-1" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"><dt id="record-key-1" class="text-xs font-medium text-muted-foreground">Country</dt><dd id="record-value-1" class="break-words text-sm"><xsl:value-of select="$v1"/></dd></div></xsl:if>      <xsl:variable name="v2" select="m:values(root(.), 'http://dbpedia.org/ontology/region')"/>
-      <xsl:if test="$v2 != ''"><div id="record-row-2" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"><dt id="record-key-2" class="text-xs font-medium text-muted-foreground">Region</dt><dd id="record-value-2" class="break-words text-sm"><xsl:value-of select="$v2"/></dd></div></xsl:if>      <xsl:variable name="v3" select="m:values(root(.), 'http://dbpedia.org/ontology/areaTotal')"/>
-      <xsl:if test="$v3 != ''"><div id="record-row-3" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"><dt id="record-key-3" class="text-xs font-medium text-muted-foreground">Area</dt><dd id="record-value-3" class="break-words text-sm"><xsl:value-of select="$v3"/></dd></div></xsl:if>      <xsl:variable name="v4" select="m:values(root(.), 'http://www.w3.org/2003/01/geo/wgs84_pos#lat')"/>
-      <xsl:if test="$v4 != ''"><div id="record-row-4" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"><dt id="record-key-4" class="text-xs font-medium text-muted-foreground">Latitude</dt><dd id="record-value-4" class="break-words text-sm"><xsl:value-of select="$v4"/></dd></div></xsl:if>      <xsl:variable name="v5" select="m:values(root(.), 'http://www.w3.org/2003/01/geo/wgs84_pos#long')"/>
-      <xsl:if test="$v5 != ''"><div id="record-row-5" class="grid gap-1 border-t py-2 sm:grid-cols-[9rem_1fr]"><dt id="record-key-5" class="text-xs font-medium text-muted-foreground">Longitude</dt><dd id="record-value-5" class="break-words text-sm"><xsl:value-of select="$v5"/></dd></div></xsl:if></dl><xsl:variable name="allPropertyRows" select="root(.)/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[2] and fct:column[3] and not(fct:column[2] = ('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', 'http://www.w3.org/2000/01/rdf-schema#label', 'http://purl.org/dc/terms/subject', 'http://dbpedia.org/ontology/abstract', 'http://xmlns.com/foaf/0.1/depiction', 'http://dbpedia.org/ontology/thumbnail'))]"/>
-<xsl:if test="exists($allPropertyRows)">
-<section id="record-additional-section" class="border-t px-5 py-4">
-<h3 id="record-additional-title" class="mb-2 text-sm font-semibold">Additional details</h3>
-<dl id="record-additional-list" class="divide-y">
-<xsl:for-each-group select="$allPropertyRows" group-by="normalize-space(string(fct:column[2]))">
-<xsl:variable name="predicate" select="current-grouping-key()"/><xsl:variable name="groupIndex" select="position()"/>
-<div id="record-extra-{position()}" class="grid gap-1 py-2 sm:grid-cols-[9rem_1fr]">
-<dt id="record-extra-key-{position()}" class="break-all text-xs font-medium text-muted-foreground" title="{$predicate}"><xsl:value-of select="tokenize($predicate, '[/#]')[last()]"/></dt>
-<dd id="record-extra-value-{position()}" class="break-words text-sm">
-<xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']">
-<xsl:choose>
-<xsl:when test="matches(., '^https?://')"><a id="record-extra-uri-{position()}-{$groupIndex}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"><xsl:value-of select="tokenize(., '[/#]')[last()]"/></a></xsl:when>
-<xsl:otherwise><span id="record-extra-text-{position()}-{$groupIndex}"><xsl:value-of select="."/></span></xsl:otherwise>
-</xsl:choose><xsl:if test="position() ne last()"><span id="record-extra-separator-{position()}-{$groupIndex}"> · </span></xsl:if>
-</xsl:for-each>
-</dd></div>
-</xsl:for-each-group>
-</dl></section></xsl:if><footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground">DBpedia record · Maestro formatter</footer></article><svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-place-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"><svg:path id="dbpedia-place-record-icon-1" d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><svg:circle id="dbpedia-place-record-icon-2" cx="12" cy="10" r="2"/></svg:svg></section></xsl:template></xsl:stylesheet>""" .
+
+<xsl:template match="/">
+  <xsl:variable name="rows" select="root(.)/mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row"/>
+  <!-- A title is ONE human-readable label, not the joined values of a potentially multi-valued predicate. -->
+  <xsl:variable name="labelNodes" select="$rows[fct:column[2] = ('http://www.w3.org/2000/01/rdf-schema#label', 'http://xmlns.com/foaf/0.1/name', 'http://schema.org/name', 'https://schema.org/name')]/fct:column[3][not(matches(normalize-space(string(.)), '^https?://')) and normalize-space(string(.)) != '']"/>
+  <xsl:variable name="englishLabel" select="($labelNodes[parent::fct:row/fct:column[2] = 'http://www.w3.org/2000/01/rdf-schema#label' and starts-with(lower-case(string((@xml:lang, @lang)[1])), 'en')], $labelNodes[parent::fct:row/fct:column[2] = 'http://www.w3.org/2000/01/rdf-schema#label' and not(@xml:lang or @lang)], $labelNodes[parent::fct:row/fct:column[2] = 'http://www.w3.org/2000/01/rdf-schema#label'], $labelNodes[starts-with(lower-case(string((@xml:lang, @lang)[1])), 'en')], $labelNodes)[1]"/>
+  <xsl:variable name="name" as="xs:string" select="(normalize-space(string($englishLabel)), replace(tokenize($recordUri, '[/#]')[last()], '_', ' '))[. != ''][1]"/>
+  <xsl:variable name="recordImages" as="xs:string*" select="distinct-values($rows[fct:column[2] = ('http://xmlns.com/foaf/0.1/depiction','http://dbpedia.org/ontology/thumbnail','http://dbpedia.org/ontology/depiction','http://schema.org/image','https://schema.org/image','http://schema.org/thumbnailUrl','https://schema.org/thumbnailUrl','http://www.wikidata.org/prop/direct/P18')]/fct:column[3] ! normalize-space(string(.)))[matches(., '^https?://') and not(matches(., '[&lt;&gt;]'))]"/>
+  <xsl:variable name="commonsImages" select="root(.)/mctx:context/mctx:commons-gallery/mctx:commons-image"/>
+  <xsl:variable name="images" as="xs:string*" select="distinct-values(($recordImages, $commonsImages/@url ! string(.)))[matches(., '^https?://')]"/>
+  <xsl:variable name="abstracts" select="$rows[fct:column[2] = ('http://dbpedia.org/ontology/abstract','http://purl.org/dc/terms/description','http://schema.org/description','https://schema.org/description')]/fct:column[3]"/>
+  <xsl:variable name="intro" select="($abstracts[starts-with(lower-case(string((@xml:lang,@lang)[1])),'en')], $abstracts)[1]"/>
+  <xsl:variable name="country" select="m:values(root(.), 'http://dbpedia.org/ontology/country')"/>
+  <xsl:variable name="region" select="(m:values(root(.), 'http://dbpedia.org/ontology/region'), m:values(root(.), 'http://dbpedia.org/ontology/isPartOf'))[. != ''][1]"/>
+  <xsl:variable name="population" select="(m:values(root(.), 'http://dbpedia.org/ontology/populationTotal'),m:values(root(.), 'http://www.wikidata.org/prop/direct/P1082'))[. != ''][1]"/>
+  <xsl:variable name="area" select="(m:values(root(.), 'http://dbpedia.org/ontology/areaTotal'),m:values(root(.), 'http://dbpedia.org/ontology/area'))[. != ''][1]"/>
+  <xsl:variable name="elevation" select="m:values(root(.), 'http://dbpedia.org/ontology/elevation')"/>
+  <xsl:variable name="timeZone" select="(m:values(root(.), 'http://dbpedia.org/ontology/timeZone'),m:values(root(.), 'http://schema.org/timeZone'))[. != ''][1]"/>
+  <xsl:variable name="placeType" select="($rows[fct:column[2] = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type']/fct:column[3] ! normalize-space(string(.)))[contains(.,'dbpedia.org/ontology/')][1]"/>
+  <xsl:variable name="geoPoint" select="normalize-space(string(($rows[fct:column[2] = ('http://www.georss.org/georss/point','http://www.w3.org/2003/01/geo/wgs84_pos#lat_long')]/fct:column[3])[1]))"/>
+  <xsl:variable name="wkt" select="normalize-space(string(($rows[fct:column[2] = ('http://www.opengis.net/ont/geosparql#asWKT','http://www.opengis.net/ont/geosparql#hasGeometry')]/fct:column[3])[1]))"/>
+  <xsl:variable name="wktPoint" select="if (matches($wkt, 'POINT\\s*\\(', 'i')) then replace($wkt, '^.*?POINT\\s*\\(\\s*([^)]*)\\).*$', '$1', 'i') else ''"/>
+  <xsl:variable name="lat" select="( $rows[fct:column[2] = ('http://www.w3.org/2003/01/geo/wgs84_pos#lat','http://schema.org/latitude','https://schema.org/latitude')]/fct:column[3] ! normalize-space(string(.)), if (matches($geoPoint, '^[-+0-9.eE]+\\s+[-+0-9.eE]+$')) then tokenize($geoPoint,'\\s+')[1] else (), if (matches($wktPoint, '^[-+0-9.eE]+\\s+[-+0-9.eE]+$')) then tokenize($wktPoint,'\\s+')[2] else () )[. castable as xs:double][1]"/>
+  <xsl:variable name="lon" select="( $rows[fct:column[2] = ('http://www.w3.org/2003/01/geo/wgs84_pos#long','http://schema.org/longitude','https://schema.org/longitude')]/fct:column[3] ! normalize-space(string(.)), if (matches($geoPoint, '^[-+0-9.eE]+\\s+[-+0-9.eE]+$')) then tokenize($geoPoint,'\\s+')[2] else (), if (matches($wktPoint, '^[-+0-9.eE]+\\s+[-+0-9.eE]+$')) then tokenize($wktPoint,'\\s+')[1] else () )[. castable as xs:double][1]"/>
+  <section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" class="mx-auto w-full max-w-2xl p-1">
+    <article id="record-card" class="overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm">
+      <xsl:if test="exists($images)">
+        <section id="record-depictions" aria-label="Place photographs" class="group relative bg-muted/30">
+          <div id="record-carousel" role="region" aria-roledescription="carousel" aria-label="Place photographs" class="relative">
+            <div id="record-carousel-track" class="flex max-h-[320px] snap-x snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth" style="scrollbar-width:none">
+              <xsl:for-each select="$images">
+                <figure id="record-picture-{position()}" class="relative h-[clamp(180px,36vw,320px)] max-h-[320px] min-w-full shrink-0 snap-center overflow-hidden bg-muted">
+                  <img id="record-photo-{position()}" src="{.}" alt="Photograph {position()} of {$name}" loading="lazy" referrerpolicy="no-referrer" class="block h-full max-h-[320px] w-full object-cover object-center" style="width:100%;height:100%;max-height:320px;object-fit:cover"/>
+                  <xsl:variable name="photoUrl" select="."/>
+                  <xsl:variable name="commons" select="$commonsImages[@url = $photoUrl][1]"/>
+                  <figcaption class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/75 to-transparent px-5 pb-4 pt-12 text-xs text-white/90" id="record-place-generated-1-{position()}">
+                    <span class="font-medium" id="record-place-generated-2-{position()}">Photo <xsl:value-of select="position()"/> of <xsl:value-of select="count($images)"/></span>
+                    <xsl:choose>
+                      <xsl:when test="$commons">
+                        <span class="ml-2 text-white/80" id="record-place-generated-3-{position()}"><xsl:value-of select="string-join((string($commons/@credit),string($commons/@license))[. != ''], ' · ')"/></span>
+                        <xsl:if test="$commons/@source != ''"><a href="{$commons/@source}" rel="noopener noreferrer" target="_blank" class="ml-2 text-white underline underline-offset-2" id="record-place-generated-4-{position()}">Wikimedia Commons</a></xsl:if>
+                      </xsl:when>
+                      <xsl:otherwise><span class="ml-2 text-white/80" id="record-place-generated-5-{position()}">Record depiction</span></xsl:otherwise>
+                    </xsl:choose>
+                  </figcaption>
+                </figure>
+              </xsl:for-each>
+            </div>
+            <xsl:if test="count($images) gt 1">
+              <div id="record-carousel-controls" class="pointer-events-none absolute inset-0 flex items-center justify-between px-3">
+                <button id="record-carousel-back" type="button" data-maestro-carousel="previous" aria-label="Previous photograph" class="pointer-events-auto flex size-10 items-center justify-center rounded-full border border-white/50 bg-black/55 text-2xl text-white opacity-0 shadow-lg backdrop-blur-sm transition-all hover:scale-110 hover:bg-black/75 group-hover:opacity-100 focus:opacity-100 focus-visible:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" id="record-carousel-prev-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path id="record-carousel-prev-icon-path" d="m15 18-6-6 6-6"/></svg></button>
+                <button id="record-carousel-next" type="button" data-maestro-carousel="next" aria-label="Next photograph" class="pointer-events-auto flex size-10 items-center justify-center rounded-full border border-white/50 bg-black/55 text-2xl text-white opacity-0 shadow-lg backdrop-blur-sm transition-all hover:scale-110 hover:bg-black/75 group-hover:opacity-100 focus:opacity-100 focus-visible:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" id="record-carousel-next-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path id="record-carousel-next-icon-path" d="m9 18 6-6-6-6"/></svg></button>
+              </div>
+            </xsl:if>
+          </div>
+        </section>
+      </xsl:if>
+      <header id="record-header" class="space-y-2 border-b px-5 py-6 sm:px-7">
+        <p id="record-category" class="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">Atlas / Places</p>
+        <h2 id="record-title" class="break-words font-serif text-3xl font-semibold tracking-tight sm:text-4xl"><xsl:value-of select="$name"/></h2>
+        <xsl:if test="$region != '' or $country != ''">
+          <p class="text-sm text-muted-foreground" id="record-place-generated-6-{position()}"><xsl:if test="$region != ''"><xsl:value-of select="replace(tokenize($region,'[/#]')[last()], '_',' ')"/></xsl:if><xsl:if test="$region != '' and $country != ''"> · </xsl:if><xsl:if test="$country != ''"><xsl:value-of select="replace(tokenize($country,'[/#]')[last()], '_',' ')"/></xsl:if></p>
+        </xsl:if>
+        <xsl:if test="$intro and normalize-space(string($intro)) != ''"><p id="record-abstract" data-maestro-expandable="true" class="pt-3 text-sm leading-7 text-muted-foreground"><xsl:value-of select="normalize-space(string($intro))"/></p></xsl:if>
+      </header>
+      <xsl:if test="$lat castable as xs:double and $lon castable as xs:double and abs(xs:double($lat)) le 90 and abs(xs:double($lon)) le 180">
+        <section id="record-geography" class="border-b px-5 py-5 sm:px-7">
+          <div id="record-map-heading" class="mb-3 flex items-baseline justify-between gap-3"><h3 id="record-map-title" class="font-serif text-xl font-semibold">Explore the map</h3><span id="record-map-coordinates" class="text-xs tabular-nums text-muted-foreground"><xsl:value-of select="concat($lat, ', ', $lon)"/></span></div>
+          <div id="record-map-shell" class="h-72 w-full overflow-hidden rounded-xl border bg-muted sm:h-80">
+            <Map id="record-map" center="{concat('[', $lon, ',', $lat, ']')}" zoom="11" className="h-full w-full">
+              <MapMarker id="record-map-marker" longitude="{$lon}" latitude="{$lat}">
+                <MarkerContent id="record-map-marker-content"><div id="record-map-pin" class="size-4 rounded-full border-2 border-white bg-rose-600 shadow-md ring-2 ring-rose-600/20"/></MarkerContent>
+                <MarkerPopup id="record-map-popup" closeButton="true"><div id="record-map-popup-text" class="text-sm font-medium"><xsl:value-of select="$name"/></div></MarkerPopup>
+              </MapMarker>
+              <MapControls id="record-map-controls" position="bottom-right" showZoom="true"/>
+            </Map>
+          </div>
+          <a id="record-map-external" class="mt-2 inline-block text-xs text-primary hover:underline" target="_blank" rel="noopener noreferrer" href="{concat('https://www.openstreetmap.org/?mlat=', $lat, '&amp;mlon=', $lon, '#map=12/', $lat, '/', $lon)}">Open larger map</a>
+        </section>
+      </xsl:if>
+      <xsl:if test="not($lat castable as xs:double and $lon castable as xs:double and abs(xs:double($lat)) le 90 and abs(xs:double($lon)) le 180)">
+        <p id="record-map-no-coordinates" class="border-b px-5 py-3 text-xs text-muted-foreground">No geographic coordinates were returned with this record.</p>
+      </xsl:if>
+      <xsl:if test="$country != '' or $region != '' or $population != '' or $area != '' or $elevation != '' or $timeZone != '' or $placeType != ''">
+        <section aria-label="Geographic facts" class="grid grid-cols-2 gap-x-4 gap-y-5 border-b bg-muted/10 px-5 py-5 sm:grid-cols-3 sm:px-7" id="record-place-generated-7-{position()}">
+          <xsl:for-each select="1 to 7">
+            <xsl:variable name="i" select="."/>
+            <xsl:variable name="v" select="($country,$region,$population,$area,$elevation,$timeZone,$placeType)[$i]"/>
+            <xsl:if test="$v != ''">
+              <div id="record-place-generated-8-{position()}"><dt class="mb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground" id="record-place-generated-9-{position()}"><xsl:value-of select="('Country','Region','Population','Area','Elevation','Time zone','Type')[$i]"/></dt><dd class="break-words text-sm font-medium" id="record-place-generated-10-{position()}"><xsl:value-of select="if ($i le 2 or $i = 7) then replace(tokenize($v,'[/#]')[last()],'_',' ') else $v"/></dd></div>
+            </xsl:if>
+          </xsl:for-each>
+        </section>
+      </xsl:if>
+      <xsl:variable name="excluded" select="('type','label','name','title','abstract','description','country','region','isPartOf','populationTotal','areaTotal','area','elevation','lat','long','latitude','longitude','depiction','thumbnail','image','thumbnailUrl')"/>
+      <xsl:variable name="details" select="$rows[fct:column[2] and fct:column[3] and not(lower-case(tokenize(normalize-space(string(fct:column[2])),'[/#]')[last()]) = $excluded ! lower-case(.))]"/>
+      <xsl:if test="exists($details)">
+        <section id="record-additional-section" class="px-5 py-5 sm:px-7">
+          <h3 class="mb-3 font-serif text-lg font-semibold" id="record-place-generated-11-{position()}">More about this place</h3>
+          <dl class="divide-y divide-border/60" id="record-place-generated-12-{position()}">
+            <xsl:for-each-group select="$details" group-by="normalize-space(string(fct:column[2]))">
+              <xsl:variable name="index" select="position()"/>
+              <div class="grid gap-1 py-2.5 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-3" id="record-place-generated-13-{$index}-{position()}">
+                <dt class="text-xs font-medium text-muted-foreground" id="record-place-generated-14-{$index}-{position()}"><xsl:value-of select="replace(tokenize(current-grouping-key(),'[/#]')[last()],'_',' ')"/></dt>
+                <dd class="min-w-0 break-words text-sm" id="record-place-generated-15-{$index}-{position()}">
+                  <RecordValuePages id="record-paged-values-{$index}" pageSize="5"><xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']">
+                    <xsl:choose><xsl:when test="matches(., '^https?://')"><a data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline" id="record-place-generated-16-{$index}-{position()}"><xsl:value-of select="replace(tokenize(.,'[/#]')[last()],'_',' ')"/></a></xsl:when><xsl:otherwise><span id="record-place-generated-17-{$index}-{position()}"><xsl:value-of select="."/></span></xsl:otherwise></xsl:choose>
+                  </xsl:for-each></RecordValuePages>
+                </dd>
+              </div>
+            </xsl:for-each-group>
+          </dl>
+        </section>
+      </xsl:if>
+      <footer id="record-footer" class="border-t bg-muted/15 px-5 py-3 text-xs text-muted-foreground">DBpedia · Maestro travel atlas</footer>
+    </article>
+    <svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-place-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"><svg:path id="dbpedia-place-record-icon-1" d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><svg:circle id="dbpedia-place-record-icon-2" cx="12" cy="10" r="2"/></svg:svg>
+  </section>
+</xsl:template>
+</xsl:stylesheet>""" .
 
 <gttp://ggg.maestro.ecosys/shacl/template#DbpediaSpeciesRecordTemplate> rdfs:label "Species taxonomy card"@en ;
     rdf:value """<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:fct="http://openlinksw.com/services/facets/1.0/" xmlns:mctx="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/dbpedia#" version="3.0" exclude-result-prefixes="xs fct mctx m">
@@ -532,12 +627,12 @@
 <div id="record-extra-{position()}" class="grid gap-1 py-2 sm:grid-cols-[9rem_1fr]">
 <dt id="record-extra-key-{position()}" class="break-all text-xs font-medium text-muted-foreground" title="{$predicate}"><xsl:value-of select="tokenize($predicate, '[/#]')[last()]"/></dt>
 <dd id="record-extra-value-{position()}" class="break-words text-sm">
-<xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']">
+<RecordValuePages id="record-paged-values-{$groupIndex}" pageSize="5"><xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']">
 <xsl:choose>
 <xsl:when test="matches(., '^https?://')"><a id="record-extra-uri-{position()}-{$groupIndex}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"><xsl:value-of select="tokenize(., '[/#]')[last()]"/></a></xsl:when>
 <xsl:otherwise><span id="record-extra-text-{position()}-{$groupIndex}"><xsl:value-of select="."/></span></xsl:otherwise>
-</xsl:choose><xsl:if test="position() ne last()"><span id="record-extra-separator-{position()}-{$groupIndex}"> · </span></xsl:if>
-</xsl:for-each>
+</xsl:choose>
+</xsl:for-each></RecordValuePages>
 </dd></div>
 </xsl:for-each-group>
 </dl></section></xsl:if><footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground">DBpedia record · Maestro formatter</footer></article><svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-species-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"><svg:path id="dbpedia-species-record-icon-1" d="M11 20A7 7 0 0 1 4 13C4 5 16 3 21 3c0 5-2 17-10 17Z"/><svg:path id="dbpedia-species-record-icon-2" d="M3 21c0-6 6-12 12-12"/></svg:svg></section></xsl:template></xsl:stylesheet>""" .
@@ -566,12 +661,12 @@
 <div id="record-extra-{position()}" class="grid gap-1 py-2 sm:grid-cols-[9rem_1fr]">
 <dt id="record-extra-key-{position()}" class="break-all text-xs font-medium text-muted-foreground" title="{$predicate}"><xsl:value-of select="tokenize($predicate, '[/#]')[last()]"/></dt>
 <dd id="record-extra-value-{position()}" class="break-words text-sm">
-<xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']">
+<RecordValuePages id="record-paged-values-{$groupIndex}" pageSize="5"><xsl:for-each select="distinct-values(current-group()/fct:column[3] ! normalize-space(string(.)))[. != '']">
 <xsl:choose>
 <xsl:when test="matches(., '^https?://')"><a id="record-extra-uri-{position()}-{$groupIndex}" data-maestro-record-uri="{.}" href="#" class="text-primary hover:underline"><xsl:value-of select="tokenize(., '[/#]')[last()]"/></a></xsl:when>
 <xsl:otherwise><span id="record-extra-text-{position()}-{$groupIndex}"><xsl:value-of select="."/></span></xsl:otherwise>
-</xsl:choose><xsl:if test="position() ne last()"><span id="record-extra-separator-{position()}-{$groupIndex}"> · </span></xsl:if>
-</xsl:for-each>
+</xsl:choose>
+</xsl:for-each></RecordValuePages>
 </dd></div>
 </xsl:for-each-group>
 </dl></section></xsl:if><footer id="record-footer" class="border-t px-5 py-3 text-xs text-muted-foreground">DBpedia record · Maestro formatter</footer></article><svg:svg xmlns:svg="http://www.w3.org/2000/svg" id="dbpedia-work-record-heading-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-5" aria-hidden="true" mui:parent="record_title_icon"><svg:path id="dbpedia-work-record-icon-1" d="M12 7v14"/><svg:path id="dbpedia-work-record-icon-2" d="M3 18V5a2 2 0 0 1 2-2h3a4 4 0 0 1 4 4 4 4 0 0 1 4-4h3a2 2 0 0 1 2 2v13a1 1 0 0 1-1 1h-4a4 4 0 0 0-4 2 4 4 0 0 0-4-2H4a1 1 0 0 1-1-1Z"/></svg:svg></section></xsl:template></xsl:stylesheet>""" .

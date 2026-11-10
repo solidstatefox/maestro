@@ -1,3 +1,4 @@
+import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 /** Render a SHACL-discovered XSLT View over the currently visible FCT result page. */
 export type ViewResult = {
   uri: string; label: string; selected?: boolean;
@@ -5,12 +6,9 @@ export type ViewResult = {
   target?: string; detail?: string; health?: string; healthState?: string; pinging?: boolean; group?: string; product?: string; version?: string; description?: string;
 };
 
-export function renderDiscoveredViewXslt(stylesheetText: string, rows: ViewResult[], options?: {
+export async function renderDiscoveredViewXslt(stylesheetText: string, rows: ViewResult[], options?: {
   availableRows?: ViewResult[]; page?: number; pageSize?: number;
-}): string {
-  if (typeof DOMParser === "undefined" || typeof XSLTProcessor === "undefined") {
-    throw new Error("This browser does not support XSLT views.");
-  }
+}): Promise<string> {
   if (stylesheetText.length > 250000 || /<\s*xsl:(?:import|include)\b|\bdocument\s*\(|\b(?:javascript|data):/i.test(stylesheetText)) {
     throw new Error("View stylesheet contains unsupported external references.");
   }
@@ -34,14 +32,13 @@ export function renderDiscoveredViewXslt(stylesheetText: string, rows: ViewResul
     options.availableRows.forEach((row) => available.appendChild(makeResult(row)));
     doc.documentElement.appendChild(available);
   }
-  const xslt = new DOMParser().parseFromString(stylesheetText, "application/xml");
-  if (xslt.querySelector("parsererror") || !["stylesheet", "transform"].includes(xslt.documentElement.localName) || xslt.documentElement.namespaceURI !== "http://www.w3.org/1999/XSL/Transform") {
-    throw new Error("Discovered View stylesheet is not valid XSLT XML.");
-  }
-  const processor = new XSLTProcessor();
-  processor.importStylesheet(xslt);
-  const transformed = processor.transformToFragment(doc, document);
-  if (!transformed) throw new Error("View XSLT produced no output.");
+  const html = await transformWithMaestroSaxon(
+    stylesheetText,
+    new XMLSerializer().serializeToString(doc),
+  );
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  const transformed = document.createDocumentFragment();
+  while (parsed.body.firstChild) transformed.appendChild(parsed.body.firstChild);
   const allowedTags = new Set(["div", "section", "article", "header", "footer", "h1", "h2", "h3", "h4", "p", "span", "strong", "em", "small", "ul", "ol", "li", "a", "button", "code", "pre", "img"]);
   const supportedIcons = new Set(["server", "network", "globe", "database", "layout-grid", "badge-check", "badge-alert", "badge-x", "badge-question-mark", "refresh-cw"]);
   const svgNs = "http://www.w3.org/2000/svg";

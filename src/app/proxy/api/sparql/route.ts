@@ -1,8 +1,10 @@
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { NextResponse } from "next/server";
+import { withGraphServerSlot } from "@/lib/server-query-scheduler";
+import { virtuosoRankFailure } from "@/lib/virtuoso-query-fallbacks";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
-import { getConfiguredFctEndpoints, selectConfiguredFctEndpoint } from "@/lib/personal-sparql";
+import { getConfiguredFctEndpoints, normalizeGraphServerUri, resolveConfiguredFctEndpoint, resolveFctEndpointFromAddr, fctAddrFromXml } from "@/lib/personal-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
 import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
@@ -179,7 +181,16 @@ function parseSparqlResults(responseText: string): {
   }
 }
 
-async function querySparql(endpoint: string, query: string, configuredTimeoutMs?: number): Promise<SparqlQueryResult> {
+/** Only remove the top-level IRI rank sort on a verified Virtuoso sort failure.
+ * Never rewrite arbitrary user SPARQL or remove a different ORDER BY clause. */
+function unorderedIriRankFallback(query: string, error: string): string | null {
+  if (!virtuosoRankFailure(error)) return null;
+  const ranking = /\bORDER\s+BY\s+DESC\s*\(\s*<LONG::IRI_RANK>\s*\(\s*\?[A-Za-z][A-Za-z0-9_]*\s*\)\s*\)\s*(?=(?:LIMIT|OFFSET|$))/i;
+  const fallback = query.replace(ranking, "");
+  return fallback === query ? null : fallback;
+}
+
+async function querySparql(endpoint: string, query: string, configuredTimeoutMs?: number, requestSignal?: AbortSignal): Promise<SparqlQueryResult> {
   const timeoutMs = configuredTimeoutMs ?? 20000;
   const sparqlUrl = endpoint;
   const key = queryCacheKey("sparql", sparqlUrl.toString(), query);
@@ -198,11 +209,13 @@ async function querySparql(endpoint: string, query: string, configuredTimeoutMs?
 
   // Coalesce identical upstream requests, but never cache here: the caller must
   // validate the operation-specific result before it becomes shared cache data.
-  const pending = inFlightSparqlRequests.get(pendingKey);
+  const pending = requestSignal ? undefined : inFlightSparqlRequests.get(pendingKey);
   if (pending) return pending;
 
   const requestPromise = (async () => {
-    const response = await fetch(sparqlUrl, {
+    const response = await withGraphServerSlot(
+      endpoint, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive", requestSignal,
+      () => fetch(sparqlUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -210,15 +223,15 @@ async function querySparql(endpoint: string, query: string, configuredTimeoutMs?
       },
       body: new URLSearchParams({ query, ...(configuredTimeoutMs ? { timeout: String(configuredTimeoutMs) } : {}) }).toString(),
       cache: "no-store",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+      signal: requestSignal ? AbortSignal.any([requestSignal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
+    }));
     return { responseText: await response.text(), response, key };
   })();
-  inFlightSparqlRequests.set(pendingKey, requestPromise);
+  if (!requestSignal) inFlightSparqlRequests.set(pendingKey, requestPromise);
   try {
     return await requestPromise;
   } finally {
-    if (inFlightSparqlRequests.get(pendingKey) === requestPromise) inFlightSparqlRequests.delete(pendingKey);
+    if (!requestSignal && inFlightSparqlRequests.get(pendingKey) === requestPromise) inFlightSparqlRequests.delete(pendingKey);
   }
 }
 
@@ -270,11 +283,16 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => null);
     const endpointList = await getConfiguredFctEndpoints(request);
-    const selectedEndpoint = selectConfiguredFctEndpoint(request, endpointList);
+    // Every SPARQL request carries the address of its originating FCT query.
+    const nested = body?.recordSelect ?? body?.recordBlankNodes ?? body?.recordValueLabels ?? body?.facetValueCount;
+    const explicitAddr = (typeof nested?.addr === "string" ? nested.addr : "") ||
+      (typeof body?.addr === "string" ? body.addr : "") ||
+      fctAddrFromXml(nested?.queryXml ?? body?.queryXml);
+    const selectedEndpoint = resolveFctEndpointFromAddr(endpointList, explicitAddr);
     const fctEndpoint = selectedEndpoint?.url;
     diagnosticEndpoint = fctEndpoint ?? "";
     if (!fctEndpoint) {
-      return NextResponse.json({ error: "No graphs are configured in SITE_SPARQL_ENDPOINTS." }, { status: 503 });
+      return NextResponse.json({ error: "SPARQL operation requires a registered graph server in query addr." }, { status: 400 });
     }
 
     // Resolve still-missing URI labels only in named graphs that the existing
@@ -285,7 +303,7 @@ export async function POST(request: Request) {
       const resources = uniqueIris(uris, 128);
       const namedGraphs = uniqueIris(graphs, 500);
       if (!resources || !namedGraphs || resources.length === 0 || namedGraphs.length === 0 ||
-          typeof preferredLanguage !== "string" || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage)) {
+          typeof preferredLanguage !== "string" || (preferredLanguage !== "all" && !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage))) {
         return NextResponse.json({ error: "Record label enrichment requires URI values and discovered graph IRIs." }, { status: 400 });
       }
       const query = `SELECT DISTINCT ?labelResource ?labelPredicate ?label WHERE {
@@ -300,11 +318,11 @@ export async function POST(request: Request) {
           <http://purl.org/dc/terms/title>
         }
         GRAPH ?labelGraph { ?labelResource ?labelPredicate ?label . }
-        FILTER(isLiteral(?label) && (LANG(?label) = "" || LANGMATCHES(LANG(?label), ${JSON.stringify(preferredLanguage)})))
+        FILTER(isLiteral(?label) && (${preferredLanguage === "all" ? "true" : `LANG(?label) = "" || LANGMATCHES(LANG(?label), ${JSON.stringify(preferredLanguage)})`}))
       }`;
       diagnosticOperation = "Record URI labels in discovered graphs";
       diagnosticQuery = query;
-      const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs);
+      const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs, request.signal);
       const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
       if (!response.ok && !incomplete) {
         return NextResponse.json({ error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}: ${responseText.trim().slice(0, 1000)}` }, { status: response.status, headers: upstreamDiagnosticHeaders(response) });
@@ -333,7 +351,7 @@ export async function POST(request: Request) {
       if ((!rootFocus && (!isSafeIri(parent) || !isSafeIri(predicate))) ||
           (rootFocus && (parent !== undefined || predicate !== undefined)) || !namedGraphs ||
           typeof queryXml !== "string" || queryXml.length > 100_000 ||
-          typeof preferredLanguage !== "string" || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage) ||
+          typeof preferredLanguage !== "string" || (preferredLanguage !== "all" && !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage)) ||
           typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 10000) {
         return NextResponse.json({ error: "A scoped list-values FCT query, URI parent, predicate, preferred language, limit (1–10000), and valid graph list are required." }, { status: 400 });
       }
@@ -376,7 +394,7 @@ export async function POST(request: Request) {
         OPTIONAL {
           {
             ${outgoingPattern}
-            FILTER(!isLiteral(?object) || LANG(?object) = "" || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)}))
+            FILTER(${preferredLanguage === "all" ? "true" : `!isLiteral(?object) || LANG(?object) = "" || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)})`})
             BIND("property" AS ?direction)
           }
           UNION
@@ -388,7 +406,7 @@ export async function POST(request: Request) {
       } LIMIT ${limit}`;
       diagnosticOperation = "FCT-path blank-node Record SELECT";
       diagnosticQuery = query;
-      const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs);
+      const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs, request.signal);
       const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
       if (!response.ok && !incomplete) {
         return NextResponse.json({ error: `SPARQL endpoint returned HTTP ${response.status}: ${responseText.trim().slice(0, 1000)}` }, { status: response.status, headers: upstreamDiagnosticHeaders(response) });
@@ -406,18 +424,31 @@ export async function POST(request: Request) {
     // Record triples. Filter inside WHERE, BEFORE LIMIT, so the limit counts
     // eligible triples rather than multilingual values that will be discarded.
     if (body?.recordSelect && typeof body.recordSelect === "object") {
-      const { iri, termType = "uri", datatype, lang, limit, graphs, focusPredicate, preferredLanguage } = body.recordSelect as RecordSelectTerm & { limit?: unknown; graphs?: unknown; focusPredicate?: unknown; preferredLanguage?: unknown };
+      const { iri, termType = "uri", datatype, lang, limit, graphs, focusPredicate, preferredLanguage, queryXml } = body.recordSelect as RecordSelectTerm & { limit?: unknown; graphs?: unknown; focusPredicate?: unknown; preferredLanguage?: unknown; queryXml?: unknown };
+      // The Record uses the graph server in the originating FCT query.
+      let recordEndpoint = fctEndpoint;
+      if (typeof queryXml === "string" && queryXml.trim()) {
+        const rootTag = queryXml.match(/<query\b([^>]*)>/i)?.[1] ?? "";
+        const addr = rootTag.match(/\baddr\s*=\s*(["'])(.*?)\1/i)?.[2]?.replace(/&amp;/g, "&") ?? "";
+        const delimiter = addr.indexOf("@");
+        const server = delimiter >= 0 ? normalizeGraphServerUri(addr.slice(delimiter + 1).trim()) : "";
+        if (!server) return NextResponse.json({ error: "Record query has no graph server in addr." }, { status: 400 });
+        const configured = resolveConfiguredFctEndpoint(endpointList, server);
+        if (!configured) return NextResponse.json({ error: `Record query graph server is not registered: ${server}` }, { status: 400 });
+        recordEndpoint = server;
+      }
+      diagnosticEndpoint = recordEndpoint;
       const namedGraphs = graphs === undefined ? [] : uniqueIris(graphs, 500);
       const record = safeRecordSelectTerm({ iri, termType, datatype, lang });
       if (!record || !Number.isInteger(limit) || typeof limit !== "number" || limit < 1 || limit > 10000 || !namedGraphs ||
           (focusPredicate !== undefined && !isSafeIri(focusPredicate)) ||
-          (typeof preferredLanguage !== "string" || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage))) {
+          (typeof preferredLanguage !== "string" || (preferredLanguage !== "all" && !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage)))) {
         return NextResponse.json({ error: "A valid Record RDF term, preferred language, limit (1–10000), and optional graph IRI list are required." }, { status: 400 });
       }
       const graphPrefix = namedGraphs.length ? `VALUES ?recordGraph { ${iriList(namedGraphs)} } GRAPH ?recordGraph { ` : "";
       const graphSuffix = namedGraphs.length ? " }" : "";
       // JSON.stringify escapes the validated BCP-47 language for SPARQL.
-      const allowedLiteral = `FILTER(!isLiteral(?object) || LANG(?object) = "" || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)}))`;
+      const allowedLiteral = `FILTER(${preferredLanguage === "all" ? "true" : `!isLiteral(?object) || LANG(?object) = "" || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)})`})`;
       // Literal focus nodes have only incoming roles. The object is the focus
       // literal itself, so no language filtering is applied to the focus term.
       let query = termType === "literal"
@@ -443,7 +474,7 @@ export async function POST(request: Request) {
         // when the focus property already establishes a useful incoming role.
         const scanTimeout = termType === "literal" && focusPredicate
           ? Math.min(queryTimeoutMs ?? 20000, 5000) : queryTimeoutMs;
-        result = await querySparql(fctEndpoint, query, scanTimeout);
+        result = await querySparql(recordEndpoint, query, scanTimeout, request.signal);
       } catch (error) {
         if (termType !== "literal" || !focusPredicate ||
             !/timeout|abort|UND_ERR_CONNECT_TIMEOUT/i.test(String(error instanceof Error ? error.message + " " + String(error.cause) : error))) throw error;
@@ -456,7 +487,7 @@ export async function POST(request: Request) {
           BIND(${record} AS ?object)
         }`;
         diagnosticQuery = query;
-        result = await querySparql(fctEndpoint, query, queryTimeoutMs);
+        result = await querySparql(recordEndpoint, query, queryTimeoutMs, request.signal);
       }
       const { responseText, response, key } = result;
       const incomplete = focusedFallback || response.status === 206 || isVirtuosoAnytime(response, responseText);
@@ -485,7 +516,18 @@ export async function POST(request: Request) {
       }
       diagnosticOperation = "Results SPARQL query";
       diagnosticQuery = resultsQuery;
-      const { responseText, response, key } = await querySparql(fctEndpoint, resultsQuery, queryTimeoutMs);
+      let actualQuery = resultsQuery;
+      let queryResult = await querySparql(fctEndpoint, actualQuery, queryTimeoutMs, request.signal);
+      if (!queryResult.response.ok && queryResult.response.status !== 206 &&
+          !isVirtuosoAnytime(queryResult.response, queryResult.responseText)) {
+        const fallback = unorderedIriRankFallback(resultsQuery, queryResult.responseText + " " +
+          (queryResult.response.headers.get("X-SQL-Message") ?? ""));
+        if (fallback) {
+          actualQuery = fallback;
+          queryResult = await querySparql(fctEndpoint, fallback, queryTimeoutMs, request.signal);
+        }
+      }
+      const { responseText, response, key } = queryResult;
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
         proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
@@ -507,7 +549,8 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Virtuoso returned invalid Results SPARQL JSON (expected ?c1)." }, { status: 502, headers: upstreamDiagnosticHeaders(response) });
       }
       if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
-      return NextResponse.json({ ...parsed, query: resultsQuery, incomplete }, { headers: sparqlResponseHeaders(response, incomplete) });
+      return NextResponse.json({ ...parsed, query: actualQuery, incomplete,
+        orderingFallback: actualQuery !== resultsQuery }, { headers: sparqlResponseHeaders(response, incomplete) });
     }
 
     if (body?.facetValueCount && typeof body.facetValueCount === "object") {
@@ -520,9 +563,21 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "The client must provide a scalar COUNT(...) AS ?ct SPARQL query." }, { status: 400 });
       }
 
+      // Count against the graph server named by the FCT query, not the shared
+      // selection state (which can lag query restoration or server changes).
+      const address = body.facetValueCount.addr;
+      if (typeof address !== "string" || !address.includes("@")) {
+        return NextResponse.json({ error: "Facet count requires the FCT query address." }, { status: 400 });
+      }
+      const serverUri = normalizeGraphServerUri(address.slice(address.indexOf("@") + 1));
+      const countEndpoint = resolveConfiguredFctEndpoint(endpointList, serverUri);
+      if (!countEndpoint || !serverUri) {
+        return NextResponse.json({ error: "The facet count graph server is not configured." }, { status: 400 });
+      }
       diagnosticOperation = "facet value count SPARQL query";
       diagnosticQuery = countQuery;
-      const { responseText, response, key } = await querySparql(fctEndpoint, countQuery, queryTimeoutMs);
+      diagnosticEndpoint = serverUri;
+      const { responseText, response, key } = await querySparql(serverUri, countQuery, queryTimeoutMs, request.signal);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
         proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
@@ -569,7 +624,7 @@ export async function POST(request: Request) {
 
       diagnosticOperation = "facet intersection SPARQL query";
       diagnosticQuery = built.query;
-      const { responseText, response, key } = await querySparql(fctEndpoint, built.query, queryTimeoutMs);
+      const { responseText, response, key } = await querySparql(fctEndpoint, built.query, queryTimeoutMs, request.signal);
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
         proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });
@@ -624,7 +679,7 @@ export async function POST(request: Request) {
     const query = `SELECT DISTINCT ?resource ?property ?direction ?value WHERE { ${branches.join(" UNION ")} }`;
     diagnosticOperation = "result relationship enrichment SPARQL query";
     diagnosticQuery = query;
-    const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs);
+    const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs, request.signal);
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.ok && !(response.status === 206 || isVirtuosoAnytime(response, responseText))) {
       proxyLog("error", "sparql.upstream-http", { operation: diagnosticOperation, status: response.status, responseBody: responseText });

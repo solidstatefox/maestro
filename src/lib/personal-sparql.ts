@@ -127,20 +127,30 @@ export type GraphSeedResult = { file: string; graph: string }[];
 
 /** One seed per personal session (store + graph + credentials), not one per server process. */
 const graphDirectorySeedPromises = new Map<string, Promise<GraphSeedResult>>();
+const graphDirectorySeedInProgress = new Set<string>();
 
 function seedSessionKey(request?: Request): string {
   const session = getPersonalSession(request);
   return [session?.graphStore ?? "", session?.graphPrefix ?? "", session?.authHeader ?? ""].join("|");
 }
 
+/** Wait for an in-progress login/reload of this session's RDF policy graph.
+ * Policy queries must never observe the interval between CLEAR GRAPH and INSERT DATA.
+ * This does not trigger a reload when no seeding is in progress.
+ */
+export async function waitForPersonalGraphSeed(request?: Request): Promise<void> {
+  const pending = graphDirectorySeedPromises.get(seedSessionKey(request));
+  if (pending) await pending;
+}
+
 /** Upload each RDF document in /graph to <graphPrefix>/query + manifest fragment on the user's graph server. Pass force to reload (used right after login). */
 export async function ensureGraphDirectorySeeded(request?: Request, options: { force?: boolean } = {}): Promise<GraphSeedResult> {
   assertPersonalSession(request);
   const sessionKey = seedSessionKey(request);
-  if (!options.force) {
-    const existing = graphDirectorySeedPromises.get(sessionKey);
-    if (existing) return existing;
-  }
+  // A force reload must not overtake another in-progress reload for this session.
+  const existing = graphDirectorySeedPromises.get(sessionKey);
+  if (existing && (!options.force || graphDirectorySeedInProgress.has(sessionKey))) return existing;
+  graphDirectorySeedInProgress.add(sessionKey);
   const promise = (async (): Promise<GraphSeedResult> => {
     const loaded: GraphSeedResult = [];
     const entries = await readdir(getGraphDirectory(), { withFileTypes: true });
@@ -253,10 +263,16 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
       console.info(`Maestro loaded ${file.name} into ${destinationGraph}.`);
       loaded.push({ file: file.name, graph: destinationGraph });
     }
+    // After the manifest reload, reinstate the shared Record state vocabulary/SHACL restriction.
+    const { ensurePersonalStateSchema } = await import("@/lib/personal-states-server");
+    await ensurePersonalStateSchema(request!);
     return loaded;
   })();
   graphDirectorySeedPromises.set(sessionKey, promise);
-  promise.catch(() => {
+  void promise.then(() => {
+    graphDirectorySeedInProgress.delete(sessionKey);
+  }, () => {
+    graphDirectorySeedInProgress.delete(sessionKey);
     if (graphDirectorySeedPromises.get(sessionKey) === promise) graphDirectorySeedPromises.delete(sessionKey);
   });
   return promise;
@@ -463,17 +479,22 @@ export async function getConfiguredFctEndpoints(request?: Request): Promise<FctE
   });
 }
 
-/** Resolve the endpoint selected by the shared fct_endpoint cookie, falling back to the first Datasite. */
-export function selectConfiguredFctEndpoint(request: Request, endpoints: FctEndpoint[]): FctEndpoint | null {
-  const cookie = request.headers.get("cookie") ?? "";
-  const match = cookie.match(/(?:^|;\s*)fct_endpoint=([^;]+)/);
-  let selectedId = "";
-  try { selectedId = match ? decodeURIComponent(match[1]) : ""; } catch { selectedId = ""; }
-  const selected = resolveConfiguredFctEndpoint(endpoints, selectedId);
-  return selected ? { ...selected, url: normalizeGraphServerUri(selectedId) } : endpoints[0] ?? null;
+/** Select only the graph server explicitly declared by the current FCT query.
+ * No request cookies, per-browser selection, or implicit first-server fallback. */
+export function resolveFctEndpointFromAddr(endpoints: FctEndpoint[], addr: unknown): FctEndpoint | null {
+  if (typeof addr !== "string") return null;
+  const separator = addr.indexOf("@");
+  if (separator < 0) return null;
+  const server = normalizeGraphServerUri(addr.slice(separator + 1).trim());
+  if (!server) return null;
+  const configured = resolveConfiguredFctEndpoint(endpoints, server);
+  return configured ? { ...configured, url: server } : null;
 }
 
-/** Load the shared RDF-backed endpoint list and resolve the selected endpoint for routes that do not need the full list. */
-export async function getSelectedFctEndpoint(request: Request): Promise<FctEndpoint | null> {
-  return selectConfiguredFctEndpoint(request, await getConfiguredFctEndpoints(request));
+/** Extract the address from serialized FCT query XML for auxiliary operations. */
+export function fctAddrFromXml(xml: unknown): string {
+  if (typeof xml !== "string") return "";
+  const root = xml.match(/<query\b([^>]*)>/i)?.[1] ?? "";
+  const raw = root.match(/\baddr\s*=\s*(["'])(.*?)\1/i)?.[2] ?? "";
+  return raw.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 }

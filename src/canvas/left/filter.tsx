@@ -1,5 +1,4 @@
 "use client";
-import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { readAutoConfiguredFacetKeys, type FacetAutofillCandidates, type AutoConfiguredFacetKey } from "@/canvas/left/configure";
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -672,7 +671,6 @@ export function PersonalRoleWidget({
   }, [pageCount]);
   return (
     <div className="min-h-0 flex-1 overflow-auto p-2">
-      {loading && <p className="px-2 py-1 text-xs text-muted-foreground" aria-live="polite"><ElapsedStatus label="Updating…" category="personal" clockScope="personal" /></p>}
       {error && <Tooltip><TooltipTrigger render={<p className="px-2 py-1 text-xs text-destructive">Update failed: {error}</p>} /><TooltipContent>{error}</TooltipContent></Tooltip>}
       {!loading && !error && visibleValues.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">No matching values for this role.</p>}
       {visibleValues.length > 10 && (

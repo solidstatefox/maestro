@@ -65,3 +65,29 @@
     </analysis>
   </xsl:template>
 </xsl:stylesheet>""" .
+
+
+# Bookmark Analyze perspectives. They are ma:Analysis entries so the existing
+# Analyze ribbon discovers them, and mui:Provider instances with SHACL class
+# gates so they appear only for Bookmark (or its subclasses) in the FCT context.
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix b: <http://www.w3.org/2002/01/bookmark#> .
+
+<gttp://ggg.maestro.ecosys/analyze/bookmark-activity>
+  a ma:Analysis, mui:Provider, sh:NodeShape ;
+  rdfs:label "Bookmark activity"@en ;
+  ma:lucideIcon "chart-column" ; ma:order 10 ;
+  mui:accepts <gttp://ggg.maestro.ecosys/analyze/bookmark-input> ;
+  ma:stylesheet <gttp://ggg.maestro.ecosys/analyze/bookmark-activity#xslt> .
+<gttp://ggg.maestro.ecosys/analyze/bookmark-tags>
+  a ma:Analysis, mui:Provider, sh:NodeShape ;
+  rdfs:label "Bookmark tags"@en ;
+  ma:lucideIcon "chart-pie" ; ma:order 11 ;
+  mui:accepts <gttp://ggg.maestro.ecosys/analyze/bookmark-input> ;
+  ma:stylesheet <gttp://ggg.maestro.ecosys/analyze/bookmark-tags#xslt> .
+<gttp://ggg.maestro.ecosys/analyze/bookmark-input> a sh:NodeShape, mui:InputShape ;
+  sh:class b:Bookmark .
+# Renderers use React/Recharts for interactive charts; the stylesheets supply
+# the declarative presentation identity in the established Analyze policy graph.
+<gttp://ggg.maestro.ecosys/analyze/bookmark-activity#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template match="/"><analysis kind="bookmark-activity"/></xsl:template></xsl:stylesheet>""" .
+<gttp://ggg.maestro.ecosys/analyze/bookmark-tags#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template match="/"><analysis kind="bookmark-tags"/></xsl:template></xsl:stylesheet>""" .

@@ -7,6 +7,12 @@ import { RESULTS_PAGE_SIZE_STORAGE_KEY } from "@/canvas/sheet/settings";
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 
 import { ViewPage } from "@/canvas/tab/view/view-components";
+import dynamic from "next/dynamic";
+const MapPerspective = dynamic(() => import("@/canvas/tab/view/map-perspective").then(mod => mod.MapPerspective), { ssr: false });
+import { currentViewColorFacets, NATIVE_MAP_URI } from "@/lib/map-perspective";
+import { toLabel } from "@/lib/uri-labels";
+import { PersonalPerspectives } from "@/canvas/tab/view/personal-perspectives";
+import { personalPerspectiveFromUri } from "@/lib/personal-perspective-ids";
 
 import { Separator } from "@/components/ui/separator";
 
@@ -22,6 +28,10 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController }) {
  const { alphabetCounts, alphabetError, alphabetIndex, alphabetLabelUris, alphabetPreflight, changeResultsPage, checkSelectedGraphServer, checkingEndpointIds, chooseFctEndpoint, discoveredViews, effectivePageSize, effectiveResultsTotalCount, fctEndpoints, isLoadingAlphabet, isSearching, preferredAlphabetLanguage, results, resultsBatchRequestPending, resultsBatchSize, resultsPageComplete, resultsPageSize, resultsPageSizeOptions, resultsUiPage, selectedEndpointId, selectedView, selectedViewUri, setNodeAttribute, setResults, setResultsPage, setResultsPageSize, setResultsUiPage, setSelectedViewUri, viewDiscoveryError, viewDiscoveryLoading, viewFeature, viewFeatureCount, viewFeatureError, viewFeatureHtml, viewFeatureLoading, viewHtml, viewRenderError, visibleResultsPage, workspaceTab } = workspace;
  const [featureLetter, setFeatureLetter] = useState("");
+ const personalKind = personalPerspectiveFromUri(selectedViewUri);
+ const mapSelected = selectedViewUri === NATIVE_MAP_URI && workspace.viewPanel === "perspectives";
+ // Never expose properties from the previous focus while Configure refreshes.
+ const mapFacets = useMemo(() => currentViewColorFacets(workspace.queryTree).map(facet => ({ ...facet, label: `${toLabel(facet.uri, "Property")}${facet.direction === "reverse" ? " of" : ""}` })), [workspace.queryTree]);
  useEffect(() => { setFeatureLetter(""); }, [viewFeature, viewFeatureHtml, viewFeatureLoading]);
  const featureCards = useMemo(() => {
    if (!viewFeature || viewFeatureLoading || !viewFeatureHtml || typeof DOMParser === "undefined") return [] as { letter: string; html: string }[];
@@ -48,6 +58,7 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
    : viewFeatureHtml;
  return <>
 {workspaceTab === "view" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Views">
+                {mapSelected ? <MapPerspective queryXml={workspace.queryXml} facets={mapFacets} addr={workspace.queryTree.attributes.addr ?? ""} /> : personalKind && workspace.viewPanel === "perspectives" ? <PersonalPerspectives active={true} kind={personalKind} providerUri={selectedViewUri} /> : <>
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-4 py-3">
                   {viewFeature ? <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label={`Alphabet for ${viewFeature}`}>
                     {featureCards.length > 0 && <button type="button" aria-pressed={!featureLetter} onClick={() => setFeatureLetter("")}
@@ -56,10 +67,10 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                       aria-pressed={parseAlphabetSelections(featureLetter).some((value) => value === letter || value === `!${letter}`)}
                       onClick={(event) => setFeatureLetter((current) => toggleAlphabetSelection(current, letter, event.shiftKey))}
                       className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${parseAlphabetSelections(featureLetter).some((value) => value === letter || value === `!${letter}`) ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}>
-                      <span>{parseAlphabetSelections(featureLetter).includes(`!${letter}`) ? <><Ban aria-label="Excluded" className="mr-1 inline size-3.5" />{letter}</> : letter}</span><Separator orientation="vertical" className="mx-1 h-4"/><span>{count}</span>
+                      <span>{parseAlphabetSelections(featureLetter).includes(`!${letter}`) ? <><span className="inline-flex items-center gap-1.5"><Ban aria-label="Excluded" className="size-3.5 shrink-0" />{letter}</span></> : letter}</span><Separator orientation="vertical" className="mx-1 h-4"/><span>{count}</span>
                     </button>)}
                   </div> : null}
-                  {!viewFeature && <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label="Alphabetical filter for View results">                    {!isLoadingAlphabet && <IncompleteWidgetIndicator source="alphabet" />}
+                  {!viewFeature && (alphabetPreflight === "available" || Boolean(alphabetIndex) || isLoadingAlphabet) && <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label="Alphabetical filter for View results">                    {!isLoadingAlphabet && <IncompleteWidgetIndicator source="alphabet" />}
                     {(alphabetPreflight === "available" || Boolean(alphabetIndex)) ? <>
                       {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0 || parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)).map((letter) => (
                         <button key={letter} type="button" title={`Letter ${letter}; Shift-click excludes it; multiple selections are OR`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)}
@@ -71,14 +82,14 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                             setNodeAttribute("query-view", "index", toggleAlphabetSelection(alphabetIndex, letter, event.shiftKey) || null);
                             setResultsUiPage(0); setResults([]); setResultsPage(resultsBatchSize, 0);
                           }}>
-                          <span className="font-medium">{parseAlphabetSelections(alphabetIndex).includes(`!${letter}`) ? <><Ban aria-label="Excluded" className="mr-1 inline size-3.5" />{letter}</> : letter}</span>
+                          <span className="font-medium">{parseAlphabetSelections(alphabetIndex).includes(`!${letter}`) ? <><span className="inline-flex items-center gap-1.5"><Ban aria-label="Excluded" className="size-3.5 shrink-0" />{letter}</span></> : letter}</span>
                           <Separator orientation="vertical" className="mx-1 h-4 bg-current opacity-30 data-vertical:self-center" />
                           <span className={`tabular-nums font-normal ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
                         </button>
                       ))}
                     </> : null}
                     {isLoadingAlphabet && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Fetching alphabet" category="alphabet" clockScope="alphabet" requestWaves={26} /></span>}
-                    {alphabetError && !Object.values(alphabetCounts).some((count) => count > 0) && <span className="text-xs text-destructive" title={alphabetError}>Alphabet unavailable</span>}
+                    
                   </div>}
                   {!viewFeature && discoveredViews.length > 1 && <select aria-label="Select view" className="rounded border bg-background px-2 py-1 text-sm" value={selectedViewUri} onChange={(event) => setSelectedViewUri(event.currentTarget.value)}>
                     {discoveredViews.map((view) => <option key={view.uri} value={view.uri}>{view.label}</option>)}
@@ -96,6 +107,7 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                     <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={isSearching || (effectiveResultsTotalCount === null ? (results.length <= (resultsUiPage+1)*resultsPageSize && (resultsPageComplete || resultsBatchRequestPending.current)) : resultsUiPage+1 >= Math.ceil(effectiveResultsTotalCount/resultsPageSize))} onClick={() => changeResultsPage(1)}>Next</button>
                   </div>
                 </div>}
+              </>}
               </div>}
 </>;
 }

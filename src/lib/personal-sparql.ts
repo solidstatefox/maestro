@@ -349,7 +349,7 @@ export async function queryPersonalSparql(query: string, timeoutMs = 20000, requ
     headers: personalSparqlHeaders(request, "application/x-www-form-urlencoded; charset=UTF-8"),
     body: new URLSearchParams({ query }).toString(),
     cache: "no-store",
-    signal: AbortSignal.timeout(timeoutMs),
+    ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
   });
   const body = await response.text();
   if (!response.ok) throw new PersonalSparqlHttpError(response.status, body, "query");
@@ -371,7 +371,7 @@ export async function askPersonalSparql(query: string, timeoutMs = 20000, reques
     headers: personalSparqlHeaders(request, "application/x-www-form-urlencoded; charset=UTF-8"),
     body: new URLSearchParams({ query }).toString(),
     cache: "no-store",
-    signal: AbortSignal.timeout(timeoutMs),
+    ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
   });
   const body = await response.text();
   if (!response.ok) throw new PersonalSparqlHttpError(response.status, body, "ASK");

@@ -4,6 +4,7 @@ import { PersonalWidgetQueryListener } from "@/canvas/left/filter";
 
 import { BrowseRibbon } from "@/canvas/tab/browse/ribbon";
 
+import { currentFocusFacets, mapEligible } from "@/lib/map-perspective";
 import { ViewRibbon } from "@/canvas/tab/view/ribbon";
 import { AnalyzeRibbon } from "@/canvas/tab/analyze/ribbon";
 
@@ -19,7 +20,9 @@ import { Toaster, toast } from "@/components/ui/toast";
 import { clearClientQueryCache } from "@/lib/client-query-cache";
 
 import { clearMaestroStorage } from "@/lib/maestro-storage";
+import { useState } from "react";
 import { Progress } from "@/components/ui/progress";
+import { WorkspaceSkeleton } from "@/canvas/workspace-skeleton";
 import { ResizableHandle, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
 
@@ -97,6 +100,10 @@ import { RightCanvasPanel } from "@/canvas/right/pane";
 /** Workbench composition. The route entry does not own query, record, or facet state. */
 export function MaestroWorkspace() {
   const workspace = useWorkspaceController();
+  // Keep the loading skeleton aligned with the actual resizable workspace widths.
+  // The layout callback is triggered on resize; switching into loading does not
+  // unmount this state, so there is no layout jump or second width preference.
+  const [workspacePanelWidths, setWorkspacePanelWidths] = useState<number[]>([25, 45, 30]);
   const { renderRootBreadcrumb, renderPathBreadcrumb } = createBreadcrumbRenderers(workspace);
   const {
     FACET_PAGE_SIZE,
@@ -584,11 +591,35 @@ export function MaestroWorkspace() {
   // This prevents default toggle values appearing for a frame and avoids
   // mounting query-dependent widget effects with provisional query state.
   if (!urlStateInitialized) return null;
+  // Inspect all explicit <class> constraints, including nested breadcrumb scopes.
+  // Superclass closure is resolved by the personal ontology graph on the server.
+  const queryClassUris: string[] = [];
+  const collectQueryClasses = (nodes: typeof queryTree.children) => {
+    for (const node of nodes) {
+      if (node.name === "class" && node.attributes.iri) queryClassUris.push(node.attributes.iri);
+      collectQueryClasses(node.children);
+    }
+  };
+  collectQueryClasses(queryTree.children);
+  const mapContextProperties = currentFocusFacets(queryTree, propertyFacets.map(facet => facet.uri));
+  const mapAvailable = mapEligible(mapContextProperties);
+  // Use the identical live ribbon in both ready and loading layouts.
+  const workspaceRibbon = (workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewFeature={viewFeature} setViewFeature={setViewFeature} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setSelectedViewUri(uri); setViewFeature(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} mapAvailable={mapAvailable} /> : <AnalyzeRibbon analysisDefinitions={analysisDefinitions} selectedAnalysisUri={selectedAnalysisUri} analyzeHistogram={analyzeHistogram} isCompareAnalysis={isCompareAnalysis} firstBreadcrumbLabel={tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : undefined} firstResultTitle={visibleResultsPage[0]?.title} onSelectAnalysis={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(false); }} onSelectHistogram={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(true); }} />);
   if (!graphRegistryReady || selectedEndpointStatus?.state !== "ok" || selectedEndpointStatus.status !== 200) return (
-    <main className="flex h-dvh min-h-[500px] flex-col items-center justify-center gap-3 bg-background text-foreground" aria-busy="true">
-      <div role="status" className="text-sm font-medium">{!graphRegistryReady ? "Loading graph servers…" : "Checking selected graph server…"}</div>
-      {(endpointMenuError || endpointHealthToast?.message) && <p role="alert" className="max-w-lg text-center text-sm text-destructive">{endpointMenuError || endpointHealthToast?.message}</p>}
-      {(endpointMenuError || endpointHealthToast) && <button type="button" className="rounded-md border px-3 py-1.5 text-sm" onClick={() => window.location.reload()}>Retry startup</button>}
+    <main className="flex h-dvh min-h-[500px] flex-col bg-background text-foreground">
+      <Toaster />
+      <AppBarSection workspace={workspace} />
+      <WorkspaceSkeleton
+        ribbon={workspaceRibbon}
+        panelWidths={workspacePanelWidths}
+        onLayout={(sizes: number[]) => {
+          if (sizes.length === 3 && sizes.every((size) => Number.isFinite(size) && size > 0)) {
+            setWorkspacePanelWidths((previous) => sizes.every((size, index) => Math.abs(size - (previous[index] ?? 0)) < 0.01) ? previous : [...sizes]);
+          }
+        }}
+        message={!graphRegistryReady ? "Loading graph servers" : "Checking selected graph server"}
+        error={endpointMenuError || endpointHealthToast?.message}
+      />
     </main>
   );
 
@@ -786,13 +817,18 @@ export function MaestroWorkspace() {
       )}
 
       <div className="shrink-0">
-        {workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewFeature={viewFeature} setViewFeature={setViewFeature} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setSelectedViewUri(uri); setViewFeature(null); }} viewDiscoveryLoading={viewDiscoveryLoading} /> : <AnalyzeRibbon analysisDefinitions={analysisDefinitions} selectedAnalysisUri={selectedAnalysisUri} analyzeHistogram={analyzeHistogram} isCompareAnalysis={isCompareAnalysis} firstBreadcrumbLabel={tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : undefined} firstResultTitle={visibleResultsPage[0]?.title} onSelectAnalysis={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(false); }} onSelectHistogram={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(true); }} />}
+        {workspaceRibbon}
 
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 
-          <ResizablePanelGroup key={workspaceTab} direction="horizontal" className="min-h-0 flex-1">
+          <ResizablePanelGroup key={workspaceTab} direction="horizontal" className="min-h-0 flex-1"
+            onLayout={(sizes: number[]) => {
+              if (sizes.length === 3 && sizes.every((size) => Number.isFinite(size) && size > 0)) {
+                setWorkspacePanelWidths((previous) => sizes.every((size, index) => Math.abs(size - (previous[index] ?? 0)) < 0.01) ? previous : [...sizes]);
+              }
+            }}>
             <LeftCanvasPanel workspace={workspace} />
             <ResizableHandle withHandle />
             <CenterCanvasPanel workspace={workspace} />

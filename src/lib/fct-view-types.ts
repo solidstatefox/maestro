@@ -7,6 +7,8 @@ export const FCT_VIEW_TYPES = {
   PROPERTIES_IN: "properties-in",
   CLASSES: "classes",
   LIST: "list",
+  LIST_SUBJECTS: "list-subjects",
+  LIST_OBJECTS: "list-objects",
   LIST_VALUES: "list-values",
   LIST_STATES: "list-states",
   ASK: "ask",
@@ -16,6 +18,7 @@ export const FCT_VIEW_TYPES = {
   YEARS: "years",
   MONTHS: "months",
   WEEKS: "weeks",
+  DAYS: "days",
   DESCRIBE: "describe",
   GRAPHS: "graphs",
 } as const;

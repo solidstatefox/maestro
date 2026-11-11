@@ -48,8 +48,12 @@ import { EndpointStatusIcon, type EndpointStatus, type EndpointOption } from "@/
 import { renderValueOperator } from "@/canvas/top/breadcrumb";
 
 import { FCT_VIEW_TYPES, type FctViewType } from "@/lib/fct-view-types";
+import { propertyUsageNavigation, type PropertyUsageDirection } from "@/lib/property-usage-query";
+import { reconcileResultBadgeProjections } from "@/lib/fct-query-derived";
+import type { FctValue } from "@/lib/fct-query-api";
 import maestroLanguages from "@/data/maestro-languages.json";
 import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
+import { listValuesProjectionSparql } from "@/lib/list-values-inspector";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { rememberNamespaceMetadata, rememberShortforms, setNamespacePrefixSource, setObservationQueryAddr, toLabel } from "@/lib/uri-labels";
@@ -753,7 +757,7 @@ useEffect(() => {
     return parsed.length && parsed[0].toLowerCase() !== "none" ? parsed : [RDFS_LABEL_URI];
   });
   const [selectedSearchResourceTypes, setSelectedSearchResourceTypes] = useState<string[]>(() =>
-    (searchNode?.attributes.resourceTypes ?? "").split(/[\s,]+/).filter((type) => type === "class" || type === "property"));
+    (searchNode?.attributes.type ?? "").split(/[\s,]+/).filter((type) => type === "class" || type === "property"));
   const search = searchDraft;
   const searchDraftRef = useRef(searchDraft);
 
@@ -785,15 +789,15 @@ useEffect(() => {
       selectedSignalModeRef.current = "uri";
       setSelectedSignalMode("uri");
     } else if (searchNode) {
-      const mode = searchNode.attributes.property ? (searchNode.attributes.match === "exact" ? "exact" : "name") : "all";
+      const mode = searchNode.attributes.property ? (searchNode.attributes.exact === "true" ? "exact" : "name") : "all";
       selectedSignalModeRef.current = mode;
       setSelectedSignalMode(mode);
     }
-  }, [uriNode?.id, uriNode?.text, searchNode?.id, searchNode?.attributes.property, searchNode?.attributes.match]);
+  }, [uriNode?.id, uriNode?.text, searchNode?.id, searchNode?.attributes.property, searchNode?.attributes.exact]);
   useEffect(() => {
-    const next = (searchNode?.attributes.resourceTypes ?? "").split(/[\s,]+/).filter((type) => type === "class" || type === "property");
+    const next = (searchNode?.attributes.type ?? "").split(/[\s,]+/).filter((type) => type === "class" || type === "property");
     setSelectedSearchResourceTypes((old) => old.join(" ") === next.join(" ") ? old : next);
-  }, [searchNode?.attributes.resourceTypes]);
+  }, [searchNode?.attributes.type]);
   const textSearchMode = selectedSignalMode;
   const selectedNamePropertyLabel = selectedNamePropertyUris
     .map((uri) => TEXT_SEARCH_NAME_PROPERTIES.find((property) => property.uri === uri)?.label ?? toLabel(uri))
@@ -1025,13 +1029,13 @@ useEffect(() => {
     const textNode: FctQueryNode = searchNode
       ? {
           ...searchNode,
-          attributes: mode === "name" || mode === "exact" ? { ...searchNode.attributes, property: propertyUris.join(" "), ...(resourceTypes.length ? { resourceTypes: resourceTypes.join(" ") } : { resourceTypes: "" }), match: mode === "exact" ? "exact" : "loose" } : Object.fromEntries(Object.entries(searchNode.attributes).filter(([key]) => key !== "property" && key !== "match" && key !== "resourceTypes")),
+          attributes: mode === "name" || mode === "exact" ? { ...searchNode.attributes, property: propertyUris.join(" "), ...(resourceTypes.length ? { type: resourceTypes.join(" ") } : { type: "" }), exact: mode === "exact" ? "true" : "false" } : Object.fromEntries(Object.entries(searchNode.attributes).filter(([key]) => key !== "property" && key !== "exact" && key !== "type")),
           text: restoredText,
         }
       : {
           id: "query-text",
           name: "text",
-          attributes: mode === "name" || mode === "exact" ? { property: propertyUris.join(" "), match: mode === "exact" ? "exact" : "loose", ...(resourceTypes.length ? { resourceTypes: resourceTypes.join(" ") } : {}) } : {},
+          attributes: mode === "name" || mode === "exact" ? { property: propertyUris.join(" "), exact: mode === "exact" ? "true" : "false", ...(resourceTypes.length ? { type: resourceTypes.join(" ") } : {}) } : {},
           text: restoredText,
           children: [],
         };
@@ -1772,6 +1776,12 @@ useEffect(() => {
       }
     }
     if (restored) {
+      // Ribbon identity is the SHACL provider resource URI, never its label.
+      if (restored.viewPanel === "trail" || restored.viewPanel === "perspectives" || restored.viewPanel === "features") setViewPanel(restored.viewPanel);
+      if (typeof restored.selectedViewUri === "string" && restored.selectedViewUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedViewUri)) setSelectedViewUri(restored.selectedViewUri);
+      if (restored.viewFeature === null || restored.viewFeature === "policies" || restored.viewFeature === "formats" || restored.viewFeature === "transcoders") setViewFeature(restored.viewFeature);
+      if (typeof restored.selectedAnalysisUri === "string" && restored.selectedAnalysisUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedAnalysisUri)) setSelectedAnalysisUri(restored.selectedAnalysisUri);
+      if (typeof restored.analyzeHistogram === "boolean") setAnalyzeHistogram(restored.analyzeHistogram);
       // Endpoint selection is authoritative in the restored query addr.
       if (typeof restored.selectedFacet === "string" && restored.selectedFacet.length < 100) setSelectedFacet(restored.selectedFacet);
       if (typeof restored.propertiesPage === "number" && Number.isFinite(restored.propertiesPage)) setPropertiesPage(Math.max(0, Math.floor(restored.propertiesPage)));
@@ -1840,7 +1850,7 @@ useEffect(() => {
       const rootChildren = serializedQuery ? (parseFctQueryXml(serializedQuery)?.children ?? []) : [];
       const impliedUri = rootChildren.find((node) => node.name === "value" && node.attributes.datatype === "uri");
       const impliedText = rootChildren.find((node) => node.name === "text" && node.id === "query-text");
-      const impliedMode: "uri" | "exact" | "name" | "all" | "clear" = impliedUri ? "uri" : !impliedText ? "clear" : impliedText.attributes.property ? (impliedText.attributes.match === "exact" ? "exact" : "name") : "all";
+      const impliedMode: "uri" | "exact" | "name" | "all" | "clear" = impliedUri ? "uri" : !impliedText ? "clear" : impliedText.attributes.property ? (impliedText.attributes.exact === "true" ? "exact" : "name") : "all";
       const savedMode = restored?.selectedSignalMode;
       const mode: "uri" | "exact" | "name" | "all" | "clear" | null = savedMode === "uri" || savedMode === "name" || savedMode === "exact" || savedMode === "all" || savedMode === "clear"
         ? savedMode
@@ -1897,6 +1907,11 @@ useEffect(() => {
       findEndpointsEnabled,
       centralTab,
       workspaceTab,
+      viewPanel,
+      selectedViewUri,
+      viewFeature,
+      selectedAnalysisUri,
+      analyzeHistogram,
       queryToggle: queryTreeOpen,
       showResultBadges,
       badgesToggle: showResultBadges,
@@ -1925,7 +1940,7 @@ useEffect(() => {
     params.set("state", JSON.stringify(state));
     const nextUrl = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", nextUrl);
-  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft]);
+  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft, viewPanel, selectedViewUri, viewFeature, selectedAnalysisUri, analyzeHistogram]);
 
   /** Persist one History visit for a query snapshot, preserving queue ordering. */
   async function writeHistoryVisit(queryXmlSnapshot: string, stateUrlSnapshot: string, action: { operator: "+" | "-"; xpath: string; value?: string } | null) {
@@ -2134,6 +2149,16 @@ useEffect(() => {
     groupCardRefs.current.get(key)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
   const sourceSparql = sparqlQuery || "# SPARQL will appear after the endpoint returns a query.";
+  function navigatePropertyUsage(direction: PropertyUsageDirection, selection?: { value: FctValue; checked: boolean }) {
+    // A native property usage facet traverses the predicate bound by
+    // rdf:Property. When the property IRI is fixed, use a normal forward or
+    // reverse relationship carrying <view type="list"> instead.
+    const next = propertyUsageNavigation(queryTree, direction, selection);
+    if (next === queryTree) return;
+    replaceQueryTree(next);
+    setCentralTab("results");
+    setWorkspaceTab("browse");
+  }
   const queryWithoutPagingXml = useCallback(
   (viewType?: FctViewType, sortByCount = false, classTree = false) =>
     serializeFctQuery(
@@ -2630,18 +2655,24 @@ useEffect(() => {
 
   /** New root text search for RDF classes, initiated by the Categories header. */
   function startCategoryNameSearch() {
-    // Reset the complete old pipeline, then atomically install a fresh root
-    // query.  Do not use setTextSearchMode against the previous tree: React
-    // renders do not guarantee the reset tree has become visible yet.
-    resetHomeQuery();
+    // Search for classes by rdfs:label and then show their rdf:type subjects.
+    // Preserve the selected graph server, but search across all of its graphs.
+    const address = queryTree.attributes.addr ?? "";
+    const server = address.includes("@") ? address.slice(address.indexOf("@") + 1) : "";
     const existingView = findQueryNode(queryTree.children, "query-view");
     const nextView: FctQueryNode = existingView
       ? { ...existingView, attributes: { ...existingView.attributes, type: FCT_VIEW_TYPES.TEXT, offset: "0" }, children: [] }
       : { id: "query-view", name: "view", attributes: { type: FCT_VIEW_TYPES.TEXT, limit: "30", offset: "0" }, children: [] };
-    replaceQueryTree({ ...queryTree, children: [
-      { id: "query-text", name: "text", text: "", attributes: { property: selectedNamePropertyUris.join(" "), match: "loose", resourceTypes: "class" }, children: [] },
-      nextView,
-    ] });
+    resetHomeQuery();
+    replaceQueryTree({
+      ...queryTree,
+      attributes: { ...queryTree.attributes, addr: `$ALL$@${server}` },
+      children: [
+        { id: "query-text", name: "text", text: "", attributes: { property: RDFS_LABEL_URI, exact: "false", type: "class" }, children: [] },
+        { id: "query-category-type-role", name: "property-of", attributes: { iri: RDF_TYPE_URI }, children: [nextView] },
+      ],
+    });
+    setSelectedNamePropertyUris([RDFS_LABEL_URI]);
     setSelectedSearchResourceTypes(["class"]);
     setSelectedSignalMode("name");
     selectedSignalModeRef.current = "name";
@@ -3231,6 +3262,21 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     .filter((iri, index, all) => all.indexOf(iri) === index)
     .join("\u0000");
 
+  // The live query store, not the list-values serializer, owns relationship
+  // identity. Reuse existing predicate nodes for Badges; remove all project
+  // flags in the current view scope when the toggle is off. Badge-only nodes
+  // are removed as well so turning Badges off cannot add existence filters.
+  useEffect(() => {
+    if (!urlStateInitialized) return;
+    const projectionColumns = [
+      { property: RDF_TYPE_URI, direction: "forward" as const },
+      ...(resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000").map(property => ({ property, direction: "forward" as const })) : []),
+      ...(resultBadgeRolesKey ? resultBadgeRolesKey.split("\u0000").map(property => ({ property, direction: "reverse" as const })) : []),
+    ];
+    const reconciled = reconcileResultBadgeProjections(queryTree, showResultBadges, projectionColumns);
+    if (serializeFctQuery(reconciled) !== serializeFctQuery(queryTree)) replaceQueryTree(reconciled);
+  }, [urlStateInitialized, showResultBadges, resultBadgePropertiesKey, resultBadgeRolesKey, queryTree, replaceQueryTree]);
+
   // This is the same FCT XML supplied to Results list-values enrichment.
   // Its response carries both executed SPARQL statements (page + projections).
   const resultsListValuesXml = (() => {
@@ -3245,12 +3291,25 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       ]);
     } catch { return ""; }
   })();
+  // The inspector must show list-values SPARQL, never the unrelated Results
+  // SELECT. Render its real projection with the currently selected page terms
+  // even before the asynchronous enrichment reply brings execution metadata.
+  const projectedPageTerms = results.filter(item => item.uri && item.termType !== "bnode").map(item => ({
+    type: (item.termType === "literal" ? "literal" : "uri") as "uri" | "literal",
+    value: item.uri, ...(item.datatype ? { datatype: item.datatype } : {}), ...(item.lang ? { lang: item.lang } : {}),
+  }));
+  const projectionColumns = [
+    { property: RDF_TYPE_URI, direction: "forward" as const },
+    ...(resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000").filter(uri => uri !== RDF_TYPE_URI).map(property => ({ property, direction: "forward" as const })) : []),
+    ...(resultBadgeRolesKey ? resultBadgeRolesKey.split("\u0000").map(property => ({ property, direction: "reverse" as const })) : []),
+  ];
+  const projectionGraph = (queryTree.attributes.addr ?? "").split("@")[0];
   const resultsListValuesSparql = resultsListValuesXml && resultListValuesDebug?.xml === resultsListValuesXml
     ? resultListValuesDebug.sparql
-    : resultsListValuesXml ? (() => {
-        try { return `${compileFctXmlToSparql(resultsListValuesXml).query}\n\n# Projected-value SELECT appears after the list-values response arrives.`; }
-        catch (error) { return `# Compilation error: ${String(error)}`; }
-      })() : "";
+    : resultsListValuesXml
+      ? listValuesProjectionSparql(projectedPageTerms.slice(0, LIST_VALUES_MAX_RESOURCES), projectionColumns,
+          projectionGraph === "$ALL$" ? "" : projectionGraph)
+      : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -3308,14 +3367,15 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
               ...proxyDebugHeaders("results-enrichment", `ResultsListValues:${proxyDebugFingerprint(`${resultBadgeUrisKey}:${resultBadgePropertiesKey}:${resultBadgeRolesKey}`)}:${start / maxResourcesPerRequest + 1}`),
             },
             body: JSON.stringify({ queryXml, resources: batch }),
-            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]),
+            signal: controller.signal,
           });
           const xml = await response.text();
           if (!response.ok) throw new Error(`list-values batch ${start / maxResourcesPerRequest + 1} returned HTTP ${response.status}: ${xml.slice(0, 300)}`);
           const responseDocument = new DOMParser().parseFromString(xml, "application/xml");
           const executedSparql = Array.from(responseDocument.getElementsByTagName("*"))
             .find((node) => node.localName === "sparql")?.textContent || "";
-          if (!cancelled) setResultListValuesDebug({ xml: queryXml, sparql: executedSparql });
+          if (!cancelled) setResultListValuesDebug({ xml: queryXml,
+            sparql: executedSparql || "# The list-values response did not include an executed SPARQL projection." });
           const parsed = parseListValuesXml(xml);
           if (cancelled) return;
           for (const term of batch) {
@@ -3335,6 +3395,9 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         }
       } catch (error) {
         if (cancelled || controller.signal.aborted) return;
+        setResultListValuesDebug({ xml: resultsListValuesXml,
+          sparql: `${listValuesProjectionSparql(missing.slice(0, LIST_VALUES_MAX_RESOURCES).map(term => ({ ...term, type: term.type as "uri" | "literal" })), projectionColumns,
+            projectionGraph === "$ALL$" ? "" : projectionGraph)}\n# Projection failed: ${error instanceof Error ? error.message : String(error)}` });
         console.warn("Results badge enrichment failed:", error);
       }
     })();
@@ -3922,6 +3985,29 @@ setGraphFacets(graphs);
   // The lit Bookmark button is the sole client-side feature gate for Personal states.
   const recordStates = usePersonalRecordStates({ enabled: personalStoreReady && isQueryBookmarked, results: visibleResultsPage, selectedUri, queryXml, resultsReady: urlStateInitialized && !isSearching && endpointReadyForQuery, pageIdentity: `${resultsOffset}:${resultsUiPage}:${resultsPageSize}:${queryRefreshRevision}`,
     onHiddenChanged: refreshQuery, selectedStates: selectedStateFilters, toggleSelectedState: toggleSelectedStateFilter });
+  // Save last *known* query-wide Results/New observations on the History visit.
+  // Unavailable statistics are never converted to zero, and stale pipelines
+  // cannot overwrite a newer query's visit.
+  const historyMetricWriteKeyRef = useRef("");
+  useEffect(() => {
+    if (!personalStoreReady || !urlStateInitialized || isSearching || isCountingResults || effectiveResultsTotalCount === null) return;
+    const historyId = historyVisitQueryRef.current === queryXml ? historyVisitIdRef.current : "";
+    if (!historyId) return;
+    const lastNewCount = recordStates.enabled && recordStates.countsReady && !recordStates.loading && !recordStates.error
+      ? recordStates.counts.New : null;
+    const key = `${historyId}:${effectiveResultsTotalCount}:${lastNewCount ?? "unknown"}`;
+    if (historyMetricWriteKeyRef.current === key) return;
+    historyMetricWriteKeyRef.current = key;
+    void fetch("/proxy/api/query-favorites", {
+      method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "updateMetrics", historyId,
+        lastResultCount: effectiveResultsTotalCount, lastNewCount }),
+    }).then(response => { if (!response.ok && historyMetricWriteKeyRef.current === key) historyMetricWriteKeyRef.current = ""; })
+      .catch(() => { if (historyMetricWriteKeyRef.current === key) historyMetricWriteKeyRef.current = ""; });
+  }, [personalStoreReady, urlStateInitialized, isSearching, isCountingResults, effectiveResultsTotalCount,
+    queryXml, historyBookmarkId, recordStates.enabled, recordStates.countsReady,
+    recordStates.loading, recordStates.error, recordStates.counts.New]);
+
   useEffect(() => {
     // Group members can be selected even when they are not on the ordinary
     // Results page. Do not let Results-page auto-selection override that pick
@@ -5646,6 +5732,111 @@ const activeLeafId: string | null =
     ? activePropertyPath[activePropertyPath.length - 1].id
     : null;
 
+  // Perspective-supplied facets belong to the context in which its RDF class
+  // is declared, not wherever the user later moves the view. In particular,
+  // navigating into dcterms:created must never introduce a tag requirement there.
+  useEffect(() => {
+    const bookmarkPerspective = selectedViewUri === "gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective";
+    const historyPerspective = selectedViewUri === "gttp://ggg.maestro.ecosys/shacl/provider/history-perspective";
+    if (!bookmarkPerspective && !historyPerspective) return;
+    const bookmarkClass = "http://www.w3.org/2002/01/bookmark#Bookmark";
+    const historyClass = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#QueryHistoryVisit";
+    type Scope = { parentId: string | null; siblings: typeof queryTree.children; kind: "bookmark" | "history" };
+    const findClassContext = (siblings: typeof queryTree.children, parentId: string | null): Scope | null => {
+      // For History's perspective a bookmark is also a history visit; use the
+      // property actually stored on that bookmark, dcterms:created.
+      const declaredBookmark = siblings.some(node => node.name === "class" && node.attributes.iri === bookmarkClass);
+      if (declaredBookmark) return { parentId, siblings, kind: "bookmark" };
+      const declaredHistory = siblings.some(node => node.name === "class" && node.attributes.iri === historyClass);
+      if (historyPerspective && declaredHistory) return { parentId, siblings, kind: "history" };
+      for (const node of siblings) {
+        if (node.name !== "property" && node.name !== "property-of") continue;
+        const nested = findClassContext(node.children, node.id);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    const context = findClassContext(queryTree.children, null);
+    if (!context || (bookmarkPerspective && context.kind !== "bookmark")) return;
+    const existing = new Set(context.siblings.filter(node => node.name === "property").map(node => node.attributes.iri));
+    const tagUris = [
+      "http://www.w3.org/2004/02/skos/core#prefLabel",
+      "http://purl.org/dc/terms/subject",
+      "http://rdfs.org/scot/ns#has_tag",
+    ];
+    const preferredTag = bookmarkTagVocabulary === "dcterms" ? tagUris[1]
+      : bookmarkTagVocabulary === "scot" ? tagUris[2] : tagUris[0];
+    const required: string[] = [];
+    if (bookmarkPerspective && !tagUris.some(uri => existing.has(uri))) required.push(preferredTag);
+    const temporalProperty = context.kind === "bookmark"
+      ? "http://purl.org/dc/terms/created"
+      : "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated";
+    if (!existing.has(temporalProperty)) required.push(temporalProperty);
+    // Repair older queries where the previous auto-add implementation inserted
+    // a context-only facet at the *moved view* rather than the class scope.
+    // Do not remove anything user-bound or anything carrying the current view.
+    const automaticUris = new Set([...tagUris,
+      "http://purl.org/dc/terms/created",
+      "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated"]);
+    const strayIds: string[] = [];
+    const containsView = (nodes: typeof queryTree.children): boolean =>
+      nodes.some(node => node.id === "query-view" || containsView(node.children));
+    const findStrays = (nodes: typeof queryTree.children, parentId: string | null): void => {
+      for (const node of nodes) {
+        if (node.name === "property" && parentId !== context.parentId &&
+            automaticUris.has(node.attributes.iri) && node.attributes.src === "perspective" &&
+            node.attributes.project === "yes" &&
+            !node.children.some(child => child.name === "value") && !containsView(node.children)) {
+          strayIds.push(node.id);
+          continue;
+        }
+        if (node.name === "property" || node.name === "property-of") findStrays(node.children, node.id);
+      }
+    };
+    findStrays(queryTree.children, null);
+    if (!required.length && !strayIds.length) return;
+    let next = queryTree;
+    for (const id of strayIds) next = workbenchQueryTreeApi.removeNode(next, id);
+    for (const uri of required) {
+      next = workbenchQueryTreeApi.addProperty(next, uri, context.parentId);
+      // Resolve in the *same* declared class scope, not the current view scope.
+      const siblingsForContext = context.parentId
+        ? (function find(nodes: typeof queryTree.children): typeof queryTree.children | null {
+            for (const node of nodes) {
+              if (node.id === context.parentId) return node.children;
+              const child = find(node.children);
+              if (child) return child;
+            }
+            return null;
+          })(next.children)
+        : next.children;
+      const added = siblingsForContext?.find(node => node.name === "property" && node.attributes.iri === uri);
+      if (!added) continue;
+      // An empty context facet is non-filtering until the user chooses a value.
+      next = workbenchQueryTreeApi.setNodeAttribute(next, added.id, "project", "yes");
+      next = workbenchQueryTreeApi.setNodeAttribute(next, added.id, "src", "perspective");
+    }
+    replaceQueryTree(next);
+  }, [selectedViewUri, queryTree, bookmarkTagVocabulary, replaceQueryTree]);
+
+  /** Apply a SHACL-discovered personal date-range facet to the current view scope. */
+  const setPersonalDateRange = useCallback((property: string, start: string, end: string) => {
+    const valid = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?$/;
+    if ((start && !valid.test(start)) || (end && !valid.test(end)) || (start && end && start > end)) return;
+    const scoped = getActiveViewPropertyFilters(queryTree).some(node => node.attributes.iri === property);
+    let tree = scoped ? queryTree : workbenchQueryTreeApi.addProperty(queryTree, property, activeLeafId);
+    const facet = getActiveViewPropertyFilters(tree).find(node => node.attributes.iri === property);
+    if (!facet) return;
+    // Turn a context-only property into an actual constraint on Apply; restore
+    // the non-filtering projection when Clear is used on an auto-added facet.
+    if (start || end) tree = workbenchQueryTreeApi.setNodeAttribute(tree, facet.id, "project", null);
+    else if (facet.attributes.src === "perspective") tree = workbenchQueryTreeApi.setNodeAttribute(tree, facet.id, "project", "yes");
+    replaceQueryTree(workbenchQueryTreeApi.setPropertyValues(tree, activeLeafId, property,
+      start || end ? [{ text: "", datatype: "dateTime", attributes: {
+        ...(start ? { rangeStart: start } : {}), ...(end ? { rangeEnd: end } : {}),
+      } }] : []));
+  }, [queryTree, activeLeafId, replaceQueryTree]);
+
 const displayedBreadcrumbPath =
   activePropertyPath.length <= breadcrumbTrail.length &&
   activePropertyPath.every(
@@ -6594,12 +6785,6 @@ useEffect(() => {
         },
         children: [
           { id: "history-bookmark-class", name: "class", attributes: { iri: classIri }, children: [] },
-          ...(includeFavorites ? [{
-            id: "favorites-hash-property",
-            name: "property",
-            attributes: { iri: "https://schema.org/identifier" },
-            children: [],
-          }] : []),
           { id: "query-view", name: "view", attributes: { type: FCT_VIEW_TYPES.TEXT, limit: "30", offset: "0" }, children: [] },
         ],
       };
@@ -6616,7 +6801,7 @@ useEffect(() => {
       toast.add({
         title: includeFavorites ? "Bookmarks loaded" : "History loaded",
         description: includeFavorites
-          ? "Showing bookmarked records with a hash identifier from your personal graph server."
+          ? "Showing Bookmark records from your personal graph server."
           : "Showing Query History Visit records from your personal graph server.",
         type: "success",
       });
@@ -7113,7 +7298,7 @@ useEffect(() => {
         className="mb-1 rounded-b-none border-b pb-1.5 text-xs font-medium text-foreground"
       >
         <span className="max-w-56 truncate">
-          {summary?.label && summary.label !== "—" ? `${isBound ? "i.e." : "e.g."} ${ellipsize(summary.label, 40).replace(/[’']s$/u, "")}` : "Example loading…"}
+          {summary?.label && summary.label !== "—" ? `${isBound ? "" : "e.g. "}${ellipsize(summary.label, 40).replace(/[’']s$/u, "")}` : "Example loading…"}
         </span>
       </DropdownMenuItem>
     );
@@ -7147,7 +7332,7 @@ useEffect(() => {
           <span key={v.id} className="ml-1 inline-flex items-baseline gap-0.5 text-xs text-muted-foreground">
             {renderValueOperator(v, "size-3")}
             <span>
-              <em>i.e.</em> {boundValueLabel(v)}
+              {boundValueLabel(v)}
             </span>
           </span>
         ))}
@@ -7725,6 +7910,18 @@ useEffect(() => {
     .map((child) => child.attributes.iri ?? "")
     .filter(Boolean))));
   const viewClassKey = JSON.stringify(viewScopeClasses);
+  // Analyze providers operate on the current focus resources. An ancestor
+  // Bookmark class does not make a tag/text property view a Bookmark analysis.
+  const analyzeFocusClasses = (() => {
+    const find = (nodes: FctQueryNode[]): FctQueryNode[] | null => {
+      if (nodes.some(node => node.id === "query-view")) return nodes;
+      for (const node of nodes) { const found = find(node.children); if (found) return found; }
+      return null;
+    };
+    return [...new Set((find(queryTree.children) ?? []).filter(node => node.name === "class")
+      .map(node => node.attributes.iri ?? "").filter(Boolean))];
+  })();
+  const analyzeClassKey = JSON.stringify(analyzeFocusClasses);
   type DiscoveredView = { uri: string; label: string; icon?: string; template: string; matchedClass: string; stylesheet: string };
   const [discoveredViews, setDiscoveredViews] = useState<DiscoveredView[]>([]);
   
@@ -7764,7 +7961,7 @@ useEffect(() => {
         if (!controller.signal.aborted) {
           const views = payload.views ?? [];
           setDiscoveredViews(views);
-          setSelectedViewUri((current) => views.some((view) => view.uri === current) ? current : (views[0]?.uri ?? ""));
+          setSelectedViewUri((current) => current === "urn:maestro:perspective:map" || current.startsWith("gttp://ggg.maestro.ecosys/shacl/provider/") || views.some((view) => view.uri === current) ? current : (views[0]?.uri ?? ""));
         }
       } catch (error) {
         if (controller.signal.aborted) {
@@ -7995,7 +8192,7 @@ useEffect(() => {
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/analyze", {cache:"no-store",signal:controller.signal});
+        const response = await fetch(`/proxy/api/analyze?classes=${encodeURIComponent(analyzeClassKey)}`, {cache:"no-store",signal:controller.signal});
         const payload = await response.json() as {analyses?: AnalysisDefinition[]; error?:string};
         if (!response.ok) throw new Error(payload.error || "Could not discover Analyze policies.");
         if (!controller.signal.aborted) {
@@ -8008,10 +8205,17 @@ useEffect(() => {
       }
     })();
     return () => controller.abort();
-  }, [workspaceTab]);
+  }, [workspaceTab, analyzeClassKey]);
 
   useEffect(() => {
     if (workspaceTab !== "analyze") return;
+    if (selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-activity" ||
+        selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-tags") {
+      setAnalysisTable(null);
+      setAnalysisLoading(false);
+      analysisRenderedBaseRef.current = "";
+      return;
+    }
     const definition = analysisDefinitions.find((item) => item.uri === selectedAnalysisUri);
     if (!definition) { setAnalysisTable(null); analysisRenderedBaseRef.current = ""; return; }
     // Structural edits to the live focus's immediate children only add/remove
@@ -8366,6 +8570,7 @@ useEffect(() => {
     navigateQueryHistory,
     navigateResultBadge,
     navigateToPropertyPath,
+    navigatePropertyUsage,
     openGraphInfo,
     openRecordPropertyUri,
     orderResults,
@@ -8556,6 +8761,7 @@ useEffect(() => {
     setPrefixSource,
     setPropertiesPage,
     setPropertyValue,
+    setPersonalDateRange,
     removeProperty,
     getPropertyPath,
     setRootSearchExpanded,

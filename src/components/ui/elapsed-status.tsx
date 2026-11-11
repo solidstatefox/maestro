@@ -52,7 +52,7 @@ export function ElapsedStatus({ label, category, requestWaves = 1, clockScope }:
   const overdueSeconds = budgetMs === null ? -1 : elapsedSeconds - Math.round(budgetMs / 1000);
   const overduePalette = [
     "#16a34a", "#55a630", "#84ab21", "#b1aa18", "#d5a319",
-    "#e49a1c", "#e5841a", "#e66b1b", "#e34c22", "#dc2626", "#b91c1c",
+    "#e49a1c", "#ed8a16", "#f57914", "#fa5810", "#fc2c08", "#ff0000",
   ];
   const elapsedColor = overdueSeconds < 0 ? undefined : overduePalette[Math.min(10, overdueSeconds)];
   const cleanLabel = label.replace(/\s*(?:\.{3}|…)+\s*$/, "").trim();

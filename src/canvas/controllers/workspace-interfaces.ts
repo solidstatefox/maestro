@@ -132,6 +132,7 @@ export type FilterPaneDirectWorkspace = Pick<WorkspaceController,
   | "leftPanelLimit"
   | "leftWidgetLimits"
   | "navigateToPropertyPath"
+  | "navigatePropertyUsage"
   | "pagedUnselectedClasses"
   | "personalRoleFacetNodes"
   | "queryRefreshRevision"
@@ -433,6 +434,8 @@ export type SettingsPaneWorkspace = Pick<WorkspaceController,
 >;
 
 export type AppBarDirectWorkspace = Pick<WorkspaceController,
+  | "effectiveResultsTotalCount"
+  | "recordStates"
   | "centralTab"
   | "resetQuery"
   | "setSearch"
@@ -606,6 +609,6 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "workspaceTab"
 >;
 
-export type FilterPaneWorkspace = FilterPaneDirectWorkspace & PersonalWidgetCardsWorkspace;
+export type FilterPaneWorkspace = FilterPaneDirectWorkspace & PersonalWidgetCardsWorkspace & Pick<WorkspaceController, "setPersonalDateRange" | "propertyFacets" | "activePropertyFilters">;
 export type LeftPaneWorkspace = LeftPaneDirectWorkspace & FilterPaneWorkspace & ConfigurePaneWorkspace;
 export type AppBarWorkspace = AppBarDirectWorkspace & SettingsPaneWorkspace;

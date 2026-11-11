@@ -59,6 +59,8 @@ interface MapContextValue {
 }
 
 interface MapProps extends Omit<maplibregl.MapOptions, "container" | "style"> {
+  onMapError?: (message: string) => void
+  onMapReady?: () => void
   children?: React.ReactNode
   className?: string
   center?: [number, number]
@@ -191,6 +193,8 @@ function Map({
   minZoom = 0,
   maxZoom = 22,
   styles,
+  onMapError,
+  onMapReady,
   ...props
 }: MapProps) {
   const mapContainer = React.useRef<HTMLDivElement>(null)
@@ -215,6 +219,10 @@ function Map({
         ? styles?.dark || DEFAULT_DARK_STYLE
         : styles?.light || DEFAULT_LIGHT_STYLE
 
+    // MapLibre 6 uses a separate ESM worker importing a sibling shared module.
+    // Turbopack may rename those modules independently, breaking the worker URL.
+    // Serve the unmodified pair from the same path instead of a bundled asset.
+    maplibregl.setWorkerUrl("/api/maplibre-worker/maplibre-gl-worker.mjs")
     mapInstance.current = new maplibregl.Map({
       container: mapContainer.current,
       style: styleUrl,
@@ -225,8 +233,31 @@ function Map({
       ...props,
     })
 
+    // If the remote style cannot load, preserve a usable map and its markers
+    // instead of leaving a grey surface with no controls or hover cards.
+    let fellBack = false
+    const fallbackStyle: maplibregl.StyleSpecification = {
+      version: 8,
+      sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256,
+        attribution: "© OpenStreetMap contributors" } },
+      layers: [{ id: "osm", type: "raster", source: "osm" }],
+    }
+    mapInstance.current.on("error", (event) => {
+      const message = event.error instanceof Error ? event.error.message : "Map style or tiles failed to load."
+      onMapError?.(message)
+      if (!fellBack && !mapInstance.current?.isStyleLoaded()) {
+        fellBack = true
+        mapInstance.current?.setStyle(fallbackStyle)
+      }
+    })
+    // styledata arrives even when a raster tile is unavailable. It allows
+    // MapMarker and controls to render without waiting indefinitely for tiles.
+    mapInstance.current.on("styledata", () => {
+      if (mapInstance.current?.getStyle()?.layers?.length) setIsLoaded(true)
+    })
     mapInstance.current.on("load", () => {
       setIsLoaded(true)
+      onMapReady?.()
     })
 
     return () => {

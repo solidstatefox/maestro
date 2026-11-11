@@ -71,10 +71,18 @@ export function listValuesQueryClone(xml: string, columns: ListValueProjection[]
   const parent = view.parentElement;
   const ns = view.namespaceURI || "http://openlinksw.com/services/facets/1.0";
   for (const column of columns) {
-    const node = document.createElementNS(ns, column.direction === "reverse" ? "property-of" : "property");
-    node.setAttribute("iri", column.property);
+    const tag = column.direction === "reverse" ? "property-of" : "property";
+    // Project through the existing relationship in the live view scope. A
+    // second node with the same IRI is forbidden by Maestro's query grammar.
+    let node = Array.from(parent.children).find(child =>
+      child.localName === tag && child.getAttribute("iri") === column.property);
+    if (!node) {
+      node = document.createElementNS(ns, tag);
+      node.setAttribute("iri", column.property);
+      node.setAttribute("src", "badges");
+      parent.insertBefore(node, view);
+    }
     node.setAttribute("project", "yes");
-    parent.insertBefore(node, view);
   }
   return new XMLSerializer().serializeToString(document);
 }
@@ -274,7 +282,16 @@ const dbActivity = getText("db-activity");
 ...(dbActivity ? { dbActivity } : {}),
 	
     rowCount: Number(getText("processed") || rows.length),
-    results: resultType === FCT_VIEW_TYPES.TEXT || resultType === FCT_VIEW_TYPES.LIST || resultType === FCT_VIEW_TYPES.LIST_COUNT ? results : [],
+    // All native list views yield FCT result rows. Omitting the new property-
+    // usage views here made Subjects and Values display zero even when the
+    // proxy's SPARQL and FCT XML both contained successful results.
+    results: (
+      resultType === FCT_VIEW_TYPES.TEXT ||
+      resultType === FCT_VIEW_TYPES.LIST ||
+      resultType === FCT_VIEW_TYPES.LIST_COUNT ||
+      resultType === FCT_VIEW_TYPES.LIST_SUBJECTS ||
+      resultType === FCT_VIEW_TYPES.LIST_OBJECTS
+    ) ? results : [],
     properties: resultType === FCT_VIEW_TYPES.PROPERTIES ? facetItems : [],
     classes: resultType === FCT_VIEW_TYPES.CLASSES ? facetItems : [],
     roles: resultType === FCT_VIEW_TYPES.PROPERTIES_IN ? facetItems : [],
@@ -329,7 +346,12 @@ export function groupValueKey(value: FctResult): string {
 }
 
 export function fctTermKey(text: string, datatype?: string, lang?: string): string {
-  return JSON.stringify([text, datatype ?? "uri", lang ?? ""]);
+  // RDF 1.1 plain literals and xsd:string literals have the same term identity.
+  // The FCT response may spell out xsd:string while the FCT <value> uses
+  // datatype="string". Their keys must match when reconciling selected values.
+  const normalizedDatatype = datatype === "http://www.w3.org/2001/XMLSchema#string" ||
+    datatype === "http://www.openlinksw.com/schemas/facets/dtp/plainstring" ? "string" : datatype;
+  return JSON.stringify([text, normalizedDatatype ?? (lang ? "" : "uri"), lang?.toLowerCase() ?? ""]);
 }
 
 export function facetValueKey(value: FctResult): string {

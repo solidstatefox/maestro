@@ -3,6 +3,9 @@ import { ElapsedStatus } from "@/components/ui/elapsed-status";
 
 import { renderPersonalWidgetCards } from "@/canvas/left/personal-widget-cards";
 import { PersonalStatesWidget } from "@/canvas/left/states-widget";
+import { PropertyUsageWidget } from "@/canvas/left/property-usage-widget";
+import { propertyUsageScope } from "@/lib/property-usage-query";
+import { useTemporalFacetProviders } from "@/canvas/left/personal-date-facet";
 import { FACET_ITEM_GAP_CLASS } from "@/canvas/left/facet-layout";
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
@@ -39,12 +42,31 @@ import { serializeFctQuery, createPersonalRoleValuesQuery, createDistinctCountQu
 
 import type { FilterPaneWorkspace } from "@/canvas/controllers/workspace-interfaces";
 
+/** Relationships in the active view carrier's sibling set, including the carrier. */
+function activeCarrierSiblingProperties(tree: FilterPaneWorkspace["queryTree"], activeLeafId: string | null): string[] {
+  if (!activeLeafId) return tree.children.filter(node => node.name === "property" || node.name === "property-of")
+    .map(node => node.attributes.iri).filter(Boolean);
+  function find(nodes: typeof tree.children): string[] | null {
+    for (const node of nodes) {
+      if (node.id === activeLeafId) return nodes.filter(item => item.name === "property" || item.name === "property-of")
+        .map(item => item.attributes.iri).filter(Boolean);
+      const result = find(node.children);
+      if (result) return result;
+    }
+    return null;
+  }
+  return find(tree.children) ?? [];
+}
+
 export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWorkspace }) {
   const [graphTreeMode, setGraphTreeMode] = useState(false);
   const [expandedGraphNodes, setExpandedGraphNodes] = useState<Set<string>>(() => new Set());
   const {
     FACET_PAGE_SIZE,
     activeLeafId,
+    activePropertyFilters,
+    propertyFacets,
+    setPersonalDateRange,
     activeRoleFilters,
     autoConfiguredFacetKeys,
     beginFacetHoverPreview,
@@ -91,6 +113,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
     leftPanelLimit,
     leftWidgetLimits,
     navigateToPropertyPath,
+    navigatePropertyUsage,
     pagedUnselectedClasses,
     personalRoleFacetNodes,
     queryRefreshRevision,
@@ -118,6 +141,10 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
   } = workspace;
   // Sorting is presentation-only. Do not rerun the SPARQL query when a sort
   // control changes; the lightweight graph projection does not fetch counts.
+  // Discover presentation providers for the *existing* Personal facet widgets.
+  // A provider never contributes a second standalone facet card.
+  const temporalProperties = workspace.personalWidgets.map(widget => widget.uri);
+  const temporalProviders = useTemporalFacetProviders(temporalProperties);
   const sortedGraphFacets = useMemo(() => [...graphFacets].sort((a, b) => {
     const comparison = (a.label || a.uri).localeCompare(b.label || b.uri);
     return graphSort === "label-desc" ? -comparison : comparison;
@@ -130,6 +157,10 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
 {defaultLeftTab === "personal" && (
                   <div className="space-y-3">
                     {recordStates.enabled && recordStates.hasStates && <PersonalStatesWidget states={recordStates} />}
+                    {propertyUsageScope(queryTree) && <>
+                      <PropertyUsageWidget tree={queryTree} direction="subject" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
+                      <PropertyUsageWidget tree={queryTree} direction="object" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
+                    </>}
                     <article ref={categoriesWidgetRef} className={`flex min-w-0 flex-col ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
                       <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
                         <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><h2 className="text-sm font-semibold">Categories</h2><Tooltip><TooltipTrigger render={<button type="button" onClick={startCategoryNameSearch} aria-label="Search for categories by name" className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Search className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Start a new search for resources by Category name</TooltipContent></Tooltip><QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.CLASSES)) : undefined} countFilename="categories-first-item-count.sparql" /><Tooltip><TooltipTrigger render={<button
@@ -306,7 +337,6 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       const excluded = roleNode.attributes.exclude?.trim().toLowerCase() === "yes";
                       const label = `${roleLabel} `;
                       const isGroupByRole = groupByPropertyUri === `reverse:${uri}`;
-                      const canGroupByRole = !excluded && groupByOptions.some((option) => option.key === `reverse:${uri}`);
                       return (
                         <article key={roleNode.id} ref={(element) => { if (element) roleWidgetCardRefs.current.set(uri, element); else roleWidgetCardRefs.current.delete(uri); }} className={`flex min-w-0 flex-col ${isGroupByRole ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`} style={facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === uri && facetHoverPreview.direction === "reverse" ? { borderColor: "rgb(168 85 247)" } : undefined}>
                           <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByRole ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
@@ -319,7 +349,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                   onMouseLeave={clearTutorialPreview}
                                   onClick={() => navigateToPropertyPath(roleNode.id)}
                                 >
-                                  <IncompleteWidgetIndicator source={`personal-role:${uri}`} />
+                                  <span className="mr-1 inline-flex align-middle"><IncompleteWidgetIndicator source={`personal-role:${uri}`} /></span>
                                   {activeRoleFilters.some((node) => node.attributes.iri === uri && node.attributes.src === "shacl") && <ClipboardList className="mr-1 inline size-4 shrink-0" aria-label="SHACL-discovered facet" />}
                                   {isGroupByRole && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                                   {excluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
@@ -351,7 +381,6 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                   {workspaceTab === "browse" && !excluded && (
                                     <Tooltip><TooltipTrigger render={<button
                                       type="button"
-                                      disabled={!canGroupByRole}
                                       aria-pressed={isGroupByRole}
                                       onClick={() => {
                                         if (isGroupByRole) {
@@ -362,11 +391,11 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                           setCentralTab("groups");
                                         }
                                       }}
-                                      className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:pointer-events-none disabled:opacity-30 ${isGroupByRole ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
+                                      className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${isGroupByRole ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
                                       aria-label={isGroupByRole ? `Stop grouping by ${roleLabel}` : `Group results by ${roleLabel}`}
                                     >
                                       <UsersRound className="size-4" aria-hidden="true" />
-                                    </button>} /><TooltipContent>{isGroupByRole ? `Stop grouping by ${roleLabel}` : canGroupByRole ? `Group results by ${roleLabel}` : "Select this role in the active query before grouping by it"}</TooltipContent></Tooltip>
+                                    </button>} /><TooltipContent>{isGroupByRole ? `Stop grouping by ${roleLabel}` : `Group results by ${roleLabel}`}</TooltipContent></Tooltip>
                                   )}
                                   <Tooltip><TooltipTrigger render={<button
                                     type="button"
@@ -395,7 +424,12 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                         </article>
                       );
                     })}
-                    {!focusWidgetsSuppressed && renderPersonalWidgetCards(workspace, "column")}
+                    {!focusWidgetsSuppressed && renderPersonalWidgetCards(workspace, "column", {
+                      providers: temporalProviders,
+                      scopeNodes: activePropertyFilters,
+                      queryXml: serializeFctQuery(workspace.queryTree),
+                      onRangeChange: setPersonalDateRange,
+                    })}
                     <article className="flex min-w-0 flex-col">
                       <header className="group/header flex items-center gap-2 px-2 py-2">
                         <div className="flex min-w-0 flex-1 items-center gap-1">

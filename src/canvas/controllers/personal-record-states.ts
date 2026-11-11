@@ -12,6 +12,8 @@ export type PersonalStatesPage = {
   countScope: "query";
   federatedQuery: string;
   counts: Record<StateFacetName, number>;
+  /** True only after the authoritative federated query returned counts. */
+  countsReady: boolean;
   selectedStates: ReadonlySet<StateFacetName>;
   toggleSelectedState: (name: StateFacetName) => void;
   loading: boolean;
@@ -177,6 +179,6 @@ export function usePersonalRecordStates({ enabled, results, selectedUri, results
   // Never manufacture counts from the currently displayed Results page.
   const shownCounts: Record<StateFacetName, number> = federatedCounts ?? { New: 0, Unseen: 0, Seen: 0, Starred: 0, Hidden: 0 };
   return { enabled, states, hidden, hasStates: enabled && (federatedCounts !== null || pageUris.length > 0 || Object.values(states).some((list) => list.length > 0) || hidden.size > 0),
-    countScope: "query", federatedQuery, counts: shownCounts, selectedStates, toggleSelectedState,
+    countScope: "query", federatedQuery, counts: shownCounts, countsReady: federatedCounts !== null, selectedStates, toggleSelectedState,
     loading, error, recordBusy, selectedRecordStates: states[selectedUri] ?? [], selectedRecordHidden: hidden.has(selectedUri), toggleRecordState, toggleHidden };
 }

@@ -360,7 +360,10 @@ async function expandListValues(args: {
     if (encoded) uniqueTerms.set(encoded, row.c1.value);
   }
   const values = [...new Set(uniqueTerms.values())];
-  const validIri = (value: string) => /^https?:\/\/[^\s<>"{}|^`\\]+$/i.test(value);
+  // RDF graph names are IRIs, not necessarily HTTP URLs. In particular,
+  // DBpedia uses urn:dbpedia:live. Rejecting URNs here made list-values
+  // silently fail even though the Results SELECT in that graph succeeded.
+  const validIri = (value: string) => /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(value);
   const columns = args.columns.slice(0, 24).filter((column) => validIri(column.property));
   if (!values.length || !columns.length) return { rows: {}, query: "", complete: true };
   if (args.graph && !validIri(args.graph))
@@ -815,7 +818,7 @@ async function handlePost(request: Request) {
         if (!hasStateConstraints) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
-    if (compiled.view === FCT_VIEW_TYPES.LIST && !countOnly && !graphOnly) {
+    if ((compiled.view === FCT_VIEW_TYPES.LIST || compiled.view === FCT_VIEW_TYPES.LIST_SUBJECTS || compiled.view === FCT_VIEW_TYPES.LIST_OBJECTS) && !countOnly && !graphOnly) {
       bindings = bindings.map((binding) => {
         const uri = binding.c1?.type === "uri" ? binding.c1.value : "";
         if (!uri) return binding;

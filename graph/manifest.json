@@ -8,5 +8,6 @@
   "maestro-services.ttl": "/shacl/policies",
   "maestro-analyze.ttl": "/shacl/policies",
   "maestro-entrypoint-view.ttl": "/shacl/policies",
-  "maestro-widget-providers.ttl": "/shacl/policies"
+  "maestro-widget-providers.ttl": "/shacl/policies",
+  "maestro-personal-perspectives.ttl": "/shacl/policies"
 }

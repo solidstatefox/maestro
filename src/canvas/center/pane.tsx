@@ -29,7 +29,7 @@ import { formatPagePosition } from "@/canvas/utils/pagination";
 
 import { maestroStorageSet } from "@/lib/maestro-storage";
 
-import { ResizablePanel } from "@/components/ui/resizable";
+import { CenterPaneFrame, CenterPaneBody } from "@/canvas/workspace-pane-shells";
 import { CodeBlock } from "@/components/ui/code-block";
 
 import xmlFormat from "xml-formatter";
@@ -241,8 +241,8 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
   } = workspace;
   const { renderScopeValueBadge, renderRootBreadcrumb, renderPathBreadcrumb } = createBreadcrumbRenderers(workspace);
   return (
-<ResizablePanel defaultSize={workspaceTab === "browse" ? 45 : 75} minSize={25} className="min-w-0">
-            <section ref={centralPaneRef} className="flex h-full min-h-0 min-w-0 flex-col border-r">
+<CenterPaneFrame defaultSize={workspaceTab === "browse" ? 45 : 75}>
+            <CenterPaneBody paneRef={centralPaneRef}>
               <div className={`group/header shrink-0 border-b px-3 pb-3 pt-0 ${centralTab === "chat" || workspaceTab !== "browse" ? "hidden" : ""}`}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm">
                   <span className="shrink-0 text-muted-foreground">
@@ -341,13 +341,13 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                         setNodeAttribute("query-view", "index", toggleAlphabetSelection(alphabetIndex, letter, event.shiftKey) || null);
                         setResultsUiPage(0); setResults([]); setResultsPage(resultsBatchSize, 0);
                       }}>
-                      <span className="font-medium">{parseAlphabetSelections(alphabetIndex).includes(`!${letter}`) ? <><Ban aria-label="Excluded" className="mr-1 inline size-3.5" />{letter}</> : letter}</span>
+                      <span className="font-medium">{parseAlphabetSelections(alphabetIndex).includes(`!${letter}`) ? <><span className="inline-flex items-center gap-1.5"><Ban aria-label="Excluded" className="size-3.5 shrink-0" />{letter}</span></> : letter}</span>
                       <Separator orientation="vertical" className="mx-1 h-4 bg-current opacity-30 data-vertical:self-center" />
                       <span className={`tabular-nums font-normal ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
                     </button>
                   ))}
                   {isLoadingAlphabet && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Fetching alphabet" category="alphabet" clockScope="alphabet" requestWaves={26} /></span>}
-                  {alphabetError && !Object.values(alphabetCounts).some((count) => count > 0) && <span className="text-xs text-destructive" title={alphabetError}>Alphabet unavailable</span>}
+                  
                 </div>
               )}
 
@@ -570,7 +570,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                 {searchError && endpointReadyForQuery && <p className="mt-2 text-sm text-destructive">{searchError}{searchError.includes("Could not load graphs from the personal SPARQL store") && <> Check that your <a href={personalSparqlEndpoint || undefined} target="_blank" rel="noreferrer" className="underline underline-offset-2">personal graph server</a> is online.</>}</p>}
                 </>)}
               </div>}
-            </section>
-            </ResizablePanel>
+            </CenterPaneBody>
+            </CenterPaneFrame>
   );
 }

@@ -3,7 +3,9 @@ import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 export type ViewResult = {
   uri: string; label: string; selected?: boolean;
   endpoint?: string; endpointId?: string; favicon?: string; rank?: string;
-  target?: string; detail?: string; health?: string; healthState?: string; pinging?: boolean; group?: string; product?: string; version?: string; description?: string;
+  tags?: string; searchText?: string; signal?: string; depth?: string; avgSiblings?: string;
+  rootClasses?: string; lastResultCount?: string; lastNewCount?: string;
+  created?: string; url?: string; target?: string; detail?: string; health?: string; healthState?: string; pinging?: boolean; group?: string; product?: string; version?: string; description?: string;
 };
 
 export async function renderDiscoveredViewXslt(stylesheetText: string, rows: ViewResult[], options?: {
@@ -19,7 +21,7 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
     element.setAttribute("label", row.label);
     if (row.selected) element.setAttribute("selected", "true");
     if (row.pinging) element.setAttribute("pinging", "true");
-    for (const key of ["endpoint", "endpointId", "favicon", "rank", "health", "healthState", "group", "product", "version", "description", "target", "detail"] as const) {
+    for (const key of ["endpoint", "endpointId", "favicon", "rank", "health", "healthState", "group", "product", "version", "description", "created", "url", "target", "detail", "tags", "searchText", "signal", "depth", "avgSiblings", "rootClasses", "lastResultCount", "lastNewCount"] as const) {
       if (row[key]) element.setAttribute(key, row[key]);
     }
     return element;
@@ -86,6 +88,11 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
             // Code viewer action is delegated and URI-validated by the Features view.
           } else if (name === "data-feature-uri" && element.localName.toLowerCase() === "article") {
             // React validates this URI before requesting code from the authenticated personal store.
+          } else if (name === "data-perspective-id" && element.localName.toLowerCase() === "button") {
+            // The perspective controller validates this identifier against its returned dataset.
+          } else if (["data-perspective-open", "data-perspective-select", "data-perspective-delete"].includes(name)
+              && element.localName.toLowerCase() === "button" && attribute.value === "true") {
+            // Actions are interpreted by the trusted React controller, never by stylesheet code.
           } else if (name === "data-endpoint-select" && element.localName.toLowerCase() === "button") {
             // The delegated View handler validates the registry ID before selection.
           } else if (name === "data-endpoint-refresh" && element.localName.toLowerCase() === "button") {

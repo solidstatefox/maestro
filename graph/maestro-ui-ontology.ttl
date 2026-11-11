@@ -297,3 +297,15 @@ mui:transcoder
 
 mui:widget
   dcterms:description "On a policy shape, the requested widget class; on a Provider, a concrete implementation resource."@en .
+
+# Discoverable personal-collection perspectives. Their presentation is supplied by mui:Provider XSLT.
+mui:PerspectiveWidget a owl:Class ; rdfs:subClassOf mui:XsltTemplate ; rdfs:label "Perspective widget"@en .
+mui:perspectiveKind a owl:DatatypeProperty ; rdfs:domain mui:Provider ; rdfs:range xsd:string ; rdfs:label "Perspective collection kind"@en .
+
+# Last known, authoritative count observations attached to saved query resources.
+mui:lastResultCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ; rdfs:label "Last known result count"@en .
+mui:lastNewCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ; rdfs:label "Last known new items"@en .
+
+# Personal facet providers are discovered against properties in the active view scope.
+mui:PersonalFacetWidget a owl:Class ; rdfs:label "Personal facet widget"@en .
+mui:DateRangeFacetWidget a owl:Class ; rdfs:subClassOf mui:PersonalFacetWidget ; rdfs:label "Date/time range facet"@en .

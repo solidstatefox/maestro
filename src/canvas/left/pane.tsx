@@ -14,7 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { MousePointerClick, LoaderCircle, ArrowLeft } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 
-import { ResizablePanel } from "@/components/ui/resizable";
+import { LeftPaneFrame, LeftPaneBody } from "@/canvas/workspace-pane-shells";
 
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
 
@@ -190,9 +190,9 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
     visibleClassDisplayFacets,
   } = workspace;
   return (
-<ResizablePanel defaultSize={25} minSize={16} className="min-w-0">
+<LeftPaneFrame>
             {/* Left pane navigation uses count links while retaining the existing panes. */}
-            <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r">
+            <LeftPaneBody>
               <div className="flex shrink-0 items-center gap-1 border-b px-3 py-2 text-sm whitespace-nowrap">
                 {defaultLeftTab === "facets" ? (
                   <>
@@ -306,8 +306,8 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
                   </div>
                 )}
               </div>
-            </aside>
+            </LeftPaneBody>
 
-            </ResizablePanel>
+            </LeftPaneFrame>
   );
 }

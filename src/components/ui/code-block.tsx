@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import hljs from "highlight.js/lib/core";
-import { Check, Copy, Download, WrapText } from "lucide-react";
+import { Check, Copy, Download, WrapText, Play } from "lucide-react";
+import { useFctQuery } from "@/lib/fct-query";
 import type { HTMLAttributes } from "react";
 
 type CodeBlockProps = Omit<HTMLAttributes<HTMLDivElement>, "children"> & {
@@ -19,6 +20,22 @@ export function CodeBlock({
   filename = "query.txt",
   ...props
 }: CodeBlockProps) {
+  const { tree } = useFctQuery();
+  const address = tree.attributes.addr ?? "";
+  const endpointAddress = address.includes("@") ? address.slice(address.indexOf("@") + 1) : "";
+  const editorUrl = useMemo(() => {
+    if (language.toLowerCase() !== "sparql" || !endpointAddress) return null;
+    try {
+      const endpoint = new URL(endpointAddress);
+      // The Virtuoso query editor is served on /sparql. Do not treat other
+      // endpoint families as Virtuoso or invent query-editor routes for them.
+      if (!/^https?:$/.test(endpoint.protocol) || !/\/sparql\/?$/i.test(endpoint.pathname)) return null;
+      endpoint.search = "";
+      endpoint.hash = "";
+      endpoint.searchParams.set("qtxt", code);
+      return endpoint.toString();
+    } catch { return null; }
+  }, [endpointAddress, language, code]);
   const [copied, setCopied] = useState(false);
   const [wrap, setWrap] = useState(false);
   const lines = useMemo(() => {
@@ -66,6 +83,12 @@ export function CodeBlock({
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-3 py-2">
         <span className="truncate font-mono text-[11px] text-slate-300">{filename}</span>
         <div className="flex shrink-0 items-center gap-2">
+          {editorUrl && <a href={editorUrl} target="_blank" rel="noopener noreferrer"
+            className="inline-flex h-7 items-center gap-1 rounded border border-white/15 px-2 text-slate-200 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+            aria-label="Open SPARQL in Virtuoso query editor" title="Open in Virtuoso SPARQL editor (does not execute automatically)">
+            <Play className="size-3.5" aria-hidden="true" />Execute
+          </a>}
+
           <button
             type="button"
             onClick={() => setWrap((current) => !current)}

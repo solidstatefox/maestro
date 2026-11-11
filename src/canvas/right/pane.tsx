@@ -26,7 +26,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Check, ChevronDown, ChevronRight, LoaderCircle, ClipboardCheck, ClockFading, Download, Eye } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 
-import { ResizableHandle, ResizablePanel } from "@/components/ui/resizable";
+import { ResizableHandle } from "@/components/ui/resizable";
+import { RightPaneFrame, RightPaneBody } from "@/canvas/workspace-pane-shells";
 
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
 
@@ -205,8 +206,8 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
   return (
 <>
 {workspaceTab === "browse" && <><ResizableHandle withHandle />
-            <ResizablePanel defaultSize={30} minSize={18} className="min-w-0">
-            <section className="flex h-full min-h-0 min-w-0 flex-col">
+            <RightPaneFrame>
+            <RightPaneBody>
               <Collapsible open={recordControlsOpen} onOpenChange={setRecordControlsOpen} className="shrink-0 border-b">
                 <div className="group/record-header flex items-center gap-2 px-4 py-3">
                   <CollapsibleTrigger aria-label={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} title={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
@@ -374,7 +375,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                 </CollapsibleContent>
               </Collapsible>
               {selectedRecordTermType !== "bnode" && recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && !recordDescriptionError && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && (!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || (!currentFormattedRecordHtml && !recordFormatError)))) ? (
-                <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status"><ElapsedStatus label="Loading formatted record" category="record" clockScope="policies" /></div>
+                <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status"><ElapsedStatus label={recordPolicy && selectedRecordTemplateUri ? "Loading record (formatted)" : "Loading record"} category="record" clockScope={recordPolicy && selectedRecordTemplateUri ? "policies" : isDescribing ? "record" : "policies"} /></div>
               ) : selectedRecordTermType !== "bnode" && currentFormattedRecordHtml ? (
                 <>
                   <div ref={formattedRecordContainerRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
@@ -537,8 +538,8 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                 )}
               </section>
               )}
-            </section>
-            </ResizablePanel></>}
+            </RightPaneBody>
+            </RightPaneFrame></>}
 </>
   );
 }

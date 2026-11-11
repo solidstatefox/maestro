@@ -9,7 +9,7 @@
 bookmark:Bookmark a rdfs:Class ;
     rdfs:subClassOf vfct:QueryHistoryVisit ;
     rdfs:label "Bookmark"@en ;
-    rdfs:comment "A query-history visit explicitly saved by the user; schema:identifier stores its query hash."@en .
+    rdfs:comment "A query-history visit explicitly saved by the user; Bookmarks have a query identity hash; views no longer require an identifier property filter."@en .
 
 vfct:QueryHistoryVisit a rdfs:Class ;
     rdfs:label "Query history visit"@en .

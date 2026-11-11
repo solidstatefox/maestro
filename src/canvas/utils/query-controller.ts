@@ -39,6 +39,11 @@ export type ShareableUiState = {
   findEndpointsEnabled?: boolean;
   centralTab?: "results" | "groups" | "query-tree" | "view-query" | "chat";
   workspaceTab?: "browse" | "view" | "analyze";
+  viewPanel?: "trail" | "perspectives" | "features";
+  selectedViewUri?: string;
+  viewFeature?: "policies" | "formats" | "transcoders" | null;
+  selectedAnalysisUri?: string;
+  analyzeHistogram?: boolean;
   /** Explicit state for the Results/Query toolbar toggle. */
   queryToggle?: boolean;
   showResultBadges?: boolean;

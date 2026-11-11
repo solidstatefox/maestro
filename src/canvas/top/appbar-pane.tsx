@@ -115,6 +115,8 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     bookmarkSaving,
     bookmarkTagVocabulary,
     bookmarkTags,
+    effectiveResultsTotalCount,
+    recordStates,
     bookmarkTitle,
     bookmarkTitleInputRef,
     browserLogLevel,
@@ -544,7 +546,9 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   const response = await fetch("/proxy/api/query-favorites", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action: "update", historyId: targetHistoryId, title: bookmarkTitle.trim() || targetHistoryId.slice(targetHistoryId.lastIndexOf("#") + 1), description: bookmarkDescription.trim(), tags, tagVocabulary: bookmarkTagVocabulary, queryXml: serializeFctQuery(queryTree), stateUrl: window.location.href }),
+                    body: JSON.stringify({ action: "update", historyId: targetHistoryId, title: bookmarkTitle.trim() || targetHistoryId.slice(targetHistoryId.lastIndexOf("#") + 1), description: bookmarkDescription.trim(), tags, tagVocabulary: bookmarkTagVocabulary, queryXml: serializeFctQuery(queryTree), stateUrl: window.location.href,
+                      lastResultCount: effectiveResultsTotalCount,
+                      lastNewCount: recordStates.enabled && recordStates.countsReady && !recordStates.loading && !recordStates.error ? recordStates.counts.New : null }),
                   });
                   const payload = await response.json() as { error?: string; namespaces?: unknown; historyId?: string; shareUrl?: string };
                   if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);

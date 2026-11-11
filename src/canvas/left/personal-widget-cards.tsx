@@ -1,5 +1,6 @@
 "use client";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
+import { TemporalFacetContent, type TemporalFacetProvider } from "@/canvas/left/personal-date-facet";
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
@@ -90,7 +91,12 @@ const TEXT_SEARCH_NAME_PROPERTIES = [
 ] as const;
 
 import type { PersonalWidgetCardsWorkspace } from "@/canvas/controllers/workspace-interfaces";
-export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspace, layout: "column" | "grid"): ReactNode {
+export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspace, layout: "column" | "grid", temporal?: {
+  providers: Map<string, TemporalFacetProvider>;
+  scopeNodes: FctQueryNode[];
+  queryXml: string;
+  onRangeChange: (property: string, start: string, end: string) => void;
+}): ReactNode {
   const { FACET_PAGE_SIZE, activeLeafId, activePropertyFilters, autoConfiguredFacetKeys, beginFacetHoverPreview, clearTutorialPreview, deleteNode, endpointReadyForQuery, facetCandidateCounts, facetHoverPreview, findPropertyPathNode, groupByOptions, groupedPersonalFacetUri, navigateIntoRelationship, navigateToPropertyPath, personalWidgetCardRefs, personalWidgets, queryTree, removeProperty, scrollToGroupForFacetValue, setCentralTab, setFacetCandidateCounts, setGroupByPropertyUri, setPersonalWidgets, setPropertyValue, workspaceTab } = workspace;
     return (
       <div
@@ -194,6 +200,31 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
               </span>} /><TooltipContent>{widget.error || undefined}</TooltipContent></Tooltip>
             </header>
             <div className="min-h-0 flex-1 overflow-auto p-2">
+              {temporal?.providers.get(widget.uri) ? (
+                <>
+                  <TemporalFacetContent
+                    key={`${temporal.providers.get(widget.uri)!.uri}:${widget.uri}`}
+                    provider={temporal.providers.get(widget.uri)!}
+                    scopeNodes={temporal.scopeNodes}
+                    queryXml={temporal.queryXml}
+                    onRangeChange={temporal.onRangeChange}
+                  />
+                  {widget.values.length > FACET_PAGE_SIZE && (
+                    <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+                      <button type="button" className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40"
+                        disabled={widget.page <= 0}
+                        onClick={() => setPersonalWidgets(items => items.map(item =>
+                          item.uri === widget.uri ? { ...item, page: Math.max(0, item.page - 1) } : item))}>Previous</button>
+                      <span className="text-muted-foreground">{Math.min(widget.page + 1, Math.ceil(widget.values.length / FACET_PAGE_SIZE))}/{Math.ceil(widget.values.length / FACET_PAGE_SIZE)}</span>
+                      <button type="button" className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40"
+                        disabled={widget.page >= Math.ceil(widget.values.length / FACET_PAGE_SIZE) - 1}
+                        onClick={() => setPersonalWidgets(items => items.map(item =>
+                          item.uri === widget.uri ? { ...item, page: Math.min(Math.ceil(item.values.length / FACET_PAGE_SIZE) - 1, item.page + 1) } : item))}>Next</button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
               {!widget.loading &&
                 !widget.error &&
                 widget.values.length === 0 && (
@@ -380,6 +411,8 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     </>
                   );
                 })()}
+                </>
+              )}
             </div>
           </article>
           );

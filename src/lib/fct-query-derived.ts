@@ -659,3 +659,50 @@ function cloneQueryTree(tree: FctQueryTree): FctQueryTree {
   return { ...tree, attributes: { ...tree.attributes }, children: tree.children.map(cloneQueryNode) };
 }
 
+
+/** Reconcile Result Badge projections in the authoritative view scope.
+ *
+ * The query store owns property identity: reuse a matching IRI/direction node;
+ * insert a new projection-only property only when no such node exists. Never
+ * append a duplicate property to the live FCT query. Turning Badges off removes
+ * project from every property/role in the scope and removes solely badge-created
+ * empty nodes so disabling Badges cannot introduce new existence constraints.
+ */
+export function reconcileResultBadgeProjections(
+  source: FctQueryTree,
+  enabled: boolean,
+  projections: ReadonlyArray<{ property: string; direction: "forward" | "reverse" }>,
+): FctQueryTree {
+  const clone = (node: FctQueryNode): FctQueryNode => ({
+    ...node, attributes: { ...node.attributes }, children: node.children.map(clone),
+  });
+  const tree: FctQueryTree = { ...source, attributes: { ...source.attributes }, children: source.children.map(clone) };
+  const update = (siblings: FctQueryNode[]): boolean => {
+    if (siblings.some(node => node.id === "query-view")) {
+      if (!enabled) {
+        for (let i = siblings.length - 1; i >= 0; i--) {
+          const node = siblings[i];
+          if (node.name !== "property" && node.name !== "property-of") continue;
+          delete node.attributes.project;
+          if (node.attributes.src === "badges" && node.children.length === 0) siblings.splice(i, 1);
+        }
+      } else {
+        for (const { property, direction } of projections) {
+          const name = direction === "reverse" ? "property-of" : "property";
+          let existing = siblings.find(node => node.name === name && node.attributes.iri === property);
+          if (!existing) {
+            existing = { id: `badge-projection-${direction}-${encodeURIComponent(property)}`,
+              name, attributes: { iri: property, src: "badges" }, children: [] };
+            siblings.push(existing);
+          }
+          existing.attributes.project = "yes";
+        }
+      }
+      return true;
+    }
+    for (const node of siblings) if (update(node.children)) return true;
+    return false;
+  };
+  update(tree.children);
+  return tree;
+}

@@ -38,7 +38,9 @@ function valueTerm(node: FctQueryNode): string | null {
   if (!datatype || datatype === "string" || datatype === "literal" || datatype === "http://www.openlinksw.com/schemas/facets/dtp/plainstring") {
     return lexical;
   }
-  const datatypeIri = iriTerm(datatype);
+  // FCT's native datatype shortcuts (e.g. dateTime) are XSD types.
+  const xsdTypes = new Set(["boolean", "decimal", "integer", "int", "long", "short", "byte", "double", "float", "date", "dateTime", "time", "gYear", "gYearMonth", "nonNegativeInteger", "positiveInteger", "unsignedLong", "unsignedInt"]);
+  const datatypeIri = iriTerm(xsdTypes.has(datatype) ? `http://www.w3.org/2001/XMLSchema#${datatype}` : datatype);
   return datatypeIri ? `${lexical}^^${datatypeIri}` : null;
 }
 
@@ -47,6 +49,35 @@ function nextVariable(state: CompilerState): string {
 }
 
 function appendValueFilter(node: FctQueryNode, subject: string, state: CompilerState): void {
+  const start = node.attributes.rangeStart?.trim();
+  const end = node.attributes.rangeEnd?.trim();
+  if (start !== undefined || end !== undefined) {
+    const datatype = (node.attributes.datatype ?? "").trim();
+    const allowed = new Set(["decimal", "integer", "int", "long", "short", "byte", "double", "float", "date", "dateTime", "time", "gYear", "gYearMonth", "nonNegativeInteger", "positiveInteger", "unsignedLong", "unsignedInt"]);
+    if (!allowed.has(datatype)) {
+      state.errors.push("FCT value ranges require an XSD numeric or date datatype.");
+      return;
+    }
+    const numeric = !["date", "dateTime", "time", "gYear", "gYearMonth"].includes(datatype);
+    if ([start, end].some((bound) => bound !== undefined && (!bound || (numeric && !Number.isFinite(Number(bound)))))) {
+      state.errors.push("FCT range bounds must be nonempty and numeric bounds must be finite.");
+      return;
+    }
+    if (start !== undefined && end !== undefined && (numeric ? Number(start) > Number(end) : start > end)) {
+      state.errors.push("The FCT rangeStart must not exceed rangeEnd.");
+      return;
+    }
+    for (const [bound, operator] of [[start, ">="], [end, "<="]] as const) {
+      if (bound === undefined) continue;
+      const term = valueTerm({ ...node, text: bound });
+      if (!term) {
+        state.errors.push("Invalid FCT range bound.");
+        return;
+      }
+      state.patterns.push(`FILTER (${subject} ${operator} ${term})`);
+    }
+    return;
+  }
   const term = valueTerm(node);
   if (!term) {
     state.errors.push("The query contains a value term that cannot be represented safely in SPARQL.");
@@ -66,6 +97,7 @@ function appendValueFilter(node: FctQueryNode, subject: string, state: CompilerS
   const lexical = `STR(${subject})`;
   const literal = `STR(${term})`;
   if (op === "contains") state.patterns.push(`FILTER (CONTAINS(LCASE(${lexical}), LCASE(${literal})))`);
+  else if (op === "regex") state.patterns.push(`FILTER (REGEX(STR(${subject}), "${escapeSparqlString(node.text ?? "")}"))`);
   else if (op === "starts-with" || op === "starts_with") state.patterns.push(`FILTER (STRSTARTS(LCASE(${lexical}), LCASE(${literal})))`);
   else if (op === "ends-with" || op === "ends_with") state.patterns.push(`FILTER (STRENDS(LCASE(${lexical}), LCASE(${literal})))`);
   else state.errors.push(`The FCT value operator '${node.attributes.op}' is not supported by the count-query compiler.`);
@@ -203,7 +235,13 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
   }
 
   let whereBody = state.patterns.join("\n  ");
-  const graph = tree.attributes.graph?.trim();
+  // The FCT query's graph is carried by `addr="graph@graphserver"`, not a
+  // separate `graph` attribute. Match the main FCT-to-SPARQL translator: every
+  // scalar facet count must use the same named-graph scope as its value list.
+  const address = tree.attributes.addr ?? "";
+  const addressDelimiter = address.indexOf("@");
+  if (addressDelimiter < 0 || !address.slice(addressDelimiter + 1).trim()) return null;
+  const graph = address.slice(0, addressDelimiter).trim();
   if (graph && graph !== ALL_GRAPHS) {
     const graphIri = iriTerm(graph);
     if (!graphIri) return null;

@@ -48,8 +48,13 @@ export async function POST(request: Request) {
       historyId?: unknown;
       direction?: unknown;
       historyAction?: unknown;
+      lastResultCount?: unknown;
+      lastNewCount?: unknown;
     };
     const action = typeof body.action === "string" ? body.action : "";
+    const metricValue = (value: unknown): number | null =>
+      typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+
     const historyId = typeof body.historyId === "string" ? body.historyId.trim() : "";
     const baseGraph = getHistoryGraph(request).split("#", 1)[0];
     const graph = iri(`${baseGraph}#history`);
@@ -119,6 +124,24 @@ export async function POST(request: Request) {
       let parsedAction: unknown = null;
       try { parsedAction = row?.action?.value ? JSON.parse(row.action.value) : null; } catch { parsedAction = null; }
       return NextResponse.json(row ? { found: true, historyId: row.visit?.value, queryXml: row.queryXML?.value, stateUrl: row.stateUrl?.value ?? "", action: parsedAction } : { found: false });
+    }
+
+    if (action === "updateMetrics") {
+      if (!historyId) return NextResponse.json({ error: "A History item ID is required." }, { status: 400 });
+      const lastResultCount = metricValue(body.lastResultCount);
+      const lastNewCount = metricValue(body.lastNewCount);
+      if (lastResultCount === null && lastNewCount === null)
+        return NextResponse.json({ updated: false });
+      const isVisit = await askPersonal(`ASK WHERE { GRAPH ${graph} { ${iri(historyId)} a <${historyType}> } }`);
+      if (!isVisit) return NextResponse.json({ error: "History visit not found." }, { status: 404 });
+      const metrics = [
+        ...(lastResultCount === null ? [] : [{ predicate: `${MAESTRO_UI_NS}lastResultCount`, value: lastResultCount }]),
+        ...(lastNewCount === null ? [] : [{ predicate: `${MAESTRO_UI_NS}lastNewCount`, value: lastNewCount }]),
+      ];
+      await updatePersonal(`DELETE { GRAPH ${graph} { ${metrics.map((m, index) => `${iri(historyId)} ${iri(m.predicate)} ?old${index} .`).join(" ")} } }
+        INSERT { GRAPH ${graph} { ${metrics.map(m => `${iri(historyId)} ${iri(m.predicate)} ${m.value} .`).join(" ")} } }
+        WHERE { ${metrics.map((m, index) => `OPTIONAL { GRAPH ${graph} { ${iri(historyId)} ${iri(m.predicate)} ?old${index} } }`).join(" ")} }`);
+      return NextResponse.json({ updated: true });
     }
 
     if (action === "updateState") {
@@ -363,6 +386,8 @@ export async function POST(request: Request) {
       };
       walk(parsed);
 
+      const lastResultCount = metricValue(body.lastResultCount);
+      const lastNewCount = metricValue(body.lastNewCount);
       // Replace every editable dialog field, including tags in all three vocabularies.
       // DELETE and INSERT are one SPARQL Update operation; OPTIONAL guarantees
       // insertion still runs when there is no prior bookmark metadata.
@@ -370,6 +395,8 @@ export async function POST(request: Request) {
         `${DCTERMS_NS}title`, `${RDFS_NS}label`, `${DCTERMS_NS}description`,
         `${SCHEMA_NS}url`, `${SCHEMA_NS}identifier`, historyQuery,
         `${MAESTRO_UI_NS}querySparql`, `${DCTERMS_NS}created`,
+        ...(lastResultCount !== null ? [`${MAESTRO_UI_NS}lastResultCount`] : []),
+        ...(lastNewCount !== null ? [`${MAESTRO_UI_NS}lastNewCount`] : []),
         `${DCTERMS_NS}subject`, `${SCOT_NS}has_tag`, `${SKOS_NS}prefLabel`,
       ];
       const metadataTriples = [
@@ -380,6 +407,8 @@ export async function POST(request: Request) {
         `${iri(historyId)} <${SCHEMA_NS}identifier> ${sparqlString(queryHash)}`,
         `${iri(historyId)} <${historyQuery}> ${sparqlString(queryXml)}`,
         `${iri(historyId)} <${MAESTRO_UI_NS}querySparql> ${sparqlString(querySparql)}`,
+        ...(lastResultCount !== null ? [`${iri(historyId)} <${MAESTRO_UI_NS}lastResultCount> ${lastResultCount}`] : []),
+        ...(lastNewCount !== null ? [`${iri(historyId)} <${MAESTRO_UI_NS}lastNewCount> ${lastNewCount}`] : []),
         ...(description ? [`${iri(historyId)} <${DCTERMS_NS}description> ${sparqlString(description)}`] : []),
         ...(shareUrl ? [`${iri(historyId)} <${SCHEMA_NS}url> ${iri(shareUrl)}`] : []),
         ...triples.filter((triple) =>
@@ -475,7 +504,7 @@ export async function POST(request: Request) {
       `${iri(bookmark)} <${RDFS_NS}label> ${sparqlString(title)}`,
       `${iri(bookmark)} <${SCHEMA_NS}identifier> ${sparqlString(queryHash)}`,
       `${iri(bookmark)} <${MAESTRO_UI_NS}querySparql> ${sparqlString(querySparql)}`,
-      `${iri(bookmark)} <${ANNOTATION_NS}created> ${sparqlString(created)}`,
+      `${iri(bookmark)} <${ANNOTATION_NS}created> ${sparqlString(created)}^^<${XSD_NS}dateTime>`,
       `${iri(bookmark)} <${DCTERMS_NS}created> ${sparqlString(created)}^^<${XSD_NS}dateTime>`,
       `${iri(bookmark)} <${DCTERMS_NS}date> ${sparqlString(created)}^^<${XSD_NS}dateTime>`,
       `${iri(bookmark)} <${BOOKMARK_NS}recalls> ${iri(queryResource)}`,

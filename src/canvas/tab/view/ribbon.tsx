@@ -1,9 +1,11 @@
 "use client";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
-import type { ReactNode, Dispatch, SetStateAction } from "react";
+import { useEffect, useMemo, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
-import { Server, Database, Globe, LayoutGrid, Network, ShieldCheck, FileCode2, ArrowLeftRight, Blocks } from "lucide-react";
+import { Server, Database, Globe, LayoutGrid, Network, ShieldCheck, FileCode2, ArrowLeftRight, Blocks, Bookmark, History, MapPin } from "lucide-react";
+import { NATIVE_MAP_URI } from "@/lib/map-perspective";
 import type { FeatureKind } from "@/lib/feature-view-xslt";
+import { PERSONAL_PERSPECTIVE_URI, personalPerspectiveFromUri, type PersonalPerspectiveKind } from "@/lib/personal-perspective-ids";
 type ViewDefinition = { uri: string; label: string; icon?: string; stylesheet: string };
 export interface ViewRibbonProps {
   viewPanel: "trail" | "perspectives" | "features";
@@ -15,8 +17,42 @@ export interface ViewRibbonProps {
   selectedViewUri: string;
   onSelectView: (uri: string) => void;
   viewDiscoveryLoading: boolean;
+  queryClassUris: string[];
+  mapAvailable: boolean;
 }
-export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredViews, viewFeature, setViewFeature, selectedViewUri, onSelectView, viewDiscoveryLoading }: ViewRibbonProps) {
+export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredViews, viewFeature, setViewFeature, selectedViewUri, onSelectView, viewDiscoveryLoading, queryClassUris, mapAvailable }: ViewRibbonProps) {
+  const [personalProviders, setPersonalProviders] = useState<{ kind: PersonalPerspectiveKind; label: string; uri: string }[]>([]);
+  const [resolvedClassKey, setResolvedClassKey] = useState<string | null>(null);
+  const classKey = useMemo(() => [...new Set(queryClassUris)].sort().join("\n"), [queryClassUris]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setPersonalProviders([]);
+    setResolvedClassKey(null);
+    if (!classKey) { setResolvedClassKey(""); return () => controller.abort(); }
+    void fetch("/proxy/api/perspectives", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "discover", classes: classKey.split("\n") }),
+      cache: "no-store", signal: controller.signal,
+    }).then(async response => {
+      if (!response.ok) return;
+      const data = await response.json() as { providers?: { kind: string; label: string; uri: string }[] };
+      if (!controller.signal.aborted) {
+        setPersonalProviders((data.providers ?? []).filter((provider): provider is { kind: PersonalPerspectiveKind; label: string; uri: string } => (provider.kind === "bookmarks" || provider.kind === "history") && /^(?:https?:|gttp:|gttps:|urn:)/.test(provider.uri)));
+        setResolvedClassKey(classKey);
+      }
+    }).catch(() => { /* Other query perspectives remain usable without personal login. */ });
+    return () => controller.abort();
+  }, [classKey]);
+  useEffect(() => {
+    const selected = personalPerspectiveFromUri(selectedViewUri);
+    if (selected && resolvedClassKey === classKey && !personalProviders.some(provider => provider.kind === selected && provider.uri === selectedViewUri)) {
+      // Do not preserve a personal collection renderer after its qualifying
+      // class has disappeared from the live query.
+      onSelectView(discoveredViews[0]?.uri ?? "");
+    }
+  }, [classKey, resolvedClassKey, personalProviders, selectedViewUri, onSelectView, discoveredViews]);
+  // A saved Map selection must survive initial Configure discovery. An empty
+  // geospatial property list during startup is not a deliberate user pivot.
   return <MaestroHoverExpand active={viewPanel} onChange={setViewPanel} panels={[
           { id: "trail", label: "Trail", content: <nav aria-label="Navigation breadcrumbs" className="flex flex-wrap items-start gap-2">
             {breadcrumbs}
@@ -33,11 +69,26 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
               return <button type="button" key={view.uri} aria-pressed={active}
                 onClick={() => onSelectView(view.uri)}
                 className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${active ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
-                <Icon className={`size-7 ${active ? "stroke-[2.5]" : ""}`} aria-hidden="true" />{title}
+                <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{title}
+              </button>;
+            })}
+            {(mapAvailable || selectedViewUri === NATIVE_MAP_URI) && <button type="button" aria-pressed={!viewFeature && selectedViewUri === NATIVE_MAP_URI}
+              onClick={() => onSelectView(NATIVE_MAP_URI)}
+              className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${!viewFeature && selectedViewUri === NATIVE_MAP_URI ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+              <MapPin className="size-7" strokeWidth={1} aria-hidden="true" />Map
+            </button>}
+            {personalProviders.map(provider => {
+              const uri = provider.uri;
+              const active = selectedViewUri === uri;
+              const Icon = provider.kind === "bookmarks" ? Bookmark : History;
+              return <button type="button" key={uri} aria-pressed={active}
+                onClick={() => onSelectView(uri)}
+                className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${active ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+                <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{provider.label}
               </button>;
             })}
             {viewDiscoveryLoading && <span className="px-3 text-xs text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></span>}
-            {!viewDiscoveryLoading && !discoveredViews.length && <span className="px-3 text-xs text-muted-foreground">No perspectives found</span>}
+            {!viewDiscoveryLoading && !discoveredViews.length && !personalProviders.length && !mapAvailable && <span className="px-3 text-xs text-muted-foreground">No perspectives found</span>}
           </div> },
           { id: "features", label: "Features", content: <div className="flex h-full flex-wrap items-center gap-1" role="toolbar" aria-label="View features">
             {([
@@ -49,12 +100,12 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
               return <button type="button" key={id}
                 className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${active ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
                 aria-pressed={active} onClick={() => setViewFeature((current) => current === id ? null : id)}>
-                <Icon className={`size-7 ${active ? "stroke-[2.5]" : ""}`} aria-hidden="true" />{label}
+                <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{label}
               </button>;
             })}
             <button type="button" disabled title="Services catalog is planned"
               className="flex min-w-24 cursor-not-allowed flex-col items-center gap-1 rounded-md px-3 py-2 text-xs text-muted-foreground opacity-40">
-              <Blocks className="size-7" aria-hidden="true" />Services
+              <Blocks className="size-7" strokeWidth={1} aria-hidden="true" />Services
             </button>
           </div> },
         ]}/>;

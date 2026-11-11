@@ -192,7 +192,7 @@ function renderRootBreadcrumb(tableHeader = false, presentationStyle?: CSSProper
                 >
                   <span className="max-w-32 truncate">
   <em>
-  {rootUriValues.length > 0 ? "i.e." : "e.g."}{" "}
+  {rootUriValues.length > 0 ? "" : "e.g. "}
   {ellipsize(breadcrumbPreviewSummaries["query-root"].label || "—", 28)}{breadcrumbBadgeMode === "classes" ? "" : rootBadgePossessive}
 </em>
 </span>
@@ -263,7 +263,7 @@ function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath
                       >
                         <span className="max-w-32 truncate">
   <em>
-  {breadcrumbBoundValues.length > 0 ? "i.e." : "e.g."} {ellipsize(summary.label || "—", 28)}{breadcrumbBadgeMode !== "classes" && breadcrumbHasSuccessor && !summary.zeroClasses && summary.label && summary.label !== "—" ? "’s" : ""}
+  {breadcrumbBoundValues.length > 0 ? "" : "e.g. "}{ellipsize(summary.label || "—", 28)}{breadcrumbBadgeMode !== "classes" && breadcrumbHasSuccessor && !summary.zeroClasses && summary.label && summary.label !== "—" ? "’s" : ""}
 </em>
 </span>
                         <span aria-hidden="true" className="mx-1 h-3 self-center border-l border-border" />

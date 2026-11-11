@@ -4,6 +4,7 @@ import { createBreadcrumbRenderers } from "@/canvas/top/breadcrumb-renderers";
 import { RESULTS_PAGE_SIZE_STORAGE_KEY } from "@/canvas/sheet/settings";
 
 import { AnalyzeHistogram } from "@/canvas/tab/analyze/analysis-utils";
+import { BookmarkCharts, isBookmarkAnalysis } from "@/canvas/tab/analyze/bookmark-charts";
 
 import { toLabel } from "@/lib/uri-labels";
 
@@ -37,10 +38,11 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                 {<div role="toolbar" aria-label="Analyze table actions" className="flex shrink-0 items-center gap-2 border-b bg-muted/30 px-3 py-1 text-muted-foreground">
                   <button type="button" className="inline-flex items-center gap-1.5 rounded border border-border/60 bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground disabled:cursor-not-allowed" title="Export (coming soon)" aria-label="Export" disabled><Download aria-hidden="true" className="size-4"/>Export</button>
                 </div>}
-                {analysisError && <p role="alert" className="p-3 text-sm text-destructive">{analysisError}</p>}
+                {analysisError && !isBookmarkAnalysis(selectedAnalysisUri) && <p role="alert" className="p-3 text-sm text-destructive">{analysisError}</p>}
                 {analysisValuesError && <p role="alert" className="p-3 text-xs text-amber-600">Facet values could not be loaded: {analysisValuesError}</p>}
-                {analysisLoading && !analysisTable && <p className="p-3 text-xs text-muted-foreground"><ElapsedStatus label="Building analysis" category="other" clockScope="analysis" /></p>}
+                {analysisLoading && !analysisTable && !isBookmarkAnalysis(selectedAnalysisUri) && <p className="p-3 text-xs text-muted-foreground"><ElapsedStatus label="Building analysis" category="other" clockScope="analysis" /></p>}
                 <div className="min-h-0 flex-1 overflow-auto">
+                  {isBookmarkAnalysis(selectedAnalysisUri) && <BookmarkCharts queryXml={workspace.queryXml} providerUri={selectedAnalysisUri} />}
                   {analysisTable && isCompareAnalysis && analyzeHistogram && <AnalyzeHistogram histogramColumns={histogramColumns} visibleCount={analysisTable.rows.length} />}
                   {analysisTable && !(isCompareAnalysis && analyzeHistogram) && <MaestroAnalysisDataTable
                     label={isCompareAnalysis ? "Compare Table" : "Table"}
@@ -78,7 +80,7 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                         })],
                     }))}
                   />}
-                  {!analysisLoading && !analysisTable && !analysisError && <p className="p-3 text-sm text-muted-foreground">Choose an analysis from the ribbon.</p>}
+                  {!isBookmarkAnalysis(selectedAnalysisUri) && !analysisLoading && !analysisTable && !analysisError && <p className="p-3 text-sm text-muted-foreground">Choose an analysis from the ribbon.</p>}
                 </div>
                 <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-3 py-2 text-xs">
                   <span className="text-muted-foreground">{formatPagePosition(resultsUiPage, effectiveResultsTotalCount === null ? null : Math.max(1, Math.ceil(effectiveResultsTotalCount / resultsPageSize)))}{effectiveResultsTotalCount !== null ? ` · ${shortenCount(effectiveResultsTotalCount)} results` : " · many results"}</span>

@@ -1,0 +1,115 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix b: <http://www.w3.org/2002/01/bookmark#> .
+@prefix vfct: <https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective> a mui:Provider ;
+  rdfs:label "Bookmarks"@en ;
+  mui:perspectiveKind "bookmarks" ;
+  mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective-input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/shacl/template#BookmarksPerspective> .
+<gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective-input> a mui:InputShape ; sh:class b:Bookmark .
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarksPerspective> a mui:PerspectiveWidget ; rdfs:label "Bookmarks perspective"@en ;
+  mui:templateContent """<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:output method="html" omit-xml-declaration="yes"/>
+<xsl:template match="/results">
+<section class="flex w-full flex-col gap-0.5" data-view-title="Bookmarks" data-view-icon="database">
+<xsl:choose>
+<xsl:when test="not(result)"><p class="py-12 text-center text-sm text-muted-foreground">No saved entries found.</p></xsl:when>
+<xsl:otherwise><xsl:apply-templates select="result"/></xsl:otherwise>
+</xsl:choose>
+</section>
+</xsl:template>
+<xsl:template match="result">
+<xsl:if test="position() = 1 or substring(@created,1,10) != substring(preceding-sibling::result[1]/@created,1,10)">
+<h3 class="mb-1 mt-2 border-b pb-1 text-xs font-semibold text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 10"><xsl:value-of select="substring(@created,1,10)"/></xsl:when><xsl:otherwise>Undated</xsl:otherwise></xsl:choose></h3>
+</xsl:if>
+<article class="group flex items-center gap-2 rounded-sm border-b px-2 py-1.5 hover:bg-accent/40">
+<button type="button" class="shrink-0 rounded border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent" data-perspective-select="true" title="Select entry"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:choose><xsl:when test="@selected = 'true'">Selected</xsl:when><xsl:otherwise>Select</xsl:otherwise></xsl:choose></button>
+<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+<button type="button" class="cursor-pointer truncate text-left text-sm font-medium hover:underline" data-perspective-open="true"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:value-of select="@label"/></button>
+<xsl:if test="string-length(@description) &gt; 0"><p class="truncate text-xs text-muted-foreground"><xsl:value-of select="@description"/></p></xsl:if>
+<xsl:if test="string-length(@tags) &gt; 0"><small class="truncate text-xs text-muted-foreground">Tags: <xsl:value-of select="@tags"/></small></xsl:if>
+<small class="truncate text-xs text-muted-foreground">
+<xsl:if test="string-length(@searchText) &gt; 0">Text: <xsl:value-of select="@searchText"/> · </xsl:if>
+<xsl:if test="string-length(@signal) &gt; 0">Signal: <xsl:value-of select="@signal"/> · </xsl:if>
+Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@avgSiblings"/>
+<xsl:if test="string-length(@rootClasses) &gt; 0"> · Classes: <xsl:value-of select="@rootClasses"/></xsl:if>
+ · Results: <xsl:choose><xsl:when test="string-length(@lastResultCount) &gt; 0"><xsl:value-of select="@lastResultCount"/></xsl:when><xsl:otherwise>—</xsl:otherwise></xsl:choose>
+ · New: <xsl:choose><xsl:when test="string-length(@lastNewCount) &gt; 0"><xsl:value-of select="@lastNewCount"/></xsl:when><xsl:otherwise>—</xsl:otherwise></xsl:choose>
+</small>
+<small class="truncate text-xs text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 19"><xsl:value-of select="substring(@created,12,8)"/></xsl:when><xsl:otherwise><xsl:value-of select="@created"/></xsl:otherwise></xsl:choose></small>
+</div>
+<button type="button" class="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-destructive/10 hover:text-destructive" data-perspective-delete="true" title="Delete entry"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute>Delete</button>
+</article>
+</xsl:template>
+</xsl:stylesheet>""" .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/history-perspective> a mui:Provider ;
+  rdfs:label "History"@en ;
+  mui:perspectiveKind "history" ;
+  mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/history-perspective-input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/shacl/template#HistoryPerspective> .
+<gttp://ggg.maestro.ecosys/shacl/provider/history-perspective-input> a mui:InputShape ; sh:class vfct:QueryHistoryVisit .
+<gttp://ggg.maestro.ecosys/shacl/template#HistoryPerspective> a mui:PerspectiveWidget ; rdfs:label "History perspective"@en ;
+  mui:templateContent """<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:output method="html" omit-xml-declaration="yes"/>
+<xsl:template match="/results">
+<section class="flex w-full flex-col gap-0.5" data-view-title="History" data-view-icon="network">
+<xsl:choose>
+<xsl:when test="not(result)"><p class="py-12 text-center text-sm text-muted-foreground">No saved entries found.</p></xsl:when>
+<xsl:otherwise><xsl:apply-templates select="result"/></xsl:otherwise>
+</xsl:choose>
+</section>
+</xsl:template>
+<xsl:template match="result">
+<xsl:if test="position() = 1 or substring(@created,1,10) != substring(preceding-sibling::result[1]/@created,1,10)">
+<h3 class="mb-1 mt-2 border-b pb-1 text-xs font-semibold text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 10"><xsl:value-of select="substring(@created,1,10)"/></xsl:when><xsl:otherwise>Undated</xsl:otherwise></xsl:choose></h3>
+</xsl:if>
+<article class="group flex items-center gap-2 rounded-sm border-b px-2 py-1.5 hover:bg-accent/40">
+<button type="button" class="shrink-0 rounded border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent" data-perspective-select="true" title="Select entry"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:choose><xsl:when test="@selected = 'true'">Selected</xsl:when><xsl:otherwise>Select</xsl:otherwise></xsl:choose></button>
+<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+<button type="button" class="cursor-pointer truncate text-left text-sm font-medium hover:underline" data-perspective-open="true"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:value-of select="@label"/></button>
+<xsl:if test="string-length(@description) &gt; 0"><p class="truncate text-xs text-muted-foreground"><xsl:value-of select="@description"/></p></xsl:if>
+<xsl:if test="string-length(@tags) &gt; 0"><small class="truncate text-xs text-muted-foreground">Tags: <xsl:value-of select="@tags"/></small></xsl:if>
+<small class="truncate text-xs text-muted-foreground">
+<xsl:if test="string-length(@searchText) &gt; 0">Text: <xsl:value-of select="@searchText"/> · </xsl:if>
+<xsl:if test="string-length(@signal) &gt; 0">Signal: <xsl:value-of select="@signal"/> · </xsl:if>
+Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@avgSiblings"/>
+<xsl:if test="string-length(@rootClasses) &gt; 0"> · Classes: <xsl:value-of select="@rootClasses"/></xsl:if>
+ · Results: <xsl:choose><xsl:when test="string-length(@lastResultCount) &gt; 0"><xsl:value-of select="@lastResultCount"/></xsl:when><xsl:otherwise>—</xsl:otherwise></xsl:choose>
+ · New: <xsl:choose><xsl:when test="string-length(@lastNewCount) &gt; 0"><xsl:value-of select="@lastNewCount"/></xsl:when><xsl:otherwise>—</xsl:otherwise></xsl:choose>
+</small>
+<small class="truncate text-xs text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 19"><xsl:value-of select="substring(@created,12,8)"/></xsl:when><xsl:otherwise><xsl:value-of select="@created"/></xsl:otherwise></xsl:choose></small>
+</div>
+<button type="button" class="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-destructive/10 hover:text-destructive" data-perspective-delete="true" title="Delete entry"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute>Delete</button>
+</article>
+</xsl:template>
+</xsl:stylesheet>""" .
+
+# Reusable temporal Personal-facet formatter. Provider discovery is property-scoped;
+# SHACL accepts XML Schema temporal literals, from year-only to full dateTime.
+# For unknown rdfs:range metadata the provider can still inspect actual values.
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-created> a mui:Provider ;
+  rdfs:label "Date/time"@en ;
+  mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/temporal-created-input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> .
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-created-input> a mui:InputShape ;
+  sh:path <http://purl.org/dc/terms/created> ;
+  sh:or ( [ sh:datatype xsd:dateTime ] [ sh:datatype xsd:date ]
+          [ sh:datatype xsd:gYearMonth ] [ sh:datatype xsd:gYear ] [ sh:datatype xsd:string ] ) .
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-history> a mui:Provider ;
+  rdfs:label "Date/time"@en ;
+  mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/temporal-history-input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> .
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-history-input> a mui:InputShape ;
+  sh:path vfct:historyCreated ;
+  sh:or ( [ sh:datatype xsd:dateTime ] [ sh:datatype xsd:date ]
+          [ sh:datatype xsd:gYearMonth ] [ sh:datatype xsd:gYear ] [ sh:datatype xsd:string ] ) .
+<gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> a mui:DateRangeFacetWidget ;
+  rdfs:label "Date/time"@en .

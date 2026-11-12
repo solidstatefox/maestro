@@ -10,6 +10,7 @@ import { cachedFetchFct, maestroQueryFetch } from "@/lib/client-query-cache";
 import { listValuesQueryClone, parseListValuesXml, fctTermKey } from "@/canvas/utils/fct-response";
 import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
 import { toLabel } from "@/lib/uri-labels";
+import { facetPropertyLabel } from "@/lib/facet-property-label";
 
 // Reuse the same MapLibre/shadcn map primitives as Place record formatting.
 type Facet = { uri: string; label: string; direction: "forward" | "reverse" | "class"; key: string };
@@ -52,10 +53,27 @@ function MapExtent({ points }: { points: MapRow[] }) {
 }
 
 export function MapProviderRuntime({ queryXml, queryTree, addr, stylesheet, visibleFacetTerms }: { queryXml: string; queryTree: FctQueryTree; addr: string; stylesheet: string; visibleFacetTerms: Record<string, string[]> }) {
-  const facets: Facet[] = useMemo(() => currentViewColorFacets(queryTree).map(facet => ({ ...facet, label: facet.direction === "class" ? "Categories" : `${toLabel(facet.uri, "Property")}${facet.direction === "reverse" ? " of" : ""}` })), [queryXml]);
+  const facets: Facet[] = useMemo(() => currentViewColorFacets(queryTree).map(facet => ({ ...facet, label: facet.direction === "class" ? "Categories" : `${facetPropertyLabel(facet.uri)}${facet.direction === "reverse" ? " of" : ""}` })), [queryXml]);
   type Layout = { name: string; text: string; className: string; ariaLabel: string; id: string; htmlFor: string; value: string; role: string; action: string; slot: string; children: Layout[] };
   const [layout, setLayout] = useState<Layout | null>(null);
-  const [colorBy, setColorBy] = useState("");
+  // Restore Color By from the bookmark/share URL before the first map request.
+  // The URL stores a direction-qualified facet key, exactly like the dropdown.
+  const [colorBy, setColorBy] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("colorBy") ?? "");
+  useEffect(() => {
+    // Keep the selected facet in the URL and request the same Personal-pane
+    // scroll as Group By. This runs for button, dropdown and URL restoration.
+    const params = new URLSearchParams(window.location.search);
+    if (colorBy) params.set("colorBy", colorBy);
+    else params.delete("colorBy");
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
+    window.history.replaceState(window.history.state, "", next);
+    if (colorBy) {
+      const split = colorBy.indexOf("|");
+      if (split !== -1) window.dispatchEvent(new CustomEvent("maestro:colorby-selection", {
+        detail: { direction: colorBy.slice(0, split), iri: colorBy.slice(split + 1) },
+      }));
+    }
+  }, [colorBy]);
   const [mapStyleError, setMapStyleError] = useState("");
   useEffect(() => { if (colorBy && !facets.some(f => f.key === colorBy)) setColorBy(""); }, [colorBy, facets]);
   const [points, setPoints] = useState<MapRow[]>([]);

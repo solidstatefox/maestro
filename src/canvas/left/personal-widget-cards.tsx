@@ -12,6 +12,7 @@ import { GROUP_BY_FACET_HIGHLIGHT_CLASSES } from "@/canvas/utils/query-controlle
 import maestroLanguages from "@/data/maestro-languages.json";
 
 import { toLabel } from "@/lib/uri-labels";
+import { facetPropertyLabel } from "@/lib/facet-property-label";
 
 import type { ReactNode } from "react";
 
@@ -125,7 +126,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                   <Tooltip><TooltipTrigger render={<button
                     type="button"
                     className={`break-words text-left text-sm font-semibold underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : "text-inherit"}`}
-                    onMouseEnter={() => beginFacetHoverPreview(widget.uri, "forward", toLabel(widget.uri), "personal")}
+                    onMouseEnter={() => beginFacetHoverPreview(widget.uri, "forward", facetPropertyLabel(widget.uri), "personal")}
                     onMouseLeave={clearTutorialPreview}
                     onClick={() => {
                       clearTutorialPreview();
@@ -137,15 +138,15 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     <IncompleteWidgetIndicator source={`personal:${widget.uri}`} />
                     {isGroupByFacet && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                     {widget.excluded && <CircleSlash className="mr-1 inline size-3.5 shrink-0" aria-label="Excluded" />}
-                    {toLabel(widget.uri, "Property")}
-                  </button>} /><TooltipContent>{`Navigate to ${widget.excluded ? `Excluded: ${toLabel(widget.uri, "Property")}` : toLabel(widget.uri)} scope`}</TooltipContent></Tooltip>
+                    {facetPropertyLabel(widget.uri)}
+                  </button>} /><TooltipContent>{`Navigate to ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} scope`}</TooltipContent></Tooltip>
                   {autoConfiguredFacetKeys.has(`property::${widget.uri}`) && (
                     <Bot className="size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                   )}
                   <div className="flex shrink-0 items-center gap-1">
                     <QueryInspectorButton
                       query={serializeFctQuery(createPropertyWidgetQuery(queryTree, widget.uri, "forward", undefined, true))}
-                      filename={`facet-${toLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}.xml`}
+                      filename={`facet-${facetPropertyLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}.xml`}
                       primaryTabLabel="XML"
                       extraQueries={personalFacetInspectorQueries(
                         queryTree,
@@ -170,10 +171,10 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                           }
                         }}
                         className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:pointer-events-none disabled:opacity-30 ${isGroupByFacet ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
-                        aria-label={isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri, "Property")}` : `Group results by ${toLabel(widget.uri, "Property")}`}
+                        aria-label={isGroupByFacet ? `Stop grouping by ${facetPropertyLabel(widget.uri)}` : `Group results by ${facetPropertyLabel(widget.uri)}`}
                       >
                         <UsersRound className="size-4" aria-hidden="true" />
-                      </button>} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri, "Property")}` : canGroupByFacet ? `Group results by ${toLabel(widget.uri, "Property")}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip>
+                      </button>} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${facetPropertyLabel(widget.uri)}` : canGroupByFacet ? `Group results by ${facetPropertyLabel(widget.uri)}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip>
                     )}
                     <FacetDecorationControl direction="forward" iri={widget.uri}/>
                     <Tooltip><TooltipTrigger render={<button
@@ -185,10 +186,10 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                         setPersonalWidgets((current) => current.filter((item) => item.uri !== widget.uri));
                       }}
                       className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
-                      aria-label={`Remove ${widget.excluded ? `Excluded: ${toLabel(widget.uri, "Property")}` : toLabel(widget.uri)} widget`}
+                      aria-label={`Remove ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} widget`}
                     >
                       <Trash2 className="size-4" aria-hidden="true" />
-                    </button>} /><TooltipContent>{`Remove ${toLabel(widget.uri, "Property")} facet`}</TooltipContent></Tooltip>
+                    </button>} /><TooltipContent>{`Remove ${facetPropertyLabel(widget.uri)} facet`}</TooltipContent></Tooltip>
                   </div>
                 </div>
                 <Tooltip><TooltipTrigger render={<p className="mt-1 break-all text-xs text-muted-foreground">{widget.uri}</p>} /><TooltipContent>{widget.uri}</TooltipContent></Tooltip>
@@ -376,7 +377,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                                   event.currentTarget.checked,
                                 );
                               }}
-                              aria-label={`Bind ${toLabel(widget.uri, "Property")} to ${value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}`}
+                              aria-label={`Bind ${facetPropertyLabel(widget.uri)} to ${value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}`}
                               className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
                               aria-invalid={isZeroCount ? true : undefined}
                             />

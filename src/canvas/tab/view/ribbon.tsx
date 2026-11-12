@@ -28,13 +28,22 @@ export interface ViewRibbonProps {
 export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredViews, viewFeature, setViewFeature, onSelectFeature, selectedViewUri, onSelectView, viewDiscoveryLoading, queryClassUris, queryXml, triggerUri, historyUri }: ViewRibbonProps) {
   const mapProvider = useMapProviderDefinition(viewPanel === "perspectives", queryXml);
   const [personalProviders, setPersonalProviders] = useState<{ kind: PersonalPerspectiveKind; label: string; uri: string }[]>([]);
-  const [resolvedClassKey, setResolvedClassKey] = useState<string | null>(null);
+  const [personalDiscoveryPending, setPersonalDiscoveryPending] = useState(false);
   const classKey = useMemo(() => [...new Set(queryClassUris)].sort().join("\n"), [queryClassUris]);
   useEffect(() => {
     const controller = new AbortController();
-    setPersonalProviders([]);
-    setResolvedClassKey(null);
-    if (!classKey) { setResolvedClassKey(""); return () => controller.abort(); }
+    // Keep the last confirmed buttons while a new ASK/discovery is pending.
+    // Clearing on every query mutation makes Bookmarks/History flicker.
+    if (!classKey) {
+      setPersonalDiscoveryPending(false);
+      // Avoid a one-frame disappearance while Configure is resetting, but
+      // clear buttons if this genuinely is a class-free query.
+      const clear = window.setTimeout(() => {
+        if (!controller.signal.aborted) setPersonalProviders([]);
+      }, 400);
+      return () => { controller.abort(); window.clearTimeout(clear); };
+    }
+    setPersonalDiscoveryPending(true);
     void fetch("/proxy/api/perspectives", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "discover", classes: classKey.split("\n"), queryXml, trigger: triggerUri, historyUri }),
@@ -44,17 +53,33 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
       const data = await response.json() as { providers?: { kind: string; label: string; uri: string }[] };
       if (!controller.signal.aborted) {
         setPersonalProviders((data.providers ?? []).filter((provider): provider is { kind: PersonalPerspectiveKind; label: string; uri: string } => (provider.kind === "bookmarks" || provider.kind === "history") && /^(?:https?:|gttp:|gttps:|urn:)/.test(provider.uri)));
-        setResolvedClassKey(classKey);
       }
-    }).catch(() => { /* Other query perspectives remain usable without personal login. */ });
+    }).catch(() => { /* Keep last confirmed buttons if discovery fails. */ })
+      .finally(() => { if (!controller.signal.aborted) setPersonalDiscoveryPending(false); });
     return () => controller.abort();
   }, [classKey, queryXml, triggerUri, historyUri]);
+  // On an explicit accordion change, activate the first actual button.
+  // Do not run this on mount: a URL-restored provider selection has priority.
+  const firstPerspectiveUri = discoveredViews[0]?.uri ?? mapProvider?.uri ?? personalProviders[0]?.uri ?? "";
+  const onRibbonPanelChange = (panel: "trail" | "perspectives" | "features") => {
+    if (panel === viewPanel) return;
+    setViewPanel(panel);
+    if (panel === "features") onSelectFeature("policies");
+    if (panel === "perspectives") {
+      onSelectView(firstPerspectiveUri);
+    }
+  };
+  // When discovery finishes after the user opened an empty Perspectives ribbon,
+  // fill its previously unselected button; never overwrite a restored URI.
+  useEffect(() => {
+    if (viewPanel === "perspectives" && !selectedViewUri && firstPerspectiveUri) onSelectView(firstPerspectiveUri);
+  }, [viewPanel, selectedViewUri, firstPerspectiveUri, onSelectView]);
   // A URL-restored selection is authoritative. Provider discovery may be
   // briefly empty while the class tree and login finish loading; do not
   // overwrite the saved perspective or ribbon selection during that window.
   // A saved Map selection must survive initial Configure discovery. An empty
   // geospatial property list during startup is not a deliberate user pivot.
-  return <MaestroHoverExpand active={viewPanel} onChange={setViewPanel} panels={[
+  return <MaestroHoverExpand active={viewPanel} onChange={onRibbonPanelChange} panels={[
           { id: "trail", label: "Trail", content: <nav aria-label="Navigation breadcrumbs" className="flex flex-wrap items-start gap-2">
             {breadcrumbs}
           </nav> },
@@ -78,7 +103,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
               className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${!viewFeature && selectedViewUri === mapProvider.uri ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
               <DynamicIcon name={(availableProviderIcons.has(mapProvider.icon) ? mapProvider.icon : "layout-grid") as IconName} className="size-7" strokeWidth={1} aria-hidden="true" />{mapProvider.label}
             </button>}
-            {personalProviders.map(provider => {
+            {personalProviders.filter(provider => !discoveredViews.some(view => view.uri === provider.uri) && provider.uri !== mapProvider?.uri).map(provider => {
               const uri = provider.uri;
               const active = selectedViewUri === uri;
               const Icon = provider.kind === "bookmarks" ? Bookmark : History;
@@ -88,8 +113,9 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
                 <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{provider.label}
               </button>;
             })}
+            {personalDiscoveryPending && <span className="px-3 text-xs text-muted-foreground"><ElapsedStatus label="Locating personal perspectives" category="policies" clockScope="views" /></span>}
             {viewDiscoveryLoading && <span className="px-3 text-xs text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></span>}
-            {!viewDiscoveryLoading && !discoveredViews.length && !personalProviders.length && !mapProvider && <span className="px-3 text-xs text-muted-foreground">No perspectives found</span>}
+            {!viewDiscoveryLoading && !personalDiscoveryPending && !discoveredViews.length && !personalProviders.length && !mapProvider && <span className="px-3 text-xs text-muted-foreground">No perspectives found</span>}
           </div> },
           { id: "features", label: "Features", content: <div className="flex h-full flex-wrap items-center gap-1" role="toolbar" aria-label="View features">
             {([

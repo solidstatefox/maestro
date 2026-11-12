@@ -1893,13 +1893,15 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (!urlStateInitialized) return;
-    const params = new URLSearchParams(window.location.search);
+  // One authoritative serializer for the address bar, History and bookmarks.
+  // Never save window.location.href as a snapshot of React state: the URL effect
+  // can lag behind the user's most recent ribbon selection.
+  function buildCurrentShareUrl(): string {
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
     params.set("q", queryXml);
     params.set("tab", String(APPBAR_TAB_NUMBER[workspaceTab]));
     params.set("ribbonTab", String(VIEW_RIBBON_TAB_NUMBER[viewPanel]));
-    // URI, not a hash: the provider resource is the identity of the ribbon button.
     params.set("ribbonButton", workspaceTab === "view" && viewPanel === "perspectives" ? selectedViewUri : "");
     const state: ShareableUiState = {
       selectedFacet,
@@ -1938,8 +1940,13 @@ useEffect(() => {
       breadcrumbBadgeMode,
     };
     params.set("state", JSON.stringify(state));
-    const nextUrl = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
-    window.history.replaceState(window.history.state, "", nextUrl);
+    return url.href;
+  }
+
+  useEffect(() => {
+    if (!urlStateInitialized) return;
+    const url = new URL(buildCurrentShareUrl());
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft, viewPanel, selectedViewUri, viewFeature, selectedAnalysisUri, analyzeHistogram]);
 
   /** Persist one History visit for a query snapshot, preserving queue ordering. */
@@ -1974,7 +1981,7 @@ useEffect(() => {
     if (!urlStateInitialized) return;
     // Not logged in: never record History. Tracking refs stay untouched so the current query is recorded as a fresh visit after login.
     if (!personalStoreReady || templateHistoryFlushRef.current) return;
-    const stateUrl = window.location.href;
+    const stateUrl = buildCurrentShareUrl();
     const previousQueryXml = historyVisitQueryRef.current;
     const isInitialLoadedHistoryItem = Boolean(historyBookmarkId && !previousQueryXml);
     const isNewQuery = !isInitialLoadedHistoryItem && previousQueryXml !== queryXml;
@@ -3067,6 +3074,36 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       setIsLoadingRoles(true);
     }
   }, [selectedEndpointId, endpointReadyForQuery, propertyFacetQueryXml, roleFacetQueryXml]);
+
+  // Mirror the Group By scroll behavior for Color By, including a selection
+  // restored from a share URL after the Map perspective mounts.
+  const [colorByScrollTarget, setColorByScrollTarget] = useState<{ direction: string; iri: string } | null>(null);
+  useEffect(() => {
+    const handleSelection = (event: Event) => {
+      const { direction, iri } = (event as CustomEvent<{ direction: string; iri: string }>).detail ?? {};
+      if (typeof iri === "string" && iri && ["forward", "reverse", "class"].includes(direction)) {
+        setDefaultLeftTab("personal");
+        setColorByScrollTarget({ direction, iri });
+      }
+    };
+    window.addEventListener("maestro:colorby-selection", handleSelection);
+    return () => window.removeEventListener("maestro:colorby-selection", handleSelection);
+  }, [setDefaultLeftTab]);
+  useEffect(() => {
+    if (!colorByScrollTarget || defaultLeftTab !== "personal") return;
+    const { direction, iri } = colorByScrollTarget;
+    const loading = direction === "class" ? isLoadingClasses
+      : direction === "reverse" ? isLoadingRoles : isLoadingProperties;
+    if (loading) return;
+    const target = direction === "class" ? categoriesWidgetRef.current
+      : direction === "reverse" ? roleWidgetCardRefs.current.get(iri)
+      : personalWidgetCardRefs.current.get(iri);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    setColorByScrollTarget(null);
+  }, [colorByScrollTarget, defaultLeftTab, isLoadingClasses, isLoadingRoles,
+      isLoadingProperties, personalWidgets.map(widget => widget.uri).join("|"),
+      roleFacets.map(facet => facet.uri).join("|")]);
 
   // Scroll to the active Group by facet when that widget's own request settles.
   // Other facet widgets load independently and must not delay this scroll.
@@ -8405,6 +8442,7 @@ useEffect(() => {
   
 
     return {
+    buildCurrentShareUrl,
     queryActivityPending: isSearching || isCountingResults || isLoadingProperties || isLoadingRoles || isLoadingClasses || isLoadingCategoryTree || isLoadingGraphs || isLoadingAlphabet || groupValuesLoading || loadingRecordGraphs || loadingRecordAuthors || isLoadingRecordPolicy || isDescribing || viewDiscoveryLoading || viewFeatureLoading || isValidatingRecord,
     FACET_PAGE_SIZE,
     RECORD_DESCRIPTION_PAGE_SIZE,

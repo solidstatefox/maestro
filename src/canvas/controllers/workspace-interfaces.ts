@@ -434,6 +434,7 @@ export type SettingsPaneWorkspace = Pick<WorkspaceController,
 >;
 
 export type AppBarDirectWorkspace = Pick<WorkspaceController,
+  | "buildCurrentShareUrl"
   | "effectiveResultsTotalCount"
   | "recordStatus"
   | "centralTab"

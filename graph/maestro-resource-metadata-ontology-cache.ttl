@@ -1,0 +1,39 @@
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<gttp://ggg.maestro.ecosys/ns/ui> rdfs:label "ui" .
+
+<gttp://ggg.maestro.ecosys/ns/ui#CodeRole> dcterms:description "Values that are source text (XML, SPARQL, JSON) and should be shown verbatim in a code view. Pair with mui:syntax. Technical: record viewer only." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#DateRangeFacetWidget> dcterms:description "Defines the Date/time range facet RDF class used in Maestro ontology and policy matching." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#IdentifierRole> dcterms:description "Machine-readable identifiers such as hashes and codes. Technical: shown in the record viewer, never in result items." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#KeyInfoRole> dcterms:description "Values worth showing in a summary even though they are not a label, description or date: publisher, licence, size." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#LinkRole> dcterms:description "Values that lead somewhere: an outbound URL, an endpoint, a link that restores saved UI state." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#PersonalFacetWidget> dcterms:description "Defines the Personal facet widget RDF class used in Maestro ontology and policy matching." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#PerspectiveWidget> dcterms:description "Defines the Perspective widget RDF class used in Maestro ontology and policy matching." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#RecordViewer> dcterms:description "The full description of one record: every property and role, grouped and ordered by the shape. Shown when a record is opened." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#ResultItem> dcterms:description "The compact card for one record in the result set. It is composed from property roles, not from every property." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#TimestampRole> dcterms:description "The date or date-time that best says when a resource was created, published or last changed. Used for display and for ordering." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#lastNewCount> dcterms:description "Defines the Last known new items RDF property and how it is used in Maestro metadata." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#lastResultCount> dcterms:description "Defines the Last known result count RDF property and how it is used in Maestro metadata." .
+
+<gttp://ggg.maestro.ecosys/ns/ui#perspectiveKind> dcterms:description "Defines the Perspective collection kind RDF property and how it is used in Maestro metadata." .
+
+<http://www.w3.org/2002/01/bookmark#Bookmark> dcterms:description "A query-history visit explicitly saved by the user; Bookmarks have a query identity hash; views no longer require an identifier property filter." .
+
+<http://www.w3.org/ns/shacl-ui/editor> rdfs:label "editor" ;
+    dcterms:description "Defines the editor Resource resource used by the Maestro RDF configuration." .
+
+<http://www.w3.org/ns/shacl-ui/viewer> rdfs:label "viewer" ;
+    dcterms:description "Defines the viewer Resource resource used by the Maestro RDF configuration." .
+

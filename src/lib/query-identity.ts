@@ -3,10 +3,10 @@
  * for execution; only normalize the bytes used by the identity digest. */
 export function canonicalQueryIdentityXml(xml: string): string {
   return xml.trim()
-    // State facet selections do not change the identity of the observed query.
-    // Keep the query-hash graph as a stable bus across State filter changes.
-    .replace(/<(?:[\w.-]+:)?state\b[^>]*>(?:[^<]*)<\/(?:[\w.-]+:)?state\s*>/gi, "")
-    .replace(/<(?:[\w.-]+:)?state\b[^>]*\/\s*>/gi, "")
+    // Status facet selections do not change the identity of the observed query.
+    // Keep the query-hash graph as a stable bus across Status filter changes.
+    .replace(/<(?:[\w.-]+:)?status\b[^>]*>(?:[^<]*)<\/(?:[\w.-]+:)?status\s*>/gi, "")
+    .replace(/<(?:[\w.-]+:)?status\b[^>]*\/\s*>/gi, "")
     .replace(
     /(<(?:[\w.-]+:)?view\b[^>]*)(\/?>)/gi,
     (_match, attributes: string, close: string) =>

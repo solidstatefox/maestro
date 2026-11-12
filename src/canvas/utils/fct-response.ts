@@ -60,30 +60,17 @@ export type FctResult = {
 
 export type ListValueProjection = { property: string; direction: "forward" | "reverse" };
 
-/** Make a derived FCT query. Projection nodes are deliberately not filters. */
-export function listValuesQueryClone(xml: string, columns: ListValueProjection[]): string {
+/** Make a read-only clone of the live FCT query for value enrichment.
+ * Projection columns are passed separately to the proxy and are never added
+ * as FCT relationship nodes or custom attributes. */
+export function listValuesQueryClone(xml: string): string {
   const document = new DOMParser().parseFromString(xml, "application/xml");
+  if (document.querySelector("parsererror")) throw new Error("Invalid FCT query XML.");
   const view = Array.from(document.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0", "view"))[0]
     ?? Array.from(document.getElementsByTagName("view"))[0];
   if (!view || !view.parentElement) throw new Error("The live query has no view carrier.");
   view.setAttribute("type", FCT_VIEW_TYPES.LIST_VALUES);
   view.removeAttribute("badges");
-  const parent = view.parentElement;
-  const ns = view.namespaceURI || "http://openlinksw.com/services/facets/1.0";
-  for (const column of columns) {
-    const tag = column.direction === "reverse" ? "property-of" : "property";
-    // Project through the existing relationship in the live view scope. A
-    // second node with the same IRI is forbidden by Maestro's query grammar.
-    let node = Array.from(parent.children).find(child =>
-      child.localName === tag && child.getAttribute("iri") === column.property);
-    if (!node) {
-      node = document.createElementNS(ns, tag);
-      node.setAttribute("iri", column.property);
-      node.setAttribute("src", "badges");
-      parent.insertBefore(node, view);
-    }
-    node.setAttribute("project", "yes");
-  }
   return new XMLSerializer().serializeToString(document);
 }
 

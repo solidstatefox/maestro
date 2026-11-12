@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requirePersonalLogin } from "@/lib/personal-guard";
+import { policyApprovalGraph } from "@/lib/policy-approval-store";
 import { getShapesGraph, getOntologyGraph, askPersonalSparql, queryPersonalSparql, waitForPersonalGraphSeed } from "@/lib/personal-sparql";
 
 const validIri = (iri: string) => /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(iri);
@@ -23,6 +24,7 @@ export async function POST(request: Request) {
     const where = `GRAPH <${graph}> { ?provider a mui:Provider ; mui:accepts ?shape ; mui:widget ?widget .
       ?shape sh:path ?property . ?widget a mui:DateRangeFacetWidget .
       OPTIONAL { ?widget rdfs:label ?label } }
+      GRAPH <${policyApprovalGraph(request)}> { ?provider mui:status mui:Approved }
       VALUES ?property { ${values} }`;
     const prefixes = `PREFIX mui: <gttp://ggg.maestro.ecosys/ns/ui#>
       PREFIX sh: <http://www.w3.org/ns/shacl#>

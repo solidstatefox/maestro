@@ -57,7 +57,7 @@ export function CodeBlock({
     try {
       await navigator.clipboard.writeText(code);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
+      window.setTimeout(() => setCopied(false), 2500);
     } catch {
       setCopied(false);
     }

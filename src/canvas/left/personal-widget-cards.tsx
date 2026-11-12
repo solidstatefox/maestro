@@ -1,4 +1,5 @@
 "use client";
+import { FacetDecorationControl, FacetItemDecoration } from "@/lib/facet-decoration-contract";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { TemporalFacetContent, type TemporalFacetProvider } from "@/canvas/left/personal-date-facet";
 
@@ -16,7 +17,7 @@ import type { ReactNode } from "react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Bot, CircleSlash, Trash2, UsersRound, ClipboardList } from "lucide-react";
+import { Bot, CircleSlash, Trash2, UsersRound } from "lucide-react";
 
 import hljs from "highlight.js/lib/core";
 import xmlLanguage from "highlight.js/lib/languages/xml";
@@ -134,7 +135,6 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     }}
                   >
                     <IncompleteWidgetIndicator source={`personal:${widget.uri}`} />
-                    {activePropertyFilters.some((node) => node.attributes.iri === widget.uri && node.attributes.src === "shacl") && <ClipboardList className="mr-1 inline size-4 shrink-0" aria-label="SHACL-discovered facet" />}
                     {isGroupByFacet && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                     {widget.excluded && <CircleSlash className="mr-1 inline size-3.5 shrink-0" aria-label="Excluded" />}
                     {toLabel(widget.uri, "Property")}
@@ -175,6 +175,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                         <UsersRound className="size-4" aria-hidden="true" />
                       </button>} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${toLabel(widget.uri, "Property")}` : canGroupByFacet ? `Group results by ${toLabel(widget.uri, "Property")}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip>
                     )}
+                    <FacetDecorationControl direction="forward" iri={widget.uri}/>
                     <Tooltip><TooltipTrigger render={<button
                       type="button"
                       onClick={() => {
@@ -379,6 +380,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                               className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
                               aria-invalid={isZeroCount ? true : undefined}
                             />
+                            <FacetItemDecoration direction="forward" iri={widget.uri} value={facetValueKey(value)}/>
                             {isGroupByFacet ? (
                               <Tooltip><TooltipTrigger render={<button
                                 type="button"

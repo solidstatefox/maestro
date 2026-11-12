@@ -1,10 +1,12 @@
+import { UI_COMPONENT } from "@/lib/maestro-ui-component-ids";
 import { NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { getShapesGraph, queryPersonalSparql, waitForPersonalGraphSeed } from "@/lib/personal-sparql";
+import { getShapesGraph, queryPersonalSparql, askPersonalSparql, waitForPersonalGraphSeed } from "@/lib/personal-sparql";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
 import { requirePersonalLogin } from "@/lib/personal-guard";
+import { policyApprovalGraph, readPolicyApprovals, discoverPolicyApprovals } from "@/lib/policy-approval-store";
 
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const SH = "http://www.w3.org/ns/shacl#";
@@ -31,7 +33,9 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null) as {
       action?: unknown;
       recordTypes?: unknown;
+      queryXml?: unknown;
       recordUri?: unknown;
+      historyUri?: unknown;
       recordShape?: unknown;
       template?: unknown;
       triples?: unknown;
@@ -74,17 +78,43 @@ export async function POST(request: Request) {
         if (template && !item.templates.some((entry) => entry.uri === template)) item.templates.push({ uri: template, label: get(row, "templateLabel") || template.split(/[\/#]/).filter(Boolean).pop() || template });
         grouped.set(uri, item);
       }
-      return NextResponse.json({ policies: [...grouped.values()], debugSparql: query });
+      const discovered = [...grouped.values()];
+      // This matched an actual Record type to a SHACL ClassPolicy, as opposed
+      // to merely enumerating policies in View > Features. Queue new matches
+      // as Pending and retain the matching Record as the requester. Discovery
+      // does NOT grant execution permission; only Approved does that.
+      if (safeIri(body.recordUri)) {
+        await discoverPolicyApprovals(discovered.map(policy => policy.uri), {
+          component: UI_COMPONENT.recordPolicyDiscovery,
+          queryXml: typeof body.queryXml === "string" ? body.queryXml : "",
+          record: body.recordUri,
+          history: safeIri(body.historyUri) ? body.historyUri : undefined,
+        }, request);
+      }
+      const statuses = await readPolicyApprovals(discovered.map(policy => policy.uri), request);
+      const approved = new Set(statuses.filter(item => item.status === "Approved").map(item => item.uri));
+      return NextResponse.json({ policies: discovered.filter(item => approved.has(item.uri)), debugSparql: query });
     }
 
     if (body.action === "template") {
       if (!safeIri(body.template)) return NextResponse.json({ error: "A valid XSLT template URI is required." }, { status: 400 });
-      // Load the graph-stored XSLT 3.0 stylesheet; the SaxonJS proxy
-      // compiles it to SEF, and Maestro validates its rendered commands.
-      const query = `PREFIX rdf: <${RDF}>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?templateXslt ?enrichmentXslt WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} { ${sparqlIri(body.template)} (rdf:value|mui:templateContent) ?templateXslt . FILTER(CONTAINS(STR(?templateXslt), 'xsl:stylesheet')) OPTIONAL { ${sparqlIri(body.template)} mui:enrichmentTemplate ?enrichmentTemplate . ?enrichmentTemplate (rdf:value|mui:templateContent) ?enrichmentXslt . } } } LIMIT 1`;
+      // The template must be reachable through a previously Approved policy.
+      // A direct request to the template endpoint cannot bypass approval.
+      const graph = sparqlIri(getShapesGraph(request));
+      const approvedGraph = sparqlIri(policyApprovalGraph(request));
+      const query = `PREFIX rdf: <${RDF}>\nPREFIX sh: <${SH}>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?templateXslt ?enrichmentXslt WHERE {
+        GRAPH ${graph} { ?policy a mui:ClassPolicy ; mui:forClass ?class ; mui:widget ?widgetClass .
+          ?provider a mui:Provider ; mui:accepts ?inputShape ; mui:widget ${sparqlIri(body.template)} .
+          ?inputShape a mui:InputShape ; sh:class ?class .
+          ${sparqlIri(body.template)} rdf:type/rdfs:subClassOf* ?widgetClass ; (rdf:value|mui:templateContent) ?templateXslt .
+          FILTER(CONTAINS(STR(?templateXslt), 'xsl:stylesheet'))
+          OPTIONAL { ${sparqlIri(body.template)} mui:enrichmentTemplate ?enrichmentTemplate . ?enrichmentTemplate (rdf:value|mui:templateContent) ?enrichmentXslt }
+        }
+        GRAPH ${approvedGraph} { ?policy mui:status mui:Approved . ?provider mui:status mui:Approved }
+      } LIMIT 1`;
       const payload = await queryPersonalSparql(query, 20000, request);
       const templateXslt = get((payload.results?.bindings?.[0] ?? {}) as BindingRow, "templateXslt");
-      if (!templateXslt) return NextResponse.json({ error: `Template ${body.template} has no XSLT stylesheet in ${getShapesGraph(request)}. Reload the updated ./graph policy documents into the Personal graph store.` }, { status: 404 });
+      if (!templateXslt) return NextResponse.json({ error: `Template ${body.template} is not available from an Approved policy.`, }, { status: 403 });
       const enrichmentXslt = get((payload.results?.bindings?.[0] ?? {}) as BindingRow, "enrichmentXslt");
       if (enrichmentXslt.length > 250000) return NextResponse.json({ error: "Formatter enrichment XSLT is too large." }, { status: 413 });
       if (templateXslt.length > 250000) return NextResponse.json({ error: "XSLT template is too large." }, { status: 413 });
@@ -92,6 +122,16 @@ export async function POST(request: Request) {
       const nextPackage = JSON.parse(await readFile(resolve(process.cwd(), "node_modules/next/package.json"), "utf8")) as { name?: unknown; version?: unknown };
       if (nextPackage.name !== "next" || typeof nextPackage.version !== "string") throw new Error("Could not determine the installed Next.js package name and version.");
       return NextResponse.json({ templateXslt, enrichmentXslt, nextName: nextPackage.name, nextVersion: nextPackage.version, debugSparql: query });
+    }
+
+    if (body.action === "facet-discover" || body.action === "validate") {
+      if (!safeIri(body.recordShape)) return NextResponse.json({ error: "A valid policy shape is required." }, { status: 400 });
+      const shape = sparqlIri(body.recordShape);
+      const approvedGraph = sparqlIri(policyApprovalGraph(request));
+      const approved = await askPersonalSparql(`PREFIX mui: <${MUI}>
+        ASK WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} { ?policy a mui:ClassPolicy ; mui:recordShape ${shape} }
+                    GRAPH ${approvedGraph} { ?policy mui:status mui:Approved } }`, 12000, request);
+      if (!approved) return NextResponse.json({ error: "This SHACL policy has not been Approved." }, { status: 403 });
     }
 
     if (body.action === "facet-discover") {

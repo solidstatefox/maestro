@@ -1,7 +1,7 @@
 "use client";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { formatPagePosition } from "@/canvas/utils/pagination";
-import { RecordStateButtons, RecordStarButton } from "@/canvas/right/record-state-buttons";
+import { RecordStatusButtons, RecordStarButton } from "@/canvas/right/record-status-buttons";
 
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
 
@@ -145,7 +145,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
     recordDescriptionSnapshot,
     recordFormatEnabled,
     recordFormatError,
-    recordStates,
+    recordStatus,
     recordFormatMenuOpen,
     recordFormatPreferenceKey,
     recordFormatPreferenceLoaded,
@@ -213,7 +213,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                   <CollapsibleTrigger aria-label={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} title={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
                     {recordControlsOpen ? <ChevronDown className="size-4" aria-hidden="true" /> : <ChevronRight className="size-4" aria-hidden="true" />}
                   </CollapsibleTrigger>
-                  {recordStates.enabled && selectedUri && selectedRecordTermType !== "bnode" && <RecordStarButton states={recordStates} />}
+                  {recordStatus.enabled && selectedUri && selectedRecordTermType !== "bnode" && <RecordStarButton statuses={recordStatus} />}
                   <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
                   {recordFormatEnabled && Boolean(currentFormattedRecordHtml) && formattedRecordButtonsHtml.record_title_icon && (
                     <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_title_icon }} />
@@ -290,7 +290,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                     </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  {recordStates.enabled && selectedRecordTermType !== "bnode" && <RecordStateButtons states={recordStates} />}
+                  {recordStatus.enabled && selectedRecordTermType !== "bnode" && <RecordStatusButtons statuses={recordStatus} />}
                   {recordGraphError && endpointReadyForQuery && <span className="text-xs text-destructive" title={recordGraphError}>Graph discovery failed: {recordGraphError}</span>}{loadingRecordAuthors && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Loading authors" category="record" clockScope="recordAuthors" /></span>}{recordAuthorError && <span className="text-xs text-destructive" title={recordAuthorError}>Author metadata unavailable</span>}
                 </div>}
                 {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div id="record_button_bar" className="mt-3 flex flex-wrap items-center gap-2">

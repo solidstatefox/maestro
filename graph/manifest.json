@@ -9,5 +9,13 @@
   "maestro-analyze.ttl": "/shacl/policies",
   "maestro-entrypoint-view.ttl": "/shacl/policies",
   "maestro-widget-providers.ttl": "/shacl/policies",
-  "maestro-personal-perspectives.ttl": "/shacl/policies"
+  "maestro-personal-perspectives.ttl": "/shacl/policies",
+  "maestro-resource-metadata-shacl-policies.ttl": "/shacl/policies",
+  "maestro-resource-metadata-otc-transcoders.ttl": "/otc/transcoders",
+  "maestro-resource-metadata-graph.ttl": "/graph",
+  "maestro-resource-metadata-ontology-cache.ttl": "/ontology-cache",
+  "maestro-authorship-policies.ttl": "/shacl/policies",
+  "maestro-authorship-transcoders.ttl": "/otc/transcoders",
+  "maestro-ui-components.ttl": "/shacl/policies",
+  "maestro-map-perspective.ttl": "/shacl/policies"
 }

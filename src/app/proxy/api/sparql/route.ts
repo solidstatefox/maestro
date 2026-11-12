@@ -322,7 +322,7 @@ async function handlePost(request: Request) {
           <http://purl.org/dc/terms/title>
         }
         GRAPH ?labelGraph { ?labelResource ?labelPredicate ?label . }
-        FILTER(isLiteral(?label) && (${preferredLanguage === "all" ? "true" : `LANG(?label) = "" || LANGMATCHES(LANG(?label), ${JSON.stringify(preferredLanguage)})`}))
+        FILTER(isLiteral(?label) && (${preferredLanguage === "all" ? "true" : `DATATYPE(?label) != <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> || LANGMATCHES(LANG(?label), ${JSON.stringify(preferredLanguage)})`}))
       }`;
       diagnosticOperation = "Record URI labels in discovered graphs";
       diagnosticQuery = query;
@@ -398,7 +398,7 @@ async function handlePost(request: Request) {
         OPTIONAL {
           {
             ${outgoingPattern}
-            FILTER(${preferredLanguage === "all" ? "true" : `!isLiteral(?object) || LANG(?object) = "" || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)})`})
+            FILTER(${preferredLanguage === "all" ? "true" : `!isLiteral(?object) || DATATYPE(?object) != <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)})`})
             BIND("property" AS ?direction)
           }
           UNION
@@ -452,7 +452,7 @@ async function handlePost(request: Request) {
       const graphPrefix = namedGraphs.length ? `VALUES ?recordGraph { ${iriList(namedGraphs)} } GRAPH ?recordGraph { ` : "";
       const graphSuffix = namedGraphs.length ? " }" : "";
       // JSON.stringify escapes the validated BCP-47 language for SPARQL.
-      const allowedLiteral = `FILTER(${preferredLanguage === "all" ? "true" : `!isLiteral(?object) || LANG(?object) = "" || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)})`})`;
+      const allowedLiteral = `FILTER(${preferredLanguage === "all" ? "true" : `!isLiteral(?object) || DATATYPE(?object) != <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)})`})`;
       // Literal focus nodes have only incoming roles. The object is the focus
       // literal itself, so no language filtering is applied to the focus term.
       let query = termType === "literal"

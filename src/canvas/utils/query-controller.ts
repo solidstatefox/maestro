@@ -17,8 +17,8 @@ export function findQueryNode(
   return undefined;
 }
 
-export function queryTreeHasStates(tree: FctQueryTree): boolean {
-  const visit = (nodes: FctQueryNode[]): boolean => nodes.some((node) => node.name === "state" || visit(node.children));
+export function queryTreeHasStatuses(tree: FctQueryTree): boolean {
+  const visit = (nodes: FctQueryNode[]): boolean => nodes.some((node) => node.name === "status" || visit(node.children));
   return visit(tree.children);
 }
 
@@ -80,6 +80,41 @@ export type ShareableUiState = {
   breadcrumbBadgeMode?: "records" | "classes";
 };
 
+/** Compact URL indices for the appbar and View accordion. Publish is reserved. */
+export const APPBAR_TAB_NUMBER = { browse: 0, view: 1, analyze: 2, publish: 3 } as const;
+export const VIEW_RIBBON_TAB_NUMBER = { trail: 0, perspectives: 1, features: 2 } as const;
+
+export function decodeAppbarTab(value: string | null): "browse" | "view" | "analyze" | null {
+  switch (value) {
+    case "0": case "browse": return "browse";
+    case "1": case "view": return "view";
+    case "2": case "analyze": return "analyze";
+    default: return null; // Publish (3) is not implemented yet.
+  }
+}
+
+export function decodeViewRibbonTab(value: string | null): "trail" | "perspectives" | "features" | null {
+  switch (value) {
+    case "0": case "trail": return "trail";
+    case "1": case "perspectives": return "perspectives";
+    case "2": case "features": return "features";
+    default: return null;
+  }
+}
+
+export function validRibbonProviderUri(value: string | null): string | null {
+  return value !== null && value.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(value)
+    ? value : null;
+}
+
+/** Copy authoritative ribbon parameters from a stored bookmark/history URL. */
+export function copyRibbonUrlParams(source: URLSearchParams, target: URLSearchParams): void {
+  for (const key of ["tab", "ribbonTab", "ribbonButton"]) {
+    if (source.has(key)) target.set(key, source.get(key) ?? "");
+    else target.delete(key);
+  }
+}
+
 /** Read the graph-server URI from the query's authoritative addr attribute. */
 export function readGraphServerFromQueryXml(xml: string | null | undefined): string | null {
   if (!xml || typeof DOMParser === "undefined") return null;
@@ -94,16 +129,27 @@ export function readGraphServerFromQueryXml(xml: string | null | undefined): str
 
 export function readShareableUiState(search?: string): ShareableUiState | null {
   if (typeof window === "undefined" && search === undefined) return null;
-  const encodedState = new URLSearchParams(search ?? window.location.search).get("state");
-  if (!encodedState) return null;
-  try {
-    const parsed: unknown = JSON.parse(encodedState);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as ShareableUiState
-      : null;
-  } catch {
-    return null;
+  const params = new URLSearchParams(search ?? window.location.search);
+  const encodedState = params.get("state");
+  let result: ShareableUiState | null = null;
+  if (encodedState) {
+    try {
+      const parsed: unknown = JSON.parse(encodedState);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) result = parsed as ShareableUiState;
+    } catch { /* A malformed legacy state must not discard valid ribbon parameters. */ }
   }
+  const appbar = decodeAppbarTab(params.get("tab"));
+  const ribbon = decodeViewRibbonTab(params.get("ribbonTab"));
+  const button = validRibbonProviderUri(params.get("ribbonButton"));
+  // Explicit top-level ribbon parameters override older values embedded in state.
+  // An empty ribbonButton explicitly means no selected provider for this ribbon.
+  if (appbar || ribbon || params.has("ribbonButton")) {
+    result = { ...(result ?? {}) };
+    if (appbar) result.workspaceTab = appbar;
+    if (ribbon) result.viewPanel = ribbon;
+    if (params.has("ribbonButton")) result.selectedViewUri = button ?? "";
+  }
+  return result;
 }
 
 /** Parse the share URL's serialized FCT XML into a fresh tree with unique client-only node IDs. */
@@ -137,8 +183,8 @@ export function parseFctQueryXml(xml: string): FctQueryTree | null {
       id = `role-filter-${path}-${encodeURIComponent(iri)}`;
     } else if (name === "class" && iri) {
       id = `class-${path}-${encodeURIComponent(iri)}`;
-    } else if (name === "state") {
-      id = `state-${path}-${encodeURIComponent((element.textContent ?? "").trim())}`;
+    } else if (name === "status") {
+      id = `status-${path}-${encodeURIComponent((element.textContent ?? "").trim())}`;
     } else {
       id = `url-${path}-${name}`;
     }
@@ -147,7 +193,7 @@ export function parseFctQueryXml(xml: string): FctQueryTree | null {
     while (usedIds.has(id)) id = `${baseId}-${suffix++}`;
     usedIds.add(id);
     const children = name === "view" ? [] : elementChildren(element).map((child, index) => parseNode(child, `${path}.${index}`, false));
-    const text = name === "text" || name === "value" || name === "state" ? (element.textContent ?? "") : undefined;
+    const text = name === "text" || name === "value" || name === "status" ? (element.textContent ?? "") : undefined;
     return { id, name, attributes, ...(text !== undefined ? { text } : {}), children };
   };
   const children = elementChildren(root).map((child, index) => parseNode(child, String(index), true));

@@ -21,7 +21,7 @@ export function PropertyUsageWidget({ tree, direction, limit, endpointReady, onN
   endpointReady: boolean;
   onNavigate: (direction: PropertyUsageDirection, selection?: { value: FctValue; checked: boolean }) => void;
 }) {
-  const title = direction === "subject" ? "Subject" : "Values";
+  const title = direction === "subject" ? "Subjects" : "Values";
   const scope = propertyUsageScope(tree);
   // Match Categories: ten visible rows per page. Fetch one extra row to
   // distinguish a full last page from a page with more results.

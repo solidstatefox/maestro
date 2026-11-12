@@ -1,18 +1,18 @@
 import { getUserGraph, getOntologyGraph, personalSparqlUrl, queryPersonalSparql, updatePersonalSparql } from "@/lib/personal-sparql";
-import { MUI_NS, MUI_STATE, MUI_HIDDEN, MUI_LAST_LOCATED_AT, RECORD_STATES, type RecordStateName } from "@/lib/personal-state-vocabulary";
+import { MUI_NS, MUI_STATUS, MUI_HIDDEN, MUI_LAST_LOCATED_AT, RECORD_STATUSES, type RecordStatusName } from "@/lib/personal-status-vocabulary";
 
-/** No state object or subject can be an RDF literal or blank node. */
+/** No status object or subject can be an RDF literal or blank node. */
 function iri(value: string): string {
-  if (!/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(value)) throw new Error("Record states require an IRI.");
+  if (!/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(value)) throw new Error("Record statuses require an IRI.");
   return `<${value}>`;
 }
 function validatedHash(queryHash: string): string {
   if (!/^sha256:[0-9a-f]{64}$/.test(queryHash)) throw new Error("A valid bookmarked-query hash is required.");
   return queryHash;
 }
-const stateGraph = (request: Request, queryHash: string) => iri(`${getUserGraph(request)}/state/${validatedHash(queryHash)}`);
+const statusGraph = (request: Request, queryHash: string) => iri(`${getUserGraph(request)}/status/${validatedHash(queryHash)}`);
 const hideGraph = (request: Request) => iri(`${getUserGraph(request)}/query-hash/hide`);
-const predicate = iri(MUI_STATE);
+const predicate = iri(MUI_STATUS);
 const hiddenObject = iri(MUI_HIDDEN);
 const locatedPredicate = iri(MUI_LAST_LOCATED_AT);
 const typeDate = iri("http://www.w3.org/2001/XMLSchema#dateTime");
@@ -23,30 +23,30 @@ const utilityGraph = iri(`${MUI_NS}UtilityGraph`);
 
 /** A query-hash graph is a durable per-query bus, not a page of results. */
 async function ensureQueryHashGraphMetadata(request: Request, queryHash: string): Promise<void> {
-  const g = stateGraph(request, queryHash);
-  const description = "Maestro's per-query resource observation and state bus. Each Results page adds distinct located resources and refreshes lastLocatedAt; Seen, Unseen, and Starred belong to those resource IRIs. Page size and offset do not change this graph's identity.";
+  const g = statusGraph(request, queryHash);
+  const description = "Maestro's per-query resource observation and status bus. Each Results page adds distinct located resources and refreshes lastLocatedAt; Seen, Unseen, and Starred belong to those resource IRIs. Page size and offset do not change this graph's identity.";
   await updatePersonalSparql(`INSERT DATA { GRAPH ${g} { ${g} ${rdfType} ${utilityGraph} ; ${rdfsLabel} "query hash graph" ; ${dctDescription} ${JSON.stringify(description)} . } }`, 30000, request);
 }
 
-export async function ensurePersonalStateSchema(request: Request): Promise<void> {
+export async function ensurePersonalStatusSchema(request: Request): Promise<void> {
   const g = iri(getOntologyGraph(request));
   const statements = [
-    `${predicate} a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ; <http://www.w3.org/2000/01/rdf-schema#label> "Record state" ; <http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/2000/01/rdf-schema#Resource> .`,
+    `${predicate} a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ; <http://www.w3.org/2000/01/rdf-schema#label> "Record status" ; <http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/2000/01/rdf-schema#Resource> .`,
     `${locatedPredicate} a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ; <http://www.w3.org/2000/01/rdf-schema#range> ${typeDate} .`,
-    ...Object.entries({ ...RECORD_STATES, Hidden: MUI_HIDDEN }).map(([name, uri]) => `${iri(uri)} a <http://www.w3.org/2000/01/rdf-schema#Resource> ; <http://www.w3.org/2000/01/rdf-schema#label> ${JSON.stringify(name)} .`),
-    `${iri(`${MUI_NS}RecordStateShape`)} a <http://www.w3.org/ns/shacl#NodeShape> ; <http://www.w3.org/ns/shacl#targetSubjectsOf> ${predicate} ; <http://www.w3.org/ns/shacl#property> ${iri(`${MUI_NS}RecordStatePropertyShape`)} .`,
-    `${iri(`${MUI_NS}RecordStatePropertyShape`)} <http://www.w3.org/ns/shacl#path> ${predicate} ; <http://www.w3.org/ns/shacl#nodeKind> <http://www.w3.org/ns/shacl#IRI> .`,
+    ...Object.entries({ ...RECORD_STATUSES, Hidden: MUI_HIDDEN }).map(([name, uri]) => `${iri(uri)} a <http://www.w3.org/2000/01/rdf-schema#Resource> ; <http://www.w3.org/2000/01/rdf-schema#label> ${JSON.stringify(name)} .`),
+    `${iri(`${MUI_NS}RecordStatusShape`)} a <http://www.w3.org/ns/shacl#NodeShape> ; <http://www.w3.org/ns/shacl#targetSubjectsOf> ${predicate} ; <http://www.w3.org/ns/shacl#property> ${iri(`${MUI_NS}RecordStatusPropertyShape`)} .`,
+    `${iri(`${MUI_NS}RecordStatusPropertyShape`)} <http://www.w3.org/ns/shacl#path> ${predicate} ; <http://www.w3.org/ns/shacl#nodeKind> <http://www.w3.org/ns/shacl#IRI> .`,
   ];
   await updatePersonalSparql(`INSERT DATA { GRAPH ${g} { ${statements.join("\n")} } }`, 30000, request);
 }
 
 /** Atomic mutually exclusive read/unread transition. Stars are orthogonal. */
-export async function updateRecordState(request: Request, queryHash: string, uri: string, state: RecordStateName, enabled: boolean): Promise<void> {
-  const subject = iri(uri), g = stateGraph(request, queryHash), object = iri(RECORD_STATES[state]);
-  if (state === "Seen" || state === "Unseen") {
-    const desired = enabled ? state : (state === "Seen" ? "Unseen" : "Seen");
+export async function updateRecordStatus(request: Request, queryHash: string, uri: string, status: RecordStatusName, enabled: boolean): Promise<void> {
+  const subject = iri(uri), g = statusGraph(request, queryHash), object = iri(RECORD_STATUSES[status]);
+  if (status === "Seen" || status === "Unseen") {
+    const desired = enabled ? status : (status === "Seen" ? "Unseen" : "Seen");
     const inverse = desired === "Seen" ? "Unseen" : "Seen";
-    await updatePersonalSparql(`DELETE { GRAPH ${g} { ${subject} ${predicate} ${iri(RECORD_STATES[inverse])} } } INSERT { GRAPH ${g} { ${subject} ${predicate} ${iri(RECORD_STATES[desired])} } } WHERE { OPTIONAL { GRAPH ${g} { ${subject} ${predicate} ${iri(RECORD_STATES[inverse])} } } }`, 30000, request);
+    await updatePersonalSparql(`DELETE { GRAPH ${g} { ${subject} ${predicate} ${iri(RECORD_STATUSES[inverse])} } } INSERT { GRAPH ${g} { ${subject} ${predicate} ${iri(RECORD_STATUSES[desired])} } } WHERE { OPTIONAL { GRAPH ${g} { ${subject} ${predicate} ${iri(RECORD_STATUSES[inverse])} } } }`, 30000, request);
   } else {
     await updatePersonalSparql(enabled
       ? `INSERT DATA { GRAPH ${g} { ${subject} ${predicate} ${object} } }`
@@ -66,21 +66,21 @@ export async function listHiddenRecords(request: Request): Promise<string[]> {
   return (response.results?.bindings ?? []).map((row) => row.s?.value ?? "").filter(Boolean);
 }
 
-export async function recordPageStates(request: Request, queryHash: string, uris: string[]): Promise<{ states: Record<string, RecordStateName[]>; hidden: string[] }> {
+export async function recordPageStatus(request: Request, queryHash: string, uris: string[]): Promise<{ statuses: Record<string, RecordStatusName[]>; hidden: string[] }> {
   const items = [...new Set(uris)].slice(0, 150);
-  if (!items.length) return { states: {}, hidden: [] };
+  if (!items.length) return { statuses: {}, hidden: [] };
   const values = items.map(iri).join(" ");
-  const g = stateGraph(request, queryHash), h = hideGraph(request);
-  const response = await queryPersonalSparql(`SELECT ?s ?state ?hidden WHERE { VALUES ?s { ${values} } OPTIONAL { GRAPH ${g} { ?s ${predicate} ?state } } OPTIONAL { GRAPH ${h} { ?s ${predicate} ${hiddenObject} } BIND(true AS ?hidden) } }`, 20000, request);
-  const states: Record<string, RecordStateName[]> = {}, hidden = new Set<string>();
-  const reverse = Object.fromEntries(Object.entries(RECORD_STATES).map(([key, value]) => [value, key])) as Record<string, RecordStateName>;
+  const g = statusGraph(request, queryHash), h = hideGraph(request);
+  const response = await queryPersonalSparql(`SELECT ?s ?status ?hidden WHERE { VALUES ?s { ${values} } OPTIONAL { GRAPH ${g} { ?s ${predicate} ?status } } OPTIONAL { GRAPH ${h} { ?s ${predicate} ${hiddenObject} } BIND(true AS ?hidden) } }`, 20000, request);
+  const statuses: Record<string, RecordStatusName[]> = {}, hidden = new Set<string>();
+  const reverse = Object.fromEntries(Object.entries(RECORD_STATUSES).map(([key, value]) => [value, key])) as Record<string, RecordStatusName>;
   for (const row of response.results?.bindings ?? []) {
-    const uri = row.s?.value, name = reverse[row.state?.value ?? ""];
+    const uri = row.s?.value, name = reverse[row.status?.value ?? ""];
     if (!uri) continue;
-    if (name) { const item = states[uri] ?? (states[uri] = []); if (!item.includes(name)) item.push(name); }
+    if (name) { const item = statuses[uri] ?? (statuses[uri] = []); if (!item.includes(name)) item.push(name); }
     if (row.hidden?.value === "true" || row.hidden?.value === "1") hidden.add(uri);
   }
-  return { states, hidden: [...hidden] };
+  return { statuses, hidden: [...hidden] };
 }
 
 /** Every page of one query execution uses the SAME timestamp. Paging cannot change it.
@@ -91,10 +91,10 @@ export async function recordLocatedPage(request: Request, queryHash: string, uri
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(executionTime) || !Number.isFinite(Date.parse(executionTime))) throw new Error("Invalid query execution timestamp.");
   const items = [...new Set(uris)].slice(0, 150);
   if (!items.length) return;
-  const values = items.map(iri).join(" "), g = stateGraph(request, queryHash);
+  const values = items.map(iri).join(" "), g = statusGraph(request, queryHash);
   await ensureQueryHashGraphMetadata(request, queryHash);
-  // Exclude SELECT-listed existing states; resources with only Stars remain Unseen.
-  await updatePersonalSparql(`INSERT { GRAPH ${g} { ?s ${predicate} ${iri(RECORD_STATES.Unseen)} } } WHERE { VALUES ?s { ${values} } FILTER NOT EXISTS { GRAPH ${g} { ?s ${predicate} ${iri(RECORD_STATES.Seen)} } } FILTER NOT EXISTS { GRAPH ${g} { ?s ${predicate} ${iri(RECORD_STATES.Unseen)} } } }`, 30000, request);
+  // Exclude SELECT-listed existing statuses; resources with only Stars remain Unseen.
+  await updatePersonalSparql(`INSERT { GRAPH ${g} { ?s ${predicate} ${iri(RECORD_STATUSES.Unseen)} } } WHERE { VALUES ?s { ${values} } FILTER NOT EXISTS { GRAPH ${g} { ?s ${predicate} ${iri(RECORD_STATUSES.Seen)} } } FILTER NOT EXISTS { GRAPH ${g} { ?s ${predicate} ${iri(RECORD_STATUSES.Unseen)} } } }`, 30000, request);
   // A resource's lastLocatedAt is updated on an explicit new execution only.
   await updatePersonalSparql(`DELETE { GRAPH ${g} { ?s ${locatedPredicate} ?old } } INSERT { GRAPH ${g} { ?s ${locatedPredicate} "${executionTime}"^^${typeDate} } } WHERE { VALUES ?s { ${values} } OPTIONAL { GRAPH ${g} { ?s ${locatedPredicate} ?old } } }`, 30000, request);
 }
@@ -105,7 +105,7 @@ export async function recordLocatedPage(request: Request, queryHash: string, uri
  * and wrapped in a COUNT or ASK. The enclosing ASK/COUNT/SELECT DISTINCT
  * performs the required projection and deduplication instead.
  *
- * The list-states view projects a simple focus variable AS ?c1. Rebinding
+ * The list-status view projects a simple focus variable AS ?c1. Rebinding
  * the focus variable inside its graph patterns preserves its identity without
  * a subquery or a BIND expression. */
 /** Compare resolved SPARQL request targets, not graph IRIs or ODS profile URLs.
@@ -121,7 +121,7 @@ function sameSparqlEndpoint(a: string, b: string): boolean {
 
 function federatedFocusSource(focusSelection: string, endpointUrl: string, personalEndpointUrl: string): string {
   const match = /^SELECT DISTINCT\s+(\?[A-Za-z][\w]*)\s+AS\s+\?c1\s+WHERE\s*\{([\s\S]*)\}\s*$/i.exec(focusSelection);
-  if (!match) throw new Error("Cannot derive the federated focus projection from the list-states FCT view.");
+  if (!match) throw new Error("Cannot derive the federated focus projection from the list-status FCT view.");
   const focusVariable = match[1];
   const patterns = match[2].trim();
   // Use a variable-token boundary rather than a plain string substitution so
@@ -133,10 +133,10 @@ function federatedFocusSource(focusSelection: string, endpointUrl: string, perso
     : `SERVICE ${iri(endpointUrl)} { ${focusPatterns} }`;
 }
 
-/** Build the exact federated ASK used for States facets without executing it.
+/** Build the exact federated ASK used for Status facets without executing it.
  * The preview and the executable query share one construction path. */
-export async function buildFederatedStatesAsk(request: Request, liveQueryXml: string, queryHash: string): Promise<{
-  askQuery: string; base: string; service: string; stateSource: string; endpointUrl: string;
+export async function buildFederatedStatusAsk(request: Request, liveQueryXml: string, queryHash: string): Promise<{
+  askQuery: string; base: string; service: string; statusSource: string; endpointUrl: string;
 }> {
   validatedHash(queryHash);
   if (!liveQueryXml || liveQueryXml.length > 100_000) throw new Error("The live FCT query is unavailable or too large.");
@@ -150,33 +150,33 @@ export async function buildFederatedStatesAsk(request: Request, liveQueryXml: st
   const requestedServer = address.slice(separator + 1);
   const { getConfiguredFctEndpoints, resolveConfiguredFctEndpoint } = await import("@/lib/personal-sparql");
   const endpoint = resolveConfiguredFctEndpoint(await getConfiguredFctEndpoints(request), requestedServer);
-  if (!endpoint?.url || !/^https?:\/\//i.test(endpoint.url)) throw new Error("The query graph server is not registered for federated States.");
-  const compiled = compileFctXmlToSparql(liveQueryXml, FCT_VIEW_TYPES.LIST_STATES);
+  if (!endpoint?.url || !/^https?:\/\//i.test(endpoint.url)) throw new Error("The query graph server is not registered for federated Status.");
+  const compiled = compileFctXmlToSparql(liveQueryXml, FCT_VIEW_TYPES.LIST_STATUS);
   const prologue = compiled.query.match(/^(?:DEFINE [^\n]+\n)*/)?.[0] ?? "";
   const focusSelection = compiled.query.slice(prologue.length).trim();
   if (!focusSelection.startsWith("SELECT DISTINCT ") || !focusSelection.includes("WHERE {")) throw new Error("Cannot derive a federated focus selection from this FCT query.");
   const base = `${prologue}PREFIX mui: <${MUI_NS}>\n`;
   const service = federatedFocusSource(focusSelection, endpoint.url, personalSparqlUrl(request).toString());
-  const g = stateGraph(request, queryHash);
-  const stateSource = `GRAPH ${g} { ?c1 ${predicate} ?state }`;
-  const askQuery = `${base}ASK WHERE { ${service} ${stateSource} FILTER(isIRI(?c1) && isIRI(?state)) }`;
-  return { askQuery, base, service, stateSource, endpointUrl: endpoint.url };
+  const g = statusGraph(request, queryHash);
+  const statusSource = `GRAPH ${g} { ?c1 ${predicate} ?status }`;
+  const askQuery = `${base}ASK WHERE { ${service} ${statusSource} FILTER(isIRI(?c1) && isIRI(?status)) }`;
+  return { askQuery, base, service, statusSource, endpointUrl: endpoint.url };
 }
 
 /** Counts come from the accumulated query-hash graph, never from just the
  * current page and never from a remote SERVICE join. A located resource with
  * no Seen assertion is New, regardless of whether Unseen was explicitly set. */
-export async function queryFederatedStateCounts(request: Request, _liveQueryXml: string, queryHash: string): Promise<{
-  hasStates: boolean; counts: Record<RecordStateName | "New" | "Hidden", number>; sparql: string;
+export async function queryFederatedStatusCounts(request: Request, _liveQueryXml: string, queryHash: string): Promise<{
+  hasStatuses: boolean; counts: Record<RecordStatusName | "New" | "Hidden", number>; sparql: string;
 }> {
-  const g = stateGraph(request, queryHash);
+  const g = statusGraph(request, queryHash);
   const h = hideGraph(request);
   const located = `GRAPH ${g} { ?c1 ${locatedPredicate} ?located }`;
   const base = `PREFIX mui: <${MUI_NS}>\n`;
   const definitions = {
-    New: `${located} FILTER NOT EXISTS { GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATES.Seen)} } }`,
-    Seen: `${located} GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATES.Seen)} }`,
-    Starred: `${located} GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATES.Starred)} }`,
+    New: `${located} FILTER NOT EXISTS { GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Seen)} } }`,
+    Seen: `${located} GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Seen)} }`,
+    Starred: `${located} GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Starred)} }`,
     Hidden: `${located} GRAPH ${h} { ?c1 ${predicate} ${hiddenObject} }`,
   } as const;
   const query = (where: string) => `${base}SELECT (COUNT(DISTINCT ?c1) AS ?ct) WHERE { ${where} }`;
@@ -186,32 +186,32 @@ export async function queryFederatedStateCounts(request: Request, _liveQueryXml:
     if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Invalid personal ${name} count.`);
     return [name, value] as const;
   }));
-  const counts: Record<RecordStateName | "New" | "Hidden", number> = { New: 0, Unseen: 0, Seen: 0, Starred: 0, Hidden: 0 };
+  const counts: Record<RecordStatusName | "New" | "Hidden", number> = { New: 0, Unseen: 0, Seen: 0, Starred: 0, Hidden: 0 };
   for (const [name, value] of entries) counts[name as keyof typeof counts] = value;
   counts.Unseen = counts.New; // Legacy internal alias; only New is displayed.
   const sparql = query(definitions.New);
-  return { hasStates: counts.New + counts.Seen + counts.Starred + counts.Hidden > 0, counts, sparql };
+  return { hasStatuses: counts.New + counts.Seen + counts.Starred + counts.Hidden > 0, counts, sparql };
 }
 
 /** The paged Results view and facet counts share the same unpaginated FCT focus
- * selection. State predicates are joined on the personal server before paging. */
-export async function queryFederatedStateResults(request: Request, liveQueryXml: string, queryHash: string,
+ * selection. Status predicates are joined on the personal server before paging. */
+export async function queryFederatedStatusResults(request: Request, liveQueryXml: string, queryHash: string,
   selected: string[], limit: number, offset: number): Promise<{ results: Array<{uri:string;title:string;matches: never[];termType:string}>; total: number; sparql: string; incomplete: boolean }> {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || !Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid Results pagination.");
   const valid = new Set(["New", "Unseen", "Seen", "Starred", "Hidden"]);
-  if (selected.some((name) => !valid.has(name))) throw new Error("Unknown state filter.");
-  // Use exactly the same FCT list-states compilation and SERVICE placement as
+  if (selected.some((name) => !valid.has(name))) throw new Error("Unknown status filter.");
+  // Use exactly the same FCT list-status compilation and SERVICE placement as
   // the previewed ASK and federated counts.
-  const { base, service: source, endpointUrl } = await buildFederatedStatesAsk(request, liveQueryXml, queryHash);
-  const g = stateGraph(request, queryHash), h = hideGraph(request);
+  const { base, service: source, endpointUrl } = await buildFederatedStatusAsk(request, liveQueryXml, queryHash);
+  const g = statusGraph(request, queryHash), h = hideGraph(request);
   const ordinary = selected.filter((name) => name !== "Hidden");
-  const stateConstraints = ordinary.length
-    ? `FILTER EXISTS { GRAPH ${g} { ?c1 ${predicate} ?selectedState } FILTER(?selectedState IN (${[...new Set(ordinary.map((name) => iri(RECORD_STATES[name === "New" ? "Unseen" : name as RecordStateName])))].join(", ")})) }`
+  const statusConstraints = ordinary.length
+    ? `FILTER EXISTS { GRAPH ${g} { ?c1 ${predicate} ?selectedStatus } FILTER(?selectedStatus IN (${[...new Set(ordinary.map((name) => iri(RECORD_STATUSES[name === "New" ? "Unseen" : name as RecordStatusName])))].join(", ")})) }`
     : "";
   const hideConstraint = selected.includes("Hidden")
     ? `FILTER EXISTS { GRAPH ${h} { ?c1 ${predicate} ${hiddenObject} } }`
     : `FILTER NOT EXISTS { GRAPH ${h} { ?c1 ${predicate} ${hiddenObject} } }`;
-  const where = `${source} FILTER(isIRI(?c1)) ${stateConstraints} ${hideConstraint}`;
+  const where = `${source} FILTER(isIRI(?c1)) ${statusConstraints} ${hideConstraint}`;
   const countResponse = await queryPersonalSparql(`${base}SELECT (COUNT(DISTINCT ?c1) AS ?ct) WHERE { ${where} }`, 30000, request);
   const total = Number(countResponse.results?.bindings?.[0]?.ct?.value ?? 0);
   if (!Number.isSafeInteger(total) || total < 0) throw new Error("Invalid federated Results count.");
@@ -224,7 +224,7 @@ export async function queryFederatedStateResults(request: Request, liveQueryXml:
     // Query just the already-paged resources; never paginate their remote labels.
     try {
       const values = resources.map(iri).join(" ");
-      const labelPatterns = `?c1 <http://www.w3.org/2000/01/rdf-schema#label> ?label . FILTER(LANG(?label) = "" || LANGMATCHES(LANG(?label), "en"))`;
+      const labelPatterns = `?c1 <http://www.w3.org/2000/01/rdf-schema#label> ?label . FILTER(DATATYPE(?label) != <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> || LANGMATCHES(LANG(?label), "en"))`;
       const labelSource = sameSparqlEndpoint(endpointUrl, personalSparqlUrl(request).toString())
         ? labelPatterns
         : `SERVICE ${iri(endpointUrl)} { ${labelPatterns} }`;

@@ -12,6 +12,8 @@ import { rememberNamespaceMetadata } from "@/lib/uri-labels";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
 
 import { ButtonGroup } from "@/components/ui/button-group";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -23,8 +25,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Check, ChevronDown, Network, Link, CirclePlay, AtSign, X, LoaderCircle, ArrowLeft, ArrowRight, ClockArrowRight, Home, RotateCw, RefreshCw, Bookmark, User, LogOut, KeyRound, Eye, EyeOff, Info, WandSparkles } from "lucide-react";
+import { Check, ChevronDown, Network, Link, CirclePlay, AtSign, X, LoaderCircle, ArrowLeft, ArrowRight, ClockArrowRight, Clock1, Clock2, Clock3, Clock4, Clock5, Clock6, Clock7, Clock8, Clock9, Clock10, Clock11, Clock12, Home, RotateCw, RefreshCw, Bookmark, User, LogOut, KeyRound, Eye, EyeOff, Info, WandSparkles } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
+import { canonicalQueryIdentityXml } from "@/lib/query-identity";
 import { AuthType, clearPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
 
@@ -35,6 +38,10 @@ import { serializeFctQuery } from "@/lib/fct-query-api";
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
 
 const MAESTRO_ALPHABET_LANGUAGES = maestroLanguages;
+// Runtime bookmark shortcuts use Lucide's dynamic loader instead of importing
+// every icon into the appbar's initial bundle. Validate persisted names too.
+const availableAppbarIconNames = new Set<string>(iconNames);
+const BOOKMARK_CLOCKS = [Clock1, Clock2, Clock3, Clock4, Clock5, Clock6, Clock7, Clock8, Clock9, Clock10, Clock11, Clock12] as const;
 
 /*
 const sampleResults = [
@@ -103,6 +110,63 @@ import type { AppBarWorkspace } from "@/canvas/controllers/workspace-interfaces"
 export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
   const [pendingQueryCount, setPendingQueryCount] = useState(0);
   const [pendingQueryDetails, setPendingQueryDetails] = useState<PendingMaestroQuery[]>([]);
+  const [appbarButtons, setAppbarButtons] = useState<{uri:string;action:string;icon:string;tooltip:string;url:string}[]>([]);
+  // Use the bookmark's authoritative FCT query, not the full URL: UI state,
+  // History cursor and parameter order can differ for the same saved query.
+  const matchedAppbarButton = (workspace.isQueryBookmarked && workspace.matchingBookmarkId
+    ? appbarButtons.find(button => button.action === workspace.matchingBookmarkId)
+    : undefined) ?? (typeof window === "undefined" ? undefined : appbarButtons.find(button => {
+    try {
+      const bookmarkedQuery = new URL(button.url, window.location.origin).searchParams.get("q");
+      return bookmarkedQuery !== null && canonicalQueryIdentityXml(bookmarkedQuery) === canonicalQueryIdentityXml(workspace.queryXml);
+    } catch { return false; }
+  }));
+  useEffect(() => {
+    if (!workspace.authSession) { setAppbarButtons([]); return; }
+    let mounted = true;
+    const refresh = async () => {
+      try {
+        const response = await fetch("/proxy/api/appbar-buttons", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list"}),cache:"no-store"});
+        if (!response.ok) return;
+        const payload = await response.json() as {buttons?:typeof appbarButtons};
+        if (mounted) setAppbarButtons(payload.buttons ?? []);
+      } catch { /* Loading optional appbar providers must not block the appbar. */ }
+    };
+    void refresh();
+    window.addEventListener("maestro:appbar-buttons-updated", refresh);
+    return () => { mounted = false; window.removeEventListener("maestro:appbar-buttons-updated", refresh); };
+  }, [workspace.authSession]);
+  const [bookmarkAttention, setBookmarkAttention] = useState(false);
+  const [policyBookmarkVisible, setPolicyBookmarkVisible] = useState(false);
+  const [bookmarkBounce, setBookmarkBounce] = useState(false);
+  // The existing bookmark workflow can await History persistence and a metadata read.
+  // Show its elapsed wall time on the button until the dialog becomes available.
+  const [bookmarkOpening, setBookmarkOpening] = useState(false);
+  const [bookmarkOpeningTenths, setBookmarkOpeningTenths] = useState(0);
+  const BookmarkLoadingClock = BOOKMARK_CLOCKS[Math.floor(bookmarkOpeningTenths / 5) % BOOKMARK_CLOCKS.length];
+  useEffect(() => {
+    if (!bookmarkOpening) return;
+    const startedAt = performance.now();
+    setBookmarkOpeningTenths(0);
+    const timer = window.setInterval(() => {
+      setBookmarkOpeningTenths(Math.floor((performance.now() - startedAt) / 100));
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [bookmarkOpening]);
+  useEffect(() => {
+    const policyRequest = (event: Event) => {
+      const active = Boolean((event as CustomEvent<{ active: boolean }>).detail?.active);
+      setPolicyBookmarkVisible(active);
+      setBookmarkAttention(active);
+      setBookmarkBounce(active);
+    };
+    window.addEventListener("maestro:policy-bookmark-attention", policyRequest);
+    return () => window.removeEventListener("maestro:policy-bookmark-attention", policyRequest);
+  }, []);
+  useEffect(() => {
+    if (workspace.isQueryBookmarked) setBookmarkBounce(false);
+  }, [workspace.isQueryBookmarked]);
+  useEffect(() => { if (workspace.isQueryBookmarked) setBookmarkAttention(false); }, [workspace.isQueryBookmarked]);
   useEffect(() => subscribePendingMaestroQueries(setPendingQueryCount), []);
   useEffect(() => subscribePendingMaestroQueryDetails(setPendingQueryDetails), []);
   const {
@@ -116,7 +180,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     bookmarkTagVocabulary,
     bookmarkTags,
     effectiveResultsTotalCount,
-    recordStates,
+    recordStatus,
     bookmarkTitle,
     bookmarkTitleInputRef,
     browserLogLevel,
@@ -462,14 +526,27 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
           </div>
         </div>
         {authSession && (
+        <div className="flex shrink-0 items-center gap-1">
+        {/* The native bookmark toggle represents the live query's saved state.
+            Custom providers are navigation shortcuts, not bookmark state. */}
+        <ToggleGroup type="single" value={isQueryBookmarked ? "bookmark" : ""} aria-label="Current query bookmark" className="shrink-0 rounded-md border">
         <Tooltip>
           <TooltipTrigger render={
-            <Button
+            <ToggleGroupItem
+              value="bookmark"
               type="button"
-              variant="outline"
-              size="icon"
-              aria-label={isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}
+              id="maestro-bookmark-button"
+              disabled={bookmarkOpening}
+              aria-label={bookmarkOpening ? "Opening bookmark dialog" : isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}
+              className={`${bookmarkOpening ? "h-9 w-auto min-w-20 px-2.5" : "size-9"} data-[state=on]:text-amber-500 ${bookmarkBounce && policyBookmarkVisible && !isQueryBookmarked && !bookmarkOpening ? "animate-bounce ring-2 ring-amber-400 ring-offset-2" : ""}`}
+              onAnimationIteration={() => {
+                // Recheck the three requirements on EACH bounce, not just when a request arrives.
+                const visible = Boolean(document.querySelector('[data-policy-bookmark-banner="true"]'));
+                if (!visible || !policyBookmarkVisible || isQueryBookmarked) setBookmarkBounce(false);
+              }}
               onClick={async () => {
+                setBookmarkAttention(false);
+                setBookmarkBounce(false);
                 if (isQueryBookmarked) {
                   try {
                     const response = await fetch("/proxy/api/query-favorites", {
@@ -489,6 +566,8 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   }
                   return;
                 }
+                setBookmarkOpening(true);
+                try {
                 // Wait until the queued visit write has finished before opening
                 // metadata for the current query. Otherwise a fast click after
                 // editing can race the visit and leave the dialog at "Saved query".
@@ -516,11 +595,27 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   }
                 }
                 setBookmarkDialogOpen(true);
+                } finally {
+                  setBookmarkOpening(false);
+                }
               }}
-            ><Bookmark aria-hidden="true" className={isQueryBookmarked ? "fill-current text-amber-500" : ""} /></Button>
+            >{bookmarkOpening ? <span className="inline-flex min-w-0 items-center justify-center gap-1 whitespace-nowrap text-xs tabular-nums" aria-label={`Opening bookmark dialog, ${Math.floor(bookmarkOpeningTenths / 10)} seconds elapsed`}><BookmarkLoadingClock className="size-3.5 shrink-0" aria-hidden="true" /><span>{Math.floor(bookmarkOpeningTenths / 10)}s</span></span> : <Bookmark aria-hidden="true" className={isQueryBookmarked ? "fill-current text-amber-500" : ""} />}</ToggleGroupItem>
           } />
-          <TooltipContent>{isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}</TooltipContent>
+          <TooltipContent>{bookmarkAttention && !isQueryBookmarked ? "Bookmark this query to continue" : isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}</TooltipContent>
         </Tooltip>
+        </ToggleGroup>
+        {appbarButtons.length > 0 && (
+        <ToggleGroup type="single" value={matchedAppbarButton?.uri ?? ""} aria-label="Pinned bookmark shortcuts" className="shrink-0 rounded-md border"> 
+        {appbarButtons.map(item => {
+          const iconName = availableAppbarIconNames.has(item.icon) ? item.icon as IconName : null;
+          return <Tooltip key={item.uri}><TooltipTrigger render={<ToggleGroupItem value={item.uri} aria-label={item.tooltip} title={item.tooltip} className="rounded-none border-l data-[state=on]:text-amber-500" onClick={() => {
+            try { const destination = new URL(item.url,window.location.origin); if (destination.origin === window.location.origin && /^https?:$/.test(destination.protocol) && destination.searchParams.has("q")) { window.location.assign(destination.href); } else toast.add({title:"Invalid bookmark share URL",type:"error"}); }
+            catch { toast.add({title:"Bookmark has no valid share URL",type:"error"}); }
+          }}>{iconName ? <DynamicIcon name={iconName} className="size-4" aria-hidden="true" fallback={() => <Bookmark className="size-4" aria-hidden="true" />} /> : <Bookmark className="size-4" aria-hidden="true" />}</ToggleGroupItem>} /><TooltipContent>{item.tooltip}</TooltipContent></Tooltip>;
+        })}
+        </ToggleGroup>
+        )}
+        </div>
         )}
         <Dialog open={bookmarkDialogOpen} onOpenChange={(open) => { if (!bookmarkSaving) setBookmarkDialogOpen(open); }}>
             <DialogContent className="max-w-lg p-5" showCloseButton={false}>
@@ -548,7 +643,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ action: "update", historyId: targetHistoryId, title: bookmarkTitle.trim() || targetHistoryId.slice(targetHistoryId.lastIndexOf("#") + 1), description: bookmarkDescription.trim(), tags, tagVocabulary: bookmarkTagVocabulary, queryXml: serializeFctQuery(queryTree), stateUrl: window.location.href,
                       lastResultCount: effectiveResultsTotalCount,
-                      lastNewCount: recordStates.enabled && recordStates.countsReady && !recordStates.loading && !recordStates.error ? recordStates.counts.New : null }),
+                      lastNewCount: recordStatus.enabled && recordStatus.countsReady && !recordStatus.loading && !recordStatus.error ? recordStatus.counts.New : null }),
                   });
                   const payload = await response.json() as { error?: string; namespaces?: unknown; historyId?: string; shareUrl?: string };
                   if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
@@ -618,13 +713,13 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   await navigator.clipboard.writeText(window.location.href);
                   setShareLinkCopied(true);
                   toast.add({ title: "Share link copied", description: "The query URL is on your clipboard.", type: "success" });
-                  window.setTimeout(() => setShareLinkCopied(false), 1800);
+                  window.setTimeout(() => setShareLinkCopied(false), 2500);
                 } catch {
                   setShareLinkCopied(false);
                   toast.add({ title: "Could not copy share link", description: "The browser denied clipboard access.", type: "error" });
                 }
               }}
-            ><Link aria-hidden="true" /></Button>
+            >{shareLinkCopied ? <Check aria-hidden="true" /> : <Link aria-hidden="true" />}</Button>
           } />
           <TooltipContent>{shareLinkCopied ? "Share link copied" : "Copy share link"}</TooltipContent>
         </Tooltip>

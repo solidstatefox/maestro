@@ -551,7 +551,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
     }));
   }
 
-  /** Clear all facet/path constraints while preserving root settings and view configuration. */
+  /** Clear all facet/path constraints and return to a root list view, preserving root settings. */
   function resetQuery() {
     updateTree((tree) => {
       const textNode: FctQueryNode = {
@@ -563,11 +563,11 @@ function createQueryStore(initialTree?: FctQueryTree) {
       };
       const existingView = findNodeInTree(tree, "query-view");
       const viewNode: FctQueryNode = existingView
-        ? { ...existingView, children: [], attributes: { ...existingView.attributes, offset: "0" } }
+        ? { ...existingView, children: [], attributes: { ...existingView.attributes, type: "list", offset: "0" } }
         : {
             id: "query-view",
             name: "view",
-            attributes: { type: "text", limit: "30", offset: "0" },
+            attributes: { type: "list", limit: "30", offset: "0" },
             children: [],
           };
       return { ...tree, children: [textNode, viewNode] };

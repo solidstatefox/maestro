@@ -26,7 +26,7 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 /** BrowseResultsCanvas: Browse-only content, using the shared query and result state. */
 export function BrowseResultsCanvas({ workspace }: { workspace: WorkspaceController }) {
  const { activeQueryIdentityRef, centralTab, endpointReadyForQuery, expandedUris, facetHoverPreview, initialBrowseTriggered, isRootView, isSearching, liveQueryHasText, navigateResultBadge, results, resultsLoadedQueryIdentityRef, resultsBatchRequestPending, resultsPageComplete, resultsUiPage, resultsPageSize, search, searchError, selectedUri, setExpandedUris, setSelectedUri, showResultBadges, tutorialMode, urlStateInitialized, visibleResultsPage, workspaceTab } = workspace;
- const { recordStates } = workspace;
+ const { recordStatus } = workspace;
  const stateFilteredResults = visibleResultsPage; // Server applies state filters before LIMIT/OFFSET.
  const { renderScopeValueBadge } = createBreadcrumbRenderers(workspace);
  return <>

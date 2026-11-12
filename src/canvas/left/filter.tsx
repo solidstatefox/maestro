@@ -1,4 +1,5 @@
 "use client";
+import { FacetItemDecoration } from "@/lib/facet-decoration-contract";
 import { readAutoConfiguredFacetKeys, type FacetAutofillCandidates, type AutoConfiguredFacetKey } from "@/canvas/left/configure";
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -342,7 +343,7 @@ export function getActiveViewPropertyFilters(tree: FctQueryTree): FctQueryNode[]
 /** Return reverse-property filters attached to the active view's scope only.
  * Ancestor <property-of> nodes are navigation breadcrumbs, not filters for the
  * current result set; every direct <property-of> child of the view scope
- * is a candidate, including an existing relationship marked src="shacl".
+ * is a candidate, regardless of how that relationship was introduced.
  */
 export function getActiveViewRoleFilters(tree: FctQueryTree): FctQueryNode[] {
   function findViewScope(nodes: FctQueryNode[]): FctQueryNode[] | null {
@@ -363,22 +364,28 @@ export function getActiveViewRoleFilters(tree: FctQueryTree): FctQueryNode[] {
   );
 }
 
-/** The Personal pane also lists values for the view-bearing reverse edge.
- * Keep this distinct from sibling-only filter discovery and badge selection. */
+/** Personal Roles facets are ONLY the explicit reverse relationships in the
+ * current view carrier's children. The carrier itself is the result focus,
+ * not a facet, even when it is a <property-of>. */
 export function getPersonalRoleFacetNodes(tree: FctQueryTree): FctQueryNode[] {
-  const siblings = getActiveViewRoleFilters(tree);
-  const carrier = (nodes: FctQueryNode[]): FctQueryNode | null => {
+  return getActiveViewRoleFilters(tree);
+}
+
+/** Value-selection lookup may also inspect the carrier's own <value> bindings,
+ * but that must never manufacture a facet card. */
+function getRoleSelectionNodes(tree: FctQueryTree, uri: string): FctQueryNode[] {
+  const facets = getActiveViewRoleFilters(tree).filter(node => node.attributes.iri === uri);
+  const findCarrier = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
     for (const node of nodes) {
-      if (node.children.some((child) => child.id === "query-view")) return node;
-      const found = carrier(node.children);
-      if (found) return found;
+      if (node.children.some(child => child.id === "query-view" || child.name === "view")) return node;
+      const nested = findCarrier(node.children);
+      if (nested) return nested;
     }
-    return null;
+    return undefined;
   };
-  const focus = carrier(tree.children);
-  return focus?.name === "property-of" && focus.attributes.iri
-    ? [focus, ...siblings]
-    : siblings;
+  const carrier = findCarrier(tree.children);
+  return carrier?.name === "property-of" && carrier.attributes.iri === uri &&
+    !facets.some(node => node.id === carrier.id) ? [carrier, ...facets] : facets;
 }
 
 export function treeHasPropertyFilter(
@@ -593,7 +600,7 @@ export function PersonalRoleWidget({
   // The Configure role filter and the view-bearing role can have the same
   // predicate but different node IDs. Their selected values describe the same
   // binding and must be reflected in the Personal role facet.
-  const roleSelectionNodes = getPersonalRoleFacetNodes(tree).filter((node) => node.attributes.iri === uri);
+  const roleSelectionNodes = getRoleSelectionNodes(tree, uri);
   const selectedValueNodes = roleSelectionNodes.flatMap((node) =>
     node.children.filter((child) => child.name === "value" && Boolean(child.text)));
   const selectedValueNodesByKey = new Map(selectedValueNodes.map((node) =>
@@ -689,6 +696,7 @@ export function PersonalRoleWidget({
               return <label key={`${binding.text}:${binding.datatype ?? ""}:${binding.lang ?? ""}:${index}`} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50">
                 <input type="checkbox" checked onChange={() => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, false)}
                   className="mt-0.5 size-4 shrink-0 accent-current" aria-label={`Remove selected role value ${value.title || value.uri}`} />
+                <FacetItemDecoration direction="reverse" iri={uri} value={facetValueKey(value)}/>
                 <span className="min-w-0 flex-1 break-words">{value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}</span>
               </label>;
             })}
@@ -704,6 +712,7 @@ export function PersonalRoleWidget({
           return (
             <div key={`${value.uri}:${value.datatype ?? ""}:${value.lang ?? ""}`} className={`flex w-full items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50 ${isGroupByRole ? "" : "cursor-pointer"}`}>
               <input id={`personal-role-value-${roleNode.id}-${valueIndex}`} type="checkbox" disabled={loading} checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}`} />
+              <FacetItemDecoration direction="reverse" iri={uri} value={facetValueKey(value)}/>
               {isGroupByRole ? (
                 <Tooltip><TooltipTrigger render={<button type="button" onClick={() => onGroupValueClick(value)} className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`}>{value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}</button>} /><TooltipContent>{`Scroll to group ${value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}`}</TooltipContent></Tooltip>
               ) : (

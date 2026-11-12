@@ -25,8 +25,7 @@ export function blankNodeRecordListValuesQuery(
   if (!view || !view.parentElement) throw new Error("Results query has no view carrier.");
   const carrier = view.parentElement;
   const hasRolePredicate = (node: Element) =>
-    node.localName === "property-of" && node.getAttribute("iri") === predicate &&
-    node.getAttribute("project") !== "yes";
+    node.localName === "property-of" && node.getAttribute("iri") === predicate;
 
   // Most commonly the role is an immediate sibling of <view> inside the
   // property that binds the blank node. Do not move <view> in this case.

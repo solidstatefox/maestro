@@ -10,8 +10,8 @@ import { useQuerySessionState, useQuerySessionController } from "@/canvas/contro
 import { usePreferencesState, readToolbarToggleState } from "@/canvas/controllers/preferences";
 import { useFacetsState, useFacetRuntimeState } from "@/canvas/controllers/facets";
 import { useResultsState } from "@/canvas/controllers/results";
-import { usePersonalRecordStates } from "@/canvas/controllers/personal-record-states";
-import type { StateFacetName } from "@/lib/personal-state-vocabulary";
+import { usePersonalRecordStatus } from "@/canvas/controllers/personal-record-status";
+import type { StatusFacetName } from "@/lib/personal-status-vocabulary";
 import { canUsePersonalStore } from "@/lib/personal-session-access";
 import { useRecordState } from "@/canvas/controllers/record";
 import { useViewState } from "@/canvas/controllers/view";
@@ -26,7 +26,7 @@ import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
 import { listValuesQueryClone, parseListValuesXml, escapeXmlText, parseFctResponse, readFctResponse, presentServerError, facetLoadErrorMessage, groupValueKey, fctTermKey, facetValueKey, groupValueBinding, type EnrichedTerm, type ScopeValue, type FctResponseColumn, type FctMatch, type FctResult, type ParsedFctResponse, type ListValueProjection, type RelationshipDirection } from "@/canvas/utils/fct-response";
 import { DistinctCount, distinctCountQueryFor, personalFacetInspectorQueries, PersonalWidgetQueryListener, PersonalRoleWidget, getActiveViewPropertyFilters, getActiveViewRoleFilters, getPersonalRoleFacetNodes, treeHasPropertyFilter, compareGroupValues, type PersonalWidget, type ScopeRelationship, type GroupByOption, type GroupMembersState, type RoleWidgetStatus } from "@/canvas/left/filter";
-import { findQueryNode, queryTreeHasStates, ellipsize, RDF_TYPE_URI, GROUP_BY_FACET_HIGHLIGHT_CLASSES, readGraphServerFromQueryXml, readShareableUiState, parseFctQueryXml, workbenchQueryTreeApi, type ShareableUiState } from "@/canvas/utils/query-controller";
+import { findQueryNode, queryTreeHasStatuses, ellipsize, RDF_TYPE_URI, GROUP_BY_FACET_HIGHLIGHT_CLASSES, readGraphServerFromQueryXml, readShareableUiState, parseFctQueryXml, workbenchQueryTreeApi, type ShareableUiState, APPBAR_TAB_NUMBER, VIEW_RIBBON_TAB_NUMBER, decodeAppbarTab, copyRibbonUrlParams } from "@/canvas/utils/query-controller";
 
 
 import { getLocalStorageUsageBytes, formatStorageBytes, useBrowserLoggingSettings, useLocalStorageUsage } from "@/canvas/sheet/settings";
@@ -49,7 +49,6 @@ import { renderValueOperator } from "@/canvas/top/breadcrumb";
 
 import { FCT_VIEW_TYPES, type FctViewType } from "@/lib/fct-view-types";
 import { propertyUsageNavigation, type PropertyUsageDirection } from "@/lib/property-usage-query";
-import { reconcileResultBadgeProjections } from "@/lib/fct-query-derived";
 import type { FctValue } from "@/lib/fct-query-api";
 import maestroLanguages from "@/data/maestro-languages.json";
 import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
@@ -60,6 +59,7 @@ import { rememberNamespaceMetadata, rememberShortforms, setNamespacePrefixSource
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
+import { featureFctQuery } from "@/lib/feature-fct-query";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { configureMaestroBrowserLogging, type BrowserLogLevel } from "@/lib/maestro-client-logging";
 import type { ReactNode, Dispatch, SetStateAction, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
@@ -464,9 +464,8 @@ export function useWorkspaceController() {
   // while the full query and shareable UI state are still being restored.
   useLayoutEffect(() => {
     const requestedTab = new URLSearchParams(window.location.search).get("tab");
-    if (requestedTab === "browse" || requestedTab === "view" || requestedTab === "analyze") {
-      setWorkspaceTab(requestedTab);
-    }
+    const decodedTab = decodeAppbarTab(requestedTab);
+    if (decodedTab) setWorkspaceTab(decodedTab);
   }, []);
   const { analysisDefinitions, setAnalysisDefinitions, selectedAnalysisUri, setSelectedAnalysisUri, analysisTable, setAnalysisTable, analysisColumnWidths, setAnalysisColumnWidths, analysisSelection, setAnalysisSelection, analysisError, setAnalysisError, analysisLoading, setAnalysisLoading, analysisValuesState, setAnalysisValuesState, analysisValuesError, setAnalysisValuesError, compareFacet, setCompareFacet, analyzeHistogram, setAnalyzeHistogram, analysisRenderedBaseRef, analysisPresentationStyle, beginAnalysisColumnResize } = useAnalyzeState();
   
@@ -1596,23 +1595,23 @@ useEffect(() => {
   }, []);
 
   const queryXml = serializeFctQuery(queryTree);
-  // States are ordinary, scope-local FCT nodes, just like <class>.
+  // Status filters are ordinary, scope-local FCT nodes, just like <class>.
   // No separate React selection state and no bookmark-dependent Results mode.
-  const stateFilterScopeId = getPropertyPath().at(-1)?.id ?? null;
-  const stateScope = stateFilterScopeId ? findQueryNode(queryTree.children, stateFilterScopeId) : undefined;
-  const scopeStateNodes = (stateScope?.children ?? queryTree.children).filter((node) => node.name === "state");
-  const selectedStateFilters = new Set<StateFacetName>(scopeStateNodes
+  const statusFilterScopeId = getPropertyPath().at(-1)?.id ?? null;
+  const statusScope = statusFilterScopeId ? findQueryNode(queryTree.children, statusFilterScopeId) : undefined;
+  const scopeStatusNodes = (statusScope?.children ?? queryTree.children).filter((node) => node.name === "status");
+  const selectedStatusFilters = new Set<StatusFacetName>(scopeStatusNodes
     .map((node) => (node.text ?? "").trim().replace("gttp://ggg.maestro.ecosys/ns/ui#", ""))
-    .filter((name): name is StateFacetName => name === "New" || name === "Seen" || name === "Starred" || name === "Hidden"));
-  const toggleSelectedStateFilter = useCallback((name: StateFacetName) => {
+    .filter((name): name is StatusFacetName => name === "New" || name === "Seen" || name === "Starred" || name === "Hidden"));
+  const toggleSelectedStatusFilter = useCallback((name: StatusFacetName) => {
     const uri = `gttp://ggg.maestro.ecosys/ns/ui#${name}`;
-    const scope = stateFilterScopeId ? findQueryNode(queryTree.children, stateFilterScopeId) : undefined;
-    const existing = (scope?.children ?? queryTree.children).find((node) => node.name === "state" && node.text?.trim() === uri);
+    const scope = statusFilterScopeId ? findQueryNode(queryTree.children, statusFilterScopeId) : undefined;
+    const existing = (scope?.children ?? queryTree.children).find((node) => node.name === "status" && node.text?.trim() === uri);
     if (existing) deleteNode(existing.id);
-    else insertNode(stateFilterScopeId, { id: `state-${crypto.randomUUID()}`, name: "state", attributes: { type: "uri" }, text: uri, children: [] });
+    else insertNode(statusFilterScopeId, { id: `status-${crypto.randomUUID()}`, name: "status", attributes: { type: "uri" }, text: uri, children: [] });
     setResultsUiPage(0);
     setResultsPage(resultsBatchSize, 0);
-  }, [stateFilterScopeId, queryTree, deleteNode, insertNode, resultsBatchSize, setResultsPage]);
+  }, [statusFilterScopeId, queryTree, deleteNode, insertNode, resultsBatchSize, setResultsPage]);
 
   // Load vocabulary namespace labels from the app's LOD metadata route. Known
   // prefixes are seeded synchronously, so the UI never falls back to nsN for
@@ -1778,7 +1777,7 @@ useEffect(() => {
     if (restored) {
       // Ribbon identity is the SHACL provider resource URI, never its label.
       if (restored.viewPanel === "trail" || restored.viewPanel === "perspectives" || restored.viewPanel === "features") setViewPanel(restored.viewPanel);
-      if (typeof restored.selectedViewUri === "string" && restored.selectedViewUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedViewUri)) setSelectedViewUri(restored.selectedViewUri);
+      if (restored.selectedViewUri === "" || (typeof restored.selectedViewUri === "string" && restored.selectedViewUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedViewUri))) setSelectedViewUri(restored.selectedViewUri);
       if (restored.viewFeature === null || restored.viewFeature === "policies" || restored.viewFeature === "formats" || restored.viewFeature === "transcoders") setViewFeature(restored.viewFeature);
       if (typeof restored.selectedAnalysisUri === "string" && restored.selectedAnalysisUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedAnalysisUri)) setSelectedAnalysisUri(restored.selectedAnalysisUri);
       if (typeof restored.analyzeHistogram === "boolean") setAnalyzeHistogram(restored.analyzeHistogram);
@@ -1882,12 +1881,13 @@ useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     // Select the URL tab before restoring any query or saved UI state.
     const tabFromUrl = params.get("tab");
-    if (tabFromUrl === "browse" || tabFromUrl === "view" || tabFromUrl === "analyze") setWorkspaceTab(tabFromUrl);
+    const decodedTabFromUrl = decodeAppbarTab(tabFromUrl);
+    if (decodedTabFromUrl) setWorkspaceTab(decodedTabFromUrl);
     const initialUiState = readShareableUiState();
     restoreQueryAndUiState(params.get("q"), initialUiState, params.get("history"));
     if (!initialUiState) setShowResultBadges(maestroStorageGet("maestro-show-result-badges") === "true");
     // An explicit ?tab= wins over a possibly older workspaceTab in saved state.
-    if (tabFromUrl === "browse" || tabFromUrl === "view" || tabFromUrl === "analyze") setWorkspaceTab(tabFromUrl);
+    if (decodedTabFromUrl) setWorkspaceTab(decodedTabFromUrl);
     setUrlStateInitialized(true);
   // This is intentionally a one-time initializer for the initial URL only.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1897,7 +1897,10 @@ useEffect(() => {
     if (!urlStateInitialized) return;
     const params = new URLSearchParams(window.location.search);
     params.set("q", queryXml);
-    params.set("tab", workspaceTab);
+    params.set("tab", String(APPBAR_TAB_NUMBER[workspaceTab]));
+    params.set("ribbonTab", String(VIEW_RIBBON_TAB_NUMBER[viewPanel]));
+    // URI, not a hash: the provider resource is the identity of the ribbon button.
+    params.set("ribbonButton", workspaceTab === "view" && viewPanel === "perspectives" ? selectedViewUri : "");
     const state: ShareableUiState = {
       selectedFacet,
       propertiesPage,
@@ -1906,9 +1909,6 @@ useEffect(() => {
       rolesPage,
       findEndpointsEnabled,
       centralTab,
-      workspaceTab,
-      viewPanel,
-      selectedViewUri,
       viewFeature,
       selectedAnalysisUri,
       analyzeHistogram,
@@ -1968,7 +1968,8 @@ useEffect(() => {
 
   // Each distinct FCT query gets its own History record. While the root breadcrumb
   // search is visible, coalesce all query/UI changes and persist only the latest
-  // snapshot after the search closes. UI-only changes otherwise update the visit.
+  // snapshot after the search closes. Ribbon/perspective selections are UI-only
+  // changes too: they must update the saved visit URL, not just the address bar.
   useEffect(() => {
     if (!urlStateInitialized) return;
     // Not logged in: never record History. Tracking refs stay untouched so the current query is recorded as a fresh visit after login.
@@ -2043,7 +2044,7 @@ useEffect(() => {
     historyWriteQueueRef.current = historyWriteQueueRef.current.then(synchronizeWhenCollapsed, synchronizeWhenCollapsed);
     // Do not cancel queued writes in effect cleanup; pending History is flushed
     // when the root breadcrumb search field closes.
-  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession, selectedSignalMode]);
+  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession, selectedSignalMode, viewPanel, selectedViewUri, viewFeature, selectedAnalysisUri, analyzeHistogram]);
 
   // The graph text box may contain an unapplied draft distinct from the query's graph binding.
   // Restore that draft after the query-graph synchronization effect has run once.
@@ -2150,11 +2151,13 @@ useEffect(() => {
   }
   const sourceSparql = sparqlQuery || "# SPARQL will appear after the endpoint returns a query.";
   function navigatePropertyUsage(direction: PropertyUsageDirection, selection?: { value: FctValue; checked: boolean }) {
-    // A native property usage facet traverses the predicate bound by
-    // rdf:Property. When the property IRI is fixed, use a normal forward or
-    // reverse relationship carrying <view type="list"> instead.
-    const next = propertyUsageNavigation(queryTree, direction, selection);
-    if (next === queryTree) return;
+    // Pivot through the predicate selected in Results. A checkbox binds its
+    // Subject/Values item to the new relationship, never the predicate itself.
+    const next = propertyUsageNavigation(queryTree, direction, selection, selectedUri);
+    if (next === queryTree) {
+      toast.add({ title: "Select a property first", description: "Select a predicate resource in Results before navigating.", type: "error" });
+      return;
+    }
     replaceQueryTree(next);
     setCentralTab("results");
     setWorkspaceTab("browse");
@@ -2924,8 +2927,8 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         if (!resultsCountSparql) {
           throw new Error("The current FCT query tree contains a condition that cannot be compiled safely to SPARQL.");
         }
-        const hasStates = queryTreeHasStates(queryTree);
-        const response = hasStates
+        const hasStatuses = queryTreeHasStatuses(queryTree);
+        const response = hasStatuses
           ? await cachedFetchFct("/proxy/api/fct", {
               method: "POST", cache: "no-store", signal: controller.signal,
               headers: { "Content-Type": "application/json" },
@@ -2938,7 +2941,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
               signal: controller.signal,
             });
         let total: number;
-        if (hasStates) {
+        if (hasStatuses) {
           const xml = await response.text();
           if (!response.ok) throw new Error(xml.slice(0, 500) || "State-constrained FCT count failed.");
           const doc = new DOMParser().parseFromString(xml, "application/xml");
@@ -3163,7 +3166,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           queryFingerprint: proxyDebugFingerprint(resultsRequestXml),
           queryLength: resultsRequestXml.length,
         });
-        const response = await (queryTreeHasStates(queryTree)
+        const response = await (queryTreeHasStatuses(queryTree)
           ? cachedFetchFct("/proxy/api/fct", {
               method: "POST", cache: "no-store", signal: controller.signal,
               headers: { "Content-Type": "text/xml; charset=utf-8" }, body: resultsRequestXml,
@@ -3262,33 +3265,14 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     .filter((iri, index, all) => all.indexOf(iri) === index)
     .join("\u0000");
 
-  // The live query store, not the list-values serializer, owns relationship
-  // identity. Reuse existing predicate nodes for Badges; remove all project
-  // flags in the current view scope when the toggle is off. Badge-only nodes
-  // are removed as well so turning Badges off cannot add existence filters.
-  useEffect(() => {
-    if (!urlStateInitialized) return;
-    const projectionColumns = [
-      { property: RDF_TYPE_URI, direction: "forward" as const },
-      ...(resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000").map(property => ({ property, direction: "forward" as const })) : []),
-      ...(resultBadgeRolesKey ? resultBadgeRolesKey.split("\u0000").map(property => ({ property, direction: "reverse" as const })) : []),
-    ];
-    const reconciled = reconcileResultBadgeProjections(queryTree, showResultBadges, projectionColumns);
-    if (serializeFctQuery(reconciled) !== serializeFctQuery(queryTree)) replaceQueryTree(reconciled);
-  }, [urlStateInitialized, showResultBadges, resultBadgePropertiesKey, resultBadgeRolesKey, queryTree, replaceQueryTree]);
-
+  // Badge visibility is presentation state, never an edit to the live FCT query.
+  // The separate list-values request receives its columns explicitly.
   // This is the same FCT XML supplied to Results list-values enrichment.
   // Its response carries both executed SPARQL statements (page + projections).
   const resultsListValuesXml = (() => {
     if (!showResultBadges) return "";
-    const forward = [...new Set([RDF_TYPE_URI,
-      ...(resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000") : [])])];
-    const reverse = resultBadgeRolesKey ? resultBadgeRolesKey.split("\u0000") : [];
     try {
-      return listValuesQueryClone(serializeFctQuery(queryTree), [
-        ...forward.map((property) => ({ property, direction: "forward" as const })),
-        ...reverse.map((property) => ({ property, direction: "reverse" as const })),
-      ]);
+      return listValuesQueryClone(serializeFctQuery(queryTree));
     } catch { return ""; }
   })();
   // The inspector must show list-values SPARQL, never the unrelated Results
@@ -3366,7 +3350,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
               "Content-Type": "application/json",
               ...proxyDebugHeaders("results-enrichment", `ResultsListValues:${proxyDebugFingerprint(`${resultBadgeUrisKey}:${resultBadgePropertiesKey}:${resultBadgeRolesKey}`)}:${start / maxResourcesPerRequest + 1}`),
             },
-            body: JSON.stringify({ queryXml, resources: batch }),
+            body: JSON.stringify({ queryXml, resources: batch, projections: projectionColumns }),
             signal: controller.signal,
           });
           const xml = await response.text();
@@ -3983,8 +3967,8 @@ setGraphFacets(graphs);
   const liveQueryHasText = queryTree.children.some((node) => node.name === "text");
   const visibleResultsPage = allLoadedResults.slice(resultsUiPage * resultsPageSize, (resultsUiPage + 1) * resultsPageSize);
   // The lit Bookmark button is the sole client-side feature gate for Personal states.
-  const recordStates = usePersonalRecordStates({ enabled: personalStoreReady && isQueryBookmarked, results: visibleResultsPage, selectedUri, queryXml, resultsReady: urlStateInitialized && !isSearching && endpointReadyForQuery, pageIdentity: `${resultsOffset}:${resultsUiPage}:${resultsPageSize}:${queryRefreshRevision}`,
-    onHiddenChanged: refreshQuery, selectedStates: selectedStateFilters, toggleSelectedState: toggleSelectedStateFilter });
+  const recordStatus = usePersonalRecordStatus({ enabled: personalStoreReady && isQueryBookmarked, results: visibleResultsPage, selectedUri, queryXml, resultsReady: urlStateInitialized && !isSearching && endpointReadyForQuery, pageIdentity: `${resultsOffset}:${resultsUiPage}:${resultsPageSize}:${queryRefreshRevision}`,
+    onHiddenChanged: refreshQuery, selectedStatuses: selectedStatusFilters, toggleSelectedStatus: toggleSelectedStatusFilter });
   // Save last *known* query-wide Results/New observations on the History visit.
   // Unavailable statistics are never converted to zero, and stale pipelines
   // cannot overwrite a newer query's visit.
@@ -3993,8 +3977,8 @@ setGraphFacets(graphs);
     if (!personalStoreReady || !urlStateInitialized || isSearching || isCountingResults || effectiveResultsTotalCount === null) return;
     const historyId = historyVisitQueryRef.current === queryXml ? historyVisitIdRef.current : "";
     if (!historyId) return;
-    const lastNewCount = recordStates.enabled && recordStates.countsReady && !recordStates.loading && !recordStates.error
-      ? recordStates.counts.New : null;
+    const lastNewCount = recordStatus.enabled && recordStatus.countsReady && !recordStatus.loading && !recordStatus.error
+      ? recordStatus.counts.New : null;
     const key = `${historyId}:${effectiveResultsTotalCount}:${lastNewCount ?? "unknown"}`;
     if (historyMetricWriteKeyRef.current === key) return;
     historyMetricWriteKeyRef.current = key;
@@ -4005,8 +3989,8 @@ setGraphFacets(graphs);
     }).then(response => { if (!response.ok && historyMetricWriteKeyRef.current === key) historyMetricWriteKeyRef.current = ""; })
       .catch(() => { if (historyMetricWriteKeyRef.current === key) historyMetricWriteKeyRef.current = ""; });
   }, [personalStoreReady, urlStateInitialized, isSearching, isCountingResults, effectiveResultsTotalCount,
-    queryXml, historyBookmarkId, recordStates.enabled, recordStates.countsReady,
-    recordStates.loading, recordStates.error, recordStates.counts.New]);
+    queryXml, historyBookmarkId, recordStatus.enabled, recordStatus.countsReady,
+    recordStatus.loading, recordStatus.error, recordStatus.counts.New]);
 
   useEffect(() => {
     // Group members can be selected even when they are not on the ordinary
@@ -4524,7 +4508,8 @@ setGraphFacets(graphs);
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-discover", "RecordPolicyDiscovery") },
-      body: JSON.stringify({ action: "discover", recordTypes }),
+      body: JSON.stringify({ action: "discover", recordTypes, recordUri: selectedUri, queryXml,
+        historyUri: historyVisitQueryRef.current === queryXml ? historyVisitIdRef.current : undefined }),
       signal: controller.signal,
     }).then(async (response) => {
       const payload = await response.json() as { policies?: { uri: string; label: string; recordShape: string; matchedClasses?: string[]; templates: { uri: string; label: string }[] }[]; error?: string; debugSparql?: string };
@@ -4597,7 +4582,7 @@ setGraphFacets(graphs);
       }
     }).finally(() => { if (!controller.signal.aborted) { setIsLoadingRecordPolicy(false); setRecordPolicyCheckedUri(selectedUri); } });
     return () => controller.abort();
-  }, [selectedUri, selectedRecordTermType, personalSparqlEndpoint, describedRecord, describedRecordUri, isDescribing, recordFormatPreferenceLoaded, authSession, personalPoliciesReady, personalPoliciesSeedError, selectedResult?.uri, selectedGroupRecord?.uri, queryXml]);
+  }, [selectedUri, selectedRecordTermType, personalSparqlEndpoint, describedRecord, describedRecordUri, isDescribing, recordFormatPreferenceLoaded, authSession, personalPoliciesReady, personalPoliciesSeedError, selectedResult?.uri, selectedGroupRecord?.uri, queryXml, historyBookmarkId]);
 
 
   async function validateSelectedRecord(policyOverride: RecordPolicyOption | null = recordPolicy) {
@@ -4667,19 +4652,13 @@ setGraphFacets(graphs);
             const existing = findScope(queuedTree)?.find((node) =>
               node.name === nodeName && node.attributes.iri === facet.uri,
             );
-            if (existing) {
-              if (existing.attributes.src !== "shacl") {
-                queuedTree = workbenchQueryTreeApi.setNodeAttribute(queuedTree, existing.id, "src", "shacl");
-                changed = true;
-              }
-              continue;
-            }
+            if (existing) continue;
             const newNode: FctQueryNode = {
               id: facet.direction === "reverse"
                 ? `role-filter-${scopeId ? `${encodeURIComponent(scopeId)}-` : "root-"}${encodeURIComponent(facet.uri)}`
                 : `property-filter-${scopeId ? `${encodeURIComponent(scopeId)}-` : "root-"}${encodeURIComponent(facet.uri)}`,
               name: nodeName,
-              attributes: { iri: facet.uri, src: "shacl" },
+              attributes: { iri: facet.uri },
               children: [],
             };
             queuedTree = workbenchQueryTreeApi.insertNode(queuedTree, scopeId, newNode);
@@ -5597,6 +5576,15 @@ setGraphFacets(graphs);
     const handleTemplateAction = (event: Event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      // Providers may request that the user bookmark the calling FCT query.
+      // This is a presentation signal only: it neither saves the query nor
+      // changes policy state, and is available to any trusted XSLT provider.
+      const bookmarkRequest = target.closest('[mui\\:request="bookmark-query"]');
+      if (bookmarkRequest) {
+        event.preventDefault();
+        window.dispatchEvent(new Event("maestro:bookmark-query-request"));
+        return;
+      }
       const carouselButton = target.closest("[data-maestro-carousel]");
       if (carouselButton) {
         event.preventDefault();
@@ -5772,32 +5760,21 @@ const activeLeafId: string | null =
       ? "http://purl.org/dc/terms/created"
       : "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated";
     if (!existing.has(temporalProperty)) required.push(temporalProperty);
-    // Repair older queries where the previous auto-add implementation inserted
-    // a context-only facet at the *moved view* rather than the class scope.
-    // Do not remove anything user-bound or anything carrying the current view.
-    const automaticUris = new Set([...tagUris,
-      "http://purl.org/dc/terms/created",
-      "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyCreated"]);
-    const strayIds: string[] = [];
-    const containsView = (nodes: typeof queryTree.children): boolean =>
-      nodes.some(node => node.id === "query-view" || containsView(node.children));
-    const findStrays = (nodes: typeof queryTree.children, parentId: string | null): void => {
-      for (const node of nodes) {
-        if (node.name === "property" && parentId !== context.parentId &&
-            automaticUris.has(node.attributes.iri) && node.attributes.src === "perspective" &&
-            node.attributes.project === "yes" &&
-            !node.children.some(child => child.name === "value") && !containsView(node.children)) {
-          strayIds.push(node.id);
-          continue;
-        }
-        if (node.name === "property" || node.name === "property-of") findStrays(node.children, node.id);
-      }
-    };
-    findStrays(queryTree.children, null);
-    if (!required.length && !strayIds.length) return;
-    let next = queryTree;
-    for (const id of strayIds) next = workbenchQueryTreeApi.removeNode(next, id);
-    for (const uri of required) {
+    if (!required.length) return;
+    // Discovery or a restored selectedViewUri never authorizes query editing.
+    // Verify approval on the personal graph server at the moment of execution.
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/proxy/api/perspectives", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "approved", providerUri: selectedViewUri }),
+        });
+        const approval = await response.json() as { approved?: boolean };
+        if (!response.ok || !approval.approved || controller.signal.aborted) return;
+        let next = queryTree;
+        for (const uri of required) {
       next = workbenchQueryTreeApi.addProperty(next, uri, context.parentId);
       // Resolve in the *same* declared class scope, not the current view scope.
       const siblingsForContext = context.parentId
@@ -5812,11 +5789,14 @@ const activeLeafId: string | null =
         : next.children;
       const added = siblingsForContext?.find(node => node.name === "property" && node.attributes.iri === uri);
       if (!added) continue;
-      // An empty context facet is non-filtering until the user chooses a value.
-      next = workbenchQueryTreeApi.setNodeAttribute(next, added.id, "project", "yes");
-      next = workbenchQueryTreeApi.setNodeAttribute(next, added.id, "src", "perspective");
+      // The provider's insertion is an ordinary, authoritative relationship.
+      // Its IRI may be recorded for human-readable provenance only.
+      next = workbenchQueryTreeApi.setNodeAttribute(next, added.id, "src", selectedViewUri);
     }
-    replaceQueryTree(next);
+        if (!controller.signal.aborted) replaceQueryTree(next);
+      } catch { /* A failed approval check must never modify the live query. */ }
+    })();
+    return () => controller.abort();
   }, [selectedViewUri, queryTree, bookmarkTagVocabulary, replaceQueryTree]);
 
   /** Apply a SHACL-discovered personal date-range facet to the current view scope. */
@@ -5827,10 +5807,7 @@ const activeLeafId: string | null =
     let tree = scoped ? queryTree : workbenchQueryTreeApi.addProperty(queryTree, property, activeLeafId);
     const facet = getActiveViewPropertyFilters(tree).find(node => node.attributes.iri === property);
     if (!facet) return;
-    // Turn a context-only property into an actual constraint on Apply; restore
-    // the non-filtering projection when Clear is used on an auto-added facet.
-    if (start || end) tree = workbenchQueryTreeApi.setNodeAttribute(tree, facet.id, "project", null);
-    else if (facet.attributes.src === "perspective") tree = workbenchQueryTreeApi.setNodeAttribute(tree, facet.id, "project", "yes");
+    // Applying or clearing a date range edits only its <value> constraint.
     replaceQueryTree(workbenchQueryTreeApi.setPropertyValues(tree, activeLeafId, property,
       start || end ? [{ text: "", datatype: "dateTime", attributes: {
         ...(start ? { rangeStart: start } : {}), ...(end ? { rangeEnd: end } : {}),
@@ -6720,6 +6697,7 @@ useEffect(() => {
       params.set("q", payload.queryXml);
       params.set("history", payload.historyId);
       if (savedUrl?.searchParams.has("state")) params.set("state", savedUrl.searchParams.get("state")!);
+      if (savedUrl) copyRibbonUrlParams(savedUrl.searchParams, params);
       window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not navigate query History.";
@@ -6727,6 +6705,37 @@ useEffect(() => {
     } finally {
       historyRestoreInProgressRef.current = false;
       setHistoryNavigationPending(null);
+    }
+  }
+
+  /** A Features button replaces the single authoritative live FCT query,
+   * exactly like navigating to a saved History query. No shadow feature query:
+   * Trail, left facets, Results, and the Features cards read this same tree. */
+  async function selectViewFeature(feature: "policies" | "formats" | "transcoders" | null) {
+    if (!feature) { setViewFeature(null); return; }
+    try {
+      const response = await fetch("/proxy/api/view-features/query-config", {
+        method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feature }),
+      });
+      const payload = await response.json() as { graph?: string; personalEndpointUrl?: string; error?: string };
+      if (!response.ok || !payload.graph || !payload.personalEndpointUrl)
+        throw new Error(payload.error || "Could not locate the personal Features graph.");
+      // Must select the personal endpoint before committing the query: the
+      // graph-server selector can otherwise rewrite addr to the previous server.
+      await synchronizeFctEndpointSelection(payload.personalEndpointUrl);
+      const tree = featureFctQuery(queryTree, feature, payload.graph, payload.personalEndpointUrl, resultsBatchSize);
+      const xml = serializeFctQuery(tree);
+      if (!restoreQueryAndUiState(xml, null)) throw new Error("Could not restore the Features FCT query.");
+      setViewFeature(feature);
+      setViewPanel("features");
+      setSearchDraft("");
+      setSavedSearchDraft("");
+      setGroupByPropertyUri("");
+      setCentralTab("results");
+      setControlsSheetOpen(false);
+    } catch (error) {
+      toast.add({ title: "Could not navigate to Features", description: error instanceof Error ? error.message : "Features FCT query failed.", type: "error" });
     }
   }
 
@@ -6841,6 +6850,7 @@ useEffect(() => {
         params.set("q", payload.queryXml);
         params.set("history", payload.nextHistoryId);
         if (savedUrl?.searchParams.has("state")) params.set("state", savedUrl.searchParams.get("state")!);
+      if (savedUrl) copyRibbonUrlParams(savedUrl.searchParams, params);
         else params.delete("state");
         window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
       } else {
@@ -7143,9 +7153,9 @@ useEffect(() => {
 
   function classBreadcrumbLabels(parentId: string | null): string[] {
     const scope = parentId ? findQueryNode(queryTree.children, parentId) : null;
-    const states = (scope?.children ?? queryTree.children).filter((item) => item.name === "state")
+    const statuses = (scope?.children ?? queryTree.children).filter((item) => item.name === "status")
       .map((item) => (item.text ?? "").split("#").pop() ?? "").filter(Boolean);
-    return [...getClassesAtNode(parentId).map((iri) => toLabel(iri, "Class")), ...states];
+    return [...getClassesAtNode(parentId).map((iri) => toLabel(iri, "Class")), ...statuses];
   }
 
   function getBreadcrumbSiblings(targetId: string): FctQueryNode[] {
@@ -7412,14 +7422,14 @@ useEffect(() => {
     if (node.name === "class" && iri) {
       return `Class: ${toLabel(iri, "Class")}`;
     }
-    if (node.name === "state") return `State: ${(node.text ?? "").split("#").pop() ?? "State"}`;
+    if (node.name === "status") return `Status: ${(node.text ?? "").split("#").pop() ?? "Status"}`;
     return node.name;
   }
 
 
   
   const rootClassNodes = queryTree.children.filter((node) => node.name === "class");
-  const rootStateNodes = queryTree.children.filter((node) => node.name === "state");
+  const rootStatusNodes = queryTree.children.filter((node) => node.name === "status");
   // Prefer the Text node, otherwise attach root classes to a root Value node.
   const rootClassCarrierId = queryTree.children.find((node) => node.id === "query-text")?.id
     ?? queryTree.children.find((node) => node.name === "value")?.id
@@ -7429,10 +7439,10 @@ useEffect(() => {
     const rootStack = node.id === rootClassCarrierId
       ? rootClassNodes.map((classNode) => classNode.attributes.iri).filter((iri): iri is string => Boolean(iri))
       : [];
-    const scopedStates = node.children.filter((child) => child.name === "state")
+    const scopedStatuses = node.children.filter((child) => child.name === "status")
       .map((child) => (child.text ?? "").split("#").pop() ?? "");
-    const rootStates = node.id === rootClassCarrierId ? rootStateNodes.map((child) => (child.text ?? "").split("#").pop() ?? "") : [];
-    return [...Array.from(new Set([...nested, ...rootStack])).map((uri) => toLabel(uri, "Class")), ...scopedStates, ...rootStates].filter(Boolean);
+    const rootStatuses = node.id === rootClassCarrierId ? rootStatusNodes.map((child) => (child.text ?? "").split("#").pop() ?? "") : [];
+    return [...Array.from(new Set([...nested, ...rootStack])).map((uri) => toLabel(uri, "Class")), ...scopedStatuses, ...rootStatuses].filter(Boolean);
   };
 
   const rootPreviewNodeId = queryTree.children.find((node) => node.name === "value" && node.attributes.datatype === "uri")?.id
@@ -7486,10 +7496,10 @@ useEffect(() => {
     const topInlineValue = inlineValues[inlineValues.length - 1];
     const inlineClassNodes = node.children.filter((child) => child.name === "class");
     const rootClassesOnThisNode = node.id === rootClassCarrierId ? rootClassNodes : [];
-    const rootStatesOnThisNode = node.id === rootClassCarrierId ? rootStateNodes : [];
-    const inlineStateNodes = node.children.filter((child) => child.name === "state");
+    const rootStatusesOnThisNode = node.id === rootClassCarrierId ? rootStatusNodes : [];
+    const inlineStatusNodes = node.children.filter((child) => child.name === "status");
     const topInlineClass = [...inlineClassNodes, ...rootClassesOnThisNode][inlineClassNodes.length + rootClassesOnThisNode.length - 1];
-    const topInlineState = [...inlineStateNodes, ...rootStatesOnThisNode].at(-1);
+    const topInlineStatus = [...inlineStatusNodes, ...rootStatusesOnThisNode].at(-1);
     // The root row (Everything / search text / root URI value) is a stack too. Its
     // text or value is on top and comes off first, like a <value> on a property;
     // then the root classes pop one at a time. With none of them there is nothing
@@ -7498,10 +7508,10 @@ useEffect(() => {
     const rootTextOrValue = isRootCarrierRow && (
       (node.id === "query-text" && Boolean(node.text?.trim() || search.trim())) ||
       (node.name === "value" && Boolean(node.text?.trim())));
-    const showMinus = !isRootCarrierRow || rootTextOrValue || rootClassesOnThisNode.length > 0 || rootStatesOnThisNode.length > 0;
+    const showMinus = !isRootCarrierRow || rootTextOrValue || rootClassesOnThisNode.length > 0 || rootStatusesOnThisNode.length > 0;
     const lockedNode = protectedNode && !isRootCarrierRow;
     const visibleChildren = node.children.filter((child) =>
-      child.id !== "query-view" && child.name !== "class" && child.name !== "state" && !(inlinesValues && child.name === "value" && (Boolean(child.text) || hasValueRange(child))));
+      child.id !== "query-view" && child.name !== "class" && child.name !== "status" && !(inlinesValues && child.name === "value" && (Boolean(child.text) || hasValueRange(child))));
     const hasVisibleChildren = visibleChildren.length > 0;
     const isCollapsed = collapsedQueryNodeIds.has(node.id);
     const toggleCollapsed = () => setCollapsedQueryNodeIds((current) => {
@@ -7580,12 +7590,12 @@ useEffect(() => {
                 : isRootCarrierRow
                   ? rootTextOrValue
                     ? node.name === "value" ? "Remove the root value" : "Clear the search text"
-                    : topInlineState ? `Remove state ${(topInlineState.text ?? "").split("#").pop()} from the root`
+                    : topInlineStatus ? `Remove state ${(topInlineStatus.text ?? "").split("#").pop()} from the root`
                     : `Remove class ${toLabel(topInlineClass?.attributes.iri ?? "class")} from the root`
                   : topInlineValue
                     ? `Remove value ${boundValueLabel(topInlineValue)} from ${queryNodeLabel(node)}`
-                    : topInlineState
-                      ? `Remove state ${(topInlineState.text ?? "").split("#").pop()} from ${queryNodeLabel(node)}`
+                    : topInlineStatus
+                      ? `Remove state ${(topInlineStatus.text ?? "").split("#").pop()} from ${queryNodeLabel(node)}`
                     : topInlineClass
                       ? `Remove class ${toLabel(topInlineClass.attributes.iri ?? "class")} from ${queryNodeLabel(node)}`
                       : `Remove ${queryNodeLabel(node)} and its children`
@@ -7594,11 +7604,11 @@ useEffect(() => {
             onClick={() => {
               if (isRootCarrierRow) {
                 if (rootTextOrValue) updateSearchText("");
-                else if (topInlineState) deleteNode(topInlineState.id);
+                else if (topInlineStatus) deleteNode(topInlineStatus.id);
                 else if (topInlineClass) deleteNode(topInlineClass.id);
                 return;
               }
-              deleteNode(topInlineValue ? topInlineValue.id : topInlineState ? topInlineState.id : topInlineClass ? topInlineClass.id : node.id);
+              deleteNode(topInlineValue ? topInlineValue.id : topInlineStatus ? topInlineStatus.id : topInlineClass ? topInlineClass.id : node.id);
             }}
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded border text-base leading-none text-muted-foreground hover:border-destructive hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-25"
           >
@@ -7608,10 +7618,10 @@ useEffect(() => {
                 : isRootCarrierRow
                   ? rootTextOrValue
                     ? `${node.name === "value" ? "Remove the root value" : "Clear the search text"}${rootClassesOnThisNode.length > 0 ? "; click again to remove the last class" : ""}`
-                    : topInlineState ? "Remove the last root state constraint" : "Remove the last root class constraint"
+                    : topInlineStatus ? "Remove the last root state constraint" : "Remove the last root class constraint"
                   : topInlineValue
                     ? "Remove the bound value; click again to remove the node"
-                    : topInlineState ? "Remove the last state constraint; click again to remove the node"
+                    : topInlineStatus ? "Remove the last state constraint; click again to remove the node"
                     : topInlineClass
                       ? "Remove the last class constraint; click again to remove the node"
                       : "Remove this node and all descendants"}</TooltipContent></Tooltip>
@@ -7910,6 +7920,7 @@ useEffect(() => {
     .map((child) => child.attributes.iri ?? "")
     .filter(Boolean))));
   const viewClassKey = JSON.stringify(viewScopeClasses);
+  const [policyApprovalRevision, setPolicyApprovalRevision] = useState(0);
   // Analyze providers operate on the current focus resources. An ancestor
   // Bookmark class does not make a tag/text property view a Bookmark analysis.
   const analyzeFocusClasses = (() => {
@@ -7961,7 +7972,7 @@ useEffect(() => {
         if (!controller.signal.aborted) {
           const views = payload.views ?? [];
           setDiscoveredViews(views);
-          setSelectedViewUri((current) => current === "urn:maestro:perspective:map" || current.startsWith("gttp://ggg.maestro.ecosys/shacl/provider/") || views.some((view) => view.uri === current) ? current : (views[0]?.uri ?? ""));
+          setSelectedViewUri((current) => current || (views[0]?.uri ?? ""));
         }
       } catch (error) {
         if (controller.signal.aborted) {
@@ -7977,10 +7988,16 @@ useEffect(() => {
     })();
     return () => { clearTimeout(timeout); controller.abort(); };
   }, [workspaceTab, viewClassKey]);
-  // The feature query is a snapshot of the live FCT query. Never mutate queryTree
-  // or issue an FCT navigation/history action while browsing feature libraries.
+  // Feature browsing is read-only: displaying a library NEVER records a policy
+  // discovery. Only a successful resource-policy match can create Pending and
+  // update mui:lastRequestedBy; a library list is not a SHACL eligibility ASK.
+  const featurePageUrisKey = visibleResultsPage.map(item => item.uri).join("\u0000");
   useEffect(() => {
     if (workspaceTab !== "view" || !viewFeature) return;
+    // The ordinary FCT query owns the displayed population. While it is
+    // executing, never display a stale Features catalog from the prior query.
+    if (isSearching) { setViewFeatureHtml(""); setViewFeatureLoading(true); return; }
+    const featureUris = [...new Set(featurePageUrisKey.split("\u0000").filter(Boolean))];
     const controller = new AbortController();
     setViewFeatureLoading(true);
     setViewFeatureError("");
@@ -7991,14 +8008,55 @@ useEffect(() => {
       try {
         const response = await fetch("/proxy/api/view-features", {
           method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store", signal: controller.signal,
-          body: JSON.stringify({ feature: viewFeature, classes: JSON.parse(viewClassKey), queryXml: String(queryXml) }),
+          body: JSON.stringify({ feature: viewFeature, featureQuery: true, queryXml: String(queryXml) }),
         });
         const data = await response.json() as { items?: FeatureItem[]; error?: string };
         if (!response.ok) throw new Error(data.error || "Could not locate feature definitions.");
         if (controller.signal.aborted) return;
-        const items = data.items ?? [];
+        const catalogByUri = new Map((data.items ?? []).map(item => [item.uri, item]));
+        // FCT Results is authoritative even when a remotely discovered policy
+        // lacks a local shape-graph description: render an IRI fallback rather
+        // than silently dropping a resource that matches the live query.
+        const items: FeatureItem[] = featureUris.map(uri => catalogByUri.get(uri) ?? { uri, label: toLabel(uri) });
         setViewFeatureCount(items.length);
-        const featureHtml = await renderDiscoveredViewXslt(FEATURE_VIEW_XSLT[viewFeature], items.map((item) => ({ ...item, label: item.label })));
+        // The policy-management stylesheet receives persisted approval status,
+        // never implicit authority from the discovery result.
+        let decorated = items.map(item => ({ ...item, label: item.label }));
+        if (viewFeature === "policies" && items.length) {
+          // The personal graph, not a transient client bookmark ID, determines
+          // whether approval controls may be shown. The server verifies the
+          // saved query identity before returning or updating policy status.
+          const approvalAction = "list";
+          const approvals: { uri: string; status: string | null; triggeredBy?: string[]; lastRequestedBy?: string; lastRequestDate?: string; matchedRecord?: string; lastRequestHistory?: string; lastRequestComponent?: string }[] = [];
+          const policyUris = [...new Set(items.map(item => item.uri))];
+          let savedQuery = false;
+          for (let offset = 0; offset < policyUris.length; offset += 500) {
+            const approvalResponse = await fetch("/proxy/api/policy-approvals", {
+              method: "POST", cache: "no-store", signal: controller.signal,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: approvalAction, queryXml, policies: policyUris.slice(offset, offset + 500) }),
+            });
+            const responseBody = await approvalResponse.json() as { entries?: typeof approvals; error?: string; bookmarkRequired?: boolean; bookmarked?: boolean };
+            if (!approvalResponse.ok && responseBody.bookmarkRequired) { savedQuery = false; break; }
+            if (!approvalResponse.ok) throw new Error(responseBody.error || "Could not load policy approval status.");
+            savedQuery = Boolean(responseBody.bookmarked);
+            approvals.push(...(responseBody.entries ?? []));
+          }
+
+          const byUri = new Map(approvals.map(entry => [entry.uri, entry]));
+          // The Policies registry contains only resources actually discovered
+          // during browsing. Never turn a catalog listing into Pending items.
+          decorated = items.filter(item => Boolean(byUri.get(item.uri)?.lastRequestComponent) &&
+              (byUri.get(item.uri)?.status === "Pending" || byUri.get(item.uri)?.status === "Approved"))
+            .map(item => ({ ...item, label: item.label,
+            bookmarked: savedQuery ? "true" : "false", status: byUri.get(item.uri)?.status ?? "",
+            triggeredBy: (byUri.get(item.uri)?.triggeredBy ?? []).join(", "), lastRequestedBy: byUri.get(item.uri)?.lastRequestedBy ?? "", lastRequestDate: byUri.get(item.uri)?.lastRequestDate ?? "",
+            lastRequestHistory: byUri.get(item.uri)?.lastRequestHistory ?? "",
+            lastRequestComponent: byUri.get(item.uri)?.lastRequestComponent ?? "",
+            matchedRecord: byUri.get(item.uri)?.matchedRecord ?? "" }));
+          setViewFeatureCount(decorated.length);
+        } else if (viewFeature === "policies") decorated = decorated.map(item => ({ ...item, bookmarked: "false" }));
+        const featureHtml = await renderDiscoveredViewXslt(FEATURE_VIEW_XSLT[viewFeature], decorated);
         if (!controller.signal.aborted) setViewFeatureHtml(featureHtml);
       } catch (error) {
         if (!controller.signal.aborted) setViewFeatureError(error instanceof Error ? error.message : "Feature lookup failed.");
@@ -8008,7 +8066,7 @@ useEffect(() => {
       }
     })();
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [workspaceTab, viewFeature, viewClassKey, queryXml]);
+  }, [workspaceTab, viewFeature, queryXml, featurePageUrisKey, isSearching, policyApprovalRevision, isQueryBookmarked, matchingBookmarkId]);
   const selectedView = discoveredViews.find((view) => view.uri === selectedViewUri);
   // Registry keys are internal slugs, while FCT results contain RDF resource IRIs.
   // Join on endpoint URL first; also accept the registry's display label for
@@ -8155,7 +8213,7 @@ useEffect(() => {
             property: key.slice(separator + 1),
           };
         });
-        const projectionQueryXml = listValuesQueryClone(queryXml, columns);
+        const projectionQueryXml = listValuesQueryClone(queryXml);
         // Virtuoso's list-values extension accepts at most 100 RDF terms per
         // request. Analyze pages may contain more; preserve the page selection
         // while projecting its terms through bounded, deduplicated requests.
@@ -8170,7 +8228,7 @@ useEffect(() => {
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store", signal: controller.signal,
             headers: {"Content-Type": "application/json", ...proxyDebugHeaders("analyze-values", `AnalyzeListValues:${proxyDebugFingerprint(analysisRequestKey)}:${start / maxResourcesPerRequest + 1}`)},
-            body: JSON.stringify({queryXml: projectionQueryXml, resources}),
+            body: JSON.stringify({queryXml: projectionQueryXml, resources, projections: columns}),
           });
           const xml = await response.text();
           if (!response.ok) throw new Error(`Analyze list-values batch ${start / maxResourcesPerRequest + 1} returned HTTP ${response.status}: ${xml.slice(0, 300)}`);
@@ -8384,7 +8442,7 @@ useEffect(() => {
     authRestoreIssue,
     authSession,
     personalStoreReady,
-    recordStates,
+    recordStatus,
     autoConfigureFacetCount,
     autoConfiguredFacetKeys,
     availableCompareFacets,
@@ -8802,6 +8860,7 @@ useEffect(() => {
     setTimeoutEditorOpen,
     setTutorialMode,
     setViewFeature,
+    selectViewFeature,
     setViewPanel,
     setWidgetTimeouts,
     setWorkspaceTab,
@@ -8830,6 +8889,8 @@ useEffect(() => {
     viewFeatureCount,
     viewFeatureError,
     viewFeatureHtml,
+    policyApprovalRevision,
+    setPolicyApprovalRevision,
     viewFeatureLoading,
     viewHtml,
     viewPanel,

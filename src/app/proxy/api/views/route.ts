@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requirePersonalLogin } from "@/lib/personal-guard";
 import { getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
+import { policyApprovalGraph } from "@/lib/policy-approval-store";
 
 type Row = Record<string, { value?: string }>;
 const safeIri = (value: string) => /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(value) && value.length <= 4096;
@@ -28,6 +29,7 @@ SELECT DISTINCT ?policy ?class ?label ?template ?stylesheet WHERE {
     ?template (rdf:value|mui:templateContent) ?stylesheet .
     FILTER(CONTAINS(STR(?stylesheet), 'xsl:stylesheet') || CONTAINS(STR(?stylesheet), 'xsl:transform'))
   }
+  GRAPH <${policyApprovalGraph(request)}> { ?policy mui:status mui:Approved . ?provider mui:status mui:Approved }
 } ORDER BY ?label LIMIT 50`;
     const payload = await queryPersonalSparql(query, 10000, request);
     const views = ((payload.results?.bindings ?? []) as Row[]).map((row) => ({

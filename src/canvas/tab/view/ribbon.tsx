@@ -2,10 +2,12 @@
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { useEffect, useMemo, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
-import { Server, Database, Globe, LayoutGrid, Network, ShieldCheck, FileCode2, ArrowLeftRight, Blocks, Bookmark, History, MapPin } from "lucide-react";
-import { NATIVE_MAP_URI } from "@/lib/map-perspective";
+import { Server, Database, Globe, LayoutGrid, Network, ShieldCheck, FileCode2, ArrowLeftRight, Blocks, Bookmark, History } from "lucide-react";
+import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
+import { useMapProviderDefinition } from "@/lib/map-provider-discovery";
 import type { FeatureKind } from "@/lib/feature-view-xslt";
 import { PERSONAL_PERSPECTIVE_URI, personalPerspectiveFromUri, type PersonalPerspectiveKind } from "@/lib/personal-perspective-ids";
+const availableProviderIcons = new Set<string>(iconNames);
 type ViewDefinition = { uri: string; label: string; icon?: string; stylesheet: string };
 export interface ViewRibbonProps {
   viewPanel: "trail" | "perspectives" | "features";
@@ -14,13 +16,17 @@ export interface ViewRibbonProps {
   discoveredViews: ViewDefinition[];
   viewFeature: FeatureKind | null;
   setViewFeature: Dispatch<SetStateAction<FeatureKind | null>>;
+  onSelectFeature: (feature: FeatureKind | null) => void;
   selectedViewUri: string;
   onSelectView: (uri: string) => void;
   viewDiscoveryLoading: boolean;
   queryClassUris: string[];
-  mapAvailable: boolean;
+  queryXml: string;
+  triggerUri: string;
+  historyUri?: string;
 }
-export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredViews, viewFeature, setViewFeature, selectedViewUri, onSelectView, viewDiscoveryLoading, queryClassUris, mapAvailable }: ViewRibbonProps) {
+export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredViews, viewFeature, setViewFeature, onSelectFeature, selectedViewUri, onSelectView, viewDiscoveryLoading, queryClassUris, queryXml, triggerUri, historyUri }: ViewRibbonProps) {
+  const mapProvider = useMapProviderDefinition(viewPanel === "perspectives", queryXml);
   const [personalProviders, setPersonalProviders] = useState<{ kind: PersonalPerspectiveKind; label: string; uri: string }[]>([]);
   const [resolvedClassKey, setResolvedClassKey] = useState<string | null>(null);
   const classKey = useMemo(() => [...new Set(queryClassUris)].sort().join("\n"), [queryClassUris]);
@@ -31,7 +37,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
     if (!classKey) { setResolvedClassKey(""); return () => controller.abort(); }
     void fetch("/proxy/api/perspectives", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "discover", classes: classKey.split("\n") }),
+      body: JSON.stringify({ action: "discover", classes: classKey.split("\n"), queryXml, trigger: triggerUri, historyUri }),
       cache: "no-store", signal: controller.signal,
     }).then(async response => {
       if (!response.ok) return;
@@ -42,15 +48,10 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
       }
     }).catch(() => { /* Other query perspectives remain usable without personal login. */ });
     return () => controller.abort();
-  }, [classKey]);
-  useEffect(() => {
-    const selected = personalPerspectiveFromUri(selectedViewUri);
-    if (selected && resolvedClassKey === classKey && !personalProviders.some(provider => provider.kind === selected && provider.uri === selectedViewUri)) {
-      // Do not preserve a personal collection renderer after its qualifying
-      // class has disappeared from the live query.
-      onSelectView(discoveredViews[0]?.uri ?? "");
-    }
-  }, [classKey, resolvedClassKey, personalProviders, selectedViewUri, onSelectView, discoveredViews]);
+  }, [classKey, queryXml, triggerUri, historyUri]);
+  // A URL-restored selection is authoritative. Provider discovery may be
+  // briefly empty while the class tree and login finish loading; do not
+  // overwrite the saved perspective or ribbon selection during that window.
   // A saved Map selection must survive initial Configure discovery. An empty
   // geospatial property list during startup is not a deliberate user pivot.
   return <MaestroHoverExpand active={viewPanel} onChange={setViewPanel} panels={[
@@ -72,10 +73,10 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
                 <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{title}
               </button>;
             })}
-            {(mapAvailable || selectedViewUri === NATIVE_MAP_URI) && <button type="button" aria-pressed={!viewFeature && selectedViewUri === NATIVE_MAP_URI}
-              onClick={() => onSelectView(NATIVE_MAP_URI)}
-              className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${!viewFeature && selectedViewUri === NATIVE_MAP_URI ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
-              <MapPin className="size-7" strokeWidth={1} aria-hidden="true" />Map
+            {mapProvider && <button type="button" aria-pressed={!viewFeature && selectedViewUri === mapProvider.uri}
+              onClick={() => onSelectView(mapProvider.uri)}
+              className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${!viewFeature && selectedViewUri === mapProvider.uri ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+              <DynamicIcon name={(availableProviderIcons.has(mapProvider.icon) ? mapProvider.icon : "layout-grid") as IconName} className="size-7" strokeWidth={1} aria-hidden="true" />{mapProvider.label}
             </button>}
             {personalProviders.map(provider => {
               const uri = provider.uri;
@@ -88,7 +89,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
               </button>;
             })}
             {viewDiscoveryLoading && <span className="px-3 text-xs text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></span>}
-            {!viewDiscoveryLoading && !discoveredViews.length && !personalProviders.length && !mapAvailable && <span className="px-3 text-xs text-muted-foreground">No perspectives found</span>}
+            {!viewDiscoveryLoading && !discoveredViews.length && !personalProviders.length && !mapProvider && <span className="px-3 text-xs text-muted-foreground">No perspectives found</span>}
           </div> },
           { id: "features", label: "Features", content: <div className="flex h-full flex-wrap items-center gap-1" role="toolbar" aria-label="View features">
             {([
@@ -99,7 +100,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
               const active = viewFeature === id;
               return <button type="button" key={id}
                 className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${active ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
-                aria-pressed={active} onClick={() => setViewFeature((current) => current === id ? null : id)}>
+                aria-pressed={active} onClick={() => onSelectFeature(viewFeature === id ? null : id)}>
                 <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{label}
               </button>;
             })}

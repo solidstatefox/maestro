@@ -31,7 +31,12 @@
 <article class="group flex items-center gap-2 rounded-sm border-b px-2 py-1.5 hover:bg-accent/40">
 <button type="button" class="shrink-0 rounded border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent" data-perspective-select="true" title="Select entry"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:choose><xsl:when test="@selected = 'true'">Selected</xsl:when><xsl:otherwise>Select</xsl:otherwise></xsl:choose></button>
 <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+<div class="flex min-w-0 items-center gap-1.5">
+<xsl:if test="@appbarAdded = 'true' and string-length(@appbarIcon) &gt; 0">
+<span class="inline-flex shrink-0" title="Pinned to appbar"><xsl:attribute name="data-perspective-appbar-icon"><xsl:value-of select="@appbarIcon"/></xsl:attribute></span>
+</xsl:if>
 <button type="button" class="cursor-pointer truncate text-left text-sm font-medium hover:underline" data-perspective-open="true"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:value-of select="@label"/></button>
+</div>
 <xsl:if test="string-length(@description) &gt; 0"><p class="truncate text-xs text-muted-foreground"><xsl:value-of select="@description"/></p></xsl:if>
 <xsl:if test="string-length(@tags) &gt; 0"><small class="truncate text-xs text-muted-foreground">Tags: <xsl:value-of select="@tags"/></small></xsl:if>
 <small class="truncate text-xs text-muted-foreground">
@@ -44,6 +49,9 @@ Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@av
 </small>
 <small class="truncate text-xs text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 19"><xsl:value-of select="substring(@created,12,8)"/></xsl:when><xsl:otherwise><xsl:value-of select="@created"/></xsl:otherwise></xsl:choose></small>
 </div>
+<xsl:if test="@appbarAvailable = 'true'">
+<button type="button" class="rounded-md border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent" data-perspective-appbar="true"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:choose><xsl:when test="@appbarAdded = 'true'">Unpin</xsl:when><xsl:otherwise>Pin to appbar</xsl:otherwise></xsl:choose></button>
+</xsl:if>
 <button type="button" class="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-destructive/10 hover:text-destructive" data-perspective-delete="true" title="Delete entry"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute>Delete</button>
 </article>
 </xsl:template>

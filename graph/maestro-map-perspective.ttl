@@ -1,0 +1,81 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix schema: <https://schema.org/> .
+
+# The Map perspective is a discoverable SHACL provider, not a native ribbon
+# entry or a native facet renderer. The TSX map runtime supplies geographic
+# query execution and MapLibre; its layout and facet decorations come from XSLT.
+<urn:maestro:perspective:map> a mui:Provider ;
+  rdfs:label "Map"@en ;
+  mui:icon "map-pin" ;
+  mui:perspectiveKind "map" ;
+  mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/map-input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/shacl/template#MapPerspective> ;
+  schema:author "ChatGPT (GPT-6)" .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/map-input> a mui:InputShape ;
+  rdfs:comment "Applies when the FCT view scope supplies a geospatial coordinate pair or one accepted geospatial geometry predicate."@en .
+
+<gttp://ggg.maestro.ecosys/shacl/template#MapPerspective> a mui:PerspectiveWidget ;
+  rdfs:label "Map perspective and facet decoration"@en ;
+  mui:templateContent """<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:output method="xml" omit-xml-declaration="yes"/>
+
+  <!-- View layout is provider-authored. The trusted map runtime mounts into
+       these XSLT-selected slots, never directly into a native View branch. -->
+  <xsl:template match="/context[@mode='view']">
+    <section class="flex min-h-0 flex-1 flex-col" aria-label="Map perspective" data-view-icon="map-pin">
+      <div class="flex shrink-0 flex-wrap items-center gap-3 border-b px-3 py-2 text-sm">
+        <label for="maestro-map-color-by" class="shrink-0 font-medium">Color by:</label>
+        <select id="maestro-map-color-by" data-provider-action="colorby" class="min-w-0 max-w-72 rounded-md border bg-background px-2 py-1 text-sm">
+          <option value="">None</option>
+          <xsl:for-each select="facets/facet">
+            <option value="{concat(@direction,'|',@iri)}"><xsl:value-of select="@label"/></option>
+          </xsl:for-each>
+        </select>
+        <xsl:if test="status/@loading='true'"><span class="text-xs text-muted-foreground" role="status">Locating map resources…</span></xsl:if>
+        <xsl:if test="status/@loading!='true'"><span class="text-xs text-muted-foreground"><xsl:value-of select="status/@mapped"/> mapped resources<xsl:if test="status/@incomplete='true'"> (partial)</xsl:if></span></xsl:if>
+        <xsl:if test="string-length(status/@error) &gt; 0"><span class="text-xs text-destructive" role="alert"><xsl:value-of select="status/@error"/></span></xsl:if>
+        <xsl:if test="string-length(status/@styleError) &gt; 0"><span class="text-xs text-destructive" role="alert"><xsl:value-of select="status/@styleError"/></span></xsl:if>
+      </div>
+      <div data-provider-slot="map" class="relative min-h-[300px] min-w-0 flex-1 overflow-hidden"/>
+    </section>
+  </xsl:template>
+
+  <!-- Exact facet addressing: direction and predicate IRI are supplied by the
+       map provider. XSLT grabs the matching facet and explicitly decorates its
+       header with a paintbrush action. The generic TSX bridge only mounts the
+       output into the slots exposed by the existing native facet components. -->
+  <xsl:template match="/context[@mode='facets']">
+    <decorations>
+      <xsl:apply-templates select="facets/facet" mode="decorate">
+        <xsl:with-param name="colorDirection" select="@colorDirection"/>
+        <xsl:with-param name="colorIri" select="@colorIri"/>
+      </xsl:apply-templates>
+    </decorations>
+  </xsl:template>
+  <xsl:template match="facet" mode="decorate">
+    <xsl:param name="colorDirection"/>
+    <xsl:param name="colorIri"/>
+    <!-- This XPath is the precise selection contract, not a DOM lookup. -->
+    <xsl:variable name="isColorFacet" select="@direction=$colorDirection and @iri=$colorIri"/>
+    <facet-decoration direction="{@direction}" iri="{@iri}">
+      <control icon="paintbrush" action="toggle-colorby" selected="{$isColorFacet}">
+        <xsl:attribute name="label"><xsl:choose>
+          <xsl:when test="$isColorFacet">Stop coloring map by this facet</xsl:when>
+          <xsl:otherwise>Color map by this facet</xsl:otherwise>
+        </xsl:choose></xsl:attribute>
+      </control>
+      <!-- Item match uses RDF lexical value, not the presented human label.
+           The provider supplies the same deterministic hex as MapLibre. -->
+      <xsl:if test="$isColorFacet">
+        <xsl:for-each select="item[string-length(@color) &gt; 0]">
+          <item-decoration value="{@value}" color="{@color}"/>
+        </xsl:for-each>
+      </xsl:if>
+    </facet-decoration>
+  </xsl:template>
+</xsl:stylesheet>""" .

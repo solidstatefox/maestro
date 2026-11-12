@@ -1,0 +1,46 @@
+# Authorship of the bundled Maestro software policies, formatters and transcoders.
+# schema:author is a Schema.org CreativeWork/SoftwareSourceCode property.
+@prefix schema: <https://schema.org/> .
+
+<gttp://ggg.maestro.ecosys/analyze/bookmark-activity> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/analyze/bookmark-tags> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/ns/ui#CardGridWidget> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/ns/ui#RecordViewerWidget> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/policy/bookmark> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-book> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-film> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-organisation> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-person> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-place> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-species> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-work> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/policy/query-history-visit> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/entrypoint> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/history-perspective> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-0> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-1> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/record-1-template-2> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/record-2-template-3> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/record-3-template-4> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/record-4-template-5> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/record-5-template-6> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/record-6-template-7> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/record-7-template-8> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/record-8-template-9> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-created> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-history> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarksPerspective> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaBookRecordTemplate> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaFilmRecordTemplate> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaOrganisationRecordTemplate> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaPersonRecordTemplate> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaPlaceRecordTemplate> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaSpeciesRecordTemplate> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaWorkRecordTemplate> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#HistoryPerspective> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/view#EntryPointCards> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> schema:author "ChatGPT (GPT-6)" .

@@ -264,8 +264,8 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
       loaded.push({ file: file.name, graph: destinationGraph });
     }
     // After the manifest reload, reinstate the shared Record state vocabulary/SHACL restriction.
-    const { ensurePersonalStateSchema } = await import("@/lib/personal-states-server");
-    await ensurePersonalStateSchema(request!);
+    const { ensurePersonalStatusSchema } = await import("@/lib/personal-status-server");
+    await ensurePersonalStatusSchema(request!);
     return loaded;
   })();
   graphDirectorySeedPromises.set(sessionKey, promise);

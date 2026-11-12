@@ -324,7 +324,8 @@ export async function POST(request: Request) {
         // never a query for the bookmark resource in the personal store.
         sourceUrl.searchParams.set("q", queryXml);
         sourceUrl.searchParams.delete("history");
-        sourceUrl.searchParams.delete("state");
+        // Preserve the shareable UI state (appbar tab, ribbon, and View panel).
+        // Only the History cursor is specific to the saving session.
         shareUrl = sourceUrl.toString();
       }
 

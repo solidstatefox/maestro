@@ -2,11 +2,13 @@
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 
 import { renderPersonalWidgetCards } from "@/canvas/left/personal-widget-cards";
-import { PersonalStatesWidget } from "@/canvas/left/states-widget";
+import { PersonalStatusWidget } from "@/canvas/left/status-widget";
 import { PropertyUsageWidget } from "@/canvas/left/property-usage-widget";
 import { propertyUsageScope } from "@/lib/property-usage-query";
 import { useTemporalFacetProviders } from "@/canvas/left/personal-date-facet";
 import { FACET_ITEM_GAP_CLASS } from "@/canvas/left/facet-layout";
+import { FacetDecorationControl, FacetItemDecoration } from "@/lib/facet-decoration-contract";
+import { fctTermKey } from "@/canvas/utils/fct-response";
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
@@ -32,7 +34,7 @@ import { Toggle } from "@/components/ui/toggle";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Bot, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, List, Network, Trash2, UsersRound, Search, X, ArrowDownAZ, ArrowDownZA, ClipboardList } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleSlash, List, Network, Trash2, UsersRound, Search, X, ArrowDownAZ, ArrowDownZA } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 
@@ -118,7 +120,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
     personalRoleFacetNodes,
     queryRefreshRevision,
     queryTree,
-    recordStates,
+    recordStatus,
     queryWithoutPagingXml,
     roleWidgetCardRefs,
     roleWidgetStatuses,
@@ -156,7 +158,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
   return <>
 {defaultLeftTab === "personal" && (
                   <div className="space-y-3">
-                    {recordStates.enabled && recordStates.hasStates && <PersonalStatesWidget states={recordStates} />}
+                    {recordStatus.enabled && recordStatus.hasStatuses && <PersonalStatusWidget statuses={recordStatus} />}
                     {propertyUsageScope(queryTree) && <>
                       <PropertyUsageWidget tree={queryTree} direction="subject" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
                       <PropertyUsageWidget tree={queryTree} direction="object" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
@@ -189,7 +191,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                           }}
                           className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${isGroupByCategory ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
                           aria-label={isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}
-                        ><UsersRound className="size-4" aria-hidden="true" /></button>} /><TooltipContent>{isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}</TooltipContent></Tooltip></div>
+                        ><UsersRound className="size-4" aria-hidden="true" /></button>} /><TooltipContent>{isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}</TooltipContent></Tooltip><FacetDecorationControl direction="class" iri={RDF_TYPE_URI}/></div>
                         <Tooltip><TooltipTrigger render={<span
                           className={`text-xs ${classFacetError ? "text-destructive" : "text-muted-foreground"}`}
                           aria-live="polite"
@@ -235,6 +237,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                           ? "relative size-4 shrink-0 appearance-none rounded-[3px] border border-black bg-white checked:border-black checked:bg-black checked:after:absolute checked:after:inset-0 checked:after:flex checked:after:items-center checked:after:justify-center checked:after:text-[14px] checked:after:font-bold checked:after:leading-none checked:after:text-white checked:after:content-['×'] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-invalid:!border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:!border-destructive/50 dark:aria-invalid:ring-destructive/40"
                                           : "size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"}
                                       />
+                                      <FacetItemDecoration direction="class" iri={RDF_TYPE_URI} value={fctTermKey(item.uri, "uri")}/>
                                       <Tooltip><TooltipTrigger render={<button
                                         type="button"
                                         className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${count === 0 ? "text-destructive" : ""}`}
@@ -285,6 +288,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                       return <Collapsible key={nodeKey} open={isExpanded} onOpenChange={(open) => setExpandedCategoryNodes((current) => { const next = new Set(current); if (open) next.add(nodeKey); else next.delete(nodeKey); return next; })} className="min-w-0">
                                         <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50" style={depth ? { paddingLeft: `${8 + depth * 14}px` } : undefined}>
                                           <input type="checkbox" checked={selectedClasses.has(item.uri)} onChange={(event) => toggleClass(item.uri, event.target.checked)} aria-label={`Filter by class ${toLabel(item.uri, "Class")}`} className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} />
+                                          <FacetItemDecoration direction="class" iri={RDF_TYPE_URI} value={fctTermKey(item.uri, "uri")}/>
                                           <div className="flex min-w-0 flex-1 items-center gap-1">
                                             <Tooltip><TooltipTrigger render={<button type="button" className={`min-w-0 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`} onClick={() => { if (isGroupByCategory) scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri, "Class"), matches: [], termType: "uri" }); else { if (!selectedClasses.has(item.uri)) toggleClass(item.uri, true); showClassResults(item.uri, activeLeafId); } }}>{toLabel(item.uri, "Class")}</button>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
                                             {node.children.length > 0 && <CollapsibleTrigger aria-label={`${isExpanded ? "Collapse" : "Expand"} ${toLabel(item.uri, "Class")}`} className="inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground">{isExpanded ? <ChevronDown className="size-3.5" aria-hidden="true" /> : <ChevronRight className="size-3.5" aria-hidden="true" />}</CollapsibleTrigger>}
@@ -309,6 +313,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                     className="size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
                                     aria-invalid={isZeroCount ? true : undefined}
                                   />
+                                  <FacetItemDecoration direction="class" iri={RDF_TYPE_URI} value={fctTermKey(item.uri, "uri")}/>
                                   <Tooltip><TooltipTrigger render={<button
                                     type="button"
                                     className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}
@@ -350,7 +355,6 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                   onClick={() => navigateToPropertyPath(roleNode.id)}
                                 >
                                   <span className="mr-1 inline-flex align-middle"><IncompleteWidgetIndicator source={`personal-role:${uri}`} /></span>
-                                  {activeRoleFilters.some((node) => node.attributes.iri === uri && node.attributes.src === "shacl") && <ClipboardList className="mr-1 inline size-4 shrink-0" aria-label="SHACL-discovered facet" />}
                                   {isGroupByRole && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                                   {excluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                                   {label}
@@ -397,6 +401,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                       <UsersRound className="size-4" aria-hidden="true" />
                                     </button>} /><TooltipContent>{isGroupByRole ? `Stop grouping by ${roleLabel}` : `Group results by ${roleLabel}`}</TooltipContent></Tooltip>
                                   )}
+                                  <FacetDecorationControl direction="reverse" iri={uri}/>
                                   <Tooltip><TooltipTrigger render={<button
                                     type="button"
                                     className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"

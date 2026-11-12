@@ -1,11 +1,15 @@
 "use client";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
-import type { MouseEvent } from "react";
+import { useEffect, useState } from "react";
+import { CodeBlock } from "@/components/ui/code-block";
+import { ArrowLeft } from "lucide-react";
 import { Network } from "lucide-react";
 import type { FeatureKind } from "@/lib/feature-view-xslt";
 type ViewChoice = { uri: string };
 export interface ViewPageProps {
   viewFeature: FeatureKind | null;
+  requiresBookmark?: boolean;
+  queryXml?: string;
   viewFeatureLoading: boolean;
   viewFeatureError: string;
   viewFeatureCount: number;
@@ -17,13 +21,51 @@ export interface ViewPageProps {
   viewHtml: string;
   onSelectEndpoint: (id: string) => void;
   onRefreshEndpoint: (id: string) => void;
+  onPolicyAction?: (uri: string, action: "toggle" | "forget" | "bookmark", approved: boolean) => void;
+  onOpenResource?: (uri: string) => void;
+  onSelectFeature?: (uri: string, selected: boolean) => void;
 }
-export function ViewPage({ viewFeature, viewFeatureLoading, viewFeatureError, viewFeatureCount, viewFeatureHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, viewRenderError, viewHtml, onSelectEndpoint, onRefreshEndpoint }: ViewPageProps) {
+export function ViewPage({ queryXml = "", requiresBookmark = false, viewFeature, viewFeatureLoading, viewFeatureError, viewFeatureCount, viewFeatureHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, viewRenderError, viewHtml, onSelectEndpoint, onRefreshEndpoint, onPolicyAction, onOpenResource, onSelectFeature }: ViewPageProps) {
+  const [policyCode, setPolicyCode] = useState<{ uri: string; code: string; query: string; loading: boolean; error: string } | null>(null);
+  useEffect(() => { setPolicyCode(null); }, [viewFeature, viewFeatureHtml]);
+  async function openPolicyCode(uri: string) {
+    if (!/^([a-z][a-z0-9+.-]*):[^\s<>"{}|^`\\]+$/i.test(uri)) return;
+    setPolicyCode({ uri, code: "", query: "", loading: true, error: "" });
+    try {
+      const response = await fetch("/proxy/api/policy-code", { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ policy: uri, queryXml }) });
+      const payload = await response.json() as { code?: string; query?: string; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Could not load policy definition.");
+      setPolicyCode({ uri, code: payload.code || "# No policy triples found in the personal shapes graph.", query: payload.query ?? "", loading: false, error: "" });
+    } catch (error) {
+      setPolicyCode({ uri, code: "", query: "", loading: false, error: error instanceof Error ? error.message : "Could not load policy source." });
+    }
+  }
   return <div className="min-h-0 flex-1 overflow-auto p-4">
-                  {viewFeature ? (viewFeatureLoading ? <p className="text-sm text-muted-foreground"><ElapsedStatus label={`Locating ${viewFeature}`} category="policies" clockScope="views" /></p>
+                  {requiresBookmark && !policyCode && <div data-policy-bookmark-banner="true" role="status" className="mb-4 rounded-md border border-amber-400/50 bg-amber-100/80 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">Bookmark this query to manage policy approvals. Use the highlighted Bookmark button in the appbar.</div>}
+                  {policyCode ? <div className="flex h-full min-h-0 flex-col gap-3">
+                    <button type="button" onClick={() => setPolicyCode(null)} className="inline-flex w-fit items-center gap-2 rounded px-2 py-1 text-sm hover:bg-accent"><ArrowLeft className="size-4"/>Back to results</button>
+                    {policyCode.loading ? <p role="status">Loading policy source…</p> : policyCode.error ? <p role="alert" className="text-destructive">{policyCode.error}</p>
+                      : <CodeBlock className="min-h-0 flex-1" code={policyCode.code} language="turtle" filename="policy.ttl" />}
+                  </div> : viewFeature ? (viewFeatureLoading ? <p className="text-sm text-muted-foreground"><ElapsedStatus label={`Locating ${viewFeature}`} category="policies" clockScope="views" /></p>
                     : viewFeatureError ? <p role="alert" className="text-sm text-destructive">{viewFeatureError}</p>
                     : viewFeatureCount === 0 ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">No applicable {viewFeature} found for the current query context.</p>
-                    : <div className="maestro-discovered-view" dangerouslySetInnerHTML={{ __html: viewFeatureHtml }}/>)
+                    : <div className="maestro-discovered-view" onClick={(event) => {
+                        const target = event.target as HTMLElement;
+                        const selection = target.closest<HTMLInputElement>('input[data-feature-select]');
+                        if (selection) {
+                          const featureUri = selection.closest<HTMLElement>('article[data-feature-uri]')?.getAttribute('data-feature-uri') ?? '';
+                          if (featureUri) onSelectFeature?.(featureUri, selection.checked);
+                          return;
+                        }
+                        const link = target.closest<HTMLElement>("button[data-feature-open-uri]");
+                        if (link) { const iri = link.getAttribute("data-feature-open-uri") || ""; if (/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(iri)) onOpenResource?.(iri); return; }
+                        const actionNode = target.closest<HTMLElement>("[data-policy-action]");
+                        const uri = (actionNode ?? target.closest<HTMLElement>("button[data-feature-code]"))?.closest<HTMLElement>("article[data-feature-uri]")?.getAttribute("data-feature-uri") ?? "";
+                        if (target.closest("button[data-feature-code]") && uri) { void openPolicyCode(uri); return; }
+                        if (!actionNode || !uri || !onPolicyAction) return;
+                        const action = actionNode.getAttribute("data-policy-action");
+                        if (action === "toggle" || action === "forget" || action === "bookmark") onPolicyAction(uri, action, actionNode instanceof HTMLInputElement ? actionNode.checked : false);
+                      }} dangerouslySetInnerHTML={{ __html: viewFeatureHtml }}/>)
                     : viewDiscoveryLoading ? <p className="text-sm text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></p>
                     : viewDiscoveryError ? <p role="alert" className="text-sm text-destructive">{viewDiscoveryError}</p>
                     : !selectedView ? <div className="mx-auto max-w-lg rounded-lg border border-dashed p-8 text-center">

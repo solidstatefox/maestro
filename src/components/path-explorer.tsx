@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowLeftRight, ArrowRight, GitBranch, Play, X } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowRight, GitBranch, Play, X, Copy, Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,6 +50,13 @@ export default function PathExplorer({ query }: { query: string }) {
   const [loadingResults, setLoadingResults] = useState(false);
   const [error, setError] = useState("");
   const [showQuery, setShowQuery] = useState(false);
+  const [sparqlCopied, setSparqlCopied] = useState(false);
+
+  useEffect(() => {
+    if (!sparqlCopied) return;
+    const timer = window.setTimeout(() => setSparqlCopied(false), 2500);
+    return () => window.clearTimeout(timer);
+  }, [sparqlCopied]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -338,10 +345,19 @@ export default function PathExplorer({ query }: { query: string }) {
               </Button>
               <Button
                 variant="outline"
-                onClick={() => navigator.clipboard.writeText(sparql)}
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(sparql);
+                    setSparqlCopied(true);
+                  } catch {
+                    setSparqlCopied(false);
+                  }
+                }}
                 disabled={!sparql}
+                aria-label={sparqlCopied ? "SPARQL copied" : "Copy SPARQL"}
               >
-                Copy SPARQL
+                {sparqlCopied ? <Check className="mr-1 size-4" aria-hidden="true" /> : <Copy className="mr-1 size-4" aria-hidden="true" />}
+                {sparqlCopied ? "Copied" : "Copy SPARQL"}
               </Button>
             </div>
 

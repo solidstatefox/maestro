@@ -221,7 +221,23 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
   const preferredLanguage = (viewNode?.attributes.indexLang ?? "en").toLowerCase();
   if (preferredLanguage !== "all" && !/^[a-z]{2,3}$/.test(preferredLanguage)) return null;
   // Same literal-focus restriction as Results; do not filter URI resources.
-  if (preferredLanguage !== "all") state.patterns.push(`FILTER (!isLiteral(${state.viewVariable}) || LANG(${state.viewVariable}) = "" || LANGMATCHES(LANG(${state.viewVariable}), "${preferredLanguage}"))`);
+  const hasExplicitViewLanguage = (() => {
+    const find = (nodes: FctQueryNode[]): boolean | null => {
+      for (const node of nodes) {
+        if (node.children.some((child) => child.name === "view"))
+          return node.children.some((child) => child.name === "value" && !!(child.attributes["xml:lang"] || child.attributes.lang));
+        const nested = find(node.children);
+        if (nested !== null) return nested;
+      }
+      return null;
+    };
+    return find(tree.children) === true;
+  })();
+  // Same RDF 1.1 language policy as the main FCT compiler: only rdf:langString
+  // is restricted. This deliberately avoids LANG() on neutral xsd:string values
+  // (e.g. Bookmark tag "demo"), which Virtuoso incorrectly excluded previously.
+  if (preferredLanguage !== "all" && !hasExplicitViewLanguage)
+    state.patterns.push(`FILTER (!isLiteral(${state.viewVariable}) || DATATYPE(${state.viewVariable}) != <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> || LANGMATCHES(LANG(${state.viewVariable}), "${preferredLanguage}"))`);
   const indexLetter = viewNode?.attributes.index?.trim() ?? "";
   if (indexLetter) {
     if (!/^[A-Z]$/.test(indexLetter)) return null;
@@ -230,7 +246,7 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
     const available = props.map((prop) => `<${prop}>`).join(", ");
     state.patterns.push(`${state.viewVariable} ?maestroIndexPredicate ?maestroIndexLabel .`);
     state.patterns.push(`FILTER (?maestroIndexPredicate IN (${available}))`);
-    if (preferredLanguage !== "all") state.patterns.push(`FILTER (LANGMATCHES(LANG(?maestroIndexLabel), "${preferredLanguage}") || LANG(?maestroIndexLabel) = "")`);
+    if (preferredLanguage !== "all") state.patterns.push(`FILTER (!isLiteral(?maestroIndexLabel) || DATATYPE(?maestroIndexLabel) != <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> || LANGMATCHES(LANG(?maestroIndexLabel), "${preferredLanguage}"))`);
     state.patterns.push(`FILTER (STRSTARTS(UCASE(STR(?maestroIndexLabel)), "${indexLetter}"))`);
   }
 

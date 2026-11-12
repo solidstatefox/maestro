@@ -1,0 +1,10 @@
+# Authorship of the bundled Maestro software policies, formatters and transcoders.
+# schema:author is a Schema.org CreativeWork/SoftwareSourceCode property.
+@prefix schema: <https://schema.org/> .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTResponseModeExtractor> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTResponseModeExtractor-widget> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTTopicExtractor> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTTopicExtractor-widget> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTUserSentimentExtractor> schema:author "ChatGPT (GPT-6)" .
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTUserSentimentExtractor-widget> schema:author "ChatGPT (GPT-6)" .

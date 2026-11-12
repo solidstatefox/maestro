@@ -136,7 +136,7 @@ export type FilterPaneDirectWorkspace = Pick<WorkspaceController,
   | "pagedUnselectedClasses"
   | "personalRoleFacetNodes"
   | "queryRefreshRevision"
-  | "recordStates"
+  | "recordStatus"
   | "queryTree"
   | "queryWithoutPagingXml"
   | "roleWidgetCardRefs"
@@ -319,7 +319,7 @@ export type RecordPaneWorkspace = Pick<WorkspaceController,
   | "recordFormatPreviews"
   | "recordGraphError"
   | "recordGraphOptions"
-  | "recordStates"
+  | "recordStatus"
   | "recordGraphs"
   | "recordPolicies"
   | "recordPolicy"
@@ -435,7 +435,7 @@ export type SettingsPaneWorkspace = Pick<WorkspaceController,
 
 export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "effectiveResultsTotalCount"
-  | "recordStates"
+  | "recordStatus"
   | "centralTab"
   | "resetQuery"
   | "setSearch"

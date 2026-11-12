@@ -4,7 +4,6 @@ import { PersonalWidgetQueryListener } from "@/canvas/left/filter";
 
 import { BrowseRibbon } from "@/canvas/tab/browse/ribbon";
 
-import { currentFocusFacets, mapEligible } from "@/lib/map-perspective";
 import { ViewRibbon } from "@/canvas/tab/view/ribbon";
 import { AnalyzeRibbon } from "@/canvas/tab/analyze/ribbon";
 
@@ -601,10 +600,8 @@ export function MaestroWorkspace() {
     }
   };
   collectQueryClasses(queryTree.children);
-  const mapContextProperties = currentFocusFacets(queryTree, propertyFacets.map(facet => facet.uri));
-  const mapAvailable = mapEligible(mapContextProperties);
   // Use the identical live ribbon in both ready and loading layouts.
-  const workspaceRibbon = (workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewFeature={viewFeature} setViewFeature={setViewFeature} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setSelectedViewUri(uri); setViewFeature(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} mapAvailable={mapAvailable} /> : <AnalyzeRibbon analysisDefinitions={analysisDefinitions} selectedAnalysisUri={selectedAnalysisUri} analyzeHistogram={analyzeHistogram} isCompareAnalysis={isCompareAnalysis} firstBreadcrumbLabel={tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : undefined} firstResultTitle={visibleResultsPage[0]?.title} onSelectAnalysis={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(false); }} onSelectHistogram={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(true); }} />);
+  const workspaceRibbon = (workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewFeature={viewFeature} setViewFeature={setViewFeature} onSelectFeature={workspace.selectViewFeature} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setSelectedViewUri(uri); setViewFeature(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <AnalyzeRibbon analysisDefinitions={analysisDefinitions} selectedAnalysisUri={selectedAnalysisUri} analyzeHistogram={analyzeHistogram} isCompareAnalysis={isCompareAnalysis} firstBreadcrumbLabel={tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : undefined} firstResultTitle={visibleResultsPage[0]?.title} onSelectAnalysis={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(false); }} onSelectHistogram={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(true); }} />);
   if (!graphRegistryReady || selectedEndpointStatus?.state !== "ok" || selectedEndpointStatus.status !== 200) return (
     <main className="flex h-dvh min-h-[500px] flex-col bg-background text-foreground">
       <Toaster />

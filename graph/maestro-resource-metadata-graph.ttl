@@ -1,0 +1,94 @@
+@prefix dcterms: <http://purl.org/dc/terms/> .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/endpoints> dcterms:description "Identifies the Endpoints graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/endpoints#split-ds> dcterms:description "Identifies the Split DS graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured> dcterms:description "Identifies the Featured graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#dbpedia> dcterms:description "Identifies the DBpedia graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#eu-publications-office> dcterms:description "Identifies the EU Publications Office graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#openlink-demo-server> dcterms:description "Identifies the OpenLink demo server graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#openlink-vector-demo-dbpedia-search-by-meaning> dcterms:description "Identifies the OpenLink vector demo (DBpedia, search by meaning) graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#uniprot> dcterms:description "Identifies the UniProt graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#uriburner-ub> dcterms:description "Identifies the URIBurner (UB) graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#wikidata> dcterms:description "Identifies the Wikidata graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/featured#wikidata-openlink-instance> dcterms:description "Identifies the Wikidata - OpenLink instance graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments> dcterms:description "Identifies the Government & parliaments graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#bcn-library-of-the-national-congress-of-chile> dcterms:description "Identifies the BCN - Library of the National Congress of Chile graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#dati-gov-it-italian-open-data> dcterms:description "Identifies the dati.gov.it (Italian open data) graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#datos-gob-es-spanish-open-data> dcterms:description "Identifies the datos.gob.es (Spanish open data) graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#era-lex-eu-railway-legislation> dcterms:description "Identifies the ERA-Lex - EU railway legislation graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#era-ocr-organisation-code-register> dcterms:description "Identifies the ERA OCR - Organisation Code Register graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#era-rinf-eu-register-of-railway-infrastructure> dcterms:description "Identifies the ERA RINF - EU Register of Railway Infrastructure graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#era-vocabulary-and-requirements> dcterms:description "Identifies the ERA vocabulary & requirements graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#fedlex-swiss-federal-law> dcterms:description "Identifies the Fedlex - Swiss federal law graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#italian-chamber-of-deputies> dcterms:description "Identifies the Italian Chamber of Deputies graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#legilux-luxembourg-legislation> dcterms:description "Identifies the Legilux - Luxembourg legislation graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/government-and-parliaments#siop-brazilian-federal-budget> dcterms:description "Identifies the SIOP - Brazilian federal budget graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities> dcterms:description "Identifies the Libraries & humanities graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities#data-for-humanities-abes> dcterms:description "Identifies the Data for Humanities (ABES) graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities#dbnary> dcterms:description "Identifies the DBnary (Wiktionary) graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities#libris-national-library-of-sweden> dcterms:description "Identifies the LIBRIS - National Library of Sweden graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it> dcterms:description "Identifies the Life sciences & health IT graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it#3lgm2-ihe-integration-profiles> dcterms:description "Identifies the 3LGM² - IHE integration profiles graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it#oma-orthology-browser> dcterms:description "Identifies the OMA orthology browser graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it#orthodb> dcterms:description "Identifies the OrthoDB graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/life-sciences-and-health-it#wikipathways> dcterms:description "Identifies the WikiPathways graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> dcterms:description "Identifies the Most reliable (endpoint registry) graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#agrovoc> dcterms:description "Identifies the AGROVOC graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#aragon-open-data> dcterms:description "Identifies the Aragon Open Data graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#cellosaurus> dcterms:description "Identifies the Cellosaurus graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#czech-government> dcterms:description "Identifies the Czech Government graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#eu-data-portal-cordis> dcterms:description "Identifies the EU data portal (Cordis) graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#idref-sudoc-authorities> dcterms:description "Identifies the IdRef (Sudoc authorities) graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#kb-national-library-of-the-netherlands> dcterms:description "Identifies the KB - National Library of the Netherlands graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#muziekschatten> dcterms:description "Identifies the Muziekschatten graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#nakala> dcterms:description "Identifies the Nakala graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#nerc-vocabulary-service> dcterms:description "Identifies the NERC Vocabulary Service graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#science-plus-abes> dcterms:description "Identifies the science plus (ABES) graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#uk-parliament> dcterms:description "Identifies the UK Parliament graph server for SPARQL discovery and query execution." .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/registry> dcterms:description "Identifies the Maestro graph registry graph server for SPARQL discovery and query execution." .
+

@@ -309,3 +309,14 @@ mui:lastNewCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ; rd
 # Personal facet providers are discovered against properties in the active view scope.
 mui:PersonalFacetWidget a owl:Class ; rdfs:label "Personal facet widget"@en .
 mui:DateRangeFacetWidget a owl:Class ; rdfs:subClassOf mui:PersonalFacetWidget ; rdfs:label "Date/time range facet"@en .
+
+# Authenticated personal appbar shortcuts. Instances live under the user's
+# /query/appbar named graph; the appbar may query these definitions but must
+# never execute arbitrary provider templates or JavaScript.
+mui:AppbarButtonProvider a owl:Class ; rdfs:subClassOf mui:Provider ;
+  rdfs:label "appbar button provider"@en ;
+  dcterms:description "A personal appbar shortcut whose action is the URI of a saved Bookmark, with a user-supplied Lucide icon and tooltip."@en .
+mui:icon a owl:DatatypeProperty ; rdfs:label "Lucide icon name"@en ;
+  dcterms:description "Kebab-case name of the Lucide icon used by an appbar button provider."@en .
+mui:tooltip a owl:DatatypeProperty ; rdfs:label "button tooltip"@en ;
+  dcterms:description "Accessible tooltip text displayed for a personal appbar button provider."@en .

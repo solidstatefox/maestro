@@ -17,8 +17,13 @@ function configuredLimit(name: string, fallback: number): number {
   return Number.isSafeInteger(value) && value >= 0 ? value : fallback;
 }
 
+/** Set MAESTRO_PROXY_QUERY_CACHE_ENABLED=false in .env.local to skip all
+ * process-local query-result cache reads/writes; the browser cache is separate.
+ * The older MAX_ENTRIES=0 / MAX_BYTES=0 switches still work.
+ */
 function cacheDisabled(): boolean {
-  return configuredLimit("MAESTRO_QUERY_CACHE_MAX_ENTRIES", DEFAULT_MAX_ENTRIES) === 0 ||
+  return process.env.MAESTRO_PROXY_QUERY_CACHE_ENABLED?.trim().toLowerCase() === "false" ||
+    configuredLimit("MAESTRO_QUERY_CACHE_MAX_ENTRIES", DEFAULT_MAX_ENTRIES) === 0 ||
     configuredLimit("MAESTRO_QUERY_CACHE_MAX_BYTES", DEFAULT_MAX_BYTES) === 0;
 }
 

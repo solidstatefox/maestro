@@ -1,0 +1,214 @@
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<gttp://ggg.maestro.ecosys/analyze/bookmark-activity> dcterms:description "Describes the RDF nodes and properties accepted by the Bookmark activity shape." .
+
+<gttp://ggg.maestro.ecosys/analyze/bookmark-activity#xslt> rdfs:label "xslt" ;
+    dcterms:description "Defines the xslt analysis or visualization available for relevant query results." .
+
+<gttp://ggg.maestro.ecosys/analyze/bookmark-input> rdfs:label "bookmark input" ;
+    dcterms:description "Defines the SHACL input constraints for bookmark input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/analyze/bookmark-tags> dcterms:description "Describes the Bookmark tags resource used for saving or recovering bookmarked queries." .
+
+<gttp://ggg.maestro.ecosys/analyze/bookmark-tags#xslt> rdfs:label "xslt" ;
+    dcterms:description "Defines the xslt analysis or visualization available for relevant query results." .
+
+<gttp://ggg.maestro.ecosys/analyze/compare-table> dcterms:description "Describes the RDF nodes and properties accepted by the Compare Table shape." .
+
+<gttp://ggg.maestro.ecosys/analyze/compare-table#xslt> rdfs:label "xslt" ;
+    dcterms:description "Defines the xslt analysis or visualization available for relevant query results." .
+
+<gttp://ggg.maestro.ecosys/analyze/table> dcterms:description "Describes the RDF nodes and properties accepted by the Table shape." .
+
+<gttp://ggg.maestro.ecosys/analyze/table#xslt> rdfs:label "xslt" ;
+    dcterms:description "Defines the xslt analysis or visualization available for relevant query results." .
+
+<gttp://ggg.maestro.ecosys/service/open-library> dcterms:description "Describes the RDF nodes and properties accepted by the Open Library shape." .
+
+<gttp://ggg.maestro.ecosys/service/open-library#author> dcterms:description "Defines the Author Details Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/open-library#authorWorks> dcterms:description "Defines the More by Author Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/open-library#bookshelves> dcterms:description "Defines the Bookshelves Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/open-library#details> dcterms:description "Defines the Book Details Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/open-library#editions> dcterms:description "Defines the Editions Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/open-library#find> dcterms:description "Defines the Find Book Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/open-library#isbn> dcterms:description "Defines the ISBN Edition Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/open-library#ratings> dcterms:description "Defines the Ratings Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/open-library#subject> dcterms:description "Defines the Related Books Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/template#JsonOutput> rdfs:label "Json Output" ;
+    dcterms:description "Defines the Json Output Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/template#ResourceInput> rdfs:label "Resource Input" ;
+    dcterms:description "Defines the Resource Input Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/service/template#SearchInput> rdfs:label "Search Input" ;
+    dcterms:description "Defines the Search Input Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/shacl/policy/bookmark> dcterms:description "Associates matching RDF resources with the Bookmark record policy policy and its processing instructions." .
+
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-book> dcterms:description "Associates matching RDF resources with the DBpedia Book policy policy and its processing instructions." .
+
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-film> dcterms:description "Associates matching RDF resources with the DBpedia Film policy policy and its processing instructions." .
+
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-organisation> dcterms:description "Associates matching RDF resources with the DBpedia Organisation policy policy and its processing instructions." .
+
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-person> dcterms:description "Associates matching RDF resources with the DBpedia Person policy policy and its processing instructions." .
+
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-place> dcterms:description "Associates matching RDF resources with the DBpedia Place policy policy and its processing instructions." .
+
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-species> dcterms:description "Associates matching RDF resources with the DBpedia Species policy policy and its processing instructions." .
+
+<gttp://ggg.maestro.ecosys/shacl/policy/dbpedia-work> dcterms:description "Associates matching RDF resources with the DBpedia Work policy policy and its processing instructions." .
+
+<gttp://ggg.maestro.ecosys/shacl/policy/query-history-visit> dcterms:description "Associates matching RDF resources with the Query history bookmark policy policy and its processing instructions." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective> dcterms:description "Provides the Bookmarks feature through Maestro policy discovery, using the Bookmarks Perspective widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective-input> rdfs:label "bookmarks perspective input" ;
+    dcterms:description "Defines the SHACL input constraints for bookmarks perspective input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/entrypoint> rdfs:label "entrypoint" ;
+    dcterms:description "Provides the entrypoint feature through Maestro policy discovery, using the Entry Point Cards widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/entrypoint-input> rdfs:label "entrypoint input" ;
+    dcterms:description "Defines the SHACL input constraints for entrypoint input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/history-perspective> dcterms:description "Provides the History feature through Maestro policy discovery, using the History Perspective widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/history-perspective-input> rdfs:label "history perspective input" ;
+    dcterms:description "Defines the SHACL input constraints for history perspective input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-0-input> rdfs:label "record 0 input" ;
+    dcterms:description "Defines the SHACL input constraints for record 0 input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-0> rdfs:label "record 0 template 0" ;
+    dcterms:description "Provides the record 0 template 0 feature through Maestro policy discovery, using the Bookmark Query Results Template widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-1> rdfs:label "record 0 template 1" ;
+    dcterms:description "Provides the record 0 template 1 feature through Maestro policy discovery, using the Bookmark Record Template widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-1-input-class-1> rdfs:label "record 1 input class 1" ;
+    dcterms:description "Defines the SHACL input constraints for record 1 input class 1 provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-1-input-class-2> rdfs:label "record 1 input class 2" ;
+    dcterms:description "Defines the SHACL input constraints for record 1 input class 2 provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-1-input-class-3> rdfs:label "record 1 input class 3" ;
+    dcterms:description "Defines the SHACL input constraints for record 1 input class 3 provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-1-template-2> rdfs:label "record 1 template 2" ;
+    dcterms:description "Provides the record 1 template 2 feature through Maestro policy discovery, using the Dbpedia Book Record Template widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-2-input> rdfs:label "record 2 input" ;
+    dcterms:description "Defines the SHACL input constraints for record 2 input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-2-template-3> rdfs:label "record 2 template 3" ;
+    dcterms:description "Provides the record 2 template 3 feature through Maestro policy discovery, using the Dbpedia Film Record Template widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-3-input> rdfs:label "record 3 input" ;
+    dcterms:description "Defines the SHACL input constraints for record 3 input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-3-template-4> rdfs:label "record 3 template 4" ;
+    dcterms:description "Provides the record 3 template 4 feature through Maestro policy discovery, using the Dbpedia Organisation Record Template widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-4-input> rdfs:label "record 4 input" ;
+    dcterms:description "Defines the SHACL input constraints for record 4 input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-4-template-5> rdfs:label "record 4 template 5" ;
+    dcterms:description "Provides the record 4 template 5 feature through Maestro policy discovery, using the Dbpedia Person Record Template widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-5-input> rdfs:label "record 5 input" ;
+    dcterms:description "Defines the SHACL input constraints for record 5 input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-5-template-6> rdfs:label "record 5 template 6" ;
+    dcterms:description "Provides the record 5 template 6 feature through Maestro policy discovery, using the Dbpedia Place Record Template widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-6-input> rdfs:label "record 6 input" ;
+    dcterms:description "Defines the SHACL input constraints for record 6 input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-6-template-7> rdfs:label "record 6 template 7" ;
+    dcterms:description "Provides the record 6 template 7 feature through Maestro policy discovery, using the Dbpedia Species Record Template widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-7-input> rdfs:label "record 7 input" ;
+    dcterms:description "Defines the SHACL input constraints for record 7 input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-7-template-8> rdfs:label "record 7 template 8" ;
+    dcterms:description "Provides the record 7 template 8 feature through Maestro policy discovery, using the Dbpedia Work Record Template widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-8-input> rdfs:label "record 8 input" ;
+    dcterms:description "Defines the SHACL input constraints for record 8 input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/record-8-template-9> rdfs:label "record 8 template 9" ;
+    dcterms:description "Provides the record 8 template 9 feature through Maestro policy discovery, using the Query History Visit Record Template widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-created> dcterms:description "Provides the Date/time feature through Maestro policy discovery, using the Temporal Facet widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-created-input> rdfs:label "temporal created input" ;
+    dcterms:description "Defines the SHACL input constraints for temporal created input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-history> dcterms:description "Provides the Date/time feature through Maestro policy discovery, using the Temporal Facet widget." .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-history-input> rdfs:label "temporal history input" ;
+    dcterms:description "Defines the SHACL input constraints for temporal history input provider discovery and matching." .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#BookmarkRecordShape> dcterms:description "Describes the RDF nodes and properties accepted by the Bookmark record shape shape." .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#DbpediaBookRecordShape> dcterms:description "Describes the RDF nodes and properties accepted by the DBpedia Book validator shape." .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#DbpediaFilmRecordShape> dcterms:description "Describes the RDF nodes and properties accepted by the DBpedia Film validator shape." .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#DbpediaOrganisationRecordShape> dcterms:description "Describes the RDF nodes and properties accepted by the DBpedia Organisation validator shape." .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#DbpediaPersonRecordShape> dcterms:description "Describes the RDF nodes and properties accepted by the DBpedia Person validator shape." .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#DbpediaPlaceRecordShape> dcterms:description "Describes the RDF nodes and properties accepted by the DBpedia Place validator shape." .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#DbpediaSpeciesRecordShape> dcterms:description "Describes the RDF nodes and properties accepted by the DBpedia Species validator shape." .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#DbpediaWorkRecordShape> dcterms:description "Describes the RDF nodes and properties accepted by the DBpedia Work validator shape." .
+
+<gttp://ggg.maestro.ecosys/shacl/shape#QueryHistoryVisitRecordShape> rdfs:label "Query History Visit Record Shape" ;
+    dcterms:description "Describes the RDF nodes and properties accepted by the Query History Visit Record Shape shape." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarkQueryResultsTemplate> dcterms:description "Defines the Bookmark with query results display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarkRecordTemplate> dcterms:description "Defines the Bookmark card display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#BookmarksPerspective> dcterms:description "Defines the Bookmarks perspective display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaBookRecordTemplate> dcterms:description "Defines the Book literary card display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaBookReviewQueryPivot> dcterms:description "Defines the Book linked reviews query pivot Resource resource used by the Maestro RDF configuration." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaFilmRecordTemplate> dcterms:description "Defines the Film cinematic card display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaOrganisationRecordTemplate> dcterms:description "Defines the Organisation profile card display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaPersonRecordTemplate> dcterms:description "Defines the Person profile card display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaPlaceRecordTemplate> dcterms:description "Defines the Place profile card display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaSpeciesRecordTemplate> dcterms:description "Defines the Species taxonomy card display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#DbpediaWorkRecordTemplate> dcterms:description "Defines the Creative work card display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#HistoryPerspective> dcterms:description "Defines the History perspective display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> rdfs:label "Query History Visit Record Template" ;
+    dcterms:description "Defines the Query History Visit Record Template display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/view#EntryPointCards> dcterms:description "Defines the Graph server cards display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.maestro.ecosys/shacl/view#EntryPointView> dcterms:description "Describes the RDF nodes and properties accepted by the Graph Servers shape." .
+
+<gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> dcterms:description "Defines the Date/time display or transformation used to render matching RDF resources." .
+

@@ -7,6 +7,7 @@ import { cachedFetchFct } from "@/lib/client-query-cache";
 import { readFctResponse } from "@/canvas/utils/fct-response";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ButtonGroup } from "@/components/ui/button-group";
+import { DateTimePicker } from "@/components/ui/date-time-picker";
 
 export type TemporalFacetProvider = { uri: string; property: string; label: string };
 type Provider = TemporalFacetProvider;
@@ -47,9 +48,7 @@ function calendarQuery(queryXml: string, property: string, resolution: Resolutio
   const facet = Array.from(scope.children).find(el => el.localName === "property" && el.getAttribute("iri") === property);
   if (!facet) return null;
   Array.from(facet.children).filter(el => el.localName === "value").forEach(el => el.remove());
-  // The same relationship is a non-filtering projection until the user chooses
-  // a range. Calendar aggregation must always bind that date value.
-  facet.removeAttribute("project");
+  // The view-bearing date property is bound by ordinary FCT traversal.
   view.remove();
   facet.appendChild(view);
   view.setAttribute("type", resolution);
@@ -65,6 +64,7 @@ function dateAt(year: number, month: number, day = 1) { return new Date(Date.UTC
 export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeChange }: {
   provider: Provider; scopeNodes: FctQueryNode[]; queryXml: string; onRangeChange: Props["onRangeChange"];
 }) {
+  const [selectedCalendarCell, setSelectedCalendarCell] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [resolution, setResolution] = useState<Resolution>("years");
@@ -73,6 +73,7 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
   const [weekStart, setWeekStart] = useState(() => dateAt(new Date().getUTCFullYear(),new Date().getUTCMonth(),1));
   const [counts, setCounts] = useState<Map<string, number>>(new Map());
   const [fetching, setFetching] = useState(false);
+  const [countsLoaded, setCountsLoaded] = useState(false);
   const [error, setError] = useState("");
   const existing = scopeNodes.find(node => node.name === "property" && node.attributes.iri === provider.property);
   const range = existing?.children.find(node => node.name === "value" &&
@@ -86,8 +87,8 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
   const query = useMemo(() => calendarQuery(queryXml, provider.property, bucketView), [queryXml, provider.property, bucketView]);
   useEffect(() => {
     const controller = new AbortController();
-    if (!query) { setCounts(new Map()); setFetching(false); return () => controller.abort(); }
-    setFetching(true); setError("");
+    if (!query) { setCounts(new Map()); setFetching(false); setCountsLoaded(false); return () => controller.abort(); }
+    setFetching(true); setCountsLoaded(false); setError("");
     void (async () => {
       try {
         const response = await cachedFetchFct("/proxy/api/fct", {
@@ -105,20 +106,37 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
           if (key && Number.isFinite(number) && number >= 0) totals.set(key, (totals.get(key) ?? 0) + number);
         }
         setCounts(totals);
+        setCountsLoaded(true);
       } catch (cause) {
-        if (!controller.signal.aborted) { setCounts(new Map()); setError(cause instanceof Error ? cause.message : "Calendar counts unavailable"); }
+        if (!controller.signal.aborted) { setCounts(new Map()); setCountsLoaded(false); setError(cause instanceof Error ? cause.message : "Calendar counts unavailable"); }
       } finally { if (!controller.signal.aborted) setFetching(false); }
     })();
     return () => controller.abort();
   }, [query, bucketView, provider.property]);
+  // Apply only complete, ordered ranges. Individual picker edits are immediate;
+  // no Apply button or blur event is necessary.
+  const updateRange = (nextFrom: string, nextTo: string) => {
+    // An explicit From/To edit tears down any prior calendar-cell selection.
+    setSelectedCalendarCell("");
+    setFrom(nextFrom); setTo(nextTo);
+    if (nextFrom && nextTo && nextFrom <= nextTo) onRangeChange(provider.property, utcDate(nextFrom), utcDate(nextTo));
+  };
   const invalid = Boolean(from && to && from > to);
-  const choose = (start: Date, end: Date) => {
+  const choose = (start: Date, end: Date, cellKey: string) => {
+    setSelectedCalendarCell(cellKey);
     const [a,b] = selectionBounds(start,end);
     setFrom(localDate(a)); setTo(localDate(b));
     onRangeChange(provider.property,a,b);
   };
   const monthLabel = new Intl.DateTimeFormat(undefined,{month:"long",timeZone:"UTC"}).format(dateAt(year,month));
   const countFor = (date: Date) => counts.get(normalizedBucket(iso(date), bucketView)) ?? 0;
+  const selectedCalendarStyle = (key: string) => selectedCalendarCell === key
+    ? "border-border bg-muted/70 text-foreground ring-1 ring-border/60 dark:border-border dark:bg-muted/50 dark:text-foreground"
+    : "";
+  const mutedIfZero = (count: number) => countsLoaded && !fetching && !error && count === 0
+    ? "bg-muted/30 text-muted-foreground/50 opacity-50"
+    : "hover:bg-accent";
+  const weekdayName = (date: Date) => new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" }).format(date);
   const weekCount = (start: Date) => Array.from({length:7},(_,i)=> new Date(start.getTime()+i*DAY_MS))
     .filter(day => day.getUTCFullYear() === year && day.getUTCMonth() === month)
     .reduce((sum,day)=>sum+countFor(day),0);
@@ -140,13 +158,11 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
     : Array.from({length:new Date(Date.UTC(year,month+1,0)).getUTCDate()},(_,i)=>dateAt(year,month,i+1));
   return <div className="flex min-w-0 flex-col gap-2" aria-label={`${provider.label} calendar and range`}>
     <div className="flex flex-col gap-2">
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">From
-        <input type="datetime-local" value={from} onChange={event=>setFrom(event.target.value)} className="h-8 rounded-md border bg-background px-2 text-sm text-foreground"/></label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">To
-        <input type="datetime-local" value={to} onChange={event=>setTo(event.target.value)} className="h-8 rounded-md border bg-background px-2 text-sm text-foreground"/></label>
+      <DateTimePicker label="From" value={from} onChange={next => updateRange(next, to)} />
+      <DateTimePicker label="To" value={to} onChange={next => updateRange(from, next)} />
+      {invalid && <span className="text-xs text-destructive">From must not be after To.</span>}
       <div className="flex gap-2">
-        <button type="button" disabled={invalid} className="rounded-md border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50" onClick={()=>onRangeChange(provider.property,utcDate(from),utcDate(to))}>Apply</button>
-        {range && <button type="button" className="rounded-md border px-2 py-1 text-xs hover:bg-accent" onClick={()=>{setFrom("");setTo("");onRangeChange(provider.property,"","");}}>Clear</button>}
+        {range && <button type="button" className="rounded-md border px-2 py-1 text-xs hover:bg-accent" onClick={()=>{setSelectedCalendarCell("");setFrom("");setTo("");onRangeChange(provider.property,"","");}}>Clear</button>}
       </div>
       <div className="mt-2 flex flex-col gap-2 border-t pt-2" aria-label="Temporal calendar">
         <ButtonGroup aria-label="Calendar resolution" className="w-full">
@@ -160,9 +176,18 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
           <button aria-label={`Next ${resolution === "years" ? "year" : resolution === "weeks" ? "week" : "month"}`} type="button" onClick={()=>shiftCalendar(1)} className="rounded p-1 hover:bg-accent"><ChevronRight className="size-4"/></button>
         </div>
         <div className={`grid gap-1 ${resolution === "days" || resolution === "weeks" ? "grid-cols-7" : "grid-cols-3"}`}>
-          {resolution === "years" && Array.from({length:12},(_,i)=>i).map(m=><button key={m} type="button" onClick={()=>{choose(dateAt(year,m),dateAt(year,m+1));setMonth(m);setResolution("months");}} className="flex flex-col items-center rounded border px-1 py-2 text-xs hover:bg-accent"><span>{new Intl.DateTimeFormat(undefined,{month:"short",timeZone:"UTC"}).format(dateAt(year,m))}</span><span className="text-muted-foreground">{counts.get(`${year}-${String(m+1).padStart(2,"0")}`)??0}</span></button>)}
-          {resolution === "months" && weeks.map(start=><button key={iso(start)} type="button" onClick={()=>{choose(start,new Date(start.getTime()+7*DAY_MS));setWeekStart(start);setResolution("weeks");}} className="flex flex-col items-center rounded border px-1 py-2 text-xs hover:bg-accent"><span>{iso(start).slice(5)}</span><span className="text-muted-foreground">{weekCount(start)}</span></button>)}
-          {(resolution === "days" || resolution === "weeks") && days.map(day=><button key={iso(day)} type="button" onClick={()=>choose(day,new Date(day.getTime()+DAY_MS))} className="flex flex-col items-center rounded border px-1 py-1 text-xs hover:bg-accent"><span>{day.getUTCDate()}</span><span className="text-muted-foreground">{countFor(day)}</span></button>)}
+          {resolution === "years" && Array.from({length:12},(_,i)=>i).map(m=>{
+            const count = counts.get(`${year}-${String(m+1).padStart(2,"0")}`) ?? 0;
+            return <button key={m} type="button" onClick={()=>{choose(dateAt(year,m),dateAt(year,m+1), `month:${year}-${m}`);setMonth(m);}} className={`flex flex-col items-center rounded border px-1 py-2 text-xs ${selectedCalendarCell === `month:${year}-${m}` ? selectedCalendarStyle(`month:${year}-${m}`) : mutedIfZero(count)}`}><span>{new Intl.DateTimeFormat(undefined,{month:"short",timeZone:"UTC"}).format(dateAt(year,m))}</span><span className="text-muted-foreground">{count}</span></button>;
+          })}
+          {resolution === "months" && weeks.map(start=>{
+            const count = weekCount(start);
+            return <button key={iso(start)} type="button" onClick={()=>{choose(start,new Date(start.getTime()+7*DAY_MS), `week:${iso(start)}`);setWeekStart(start);}} className={`flex flex-col items-center rounded border px-1 py-2 text-xs ${selectedCalendarCell === `week:${iso(start)}` ? selectedCalendarStyle(`week:${iso(start)}`) : mutedIfZero(count)}`}><span>{iso(start).slice(5)}</span><span className="text-muted-foreground">{count}</span></button>;
+          })}
+          {(resolution === "days" || resolution === "weeks") && days.map(day=>{
+            const count = countFor(day);
+            return <button key={iso(day)} type="button" onClick={()=>choose(day,new Date(day.getTime()+DAY_MS), `day:${iso(day)}`)} className={`flex flex-col items-center rounded border px-1 py-1 text-xs ${selectedCalendarCell === `day:${iso(day)}` ? selectedCalendarStyle(`day:${iso(day)}`) : mutedIfZero(count)}`}><span>{resolution === "weeks" ? weekdayName(day) : day.getUTCDate()}</span><span className="text-muted-foreground">{count}</span></button>;
+          })}
         </div>
         {fetching && <span className="text-xs text-muted-foreground">Fetching calendar counts…</span>}
         {error && <span role="status" className="text-xs text-muted-foreground">{error}</span>}

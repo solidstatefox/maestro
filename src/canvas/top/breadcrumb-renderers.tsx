@@ -156,11 +156,11 @@ function renderRootBreadcrumb(tableHeader = false, presentationStyle?: CSSProper
                       : `"${search}"${rootLabelPossessive}`}
               </button>} /><TooltipContent>{`Return to the top-level query view${textSearchMode === "uri" && rootSearchText ? ` · ${rootSearchText}` : ""}${classBreadcrumbLabels(null).length ? ` · Classes: ${classBreadcrumbLabels(null).join(", ")}` : ""}`}</TooltipContent></Tooltip>
             )}
-            {!rootSearchExpanded && queryTree.children.some((node) => node.name === "class" || node.name === "state") && (
+            {!rootSearchExpanded && queryTree.children.some((node) => node.name === "class" || node.name === "status") && (
               <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={() => {
-                  const rootClasses = queryTree.children.filter((node) => node.name === "class" || node.name === "state");
+                  const rootClasses = queryTree.children.filter((node) => node.name === "class" || node.name === "status");
                   const lastRootClass = rootClasses[rootClasses.length - 1];
                   if (lastRootClass) deleteNode(lastRootClass.id);
                 }}

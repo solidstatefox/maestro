@@ -1,14 +1,14 @@
-/** Add personal-state constraints to an ordinary compiled FCT query.
+/** Add personal-status constraints to an ordinary compiled FCT query.
  *
  * The remote graph patterns are a SERVICE group, not a nested SELECT. This
  * preserves the FCT projection, grouping, ordering and LIMIT/OFFSET, while
- * evaluating personal-state constraints before result pagination.
+ * evaluating personal-status constraints before result pagination.
  */
-export type ScopedStateBinding = { variable: string; uri: string };
+export type ScopedStatusBinding = { variable: string; uri: string };
 
 const MUI = 'gttp://ggg.maestro.ecosys/ns/ui#';
 function sparqlIri(value: string): string {
-  if (!/^[A-Za-z][A-Za-z\d+.-]*:[^\s<>"{}|^`\\]*$/.test(value)) throw new Error('Invalid state federation IRI.');
+  if (!/^[A-Za-z][A-Za-z\d+.-]*:[^\s<>"{}|^`\\]*$/.test(value)) throw new Error('Invalid status federation IRI.');
   return `<${value}>`;
 }
 function canonicalEndpoint(value: string): string {
@@ -41,12 +41,12 @@ function whereGroup(query: string): { start: number; end: number } {
   throw new Error('Unterminated FCT WHERE group.');
 }
 
-export function compileScopedStateFederation(
+export function compileScopedStatusFederation(
   compiled: string,
-  constraints: readonly ScopedStateBinding[],
+  constraints: readonly ScopedStatusBinding[],
   liveEndpoint: string,
   personalEndpoint: string,
-  stateGraph: string,
+  statusGraph: string,
   hideGraph: string,
 ): string {
   if (!constraints.length) return compiled;
@@ -56,12 +56,12 @@ export function compileScopedStateFederation(
     ? source
     : `SERVICE ${sparqlIri(liveEndpoint)} {\n${source}\n}`;
   const personal = constraints.map(({ variable, uri }, i) => {
-    if (!/^\?[A-Za-z][A-Za-z\d_]*$/.test(variable)) throw new Error('Invalid state variable.');
+    if (!/^\?[A-Za-z][A-Za-z\d_]*$/.test(variable)) throw new Error('Invalid status variable.');
     const name = uri.slice(MUI.length);
-    if (!uri.startsWith(MUI) || !['New', 'Seen', 'Starred', 'Hidden'].includes(name)) throw new Error('Unknown state.');
-    if (name === 'New') return `GRAPH ${sparqlIri(stateGraph)} { ${variable} ${sparqlIri(MUI + 'lastLocatedAt')} ?locatedState${i} . }\nFILTER NOT EXISTS { GRAPH ${sparqlIri(stateGraph)} { ${variable} ${sparqlIri(MUI + 'state')} ${sparqlIri(MUI + 'Seen')} . } }`;
-    const graph = name === 'Hidden' ? hideGraph : stateGraph;
-    return `GRAPH ${sparqlIri(graph)} { ${variable} ${sparqlIri(MUI + 'state')} ${sparqlIri(MUI + name)} . }`;
+    if (!uri.startsWith(MUI) || !['New', 'Seen', 'Starred', 'Hidden'].includes(name)) throw new Error('Unknown status.');
+    if (name === 'New') return `GRAPH ${sparqlIri(statusGraph)} { ${variable} ${sparqlIri(MUI + 'lastLocatedAt')} ?locatedState${i} . }\nFILTER NOT EXISTS { GRAPH ${sparqlIri(statusGraph)} { ${variable} ${sparqlIri(MUI + 'status')} ${sparqlIri(MUI + 'Seen')} . } }`;
+    const graph = name === 'Hidden' ? hideGraph : statusGraph;
+    return `GRAPH ${sparqlIri(graph)} { ${variable} ${sparqlIri(MUI + 'status')} ${sparqlIri(MUI + name)} . }`;
   }).join('\n');
   return compiled.slice(0, group.start) + '\n' + remote + '\n' + personal + '\n' + compiled.slice(group.end);
 }

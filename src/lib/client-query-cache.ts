@@ -22,6 +22,32 @@ interface CachedResponseRecord {
 }
 
 const memoryCache = new Map<string, CachedResponseRecord>();
+// IndexedDB is the persistent cache. This Map is only a bounded hot-response tier.
+const MEMORY_CACHE_MAX_ENTRIES = 256;
+const MEMORY_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+let memoryCacheBytes = 0;
+function memoryRecordBytes(record: CachedResponseRecord): number {
+  // JS strings can occupy up to two bytes per UTF-16 code unit.
+  return 2 * (record.key.length + record.body.length + record.contentType.length) + 128;
+}
+function rememberMemoryResponse(key: string, record: CachedResponseRecord): void {
+  const previous = memoryCache.get(key);
+  if (previous) {
+    memoryCacheBytes -= memoryRecordBytes(previous);
+    memoryCache.delete(key);
+  }
+  const size = memoryRecordBytes(record);
+  if (size > MEMORY_CACHE_MAX_BYTES) return;
+  while (memoryCache.size >= MEMORY_CACHE_MAX_ENTRIES || memoryCacheBytes + size > MEMORY_CACHE_MAX_BYTES) {
+    const oldest = memoryCache.keys().next().value;
+    if (oldest === undefined) break;
+    const removed = memoryCache.get(oldest);
+    if (removed) memoryCacheBytes -= memoryRecordBytes(removed);
+    memoryCache.delete(oldest);
+  }
+  memoryCache.set(key, record);
+  memoryCacheBytes += size;
+}
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function getDb(): Promise<IDBDatabase> {
@@ -65,6 +91,8 @@ export function computeClientCacheKey(url: string, init?: RequestInit): string |
 export async function getClientCachedResponse(key: string): Promise<Response | null> {
   const mem = memoryCache.get(key);
   if (mem) {
+    memoryCache.delete(key);
+    memoryCache.set(key, mem);
     return new Response(mem.body, {
       status: mem.status,
       headers: {
@@ -83,7 +111,7 @@ export async function getClientCachedResponse(key: string): Promise<Response | n
       req.onerror = () => reject(req.error);
     });
     if (record) {
-      memoryCache.set(key, record);
+      rememberMemoryResponse(key, record);
       return new Response(record.body, {
         status: record.status,
         headers: {
@@ -113,7 +141,7 @@ export async function setClientCachedResponse(
     status,
     timestamp: Date.now(),
   };
-  memoryCache.set(key, record);
+  rememberMemoryResponse(key, record);
   try {
     const db = await getDb();
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -126,6 +154,7 @@ export async function setClientCachedResponse(
 
 export async function clearClientQueryCache(): Promise<void> {
   memoryCache.clear();
+  memoryCacheBytes = 0;
   try {
     const db = await getDb();
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -141,8 +170,17 @@ export type PendingMaestroQuery = { id: number; label: string; state: "queued" |
 const pendingQueryDetails = new Map<AbortController, PendingMaestroQuery>();
 let nextPendingQueryId = 0;
 const pendingQueryDetailListeners = new Set<(queries: PendingMaestroQuery[]) => void>();
+// React subscribers must not receive a fresh array when no observable detail changed.
+// In particular, repeated scheduler notifications must not trigger setState loops.
+let lastPendingDetails: PendingMaestroQuery[] = [];
+function pendingDetailsEqual(a: readonly PendingMaestroQuery[], b: readonly PendingMaestroQuery[]): boolean {
+  return a.length === b.length && a.every((item, index) =>
+    item.id === b[index].id && item.label === b[index].label && item.state === b[index].state);
+}
 function notifyPendingQueryDetails() {
   const snapshot = [...pendingQueryDetails.values()];
+  if (pendingDetailsEqual(snapshot, lastPendingDetails)) return;
+  lastPendingDetails = snapshot;
   for (const listener of pendingQueryDetailListeners) listener(snapshot);
 }
 export function subscribePendingMaestroQueryDetails(listener: (queries: PendingMaestroQuery[]) => void): () => void {
@@ -170,8 +208,13 @@ function labelMaestroRequest(input: RequestInfo | URL, init?: RequestInit): stri
 
 let queryPipelineStopped = false;
 const pendingQueryListeners = new Set<(count: number) => void>();
+let lastPendingQueryCount = 0;
 function notifyPendingQueries() {
-  for (const listener of pendingQueryListeners) listener(pendingQueryControllers.size);
+  const count = pendingQueryControllers.size;
+  if (count !== lastPendingQueryCount) {
+    lastPendingQueryCount = count;
+    for (const listener of pendingQueryListeners) listener(count);
+  }
   notifyPendingQueryDetails();
 }
 export function subscribePendingMaestroQueries(listener: (count: number) => void): () => void {

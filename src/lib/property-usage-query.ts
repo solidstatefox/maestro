@@ -55,30 +55,40 @@ export function propertyUsageNavigation(
   tree: FctQueryTree,
   direction: PropertyUsageDirection,
   selection?: { value: FctValue; checked: boolean },
+  selectedPredicateUri?: string,
 ): FctQueryTree {
   const scope = propertyUsageScope(tree);
   if (!scope) return tree;
-  const fixedUri = fixedPropertyUri(scope);
+  // Results selection is authoritative for the predicate pivot. A URI
+  // explicitly bound in the breadcrumb remains a fallback for callers that
+  // have no selected Results item.
+  const candidate = selectedPredicateUri?.trim() || fixedPropertyUri(scope) || "";
+  const fixedUri = /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(candidate) ? candidate : null;
   if (fixedUri) {
     const originalView = scope.nodes.find(node => node.id === "query-view");
     if (!originalView) return tree;
+    const relationName = direction === "subject" ? "property-of" : "property";
+    const selectedKey = selection && JSON.stringify([selection.value.text, selection.value.datatype ?? "", selection.value.lang ?? ""]);
     const valueNodes: FctQueryNode[] = selection?.checked ? [{
-      id: `property-usage-pivot-value-${direction}`, name: "value", text: selection.value.text,
+      id: `property-usage-pivot-value-${direction}-${encodeURIComponent(selectedKey ?? "")}`, name: "value", text: selection.value.text,
       attributes: {
         ...(selection.value.datatype ? { datatype: selection.value.datatype } : {}),
         ...(selection.value.lang ? { "xml:lang": selection.value.lang } : {}),
       }, children: [],
     }] : [];
-    const relationship: FctQueryNode = {
+    const existing = scope.nodes.find(node => node.name === relationName && node.attributes.iri === fixedUri);
+    const relation = existing ? cloneNode(existing) : {
       id: `property-usage-pivot-${direction}-${encodeURIComponent(fixedUri)}`,
-      name: direction === "subject" ? "property-of" : "property",
-      attributes: { iri: fixedUri },
-      children: [...valueNodes, {
-        ...cloneNode(originalView), id: "query-view",
-        attributes: { ...originalView.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0", sort: "" },
-        children: [],
-      }],
-    };
+      name: relationName, attributes: { iri: fixedUri }, children: [],
+    } as FctQueryNode;
+    if (selection) {
+      relation.children = relation.children.filter(node => node.name !== "value" ||
+        JSON.stringify([node.text ?? "", node.attributes.datatype ?? "", node.attributes["xml:lang"] ?? ""]) !== selectedKey);
+      if (selection.checked) relation.children.push(...valueNodes);
+    }
+    relation.children = relation.children.filter(node => node.id !== "query-view");
+    relation.children.push({ ...cloneNode(originalView), id: "query-view",
+      attributes: { ...originalView.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0", sort: "" }, children: [] });
     const replaceAtScope = (nodes: FctQueryNode[], parentId: string | null): FctQueryNode[] => {
       if (parentId === scope.parentId) {
         // Remove *only* the class that classified the predicate as rdf:Property,
@@ -86,39 +96,21 @@ export function propertyUsageNavigation(
         // class or an unrelated ancestor remains in place.
         return [
           ...nodes.filter(node => node.id !== "query-view"
+            && node !== existing
+            && node.name !== "text"
             && !(node.name === "class" && node.attributes.iri === RDF_PROPERTY_CLASS)
             && !(node.name === "value" && node.attributes.datatype === "uri" &&
               (node.text ?? "").replace(/^\[|\]$/g, "") === fixedUri)).map(cloneNode),
-          relationship,
+          relation,
         ];
       }
       return nodes.map(node => ({ ...cloneNode(node), children: replaceAtScope(node.children, node.id) }));
     };
     return { ...tree, attributes: { ...tree.attributes }, children: replaceAtScope(tree.children, null) };
   }
-  // The focus can represent multiple rdf:Property resources. Until it has a
-  // single URI binding we cannot manufacture a fixed-IRI <property> element.
-  // Keep the variable-predicate view while the user browses the alternatives.
-  const next = setQueryViewAttributes(propertyUsageFacetQuery(tree, direction, 30), { sort: "" });
-  if (!selection) return next;
-  const selectedKey = JSON.stringify([selection.value.text, selection.value.datatype ?? "", selection.value.lang ?? ""]);
-  const valueNode: FctQueryNode = { id: `usage-${direction}-${encodeURIComponent(selectedKey)}`,
-    name: "value", text: selection.value.text, attributes: {
-      ...(selection.value.datatype ? { datatype: selection.value.datatype } : {}),
-      ...(selection.value.lang ? { "xml:lang": selection.value.lang } : {}),
-    }, children: [] };
-  const updateScope = (nodes: FctQueryNode[]): FctQueryNode[] => {
-    if (nodes.some(node => node.id === "query-view")) {
-      const existing = nodes.find(node => node.name === direction);
-      const candidates = existing?.children.filter(node => node.name === "value") ?? [];
-      const remaining = candidates.filter(node => JSON.stringify([node.text ?? "", node.attributes.datatype ?? "", node.attributes["xml:lang"] ?? ""]) !== selectedKey);
-      const replacements = selection.checked ? [...remaining, valueNode] : remaining;
-      return [...nodes.filter(node => node.name !== direction),
-        ...(replacements.length ? [{ id: `usage-${direction}`, name: direction, attributes: {}, children: replacements }] as FctQueryNode[] : [])];
-    }
-    return nodes.map(node => ({ ...node, children: updateScope(node.children) }));
-  };
-  return { ...next, children: updateScope(next.children) };
+  // Neither Results nor the breadcrumb has a valid predicate IRI. Do not
+  // invent one or emit an invalid relationship in the live query.
+  return tree;
 }
 
 export function selectedPropertyUsageValues(tree: FctQueryTree, direction: PropertyUsageDirection): FctValue[] {

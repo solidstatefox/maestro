@@ -10,6 +10,17 @@ export const maxDuration = 300;
  * extracts ontology membership and direct superclass links; failures are intentionally non-fatal. */
 type ClassMetadata = { uri: string; ontology: string; parent?: string; ontologyLabel?: string };
 const metadataCache = new Map<string, ClassMetadata>();
+// Prevent long-lived Next.js processes from retaining one class per URI forever.
+const METADATA_CACHE_MAX_ENTRIES = 512;
+function rememberMetadata(uri: string, metadata: ClassMetadata): void {
+  metadataCache.delete(uri);
+  while (metadataCache.size >= METADATA_CACHE_MAX_ENTRIES) {
+    const oldest = metadataCache.keys().next().value;
+    if (oldest === undefined) break;
+    metadataCache.delete(oldest);
+  }
+  metadataCache.set(uri, metadata);
+}
 const RDFS_IS_DEFINED_BY = "http://www.w3.org/2000/01/rdf-schema#isDefinedBy";
 const RDFS_SUBCLASS = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const OWL_ONTOLOGY = "http://www.w3.org/2002/07/owl#Ontology";
@@ -88,7 +99,11 @@ function compactMetadata(uri: string, text: string, contentType: string): ClassM
 
 async function dereferenceClass(uri: string): Promise<ClassMetadata> {
   const cached = metadataCache.get(uri);
-  if (cached) return cached;
+  if (cached) {
+    metadataCache.delete(uri);
+    metadataCache.set(uri, cached);
+    return cached;
+  }
   const fallback: ClassMetadata = { uri, ontology: namespaceFallback(uri) };
   const start = safePublicHttpUrl(uri);
   if (!start) return fallback;
@@ -114,7 +129,7 @@ async function dereferenceClass(uri: string): Promise<ClassMetadata> {
     if (!/(json|xml|turtle|n3|rdf)/.test(contentType)) return fallback;
     const body = (await response.text()).slice(0, 750_000);
     const metadata = compactMetadata(uri, body, contentType);
-    metadataCache.set(uri, metadata);
+    rememberMetadata(uri, metadata);
     return metadata;
   } catch { return fallback; }
 }

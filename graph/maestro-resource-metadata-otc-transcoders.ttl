@@ -1,0 +1,27 @@
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTResponseModeExtractor> rdfs:label "Chat GPTResponse Mode Extractor" .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTResponseModeExtractor-widget> rdfs:label "Chat GPTResponse Mode Extractor widget" ;
+    dcterms:description "Defines the Chat GPTResponse Mode Extractor widget display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTResponseModeExtractorMessageShape> dcterms:description "Defines the SHACL input constraints for ChatGPTResponseModeExtractor message input validation provider discovery and matching." .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTTopicExtractor> rdfs:label "Chat GPTTopic Extractor" .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTTopicExtractor-widget> rdfs:label "Chat GPTTopic Extractor widget" ;
+    dcterms:description "Defines the Chat GPTTopic Extractor widget display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTTopicExtractorMessageShape> dcterms:description "Defines the SHACL input constraints for ChatGPTTopicExtractor message input validation provider discovery and matching." .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTUserSentimentExtractor> rdfs:label "Chat GPTUser Sentiment Extractor" .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTUserSentimentExtractor-widget> rdfs:label "Chat GPTUser Sentiment Extractor widget" ;
+    dcterms:description "Defines the Chat GPTUser Sentiment Extractor widget display or transformation used to render matching RDF resources." .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTUserSentimentExtractorMessageShape> dcterms:description "Defines the SHACL input constraints for ChatGPTUserSentimentExtractor message input validation provider discovery and matching." .
+
+<gttp://ggg.openlink.sw/nlp/transcoder#ConversationRoot> rdfs:label "Conversation Root" ;
+    dcterms:description "Transforms supported RDF or message input according to the Conversation Root transcoder." .
+

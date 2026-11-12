@@ -1,6 +1,6 @@
 /** Proxy-dispatch-driven execution clock. Browser and proxy queue waiting are excluded.
  * Start and completion are signaled over the query event stream. */
-export type MaestroQueryClockScope = "alphabet" | "properties" | "roles" | "categories" | "categoryTree" | "graphs" | "results" | "groups" | "record" | "recordGraphs" | "recordAuthors" | "policies" | "personal" | "states" | "analysis" | "views";
+export type MaestroQueryClockScope = "alphabet" | "properties" | "roles" | "categories" | "categoryTree" | "graphs" | "results" | "groups" | "record" | "recordGraphs" | "recordAuthors" | "policies" | "personal" | "statuses" | "analysis" | "views";
 type ClockState = { active: number; elapsedMs: number; activeSince: number; lastCompletedAt: number; lastStartedAt: number };
 const clocks = new Map<MaestroQueryClockScope, ClockState>();
 let clockGeneration = 0;
@@ -16,7 +16,7 @@ export function maestroQueryClockScope(headers?: Headers): MaestroQueryClockScop
   if (label.includes("record-policy") || label.includes("record-template") || label.includes("record-shacl") || label.includes("record-xslt")) return "policies";
   if (label.includes("record-") || label.includes("recorddescription")) return "record";
   if (label.includes("personal-widget-values") || label.includes("personal-role-widget-values")) return "personal";
-  if (label.includes("state-facet") || label.includes("states-facet")) return "states";
+  if (label.includes("status-facet") || label.includes("statuses-facet")) return "statuses";
   if (label.includes("analyze-values")) return "analysis";
   if (label.includes("view-discover") || label.includes("view-feature") || label.includes("view-policy")) return "views";
   if (label.includes("alphabet")) return "alphabet";

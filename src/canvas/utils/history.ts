@@ -1,6 +1,6 @@
 "use client";
 
-import { parseFctQueryXml, readGraphServerFromQueryXml, readShareableUiState, type ShareableUiState } from "@/canvas/utils/query-controller";
+import { parseFctQueryXml, readGraphServerFromQueryXml, readShareableUiState, copyRibbonUrlParams, type ShareableUiState } from "@/canvas/utils/query-controller";
 import { serializeFctQuery } from "@/lib/fct-query-api";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
 import { toast } from "@/components/ui/toast";
@@ -47,6 +47,7 @@ export function createHistoryActionRestorer({
       const params = new URLSearchParams(window.location.search);
       params.set("q", payload.queryXml);
       params.set("history", historyId);
+      if (savedUrl) copyRibbonUrlParams(savedUrl.searchParams, params);
       window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
       setHistoryActionMenu(null);
     } catch (error) {

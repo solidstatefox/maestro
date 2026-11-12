@@ -11,7 +11,6 @@ import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
 import { toLabel } from "@/lib/uri-labels";
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { readFctResponse } from "@/canvas/utils/fct-response";
-import { resolveBookmarkShareUrl } from "@/lib/bookmark-share-url";
 
 const validAppbarIcons = new Set<string>(iconNames);
 type Provider = { kind: "bookmarks" | "history"; label: string; template: string };
@@ -186,6 +185,29 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
     }))).then(markup => { if (current) setHtml(markup); }).catch(err => { if (current) setError(err instanceof Error ? err.message : "Rendering failed"); });
     return () => { current = false; };
   }, [collection, visible, selected, appbarButtons, kind]);
+  // The saved bookmark link is never silently rewritten. Offer an explicit
+  // same-app navigation option only when its HTTP(S) origin differs from ours.
+  // Insert into the already-sanitized XSLT card so this works with previously
+  // published personal-store stylesheets without requiring an RDF reload.
+  useEffect(() => {
+    if (!active || kind !== "bookmarks" || !collection || !resultsRef.current) return;
+    const origin = window.location.origin;
+    for (const openButton of resultsRef.current.querySelectorAll<HTMLButtonElement>("button[data-perspective-open='true'][data-perspective-id]")) {
+      const row = collection.rows.find(entry => entry.uri === openButton.dataset.perspectiveId);
+      if (!row?.url) continue;
+      let target: URL;
+      try { target = new URL(row.url); } catch { continue; }
+      if (!(["http:", "https:"].includes(target.protocol) && target.origin !== origin && target.searchParams.has("q"))) continue;
+      const hostButton = document.createElement("button");
+      hostButton.type = "button";
+      hostButton.dataset.perspectiveTryHost = "true";
+      hostButton.dataset.perspectiveId = row.uri;
+      hostButton.textContent = "Try at this host";
+      hostButton.title = `Open this saved query at ${origin} instead of ${target.origin}`;
+      hostButton.className = "shrink-0 rounded-md border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground";
+      openButton.insertAdjacentElement("afterend", hostButton);
+    }
+  }, [active, kind, collection, html]);
   // XSLT owns the card layout; React mounts the user-selected Lucide icon into
   // its sanitized, inert placeholder. No icon markup or code comes from RDF.
   useEffect(() => {
@@ -209,10 +231,27 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
     if (!row) return;
     // Saved share URLs are the authoritative restoration route. Never execute RDF-supplied scripts.
     try {
-      const shareUrl = resolveBookmarkShareUrl(row.url, window.location.origin);
-      if (shareUrl) { window.location.assign(shareUrl); return; }
+      const url = new URL(row.url, window.location.origin);
+      if (url.origin === window.location.origin && (url.protocol === "http:" || url.protocol === "https:")) {
+        window.location.assign(url.href); return;
+      }
     } catch { /* A legacy entry may have no valid saved URL. */ }
     setError("This entry has no usable Maestro share URL. Open it through the existing History/Bookmarks navigation.");
+  }, [collection]);
+  const tryAtThisHost = useCallback((id: string) => {
+    const row = collection?.rows.find(entry => entry.uri === id);
+    if (!row?.url) return;
+    try {
+      const saved = new URL(row.url);
+      const current = new URL(window.location.href);
+      if (!["http:", "https:"].includes(saved.protocol) || saved.origin === current.origin || !saved.searchParams.has("q")) return;
+      // URL.origin carries the scheme, hostname and port together. All query,
+      // ribbon and history parameters are preserved from the saved bookmark.
+      const rewritten = new URL(saved.pathname + saved.search + saved.hash, current.origin);
+      window.location.assign(rewritten.href);
+    } catch {
+      setError("This entry has no usable Maestro share URL.");
+    }
   }, [collection]);
   if (!active) return null;
   return <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -238,6 +277,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
             if (found) void editAppbar("remove", id, found.uri);
             else if (appbarButtons.length < 3) { setAppbarCandidate(id); setAppbarTooltip(collection.rows.find(r=>r.uri===id)?.label ?? ""); setAppbarIcon("bookmark"); }
           }
+          else if (button.dataset.perspectiveTryHost === "true") tryAtThisHost(id);
           else if (button.dataset.perspectiveOpen === "true") open(id);
           else if (button.dataset.perspectiveDelete === "true") void remove([id]);
           else if (button.dataset.perspectiveSelect === "true") setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);

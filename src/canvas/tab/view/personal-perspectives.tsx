@@ -11,6 +11,7 @@ import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
 import { toLabel } from "@/lib/uri-labels";
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { readFctResponse } from "@/canvas/utils/fct-response";
+import { resolveBookmarkShareUrl } from "@/lib/bookmark-share-url";
 
 const validAppbarIcons = new Set<string>(iconNames);
 type Provider = { kind: "bookmarks" | "history"; label: string; template: string };
@@ -208,10 +209,8 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
     if (!row) return;
     // Saved share URLs are the authoritative restoration route. Never execute RDF-supplied scripts.
     try {
-      const url = new URL(row.url, window.location.origin);
-      if (url.origin === window.location.origin && (url.protocol === "http:" || url.protocol === "https:")) {
-        window.location.assign(url.href); return;
-      }
+      const shareUrl = resolveBookmarkShareUrl(row.url, window.location.origin);
+      if (shareUrl) { window.location.assign(shareUrl); return; }
     } catch { /* A legacy entry may have no valid saved URL. */ }
     setError("This entry has no usable Maestro share URL. Open it through the existing History/Bookmarks navigation.");
   }, [collection]);

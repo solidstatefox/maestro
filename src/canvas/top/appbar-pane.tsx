@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { Check, ChevronDown, Network, Link, CirclePlay, AtSign, X, LoaderCircle, ArrowLeft, ArrowRight, ClockArrowRight, Clock1, Clock2, Clock3, Clock4, Clock5, Clock6, Clock7, Clock8, Clock9, Clock10, Clock11, Clock12, Home, RotateCw, RefreshCw, Bookmark, User, LogOut, KeyRound, Eye, EyeOff, Info, WandSparkles } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
+import { resolveBookmarkShareUrl } from "@/lib/bookmark-share-url";
 import { AuthType, clearPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
 
@@ -609,8 +610,9 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
         {appbarButtons.map(item => {
           const iconName = availableAppbarIconNames.has(item.icon) ? item.icon as IconName : null;
           return <Tooltip key={item.uri}><TooltipTrigger render={<ToggleGroupItem value={item.uri} aria-label={item.tooltip} title={item.tooltip} className="rounded-none border-l data-[state=on]:text-amber-500" onClick={() => {
-            try { const destination = new URL(item.url,window.location.origin); if (destination.origin === window.location.origin && /^https?:$/.test(destination.protocol) && destination.searchParams.has("q")) { window.location.assign(destination.href); } else toast.add({title:"Invalid bookmark share URL",type:"error"}); }
-            catch { toast.add({title:"Bookmark has no valid share URL",type:"error"}); }
+            const shareUrl = resolveBookmarkShareUrl(item.url, window.location.origin);
+            if (shareUrl) window.location.assign(shareUrl);
+            else toast.add({ title: "Invalid bookmark share URL", type: "error" });
           }}>{iconName ? <DynamicIcon name={iconName} className="size-4" aria-hidden="true" fallback={() => <Bookmark className="size-4" aria-hidden="true" />} /> : <Bookmark className="size-4" aria-hidden="true" />}</ToggleGroupItem>} /><TooltipContent>{item.tooltip}</TooltipContent></Tooltip>;
         })}
         </ToggleGroup>
@@ -660,7 +662,15 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                       <div className="flex min-w-0 flex-col gap-1">
                         <div><span className="font-medium">Name:</span> {savedName}</div>
                         <div><span className="font-medium">Date:</span> {savedAt}</div>
-                        {shareUrl && <div className="min-w-0"><span className="font-medium">Link:</span> <a href={shareUrl} target="_blank" rel="noreferrer" className="break-all text-primary underline underline-offset-2">Open bookmark</a></div>}
+                        {shareUrl && <div className="min-w-0"><span className="font-medium">Link:</span> <a
+                          href={resolveBookmarkShareUrl(shareUrl, window.location.origin) ?? "#"}
+                          target="_blank" rel="noreferrer"
+                          onClick={event => {
+                            const destination = resolveBookmarkShareUrl(shareUrl, window.location.origin);
+                            if (!destination) { event.preventDefault(); toast.add({ title: "Invalid bookmark share URL", type: "error" }); return; }
+                            event.currentTarget.href = destination;
+                          }}
+                          className="break-all text-primary underline underline-offset-2">Open bookmark</a></div>}
                       </div>
                     ),
                     type: "success",

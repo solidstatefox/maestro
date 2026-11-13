@@ -24,9 +24,7 @@ export function writeMaestroConcurrency(value: MaestroConcurrency): void {
   maestroStorageSet(MAESTRO_CONCURRENCY_STORAGE_KEY, JSON.stringify(normalizeMaestroConcurrency(value)));
 }
 export async function syncMaestroConcurrency(value: MaestroConcurrency): Promise<void> {
-  const response = await fetch("/proxy/api/query-preferences", {
-    method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
-    body: JSON.stringify(normalizeMaestroConcurrency(value)), cache: "no-store",
-  });
-  if (!response.ok) throw new Error(`Could not synchronize query limits (HTTP ${response.status})`);
+  // The FCT transport carries these preferences on its next query. A separate
+  // preference POST was a redundant network round trip on every Sheet edit.
+  writeMaestroConcurrency(value);
 }

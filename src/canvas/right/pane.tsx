@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 import { RecordStatusButtons, RecordStarButton } from "@/canvas/right/record-status-buttons";
@@ -26,7 +27,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Check, ChevronDown, ChevronRight, LoaderCircle, ClipboardCheck, ClockFading, Download, Eye } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 
-import { ResizableHandle } from "@/components/ui/resizable";
 import { RightPaneFrame, RightPaneBody } from "@/canvas/workspace-pane-shells";
 
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
@@ -205,7 +205,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
 
   return (
 <>
-{workspaceTab === "browse" && <><ResizableHandle withHandle />
+{workspaceTab === "browse" && <>
             <RightPaneFrame>
             <RightPaneBody>
               <Collapsible open={recordControlsOpen} onOpenChange={setRecordControlsOpen} className="shrink-0 border-b">
@@ -263,7 +263,10 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                 {selectedUri && <div className="mt-3 flex flex-wrap items-center gap-2">
                   <div className="inline-flex min-w-0 items-stretch overflow-hidden rounded-md border text-xs">
                     <span className="inline-flex shrink-0 items-center border-r bg-muted/40 px-2 text-muted-foreground">Graphs</span>
-                    <DropdownMenu>
+                    {selectedRecordTermType === "bnode" && recordGraphs.length === 1 &&
+                      queryTree.attributes.addr?.split("@", 1)[0] === recordGraphs[0] ? (
+                      <span className="inline-flex min-w-0 max-w-64 items-center px-3 py-1.5 font-medium" title={recordGraphs[0]}>{toLabel(recordGraphs[0])}</span>
+                    ) : <DropdownMenu>
                     <DropdownMenuTrigger asChild><button type="button" className="inline-flex min-w-0 max-w-64 items-center gap-1 px-3 py-1.5 hover:bg-accent" title={selectedRecordGraph || "All graphs"}>
                       <span className="truncate">{selectedRecordGraph ? toLabel(selectedRecordGraph) : "All graphs"}</span><ChevronDown className="size-3.5 shrink-0" />
                     </button></DropdownMenuTrigger>
@@ -273,7 +276,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                       {recordGraphOptions.map((graph) => <DropdownMenuItem key={graph} onSelect={() => { setSelectedRecordGraph(graph); setSelectedRecordAuthor(""); setRecordDescriptionPage(0); setFormattedRecordHtml(""); }} title={graph}>{toLabel(graph)}</DropdownMenuItem>)}
                       {!recordGraphs.length && <DropdownMenuLabel>{loadingRecordGraphs ? <ElapsedStatus label="Loading graphs" category="record" clockScope="recordGraphs" /> : "No named graphs found"}</DropdownMenuLabel>}
                     </DropdownMenuContent>
-                  </DropdownMenu>
+                  </DropdownMenu>}
                   </div>
                   <div className="inline-flex min-w-0 items-stretch overflow-hidden rounded-md border text-xs">
                     <span className="inline-flex shrink-0 items-center border-r bg-muted/40 px-2 text-muted-foreground">Authors</span>
@@ -291,7 +294,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                     </DropdownMenu>
                   </div>
                   {recordStatus.enabled && selectedRecordTermType !== "bnode" && <RecordStatusButtons statuses={recordStatus} />}
-                  {recordGraphError && endpointReadyForQuery && <span className="text-xs text-destructive" title={recordGraphError}>Graph discovery failed: {recordGraphError}</span>}{loadingRecordAuthors && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Loading authors" category="record" clockScope="recordAuthors" /></span>}{recordAuthorError && <span className="text-xs text-destructive" title={recordAuthorError}>Author metadata unavailable</span>}
+                  {recordGraphError && endpointReadyForQuery && <ErrorDetails prefix="Graph discovery failed" error={recordGraphError} />}{loadingRecordAuthors && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Loading authors" category="record" clockScope="recordAuthors" /></span>}{recordAuthorError && <ErrorDetails prefix="Author metadata" error={recordAuthorError} />}
                 </div>}
                 {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div id="record_button_bar" className="mt-3 flex flex-wrap items-center gap-2">
                   {recordPolicy && <>
@@ -326,12 +329,12 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                     </DropdownMenu>
                   </>}
                   {isLoadingRecordPolicy && <span className="text-xs text-muted-foreground">Looking for a record policy…</span>}
-                  {recordPolicyError && <span className="text-xs text-destructive">{recordPolicyError}</span>}
+                  {recordPolicyError && <ErrorDetails prefix="Record policy" error={recordPolicyError} />}
                   {formattedRecordButtonsHtml.record_button_bar && <div className="contents" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_button_bar }} />}
                 </div>}
                 <RecordValidationNotice report={recordValidation} onDismiss={() => setRecordValidation(null)} />
-                {recordDescriptionError && endpointReadyForQuery && <p role="alert" className="mt-2 text-sm text-destructive">{recordDescriptionError}</p>}
-                {recordFormatError && recordFormatError !== recordDescriptionError && !hasVisibleValidationWarning(recordValidation) && <p className="mt-2 text-sm text-destructive">{recordFormatError}</p>}
+                {recordDescriptionError && endpointReadyForQuery && <ErrorDetails prefix="Record SELECT" error={recordDescriptionError} className="mt-2" />}
+                {recordFormatError && recordFormatError !== recordDescriptionError && !hasVisibleValidationWarning(recordValidation) && <ErrorDetails prefix="Record formatter" error={recordFormatError} className="mt-2" />}
                 {!isDescribing && describedRecordUri === selectedUri &&
                  recordDescriptionSnapshot?.key === currentRecordDescriptionKey && (
                 <div className="mt-3 flex shrink-0 items-center justify-between gap-2 border-t pt-3">
@@ -406,7 +409,7 @@ export function RightCanvasPanel({ workspace }: { workspace: RecordPaneWorkspace
                         </button>)}
                       </div>
                       {result?.loading && <p role="status" className="text-sm text-muted-foreground"><ElapsedStatus label={`Loading ${result.name}`} category="policies" clockScope="policies" /></p>}
-                      {result?.error && <p role="alert" className="text-sm text-destructive">{result.error}</p>}
+                      {result?.error && <ErrorDetails error={result.error} />}
                       {result?.html && <div className="max-h-[36rem] overflow-auto rounded-md border bg-background p-3" dangerouslySetInnerHTML={{__html:result.html}} />}
                       {!result && <p className="text-sm text-muted-foreground">Select an action to retrieve service data.</p>}
                     </section>;

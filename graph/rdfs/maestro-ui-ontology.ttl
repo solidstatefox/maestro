@@ -1,0 +1,362 @@
+# Maestro UI vocabulary (mui:)
+#
+# Supporting ontology for Maestro's SHACL UI policies. It adds only what
+# SHACL 1.2 UI (https://www.w3.org/TR/shacl12-ui/) does not already provide:
+#   * which SHACL shape renders a class on which Maestro surface, and
+#   * a few extra property roles (shui:PropertyRole instances) that the
+#     built-in Label / Description / Depiction / Classification / Icon roles
+#     do not cover; and
+#   * the HTML template, data binding, query binding, and constrained action
+#     vocabulary used by Maestro's record-formatting workflow.
+#
+# NOTE: shui: is the SHACL UI namespace exactly as printed in the current
+# Working Draft's prefix table. If the final vocabulary file differs (for
+# example a trailing "#"), change the one @prefix line in each file.
+
+@prefix rdf:     <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:     <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:     <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:    <http://www.w3.org/2004/02/skos/core#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix sh:      <http://www.w3.org/ns/shacl#> .
+@prefix shui:    <http://www.w3.org/ns/shacl-ui/> .
+@prefix mui:     <gttp://ggg.maestro.ecosys/ns/ui#> .
+
+<gttp://ggg.maestro.ecosys/ns/ui>
+    a owl:Ontology ;
+    dcterms:title "Maestro UI vocabulary"@en ;
+    dcterms:description "Surfaces, class policies and property roles that connect SHACL shapes to Maestro's record viewer and result set items."@en ;
+    owl:versionInfo "p2-20261027" ;
+    rdfs:seeAlso <https://www.w3.org/TR/shacl12-ui/> .
+
+# ---------------------------------------------------------------------------
+# Surfaces: the places in Maestro where a record is presented.
+# ---------------------------------------------------------------------------
+
+mui:Surface
+    a owl:Class ;
+    rdfs:label "Surface"@en ;
+    rdfs:comment "A place in Maestro's UI where one RDF resource is presented."@en .
+
+mui:RecordViewer
+    a mui:Surface, owl:NamedIndividual ;
+    rdfs:label "Record viewer"@en ;
+    rdfs:comment "The full description of one record: every property and role, grouped and ordered by the shape. Shown when a record is opened."@en .
+
+mui:ResultItem
+    a mui:Surface, owl:NamedIndividual ;
+    rdfs:label "Result set item"@en ;
+    rdfs:comment "The compact card for one record in the result set. It is composed from property roles, not from every property."@en .
+
+# ---------------------------------------------------------------------------
+# Class policies: which shape renders a class on which surface.
+# ---------------------------------------------------------------------------
+
+mui:ClassPolicy
+    a owl:Class ;
+    rdfs:label "Class policy"@en ;
+    rdfs:comment """Declares how instances of one or more classes are presented. A policy points at one SHACL node shape per surface. Only the record shape carries sh:targetClass, so a renderer that looks shapes up by target always finds the canonical shape; item shapes are reached through the policy."""@en .
+
+mui:forClass
+    a owl:ObjectProperty ;
+    rdfs:label "for class"@en ;
+    rdfs:comment "A class whose instances this policy presents. A policy may cover several equivalent classes."@en ;
+    rdfs:domain mui:ClassPolicy ;
+    rdfs:range rdfs:Class .
+
+mui:surfaceShape
+    a owl:ObjectProperty ;
+    rdfs:label "surface shape"@en ;
+    rdfs:comment "The SHACL node shape a renderer applies to a focus node on some surface."@en ;
+    rdfs:domain mui:ClassPolicy ;
+    rdfs:range sh:NodeShape .
+
+mui:forSurface
+    a owl:AnnotationProperty ;
+    rdfs:label "for surface"@en ;
+    rdfs:comment "Annotates a mui:surfaceShape sub-property with the surface it serves."@en ;
+    rdfs:domain owl:ObjectProperty ;
+    rdfs:range mui:Surface .
+
+mui:recordShape
+    a owl:ObjectProperty ;
+    rdfs:subPropertyOf mui:surfaceShape ;
+    mui:forSurface mui:RecordViewer ;
+    rdfs:label "record shape"@en ;
+    rdfs:comment "The shape for the record viewer. Lists every property shape, with groups and sh:order. Exactly one per policy."@en ;
+    rdfs:domain mui:ClassPolicy ;
+    rdfs:range sh:NodeShape .
+
+mui:itemShape
+    a owl:ObjectProperty ;
+    rdfs:subPropertyOf mui:surfaceShape ;
+    mui:forSurface mui:ResultItem ;
+    rdfs:label "item shape"@en ;
+    rdfs:comment """The shape for result set items. By convention it lists exactly the property shapes of the record shape that carry a property role, except mui:IdentifierRole and mui:CodeRole, which are technical and record-viewer only. Exactly one per policy."""@en ;
+    rdfs:domain mui:ClassPolicy ;
+    rdfs:range sh:NodeShape .
+
+# ---------------------------------------------------------------------------
+# Annotation properties on shapes.
+# ---------------------------------------------------------------------------
+
+mui:readOnly
+    a owl:DatatypeProperty ;
+    rdfs:label "read only"@en ;
+    rdfs:comment "True when users must not edit the values: they are system-managed or come from a source Maestro does not write to. On a node shape it applies to every property shape unless overridden."@en ;
+    rdfs:domain [ a owl:Class ; owl:unionOf ( sh:NodeShape sh:PropertyShape ) ] ;
+    rdfs:range xsd:boolean .
+
+mui:syntax
+    a owl:DatatypeProperty ;
+    rdfs:label "syntax"@en ;
+    rdfs:comment "The language of a code value, such as xml, sparql, json or turtle. Used with mui:CodeRole so a viewer can pick highlighting."@en ;
+    rdfs:domain sh:PropertyShape ;
+    rdfs:range xsd:string .
+
+# ---------------------------------------------------------------------------
+# Property roles beyond SHACL UI's built-in Label, Description, Depiction,
+# Classification and Icon roles. Each is an instance of shui:PropertyRole.
+#
+# Annotation style: roles where only the best value should be shown
+# (Label, Description, Depiction, Timestamp) are annotated with SHACL UI's
+# qualified form, so sh:order sets precedence between predicates. Roles where
+# every value is wanted (Classification, KeyInfo, Link, Identifier, Code) use
+# the direct form.
+# ---------------------------------------------------------------------------
+
+mui:KeyInfoRole
+    a shui:PropertyRole, owl:NamedIndividual ;
+    rdfs:label "Key information role"@en ;
+    rdfs:comment "Values worth showing in a summary even though they are not a label, description or date: publisher, licence, size."@en .
+
+mui:TimestampRole
+    a shui:PropertyRole, owl:NamedIndividual ;
+    rdfs:label "Timestamp role"@en ;
+    rdfs:comment "The date or date-time that best says when a resource was created, published or last changed. Used for display and for ordering."@en .
+
+mui:LinkRole
+    a shui:PropertyRole, owl:NamedIndividual ;
+    rdfs:label "Link role"@en ;
+    rdfs:comment "Values that lead somewhere: an outbound URL, an endpoint, a link that restores saved UI state."@en .
+
+mui:IdentifierRole
+    a shui:PropertyRole, owl:NamedIndividual ;
+    rdfs:label "Identifier role"@en ;
+    rdfs:comment "Machine-readable identifiers such as hashes and codes. Technical: shown in the record viewer, never in result items."@en .
+
+mui:CodeRole
+    a shui:PropertyRole, owl:NamedIndividual ;
+    rdfs:label "Code role"@en ;
+    rdfs:comment "Values that are source text (XML, SPARQL, JSON) and should be shown verbatim in a code view. Pair with mui:syntax. Technical: record viewer only."@en .
+
+# ---------------------------------------------------------------------------
+# XSLT template policies and safe template annotations used by Maestro.
+# ---------------------------------------------------------------------------
+
+mui:XsltTemplate
+    a owl:Class ;
+    rdfs:label "XSLT template"@en ;
+    rdfs:comment "An XSLT 1.0 stylesheet that formats FCT DESCRIBE XML while preserving Maestro rendering and actions. The stylesheet is stored as an RDF literal."@en .
+
+# The W3C SHACL UI widget predicates are kept unchanged; Maestro treats
+# each as a special form of the common mui:widget relationship.
+mui:widget a owl:ObjectProperty ;
+    rdfs:label "widget"@en ;
+    rdfs:comment "On a policy shape, the requested widget class; on a Provider, a concrete implementation resource."@en .
+
+shui:editor rdfs:subPropertyOf mui:widget .
+shui:viewer rdfs:subPropertyOf mui:widget .
+
+mui:enrichmentTemplate a owl:ObjectProperty ;
+    rdfs:label "formatter enrichment template"@en ;
+    rdfs:comment "Optional XSLT query-pivot implementation used to retrieve linked RDF data for a Record formatter."@en .
+
+mui:Provider a owl:Class ; rdfs:label "widget provider"@en .
+mui:InputShape a owl:Class ; rdfs:subClassOf sh:NodeShape ;
+    rdfs:label "provider input shape"@en .
+mui:accepts a owl:ObjectProperty ; rdfs:domain mui:Provider ;
+    rdfs:range mui:InputShape ; rdfs:label "accepts"@en .
+
+mui:RecordViewerWidget a owl:Class ; rdfs:subClassOf mui:XsltTemplate .
+mui:CardGridWidget a owl:Class ; rdfs:subClassOf mui:XsltTemplate .
+mui:RdfTranscoderWidget a owl:Class ; rdfs:label "RDF transcoder widget"@en .
+mui:transcoder a owl:ObjectProperty ; rdfs:label "OTC transcoder"@en .
+
+mui:templateContent
+    a owl:DatatypeProperty ;
+    rdfs:label "template content"@en ;
+    rdfs:comment "The XSLT stylesheet source. Store the stylesheet as a literal; RDF/XML CDATA is only a serialization detail."@en ;
+    rdfs:domain mui:XsltTemplate ;
+    rdfs:range xsd:string .
+
+mui:data
+    a owl:AnnotationProperty ;
+    rdfs:label "data binding"@en ;
+    rdfs:comment "In a Maestro XSLT result template, the value is the full property URI whose value(s) in the current query scope populate the element."@en .
+
+mui:query
+    a owl:AnnotationProperty ;
+    rdfs:label "query binding"@en ;
+    rdfs:comment "In a Maestro XSLT result template, the value is the id of an embedded XML query whose results instantiate the component."@en .
+
+mui:action
+    a owl:AnnotationProperty ;
+    rdfs:label "Maestro action"@en ;
+    rdfs:comment "Declares a constrained interaction routed through Maestro's approved live-query update API. The initial interpreter accepts only a direct allowlisted fctQueryTreeApi method call with literal or approved data-binding arguments; template content is never evaluated as unrestricted JavaScript or TypeScript."@en .
+
+mui:templateCall
+    a owl:AnnotationProperty ;
+    rdfs:label "template query call"@en ;
+    rdfs:comment "An XSLT-result instruction for a bounded sandbox query operation or a queued live query edit. Calls are validated by Maestro and never run as JavaScript."@en .
+
+# Serialized SPARQL form of the FCT query saved with a Bookmark.
+ mui:querySparql
+    a owl:DatatypeProperty ;
+    rdfs:label "Serialized query SPARQL"@en ;
+    rdfs:comment "The SPARQL translation of the saved vfct:historyQueryXML query, stored as text for inspection and reuse."@en ;
+    rdfs:domain rdfs:Resource ;
+    rdfs:range xsd:string .
+
+
+# Human-readable descriptions for ontology classes and properties.
+mui:CardGridWidget
+  rdfs:label 'Card Grid Widget'@en ;
+  dcterms:description "Card Grid Widget class in the Maestro vocabulary."@en .
+
+mui:ClassPolicy
+  dcterms:description "Declares how instances of one or more classes are presented. A policy points at one SHACL node shape per surface. Only the record shape carries sh:targetClass, so a renderer that looks shapes up by target always finds the canonical shape; item shapes are reached through the policy."@en .
+
+mui:InputShape
+  dcterms:description "Input Shape class in the Maestro vocabulary."@en .
+
+mui:Provider
+  dcterms:description "Provider class in the Maestro vocabulary."@en .
+
+mui:RdfTranscoderWidget
+  dcterms:description "Rdf Transcoder Widget class in the Maestro vocabulary."@en .
+
+mui:RecordViewerWidget
+  rdfs:label 'Record Viewer Widget'@en ;
+  dcterms:description "Record Viewer Widget class in the Maestro vocabulary."@en .
+
+mui:Surface
+  dcterms:description "A place in Maestro's UI where one RDF resource is presented."@en .
+
+mui:XsltTemplate
+  dcterms:description "An XSLT 1.0 stylesheet that formats FCT DESCRIBE XML while preserving Maestro rendering and actions. The stylesheet is stored as an RDF literal."@en .
+
+mui:accepts
+  dcterms:description "accepts property in the Maestro vocabulary."@en .
+
+mui:action
+  dcterms:description "Declares a constrained interaction routed through Maestro's approved live-query update API. The initial interpreter accepts only a direct allowlisted fctQueryTreeApi method call with literal or approved data-binding arguments; template content is never evaluated as unrestricted JavaScript or TypeScript."@en .
+
+mui:data
+  dcterms:description "In a Maestro XSLT result template, the value is the full property URI whose value(s) in the current query scope populate the element."@en .
+
+mui:enrichmentTemplate
+  dcterms:description "Optional XSLT query-pivot implementation used to retrieve linked RDF data for a Record formatter."@en .
+
+mui:forClass
+  dcterms:description "A class whose instances this policy presents. A policy may cover several equivalent classes."@en .
+
+mui:forSurface
+  dcterms:description "Annotates a mui:surfaceShape sub-property with the surface it serves."@en .
+
+mui:itemShape
+  dcterms:description "The shape for result set items. By convention it lists exactly the property shapes of the record shape that carry a property role, except mui:IdentifierRole and mui:CodeRole, which are technical and record-viewer only. Exactly one per policy."@en .
+
+mui:query
+  dcterms:description "In a Maestro XSLT result template, the value is the id of an embedded XML query whose results instantiate the component."@en .
+
+mui:querySparql
+  dcterms:description "The SPARQL translation of the saved vfct:historyQueryXML query, stored as text for inspection and reuse."@en .
+
+mui:readOnly
+  dcterms:description "True when users must not edit the values: they are system-managed or come from a source Maestro does not write to. On a node shape it applies to every property shape unless overridden."@en .
+
+mui:recordShape
+  dcterms:description "The shape for the record viewer. Lists every property shape, with groups and sh:order. Exactly one per policy."@en .
+
+mui:surfaceShape
+  dcterms:description "The SHACL node shape a renderer applies to a focus node on some surface."@en .
+
+mui:syntax
+  dcterms:description "The language of a code value, such as xml, sparql, json or turtle. Used with mui:CodeRole so a viewer can pick highlighting."@en .
+
+mui:templateCall
+  dcterms:description "An XSLT-result instruction for a bounded sandbox query operation or a queued live query edit. Calls are validated by Maestro and never run as JavaScript."@en .
+
+mui:templateContent
+  dcterms:description "The XSLT stylesheet source. Store the stylesheet as a literal; RDF/XML CDATA is only a serialization detail."@en .
+
+mui:transcoder
+  dcterms:description "transcoder property in the Maestro vocabulary."@en .
+
+mui:widget
+  dcterms:description "On a policy shape, the requested widget class; on a Provider, a concrete implementation resource."@en .
+
+# Discoverable personal-collection perspectives. Their presentation is supplied by mui:Provider XSLT.
+mui:PerspectiveWidget a owl:Class ; rdfs:subClassOf mui:XsltTemplate ; rdfs:label "Perspective widget"@en .
+mui:perspectiveKind a owl:DatatypeProperty ; rdfs:domain mui:Provider ; rdfs:range xsd:string ; rdfs:label "Perspective collection kind"@en .
+
+# Last known, authoritative count observations attached to saved query resources.
+mui:lastResultCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ; rdfs:label "Last known result count"@en .
+mui:lastNewCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ; rdfs:label "Last known new items"@en .
+
+# Personal facet providers are discovered against properties in the active view scope.
+mui:FacetWidget a owl:Class ; rdfs:label "Facet widget"@en .
+mui:PersonalFacetWidget a owl:Class ; rdfs:subClassOf mui:FacetWidget ; rdfs:label "Personal facet widget"@en .
+mui:DateRangeFacetWidget a owl:Class ; rdfs:subClassOf mui:PersonalFacetWidget ; rdfs:label "Date/time range facet"@en .
+mui:NumericRangeFacetWidget a owl:Class ; rdfs:subClassOf mui:PersonalFacetWidget ; rdfs:label "Numeric range facet"@en .
+# Provider-owned, typed extension points for the scalar facet count query.
+mui:countProjection a owl:ObjectProperty ; rdfs:domain mui:Provider .
+mui:countTriple a owl:ObjectProperty ; rdfs:domain mui:Provider .
+mui:aggregate a owl:DatatypeProperty .
+mui:expression a owl:DatatypeProperty .
+mui:alias a owl:DatatypeProperty .
+mui:subjectSlot a owl:DatatypeProperty .
+mui:predicateSlot a owl:DatatypeProperty .
+mui:objectSlot a owl:DatatypeProperty .
+mui:optional a owl:DatatypeProperty .
+
+
+# Authenticated personal appbar shortcuts. Instances live under the user's
+# /query/appbar named graph; the appbar may query these definitions but must
+# never execute arbitrary provider templates or JavaScript.
+mui:AppbarButtonProvider a owl:Class ; rdfs:subClassOf mui:Provider ;
+  rdfs:label "appbar button provider"@en ;
+  dcterms:description "A personal appbar shortcut whose action is the URI of a saved Bookmark, with a user-supplied Lucide icon and tooltip."@en .
+mui:icon a owl:DatatypeProperty ; rdfs:label "Lucide icon name"@en ;
+  dcterms:description "Kebab-case name of the Lucide icon used by an appbar button provider."@en .
+mui:tooltip a owl:DatatypeProperty ; rdfs:label "button tooltip"@en ;
+  dcterms:description "Accessible tooltip text displayed for a personal appbar button provider."@en .
+
+# Provider-authored transformation stages (declarative; no runtime class checks).
+mui:QueryTemplate a owl:Class ; rdfs:subClassOf mui:XsltTemplate ;
+  rdfs:label "Derived-query XSLT template"@en .
+mui:QueryResultTemplate a owl:Class ; rdfs:subClassOf mui:XsltTemplate ;
+  rdfs:label "Query result transformation template"@en .
+mui:queryTemplate a owl:ObjectProperty ; rdfs:domain mui:Provider ;
+  rdfs:range mui:QueryTemplate ; rdfs:label "Derived query stylesheet"@en .
+mui:resultTemplate a owl:ObjectProperty ; rdfs:domain mui:Provider ;
+  rdfs:range mui:QueryResultTemplate ; rdfs:label "Result stylesheet"@en .
+mui:paletteTemplate a owl:ObjectProperty ; rdfs:domain mui:Provider ;
+  rdfs:range mui:QueryResultTemplate ; rdfs:label "Palette stylesheet"@en .
+# Optional provider-specific interpretation of a SHACL property shape. This
+# annotation does not change standard SHACL validation or eligibility.
+mui:mapBinding a owl:DatatypeProperty ; rdfs:domain sh:PropertyShape ;
+  rdfs:range xsd:string ; rdfs:label "Map result binding"@en .
+
+# Guarded numeric expression contract used by generic count projections.
+mui:numericCoercion a rdf:Property ; rdfs:label "Numeric coercion policy"@en .
+mui:numericPattern a rdf:Property ; rdfs:label "Numeric lexical validation pattern"@en .
+
+# Curation providers publish their approved provider IRIs as an RDF collection
+# in mui:widget. A curator has no authority until the user approves it.
+mui:CurationProvider a owl:Class ;
+    rdfs:subClassOf mui:Provider ;
+    rdfs:label "Curation provider"@en ;
+    rdfs:comment "A curator whose mui:widget is an rdf:List of mui:Provider resources."@en .

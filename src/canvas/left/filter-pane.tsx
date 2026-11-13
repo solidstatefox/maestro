@@ -1,11 +1,13 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 
 import { renderPersonalWidgetCards } from "@/canvas/left/personal-widget-cards";
-import { PersonalStatusWidget } from "@/canvas/left/status-widget";
+import { UI_COMPONENT } from "@/lib/maestro-ui-component-ids";
+import { LiveQueryStatusWidget } from "@/canvas/left/status-widget";
 import { PropertyUsageWidget } from "@/canvas/left/property-usage-widget";
 import { propertyUsageScope } from "@/lib/property-usage-query";
-import { useTemporalFacetProviders } from "@/canvas/left/personal-date-facet";
+import { usePersonalFacetProviders } from "@/canvas/left/personal-date-facet";
 import { FACET_ITEM_GAP_CLASS } from "@/canvas/left/facet-layout";
 import { FacetDecorationControl, FacetItemDecoration } from "@/lib/facet-decoration-contract";
 import { fctTermKey } from "@/canvas/utils/fct-response";
@@ -21,8 +23,10 @@ import { categoryTreeNodeKey, type CategoryTreeNode } from "@/canvas/left/filter
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 
 import { toLabel } from "@/lib/uri-labels";
+import { selectedFacetCount, selectedFacetLabel } from "@/lib/selected-facet-presentation";
 
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
+import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 
 import { useMemo, useState, type ReactNode } from "react";
 import { GraphUriTree, buildGraphUriTree, graphTreeParentKeys } from "@/canvas/left/graph-uri-tree";
@@ -58,6 +62,22 @@ function activeCarrierSiblingProperties(tree: FilterPaneWorkspace["queryTree"], 
     return null;
   }
   return find(tree.children) ?? [];
+}
+
+/** The inspector shows the actual FCT XML and compiled SPARQL for both
+ * the facet view and its list-count variant. No execution happens in the
+ * inspector; SPARQL tabs retain CodeBlock's Execute-in-Virtuoso action. */
+function facetQueryInspectorTabs(xml: string, key: string) {
+  const compile = (value: string): string => {
+    try { return compileFctXmlToSparql(value).query; }
+    catch (error) { return `# SPARQL compilation failed: ${error instanceof Error ? error.message : String(error)}`; }
+  };
+  const countXml = xml.replace(/(<view\b[^>]*\btype=")[^"]+("[^>]*>)/, "$1list-count$2");
+  return [
+    { id: `${key}-sparql`, label: "SPARQL", query: compile(xml), filename: `${key}.sparql`, language: "sparql" as const },
+    { id: `${key}-count-xml`, label: "List-count XML", query: countXml, filename: `${key}-list-count.xml`, language: "xml" as const },
+    { id: `${key}-count-sparql`, label: "List-count SPARQL", query: compile(countXml), filename: `${key}-list-count.sparql`, language: "sparql" as const },
+  ];
 }
 
 export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWorkspace }) {
@@ -135,6 +155,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
     setGraphSortPickerExpanded,
     setGraphsPage,
     setGroupByPropertyUri,
+    setPersonalNumericRange,
     setQueryAttribute,
     setRoleWidgetStatuses,
     showClassResults,
@@ -146,7 +167,11 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
   // Discover presentation providers for the *existing* Personal facet widgets.
   // A provider never contributes a second standalone facet card.
   const temporalProperties = workspace.personalWidgets.map(widget => widget.uri);
-  const temporalProviders = useTemporalFacetProviders(temporalProperties);
+  // Do not rediscover a numeric policy from stale Personal facet rows while
+  // viewing the policy library's own FCT query.
+  const allowNumericDiscovery = !(workspaceTab === "view" && workspace.viewFeature);
+  const datatypeEvidence = allowNumericDiscovery ? Object.fromEntries(workspace.personalWidgets.map(widget => [widget.uri, widget.datatypeEvidence ?? []])) : {};
+  const personalFacetProviders = usePersonalFacetProviders(temporalProperties, serializeFctQuery(workspace.queryTree), datatypeEvidence);
   const sortedGraphFacets = useMemo(() => [...graphFacets].sort((a, b) => {
     const comparison = (a.label || a.uri).localeCompare(b.label || b.uri);
     return graphSort === "label-desc" ? -comparison : comparison;
@@ -158,14 +183,19 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
   return <>
 {defaultLeftTab === "personal" && (
                   <div className="space-y-3">
-                    {recordStatus.enabled && recordStatus.hasStatuses && <PersonalStatusWidget statuses={recordStatus} />}
+                    {workspace.isQueryBookmarked && <LiveQueryStatusWidget tree={queryTree}
+                      toggle={workspace.toggleLiveStatusFilter} revision={workspace.policyApprovalRevision}
+                      onNavigate={() => workspace.navigateFacetHeaderToProperty("gttp://ggg.maestro.ecosys/ns/ui#status")}
+                      queryXml={workspace.queryXml} />}
                     {propertyUsageScope(queryTree) && <>
                       <PropertyUsageWidget tree={queryTree} direction="subject" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
                       <PropertyUsageWidget tree={queryTree} direction="object" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
                     </>}
-                    <article ref={categoriesWidgetRef} className={`flex min-w-0 flex-col ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
+                    <article id={UI_COMPONENT.categories} ref={categoriesWidgetRef}
+                      hidden={!isLoadingClasses && !isLoadingCategoryTree && !classFacetError && !categoriesIncomplete && visibleClassDisplayFacets.length === 0 && selectedClassDisplayFacets.length === 0}
+                      className={`flex min-w-0 flex-col ${!isLoadingClasses && !isLoadingCategoryTree && !classFacetError && !categoriesIncomplete && visibleClassDisplayFacets.length === 0 && selectedClassDisplayFacets.length === 0 ? "!hidden" : ""} ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
                       <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
-                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><h2 className="text-sm font-semibold">Categories</h2><Tooltip><TooltipTrigger render={<button type="button" onClick={startCategoryNameSearch} aria-label="Search for categories by name" className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Search className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Start a new search for resources by Category name</TooltipContent></Tooltip><QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.CLASSES)) : undefined} countFilename="categories-first-item-count.sparql" /><Tooltip><TooltipTrigger render={<button
+                        <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><button type="button" className="cursor-pointer text-sm font-semibold hover:underline underline-offset-2" onClick={() => workspace.navigateFacetHeaderToProperty(RDF_TYPE_URI)} title="Navigate to rdf:type of the current focus">Categories</button><Tooltip><TooltipTrigger render={<button type="button" onClick={startCategoryNameSearch} aria-label="Search for categories by name" className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Search className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Start a new search for resources by Category name</TooltipContent></Tooltip><QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.CLASSES)) : undefined} countFilename="categories-first-item-count.sparql" primaryTabLabel="XML" extraQueries={facetQueryInspectorTabs(queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false), "categories")} /><Tooltip><TooltipTrigger render={<button
                           type="button"
                           aria-pressed={categoriesTreeMode}
                           onClick={() => { setQueryAttribute("classTree", categoriesTreeMode ? "false" : "true"); setExpandedCategoryNodes(new Set()); setClassesPage(0); }}
@@ -207,8 +237,8 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                         </span>} /><TooltipContent>{classFacetError || classFacetWarning || undefined}</TooltipContent></Tooltip>
                       </header>
                       {classFacetError && endpointReadyForQuery ? (
-                        <p className="text-xs text-destructive">{classFacetError}</p>
-                      ) : visibleClassDisplayFacets.length === 0 && !isLoadingClasses && !categoriesIncomplete ? (
+                        <ErrorDetails prefix="Categories" error={classFacetError} />
+                      ) : visibleClassDisplayFacets.length === 0 && selectedClassDisplayFacets.length === 0 && !isLoadingClasses && !categoriesIncomplete ? (
                         <p className="text-xs text-muted-foreground">No classes found for this query.</p>
                       ) : (
                         <>
@@ -217,7 +247,8 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                               <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">Selected</div>
                               <div className={FACET_ITEM_GAP_CLASS}>
                                 {selectedClassDisplayFacets.map((item) => {
-                                  const count = classFacets.some((facet) => facet.uri === item.uri) ? item.count : null;
+                                  const count = selectedFacetCount(classFacets.find((facet) => facet.uri === item.uri)?.count);
+                                  const label = selectedFacetLabel(item.uri, "Class", item.label);
                                   return (
                                     <div key={item.uri} className="flex w-full items-center gap-2 rounded-md px-2 py-0.5 text-sm">
                                       <input
@@ -232,7 +263,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                           }
                                         }}
                                         onChange={(event) => toggleClass(item.uri, event.currentTarget.checked)}
-                                        aria-label={`Unselect category ${toLabel(item.uri, "Class")}`}
+                                        aria-label={`Unselect category ${label}`}
                                         className={isFacetExcluded("Classes", item.uri)
                                           ? "relative size-4 shrink-0 appearance-none rounded-[3px] border border-black bg-white checked:border-black checked:bg-black checked:after:absolute checked:after:inset-0 checked:after:flex checked:after:items-center checked:after:justify-center checked:after:text-[14px] checked:after:font-bold checked:after:leading-none checked:after:text-white checked:after:content-['×'] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-invalid:!border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:!border-destructive/50 dark:aria-invalid:ring-destructive/40"
                                           : "size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"}
@@ -241,10 +272,10 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                       <Tooltip><TooltipTrigger render={<button
                                         type="button"
                                         className={`min-w-0 flex-1 break-all text-left underline-offset-2 hover:underline cursor-pointer ${count === 0 ? "text-destructive" : ""}`}
-                                        onClick={() => isGroupByCategory ? scrollToGroupForFacetValue({ uri: item.uri, title: toLabel(item.uri, "Class"), matches: [], termType: "uri" }) : showClassResults(item.uri, activeLeafId)}
+                                        onClick={() => isGroupByCategory ? scrollToGroupForFacetValue({ uri: item.uri, title: label, matches: [], termType: "uri" }) : showClassResults(item.uri, activeLeafId)}
                                       >
                                         {isFacetExcluded("Classes", item.uri) && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
-                                        {toLabel(item.uri, "Class")}
+                                        {label}
                                       </button>} /><TooltipContent>{item.uri}</TooltipContent></Tooltip>
                                       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{count === null ? "—" : shortenCount(count)}</span>
                                     </div>
@@ -430,7 +461,9 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       );
                     })}
                     {!focusWidgetsSuppressed && renderPersonalWidgetCards(workspace, "column", {
-                      providers: temporalProviders,
+                      providers: personalFacetProviders.temporal,
+                      numericProviders: personalFacetProviders.numeric,
+                      onNumericRangeChange: setPersonalNumericRange,
                       scopeNodes: activePropertyFilters,
                       queryXml: serializeFctQuery(workspace.queryTree),
                       onRangeChange: setPersonalDateRange,
@@ -439,7 +472,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       <header className="group/header flex items-center gap-2 px-2 py-2">
                         <div className="flex min-w-0 flex-1 items-center gap-1">
                           <IncompleteWidgetIndicator source="graphs" /><h2 className="text-sm font-semibold">Graphs</h2>
-                          <QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.GRAPHS)}\n<!-- FCT API option: graphOnly=true -->`} filename="graphs-fct-query.xml" extraQueries={[{ id: "graph-list-sparql", label: "GraphList SPARQL", query: graphListSparql || "# GraphList SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" }]} />
+                          <QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.GRAPHS)}\n<!-- FCT API option: graphOnly=true -->`} filename="graphs-fct-query.xml" primaryTabLabel="XML" extraQueries={[...facetQueryInspectorTabs(queryWithoutPagingXml(FCT_VIEW_TYPES.GRAPHS), "graphs"), { id: "graph-list-sparql", label: "Executed graph-list SPARQL", query: graphListSparql || "# Graph list SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" as const }]} />
                           <Tooltip><TooltipTrigger render={<button
                             type="button" aria-pressed={graphTreeMode}
                             onClick={() => { setGraphTreeMode((mode) => !mode); setGraphsPage(0); setExpandedGraphNodes(new Set()); }}

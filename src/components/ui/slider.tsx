@@ -3,16 +3,19 @@ import type { ComponentProps } from "react";
 
 /** Compact shadcn-style Radix slider. Radix Slider values are arrays. */
 export function Slider({ className = "", ...props }: ComponentProps<typeof SliderPrimitive.Root>) {
+  const thumbs = Math.max(1, props.value?.length ?? props.defaultValue?.length ?? 1);
   return (
     <SliderPrimitive.Root
       data-slot="slider"
-      className={`relative flex w-full touch-none select-none items-center ${className}`}
+      className={`relative flex w-full touch-none select-none items-center data-[orientation=vertical]:h-full data-[orientation=vertical]:w-auto data-[orientation=vertical]:flex-col ${className}`}
       {...props}
     >
-      <SliderPrimitive.Track data-slot="slider-track" className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary">
-        <SliderPrimitive.Range data-slot="slider-range" className="absolute h-full bg-primary" />
+      <SliderPrimitive.Track data-slot="slider-track" className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary data-[orientation=vertical]:h-full data-[orientation=vertical]:w-1.5">
+        <SliderPrimitive.Range data-slot="slider-range" className="absolute h-full bg-primary data-[orientation=vertical]:w-full" />
       </SliderPrimitive.Track>
-      <SliderPrimitive.Thumb data-slot="slider-thumb" className="block size-3.5 rounded-full border border-primary/50 bg-background shadow-sm ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50" />
+      {Array.from({ length: thumbs }, (_, index) => (
+        <SliderPrimitive.Thumb key={index} data-slot="slider-thumb" className="block size-3.5 rounded-full border border-primary/50 bg-background shadow-sm ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50" />
+      ))}
     </SliderPrimitive.Root>
   );
 }

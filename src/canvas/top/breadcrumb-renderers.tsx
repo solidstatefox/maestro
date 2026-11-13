@@ -219,7 +219,7 @@ function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath
   const isInactiveSuffix = index > activeBreadcrumbIndex;
           const breadcrumbClasses = classBreadcrumbLabels(crumb.id);
           const breadcrumbNode = findQueryNode(queryTree.children, crumb.id);
-          const breadcrumbIsRole = crumb.name === "property-of" || crumb.id.startsWith("role-filter-");
+          const breadcrumbIsRole = crumb.name === "property-of";
           const breadcrumbBaseLabel = toLabel(crumb.uri, breadcrumbIsRole ? "Role" : "Property") + (breadcrumbIsRole ? " of" : "");
           const breadcrumbExcluded = breadcrumbNode?.attributes.exclude?.trim().toLowerCase() === "yes";
           const breadcrumbLabel = breadcrumbExcluded ? `Excluded: ${breadcrumbBaseLabel}` : breadcrumbBaseLabel;

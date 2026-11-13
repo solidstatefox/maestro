@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useEffect, useMemo, useState } from "react";
 import { cachedFetchFct, maestroQueryFetch } from "@/lib/client-query-cache";
@@ -11,6 +12,7 @@ import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { shortenCount } from "@/lib/utils";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 import { toLabel } from "@/lib/uri-labels";
+import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 
 /** Built-in, property-class-only facets; intentionally not XSLT providers. */
@@ -40,17 +42,16 @@ export function PropertyUsageWidget({ tree, direction, limit, endpointReady, onN
     const controller = new AbortController();
     void (async () => {
       try {
-        const compiled = compileFctXmlToSparql(countSourceXml);
-        const unpaged = compiled.query.replace(/\s+LIMIT\s+\d+(?:\s+OFFSET\s+\d+)?\s*$/i, "").replace(/\s+ORDER BY[\s\S]*$/i, "");
-        const sparql = `SELECT (COUNT(*) AS ?ct) WHERE { { ${unpaged} } }`;
-        const response = await maestroQueryFetch("/proxy/api/sparql", {
+        const countXml = countSourceXml.replace(/(<view\b[^>]*\btype=")[^"]+"/, `$1${FCT_VIEW_TYPES.COUNT_DISTINCT}"`);
+        const response = await maestroQueryFetch("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ addr: tree.attributes.addr ?? "", resultsQuery: { sparql } }),
+          body: JSON.stringify({ queryXml: countXml }),
         });
         if (!response.ok) return;
-        const payload = await response.json() as { results?: { bindings?: Array<{ ct?: { value?: string } }> } };
-        const count = Number(payload.results?.bindings?.[0]?.ct?.value);
+        const parsed = await readFctResponse(response);
+        if (parsed.incomplete || parsed.viewType !== FCT_VIEW_TYPES.COUNT_DISTINCT) return;
+        const count = Number(parsed.rows[0]?.[0]?.value);
         if (!controller.signal.aborted && Number.isSafeInteger(count) && count >= 0) setKnownTotal(count);
       } catch { /* An endpoint may time out counting all distinct terms; keep rows usable. */ }
     })();
@@ -96,7 +97,7 @@ export function PropertyUsageWidget({ tree, direction, limit, endpointReady, onN
           const fallback = propertyUsageFacetQuery(tree, direction, PAGE_SIZE + 1, page * PAGE_SIZE);
           const fallbackView = (nodes: typeof fallback.children): void => {
             for (const node of nodes) {
-              if (node.id === "query-view") { node.attributes.sort = ""; return; }
+              if ((node.uiKey === "query-view" || node.id === "query-view")) { node.attributes.sort = ""; return; }
               fallbackView(node.children);
             }
           };
@@ -152,6 +153,6 @@ export function PropertyUsageWidget({ tree, direction, limit, endpointReady, onN
       <button type="button" disabled={!hasMore || loading} onClick={() => setPage(n => n + 1)} className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40">Next</button>
     </div>}
     {incomplete && !loading && <p role="status" className="px-2 py-1 text-xs text-muted-foreground">Virtuoso returned an incomplete {title.toLowerCase()} page; counts may be unavailable.</p>}
-    {error && <p role="alert" className="px-2 py-1 text-xs text-destructive">{error}</p>}
+    {error && <ErrorDetails error={error} prefix={`${title} facet`} className="mx-2 my-1" />}
   </article>;
 }

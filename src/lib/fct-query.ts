@@ -1,6 +1,8 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { ensureFctQueryIds } from "./fct-node-identity";
+export { serializeFctQuery } from "./fct-query-serialize";
 
 export type FctNodeName = string;
 
@@ -20,6 +22,8 @@ export type FctUiResultSummary = {
 
 export type FctQueryNode = {
   id: string;
+  /** Compatibility lookup for view, root search and facet controls; not an XML ID. */
+  uiKey?: string;
   name: FctNodeName;
   attributes: Record<string, string>;
   text?: string;
@@ -68,7 +72,7 @@ const RDFS_LABEL_URI = "http://www.w3.org/2000/01/rdf-schema#label";
 
 function createInitialState(): FctQueryState {
   return {
-    tree: {
+    tree: ensureFctQueryIds({
       name: "query",
       attributes: {
         xmlns: QUERY_NAMESPACE,
@@ -94,7 +98,7 @@ function createInitialState(): FctQueryState {
           children: [],
         },
       ],
-    },
+    }),
     revision: 0,
   };
 }
@@ -103,15 +107,6 @@ function createInitialState(): FctQueryState {
 
 
 
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
 
 /** Normalize a string or structured value into an FCT value node payload. */
 function normalizeFctValue(value: FctValueInput): FctValue {
@@ -151,61 +146,6 @@ function addValue(id: string, value: FctValueInput, defaultDatatype?: string): F
   };
 }
 
-function serializeNode(node: FctQueryNode): string {
-  // An empty search means browse without full-text matching. Virtuoso FCT treats
-  // <text></text> as a search for the placeholder token (NULL), not as no filter.
-  // Keep the empty text node in the client query tree, but omit it on the wire.
-  if (node.name === "text" && !(node.text ?? "").trim() && node.children.length === 0) return "";
-
-  const attributes = Object.entries(node.attributes)
-    .map(([name, value]) => ` ${name}="${escapeXml(value)}"`)
-    .join("");
-
-  if (node.name === "view") return `<view${attributes}/>`;
-
-  // Serialize the value text as supplied by the query tree. XML escaping
-  // protects the document syntax; it must not add SPARQL IRI delimiters.
-  const textContent = node.text ?? "";
-  const serializedText = textContent ? escapeXml(textContent) : "";
-  // FCT query filters must precede <view>. If a filter is appended after the
-  // view node (for example when a user checks a facet after initial browse),
-  // emitting the tree's raw child order can cause the endpoint to stop reading
-  // the query before it reaches that filter. Always serialize view last at each
-  // scope, without changing the authoritative query tree itself.
-  const content = [
-    serializedText,
-    ...node.children
-      .filter((child) => child.name !== "view")
-      .map(serializeNode),
-    ...node.children
-      .filter((child) => child.name === "view")
-      .map(serializeNode),
-  ].join("");
-
-  return `<${node.name}${attributes}>${content}</${node.name}>`;
-}
-
-export function serializeFctQuery(tree: FctQueryTree): string {
-  // `addr` is the sole serialized address; graph remains a UI compatibility
-  // field only and must never leak into executable query XML.
-  const attributes = Object.entries(tree.attributes)
-    .filter(([name]) => name !== "graph")
-    .map(([name, value]) => ` ${name}="${escapeXml(value)}"`)
-    .join("");
-  return (
-    `<?xml version="1.0" encoding="UTF-8"?>` +
-    `<query${attributes}>` +
-    tree.children
-      .filter((child) => child.name !== "view")
-      .map(serializeNode)
-      .join("") +
-    tree.children
-      .filter((child) => child.name === "view")
-      .map(serializeNode)
-      .join("") +
-    `</query>`
-  );
-}
 
 
 
@@ -237,13 +177,13 @@ export function attachViewToPropertyInQueryTree(
     children: [],
   };
   const attach = (nodes: FctQueryNode[]): FctQueryNode[] => {
-    const viewIndex = nodes.findIndex((node) => node.id === view.id || node.id === "query-view");
+    const viewIndex = nodes.findIndex((node) => (node.id === view.id || (Boolean(view.uiKey) && node.uiKey === view.uiKey)) || (node.uiKey === "query-view" || node.id === "query-view"));
     if (viewIndex >= 0) {
-      const withoutView = nodes.filter((node) => node.id !== view.id && node.id !== "query-view");
+      const withoutView = nodes.filter((node) => (node.id !== view.id && (!view.uiKey || node.uiKey !== view.uiKey)) && (node.uiKey !== "query-view" && node.id !== "query-view"));
       const existing = withoutView.find((node) => node.name === relationship && node.attributes.iri === iri);
       if (existing) {
         return withoutView.map((node) => node.id === existing.id
-          ? { ...node, children: [...node.children.filter((child) => child.id !== "query-view"), leafView] }
+          ? { ...node, children: [...node.children.filter((child) => (child.uiKey !== "query-view" && child.id !== "query-view")), leafView] }
           : node);
       }
       return [...withoutView, {
@@ -287,7 +227,7 @@ function isValidQueryTree(tree: unknown): tree is FctQueryTree {
 
 function createQueryStore(initialTree?: FctQueryTree) {
   let state: FctQueryState = initialTree
-    ? { tree: cloneQueryTree(initialTree), revision: 0 }
+    ? { tree: ensureFctQueryIds(cloneQueryTree(initialTree)), revision: 0 }
     : createInitialState();
   const listeners = new Set<Listener>();
   function cloneNodes(nodes: FctQueryNode[]): FctQueryNode[] {
@@ -312,7 +252,13 @@ function createQueryStore(initialTree?: FctQueryTree) {
   function updateTree(
     update: (tree: FctQueryTree) => FctQueryTree,
   ) {
-    const nextTree = update(state.tree);
+    const updated = update(state.tree);
+    const nextTree = ensureFctQueryIds({
+      ...updated,
+      attributes: { ...updated.attributes,
+        ctr: String(Math.max(10, Number(state.tree.attributes.ctr) || 10, Number(updated.attributes.ctr) || 10)),
+      },
+    });
     state = {
       ...state,
       tree: nextTree,
@@ -324,7 +270,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
   /** Replace the authoritative query with a validated snapshot, e.g. one restored from a share URL. */
   function replaceTree(tree: FctQueryTree) {
     if (!isValidQueryTree(tree)) throw new TypeError("Invalid FCT query tree");
-    const clonedTree = cloneQueryTree(tree);
+    const clonedTree = ensureFctQueryIds(cloneQueryTree(tree));
     const rootUriValues = clonedTree.children.filter(
       (node) => node.name === "value" && node.attributes.datatype === "uri",
     );
@@ -336,7 +282,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
     // Old shared URLs may contain duplicate or empty fixed-subject values.
     // Reconcile them through the same setValue API used by live edits.
     if (rootUriValues.length) {
-      const selected = rootUriValues.find((node) => node.id === "query-uri-value" && node.text?.trim())
+      const selected = rootUriValues.find((node) => (node.uiKey === "query-uri-value" || node.id === "query-uri-value") && node.text?.trim())
         ?? rootUriValues.find((node) => node.text?.trim());
       setValue(
         null,
@@ -443,37 +389,35 @@ function createQueryStore(initialTree?: FctQueryTree) {
       if (parentId !== null && !parent) return tree;
       const currentChildren = parent ? parent.children : tree.children;
       const existingValues = currentChildren.filter((node) => node.name === "value");
+      // Preserve the node's allocated compact identity when a value survives a
+      // merge or replacement. Only genuinely new bindings consume new IDs.
+      const existingByValue = new Map(existingValues.map((node) => {
+        const key = fctValueKey({
+          text: node.text ?? "",
+          datatype: node.attributes.datatype,
+          lang: node.attributes["xml:lang"],
+          op: node.attributes.op,
+          attributes: Object.fromEntries(Object.entries(node.attributes).filter(([name]) =>
+            !["datatype", "xml:lang", "op"].includes(name))),
+        });
+        return [key, node] as const;
+      }));
       const retainedValues = replaceExisting
         ? []
-        : existingValues.filter((node) => {
-            const key = fctValueKey({
-              text: node.text ?? "",
-              datatype: node.attributes.datatype,
-              lang: node.attributes["xml:lang"],
-              op: node.attributes.op,
-              attributes: Object.fromEntries(Object.entries(node.attributes).filter(([name]) =>
-                !["datatype", "xml:lang", "op"].includes(name))),
-            });
-            return !uniqueValues.has(key);
-          });
+        : existingValues.filter((node) => ![...uniqueValues.keys()].some((key) => existingByValue.get(key) === node));
       const nextValues = [
         ...retainedValues,
         ...[...uniqueValues.entries()]
-          .filter(([key]) => replaceExisting || !existingValues.some((node) =>
-            fctValueKey({
-              text: node.text ?? "",
-              datatype: node.attributes.datatype,
-              lang: node.attributes["xml:lang"],
-              op: node.attributes.op,
-              attributes: Object.fromEntries(Object.entries(node.attributes).filter(([name]) =>
-                !["datatype", "xml:lang", "op"].includes(name))),
-            }) === key,
-          ))
-          .map(([key, value]) => addValue(
-            (idPrefix === "query-uri-value" ? idPrefix : `${idPrefix}-${encodeURIComponent(key)}`),
-            value,
-            typeof value === "string" ? "uri" : undefined,
-          )),
+          .filter(([key]) => replaceExisting || !existingByValue.has(key))
+          .map(([key, value]) => {
+            const prior = existingByValue.get(key);
+            const next = addValue(
+              (idPrefix === "query-uri-value" ? idPrefix : `${idPrefix}-${encodeURIComponent(key)}`),
+              value,
+              typeof value === "string" ? "uri" : undefined,
+            );
+            return prior ? { ...next, id: prior.id, uiKey: prior.uiKey } : next;
+          }),
       ];
       const children = [
         ...currentChildren.filter((node) => node.name !== "value"),
@@ -499,11 +443,11 @@ function createQueryStore(initialTree?: FctQueryTree) {
         attributes: { ...node.attributes },
         children: node.name === "view" ? [] : node.children.map(clone),
       });
-      const stableReplacement = clone({ ...replacement, id: nodeId });
+      const stableReplacement = clone({ ...replacement, id: target.id, uiKey: target.uiKey ?? replacement.uiKey });
       function replace(nodes: FctQueryNode[]): FctQueryNode[] {
-        const target = nodes.find((node) => node.id === nodeId);
+        const target = nodes.find((node) => (node.id === nodeId || node.uiKey === nodeId));
         if (target) {
-          return nodes.map((node) => node.id === nodeId ? stableReplacement : node);
+          return nodes.map((node) => (node.id === nodeId || node.uiKey === nodeId) ? stableReplacement : node);
         }
         return nodes.map((node) => ({ ...node, children: replace(node.children) }));
       }
@@ -513,19 +457,19 @@ function createQueryStore(initialTree?: FctQueryTree) {
 
   function removeQueryNode(nodeId: string) {
     updateTree((tree) => {
-      if (nodeId === "query-view" || nodeId === "query-text") return tree;
       const target = findNodeInTree(tree, nodeId);
-      if (!target) return tree;
+      if (!target || target.uiKey === "query-view" || target.uiKey === "query-text" ||
+          nodeId === "query-view" || nodeId === "query-text") return tree;
       // Never let a generic structural edit orphan the active view. If the
       // selected wrapper contains it, relocate the view to the wrapper's slot.
       const findView = (node: FctQueryNode): FctQueryNode | null =>
-        node.id === "query-view" ? node : node.children.map(findView).find(Boolean) ?? null;
+        (node.uiKey === "query-view" || node.id === "query-view") ? node : node.children.map(findView).find(Boolean) ?? null;
       const preservedView = findView(target);
       let inserted = false;
       const remove = (nodes: FctQueryNode[]): FctQueryNode[] => {
         const output: FctQueryNode[] = [];
         for (const node of nodes) {
-          if (node.id === nodeId) {
+          if ((node.id === nodeId || node.uiKey === nodeId)) {
             if (preservedView && !inserted) {
               output.push(preservedView);
               inserted = true;
@@ -544,7 +488,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
     updateTree((tree) => ({
       ...tree,
       children: tree.children.map((node) =>
-        node.name === "text" && node.id === "query-text"
+        node.name === "text" && (node.uiKey === "query-text" || node.id === "query-text")
           ? { ...node, text }
           : node,
       ),
@@ -555,7 +499,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
   function resetQuery() {
     updateTree((tree) => {
       const textNode: FctQueryNode = {
-        id: "query-text",
+        ...(findNodeInTree(tree, "query-text") ?? { id: "query-text", uiKey: "query-text" }),
         name: "text",
         attributes: { property: RDFS_LABEL_URI },
         text: "",
@@ -589,7 +533,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
     nodeId: string,
     update: (node: FctQueryNode) => FctQueryNode,
   ): FctQueryNode[] {
-    return nodes.map((node) => node.id === nodeId
+    return nodes.map((node) => (node.id === nodeId || node.uiKey === nodeId)
       ? update(node)
       : { ...node, children: updateNodeRecursively(node.children, nodeId, update) });
   }
@@ -600,14 +544,14 @@ function createQueryStore(initialTree?: FctQueryTree) {
     replacement: FctQueryNode,
   ): FctQueryNode[] {
     return nodes.map((node) =>
-      node.id === nodeId
+      (node.id === nodeId || node.uiKey === nodeId)
         ? replacement
         : { ...node, children: replaceNode(node.children, nodeId, replacement) },
     );
   }
 
 function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
-    if (node.id === nodeId) return node;
+    if ((node.id === nodeId || node.uiKey === nodeId)) return node;
     for (const child of node.children) {
       const found = findNode(child, nodeId);
       if (found) return found;
@@ -648,7 +592,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     function findPath(nodes: FctQueryNode[], ancestors: FctQueryNode[]): boolean {
       for (const node of nodes) {
         const nextAncestors = [...ancestors, node];
-        if (node.id === "query-view") {
+        if ((node.uiKey === "query-view" || node.id === "query-view")) {
           // The breadcrumb is the structural path to the active <view>, not
           // the generated ID prefix of each relationship. A relationship that
           // was originally a property filter can become the focus when the view
@@ -679,7 +623,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     const parent = parentId ? findNodeInTree(state.tree, parentId) : getActiveViewScopeParent();
     const children = parent ? parent.children : state.tree.children;
     return [...new Set(children.filter((node) =>
-      node.name === "property" && node.id.startsWith("property-filter-") && typeof node.attributes.iri === "string",
+      node.name === "property" && (node.uiKey ?? node.id).startsWith("property-filter-") && typeof node.attributes.iri === "string",
     ).map((node) => node.attributes.iri))];
   }
 
@@ -724,7 +668,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
         children: [{ ...view, children: [] }],
       };
       const withoutView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) =>
-        node.id === "query-view" ? [] : [{ ...node, children: withoutView(node.children) }],
+        (node.uiKey === "query-view" || node.id === "query-view") ? [] : [{ ...node, children: withoutView(node.children) }],
       );
       const base = { ...tree, children: withoutView(tree.children) };
       return updateChildrenAtParent(base, scopeParentId, (children) => [
@@ -807,7 +751,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
         parent?.children.some(
           (child) =>
             child.name === "property" &&
-            child.id.startsWith("property-filter-") &&
+            (child.uiKey ?? child.id).startsWith("property-filter-") &&
             child.attributes.iri === normalizedUri,
         ),
       );
@@ -826,7 +770,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
                     (child) =>
                       !(
                         child.name === "property" &&
-                        child.id.startsWith("property-filter-") &&
+                        (child.uiKey ?? child.id).startsWith("property-filter-") &&
                         child.attributes.iri === normalizedUri
                       ),
                   ),
@@ -839,14 +783,14 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
 
       // Compatibility with legacy/root-level filter nodes. The serializer
       // emits view-owned filters as query-level <property> siblings, and older
-      if (!parentId && tree.children.some((node) => node.id === "query-view")) {
+      if (!parentId && tree.children.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) {
         return {
           ...tree,
           children: tree.children.filter(
             (node) =>
               !(
                 node.name === "property" &&
-                node.id.startsWith("property-filter-") &&
+                (node.uiKey ?? node.id).startsWith("property-filter-") &&
                 node.attributes.iri === normalizedUri
               ),
           ),
@@ -863,17 +807,17 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
       if (!view) return tree;
       if (targetId === "query-root") {
         const removeView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) =>
-          node.id === "query-view" ? [] : [{ ...node, children: removeView(node.children) }],
+          (node.uiKey === "query-view" || node.id === "query-view") ? [] : [{ ...node, children: removeView(node.children) }],
         );
         return { ...tree, children: [...removeView(tree.children), { ...view, children: [] }] };
       }
       let found = false;
       const removeView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) =>
-        node.id === "query-view" ? [] : [{ ...node, children: removeView(node.children) }],
+        (node.uiKey === "query-view" || node.id === "query-view") ? [] : [{ ...node, children: removeView(node.children) }],
       );
       const base = { ...tree, children: removeView(tree.children) };
       const insert = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => {
-        if (node.id === targetId && (node.name === "property" || node.name === "property-of")) {
+        if ((node.id === targetId || node.uiKey === targetId) && (node.name === "property" || node.name === "property-of")) {
           found = true;
           return { ...node, children: [...node.children, { ...view, children: [] }] };
         }
@@ -902,7 +846,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
 
   function findParentOfNode(nodes: FctQueryNode[], targetId: string, parentId: string | null = null): { parentId: string | null } | null {
     for (const node of nodes) {
-      if (node.id === targetId) return { parentId };
+      if ((node.id === targetId || node.uiKey === targetId)) return { parentId };
       const found = findParentOfNode(node.children, targetId, node.id);
       if (found) return found;
     }
@@ -931,7 +875,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
       const viewAncestors = (() => {
         function find(nodes: FctQueryNode[], ancestors: FctQueryNode[] = []): FctQueryNode[] | null {
           for (const node of nodes) {
-            if (node.id === "query-view") return ancestors;
+            if ((node.uiKey === "query-view" || node.id === "query-view")) return ancestors;
             const result = find(node.children, [...ancestors, node]);
             if (result) return result;
           }
@@ -940,21 +884,21 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
         return find(originalTree.children) ?? [];
       })();
       if (viewAncestors.some((node) =>
-        node.name === "property-of" && node.id.startsWith("role-filter-") &&
+        node.name === "property-of" && (node.uiKey ?? node.id).startsWith("role-filter-") &&
         node.attributes.iri === normalizedUri,
       )) return originalTree;
 
       const existingRole = (() => {
         function findScope(nodes: FctQueryNode[]): FctQueryNode[] | null {
           for (const node of nodes) {
-            if (node.children.some((child) => child.id === "query-view")) return node.children;
+            if (node.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"))) return node.children;
             const result = findScope(node.children);
             if (result) return result;
           }
-          return nodes.some((node) => node.id === "query-view") ? nodes : null;
+          return nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view")) ? nodes : null;
         }
         return (findScope(originalTree.children) ?? []).find(
-          (node) => node.name === "property-of" && node.id.startsWith("role-filter-") &&
+          (node) => node.name === "property-of" && (node.uiKey ?? node.id).startsWith("role-filter-") &&
             node.children.length === 0 && node.attributes.iri === normalizedUri,
         ) ?? null;
       })();
@@ -978,7 +922,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
 
       function wrapView(nodes: FctQueryNode[]): FctQueryNode[] {
         return nodes.flatMap((node) => {
-          if (node.id === "query-view") return [rolePath];
+          if ((node.uiKey === "query-view" || node.id === "query-view")) return [rolePath];
           return [{ ...node, children: wrapView(node.children) }];
         });
       }
@@ -991,7 +935,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     function findPath(nodes: FctQueryNode[], ancestors: FctQueryNode[]): boolean {
       for (const node of nodes) {
         const nextAncestors = [...ancestors, node];
-        if (node.id === "query-view") {
+        if ((node.uiKey === "query-view" || node.id === "query-view")) {
           // Keep pure tree operations consistent with getPropertyPath(): any
           // property/property-of ancestor of the active view is a focus-path
           // node, regardless of whether it started life as a filter node.
@@ -1024,7 +968,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
             return { ...node, children: appendAtScope(node.children) };
           }
           const children = [...node.children];
-          const viewIndex = children.findIndex((child) => child.id === "query-view");
+          const viewIndex = children.findIndex((child) => (child.uiKey === "query-view" || child.id === "query-view"));
           children.splice(viewIndex < 0 ? children.length : viewIndex, 0, classNode);
           return { ...node, children };
         });
@@ -1033,7 +977,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     }
 
     const children = [...tree.children];
-    const viewIndex = children.findIndex((child) => child.id === "query-view");
+    const viewIndex = children.findIndex((child) => (child.uiKey === "query-view" || child.id === "query-view"));
     children.splice(viewIndex < 0 ? children.length : viewIndex, 0, classNode);
     return { ...tree, children };
   }
@@ -1087,13 +1031,13 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
       // from leaking into every other scope.
       function findViewParent(nodes: FctQueryNode[]): { parentId: string | null; children: FctQueryNode[] } | null {
         for (const node of nodes) {
-          if (node.children.some((child) => child.id === "query-view")) {
+          if (node.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"))) {
             return { parentId: node.id, children: node.children };
           }
           const nested = findViewParent(node.children);
           if (nested) return nested;
         }
-        if (nodes.some((node) => node.id === "query-view")) {
+        if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) {
           return { parentId: null, children: nodes };
         }
         return null;
@@ -1101,7 +1045,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
       const scope = findViewParent(tree.children);
       if (!scope) return tree;
       const scopedRole = scope.children.find(
-        (node) => node.name === "property-of" && node.id.startsWith("role-filter-") &&
+        (node) => node.name === "property-of" && (node.uiKey ?? node.id).startsWith("role-filter-") &&
           node.attributes.iri === normalizedUri,
       );
       let nextChildren = scope.children.filter((node) => node.id !== scopedRole?.id);
@@ -1112,7 +1056,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
           attributes: { iri: normalizedUri },
           children: [],
         };
-        const viewIndex = nextChildren.findIndex((node) => node.id === "query-view");
+        const viewIndex = nextChildren.findIndex((node) => (node.uiKey === "query-view" || node.id === "query-view"));
         nextChildren = [...nextChildren];
         nextChildren.splice(viewIndex < 0 ? nextChildren.length : viewIndex, 0, roleNode);
       } else if (checked) {
@@ -1137,11 +1081,11 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
 
     function findViewParent(nodes: FctQueryNode[]): { parentId: string | null; children: FctQueryNode[] } | null {
       for (const node of nodes) {
-        if (node.children.some((child) => child.id === "query-view")) return { parentId: node.id, children: node.children };
+        if (node.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"))) return { parentId: node.id, children: node.children };
         const nested = findViewParent(node.children);
         if (nested) return nested;
       }
-      if (nodes.some((node) => node.id === "query-view")) return { parentId: null, children: nodes };
+      if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) return { parentId: null, children: nodes };
       return null;
     }
     const tree = state.tree;
@@ -1155,7 +1099,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     const findAncestorRole = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
       for (const node of nodes) {
         const containsView = (candidate: FctQueryNode): boolean =>
-          candidate.id === "query-view" || candidate.children.some(containsView);
+          (candidate.uiKey === "query-view" || candidate.id === "query-view") || candidate.children.some(containsView);
         if (node.name === "property-of" && node.attributes.iri === normalizedUri && containsView(node)) return node;
         const nested = findAncestorRole(node.children);
         if (nested) return nested;

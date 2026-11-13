@@ -8,7 +8,7 @@ export type PropertyUsageDirection = "subject" | "object";
 /** The view-bearing scope, not any unrelated class filter elsewhere in the tree. */
 export function propertyUsageScope(tree: FctQueryTree): { parentId: string | null; nodes: FctQueryNode[] } | null {
   function visit(nodes: FctQueryNode[], parentId: string | null): { parentId: string | null; nodes: FctQueryNode[] } | null {
-    if (nodes.some(node => node.id === "query-view"))
+    if (nodes.some(node => (node.uiKey === "query-view" || node.id === "query-view")))
       return nodes.some(node => node.name === "class" && node.attributes.iri === RDF_PROPERTY_CLASS)
         ? { parentId, nodes } : null;
     for (const node of nodes) {
@@ -65,7 +65,7 @@ export function propertyUsageNavigation(
   const candidate = selectedPredicateUri?.trim() || fixedPropertyUri(scope) || "";
   const fixedUri = /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(candidate) ? candidate : null;
   if (fixedUri) {
-    const originalView = scope.nodes.find(node => node.id === "query-view");
+    const originalView = scope.nodes.find(node => (node.uiKey === "query-view" || node.id === "query-view"));
     if (!originalView) return tree;
     const relationName = direction === "subject" ? "property-of" : "property";
     const selectedKey = selection && JSON.stringify([selection.value.text, selection.value.datatype ?? "", selection.value.lang ?? ""]);
@@ -86,8 +86,8 @@ export function propertyUsageNavigation(
         JSON.stringify([node.text ?? "", node.attributes.datatype ?? "", node.attributes["xml:lang"] ?? ""]) !== selectedKey);
       if (selection.checked) relation.children.push(...valueNodes);
     }
-    relation.children = relation.children.filter(node => node.id !== "query-view");
-    relation.children.push({ ...cloneNode(originalView), id: "query-view",
+    relation.children = relation.children.filter(node => (node.uiKey !== "query-view" && node.id !== "query-view"));
+    relation.children.push({ ...cloneNode(originalView),
       attributes: { ...originalView.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0", sort: "" }, children: [] });
     const replaceAtScope = (nodes: FctQueryNode[], parentId: string | null): FctQueryNode[] => {
       if (parentId === scope.parentId) {
@@ -95,7 +95,7 @@ export function propertyUsageNavigation(
         // the predicate-resource's URI binding, and the old view. A generic
         // class or an unrelated ancestor remains in place.
         return [
-          ...nodes.filter(node => node.id !== "query-view"
+          ...nodes.filter(node => (node.uiKey !== "query-view" && node.id !== "query-view")
             && node !== existing
             && node.name !== "text"
             && !(node.name === "class" && node.attributes.iri === RDF_PROPERTY_CLASS)

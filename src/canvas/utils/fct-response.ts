@@ -2,6 +2,7 @@
 
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 import { toLabel } from "@/lib/uri-labels";
+import { rdfBindingKind } from "@/lib/bnode";
 
 export type RelationshipDirection = "forward" | "reverse";
 
@@ -52,7 +53,7 @@ export type FctResult = {
   scopeValues?: ScopeValue[];
   // URI anchor projected in the same FCT SELECT as a blank-node focus.
   // Not a display badge and not dependent on list-values enrichment.
-  recordAnchor?: { parent: string; predicate: string };
+  recordAnchor?: { parent: string; predicate: string; direction?: "forward" | "reverse"; depth?: number };
   termType?: "uri" | "literal" | "bnode";
   datatype?: string;
   lang?: string;
@@ -94,7 +95,7 @@ export function parseListValuesXml(xml: string): Map<string, ScopeValue[]> {
       const values = Array.from(col.children).filter((node) => node.localName === "value").map((node): EnrichedTerm => {
         const datatype = node.getAttribute("datatype") || undefined;
         const lang = node.getAttribute("xml:lang") || undefined;
-        return { value: node.textContent ?? "", type: datatype === "uri" ? "uri" : datatype === "bnode" ? "bnode" : "literal",
+        return { value: node.textContent ?? "", type: rdfBindingKind(datatype),
           ...(datatype ? { datatype } : {}), ...(lang ? { lang } : {}) };
       });
       return [{ property, direction, label: toLabel(property), values: values.length ? values : [{ value: "-" }] }];
@@ -109,6 +110,7 @@ export function escapeXmlText(value: string): string {
 }
 
 export type ParsedFctResponse = {
+  datatypeEvidence?: Array<{ datatype: string; originalDatatype?: string; count: number }>;
   sparql: string;
   viewType: string;
   rows: FctResponseColumn[][];
@@ -146,6 +148,9 @@ const execMilliseconds = getText("exec-milliseconds");
 const dbActivity = getText("db-activity");
 
   if (error) return { sparql: getText("sparql"), viewType: "error", rows: [], complete: "no", rowCount: 0, results: [], properties: [], classes: [], roles: [], graphs: [], describe: [], count: undefined, shortforms: [], incomplete: true, error };
+  const datatypeEvidence = byLocalName(root, "datatypeEvidence").flatMap(e => byLocalName(e, "datatype")).map(e => ({
+    datatype: e.getAttribute("iri") ?? "", originalDatatype: e.getAttribute("originalDatatype") ?? undefined, count: Number(e.getAttribute("count") ?? "0"),
+  })).filter(e => e.datatype && Number.isFinite(e.count) && e.count > 0);
   const resultNode = byLocalName(root, "result")[0];
   const resultType = resultNode?.getAttribute("type") ?? "text";
   const rows = resultNode ? byLocalName(resultNode, "row") : [];
@@ -156,7 +161,7 @@ const dbActivity = getText("db-activity");
     const lang = element.getAttributeNS("http://www.w3.org/XML/1998/namespace", "lang") ?? element.getAttribute("xml:lang") ?? undefined;
     const shortform = element.getAttribute("shortform") ?? undefined;
     const label = element.getAttribute("label") ?? undefined;
-    const termType = datatype === "uri" || datatype === "url" ? "uri" : datatype === "bnode" ? "bnode" : "literal";
+    const termType = rdfBindingKind(datatype);
     return { value: element.textContent ?? "", name: String(index + 1), termType, ...(datatype ? { datatype } : {}), ...(lang ? { lang } : {}), ...(shortform ? { shortform } : {}), ...(label ? { label } : {}), attributes, raw: { "#text": element.textContent ?? "", ...attributes } };
   };
   const rowColumns = rows.map((row) => byLocalName(row, "column").map(termColumn));
@@ -167,14 +172,17 @@ const dbActivity = getText("db-activity");
     const second = columns[1];
     const third = columns[2];
     const isText = resultType === FCT_VIEW_TYPES.TEXT;
-    const excerpt = isText ? (second?.value ?? "") : "";
+    const excerpt = isText ? (columns.find((column) => column.attributes?.var === "c2")?.value ?? "") : "";
     // A label column is any later column that is not a count. Count-sorted list
     // views (Group By) put the integer COUNT in column 2 and the label, if any,
     // after it; reading column 2 as the label made some titles show the count.
     const isCountColumn = (column: FctResponseColumn) =>
       column.attributes?.var === "ct" || column.attributes?.var === "n"
       || /#(?:integer|int|long|short|nonNegativeInteger|positiveInteger|unsignedInt|unsignedLong)$/.test(column.datatype ?? "");
-    const labelColumn = isText ? undefined : columns.slice(1).find((column) => column.attributes?.var === "c2" || !isCountColumn(column));
+    const labelColumn = isText ? undefined : (
+      columns.slice(1).find((column) => column.attributes?.var === "c2")
+      ?? columns.slice(1).find((column) => column.attributes?.recordParent !== "yes" && !isCountColumn(column))
+    );
     const title = first.termType === "uri"
       ? (first.label || labelColumn?.value || toLabel(first.value))
       : (labelColumn?.value || first.value);
@@ -208,10 +216,19 @@ const dbActivity = getText("db-activity");
         }
       }
     }
-    const recordRole = first.termType === "bnode"
-      ? parsedScopeValues.find((scope) => scope.direction === "reverse" && scope.values.some((value) => value.type === "uri"))
+    // Inspect every structural path ancestor (not display badges). Prefer the
+    // nearest URI ancestor, even when the immediate parent is another b-node.
+    const structuralParent = first.termType === "bnode"
+      ? columns.filter((column) => column.attributes?.recordParent === "yes" && column.termType === "uri"
+          && column.value && column.attributes.recordPredicate)
+        .sort((a, b) => Number(b.attributes.recordDepth ?? -1) - Number(a.attributes.recordDepth ?? -1))[0]
       : undefined;
-    const recordParent = recordRole?.values.find((value) => value.type === "uri")?.value;
+    const structuralDepth = structuralParent ? Number(structuralParent.attributes.recordDepth) : NaN;
+    const recordAnchor = structuralParent
+      ? { parent: structuralParent.value, predicate: structuralParent.attributes.recordPredicate,
+          direction: structuralParent.attributes.recordDirection === "reverse" ? "reverse" as const : "forward" as const,
+          ...(Number.isSafeInteger(structuralDepth) && structuralDepth >= 0 ? { depth: structuralDepth } : {}) }
+      : undefined;
     const item: FctResult = {
       uri: first.value,
       title,
@@ -222,12 +239,12 @@ const dbActivity = getText("db-activity");
       columns,
       matches: excerpt ? [{ excerpt, columns: columns.slice(1) }] : [],
       ...(parsedScopeValues.length > 0 ? { scopeValues: parsedScopeValues } : {}),
-      ...(recordParent && recordRole ? { recordAnchor: { parent: recordParent, predicate: recordRole.property } } : {}),
+      ...(recordAnchor ? { recordAnchor } : {}),
     };
     if (resultType === FCT_VIEW_TYPES.LIST_COUNT && second) item.columns = columns;
     // In TEXT views c2 is the excerpt. Later columns can be independent
     // structural Record-identity projections, not additional excerpts.
-    if (third && resultType === FCT_VIEW_TYPES.TEXT && second?.attributes?.var !== "c2" && !excerpt)
+    if (third && resultType === FCT_VIEW_TYPES.TEXT && second?.attributes?.var !== "c2" && third.attributes?.recordParent !== "yes" && !excerpt)
       item.matches = [{ excerpt: third.value, columns: columns.slice(2) }];
     return [item];
   });
@@ -256,6 +273,7 @@ const dbActivity = getText("db-activity");
     }
   }
   return {
+    datatypeEvidence,
     sparql: getText("sparql"),
     viewType: resultType,
     rows: rowColumns,
@@ -290,7 +308,7 @@ const dbActivity = getText("db-activity");
       count: columns[1]?.value === undefined ? -1 : Number(columns[1].value),
     }] : []) : [],
     describe: resultType === FCT_VIEW_TYPES.DESCRIBE ? describe : [],
-    count: resultType === "count" ? Number(rowColumns[0]?.[0]?.value ?? 0) : undefined,
+    count: (resultType === "count" || resultType === FCT_VIEW_TYPES.COUNT_DISTINCT) ? Number(rowColumns[0]?.[0]?.value ?? 0) : undefined,
     shortforms: Array.from(uris, ([uri, metadata]) => ({ uri, ...metadata })),
   };
 }

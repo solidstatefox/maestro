@@ -4,9 +4,12 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseRdfDocument, buildInsertData } from "@/lib/rdf-to-sparql";
+import { createBlankNodeLabelAllocator } from "@/lib/bnode";
 import { askPersonalSparql, queryPersonalSparql, updatePersonalSparql, getConfiguredFctEndpoints, personalSparqlUrl, personalSparqlHeaders, assertPersonalSession } from "@/lib/personal-sparql";
 import { clearQueryCache } from "@/lib/query-cache";
 import { renderOtcLiquid } from "@/lib/otc-liquid";
+import { isApprovedPolicy, discoverPolicyApprovals } from "@/lib/policy-approval-store";
+import { UI_COMPONENT } from "@/lib/maestro-ui-component-ids";
 
 export const OTC = "gttp://ggg.openlink.sw/nlp/transcoder#";
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -477,14 +480,11 @@ async function executeStage(
         throw new Error("OTC run exceeds the 300-triple output budget.");
       }
       // Rename blank nodes as a set so their identity is preserved inside each rendered row.
-      const prefix = randomUUID().replaceAll("-", "");
+      const renameId = createBlankNodeLabelAllocator(`otc${randomUUID().replaceAll("-", "")}`);
 
 const renameBlankNode = (term: typeof parsed[number]["subject"]) =>
   term.termType === "BlankNode"
-    ? {
-        termType: "BlankNode",
-        value: `${prefix}_${term.value}`,
-      }
+    ? { termType: "BlankNode", value: renameId(term.value) }
     : term;
 
 stageTriples.push(
@@ -594,6 +594,11 @@ export async function runRootTranscoders(
   const report: string[] = [];
   for (const [key, group] of groups) {
     const rootIri = key.split('\u0000')[0];
+    if (!(await isApprovedPolicy(rootIri, request))) {
+      await discoverPolicyApprovals([rootIri], { component: UI_COMPONENT.otcDispatch, queryXml: "" }, request);
+      report.push(`${rootIri}: Pending approval; no survey executed`);
+      continue;
+    }
     const eligible = (await sourceSparql(request, validateReadQuery(group.rule.ask, 'ASK'), 'personal', sourceGraph, true)).boolean;
     if (!eligible) { report.push(`${rootIri}: ASK false`); continue; }
     const projection = await sourceSparql(request, validateReadQuery(group.rule.select, 'SELECT'), 'personal', sourceGraph, false);
@@ -610,6 +615,11 @@ export async function runRootTranscoders(
       const candidate = row.transcoder?.value;
       if (!candidate || !row.shape?.value || !group.shapes.has(row.shape.value) || processed.has(candidate)) continue;
       processed.add(candidate);
+      if (!(await isApprovedPolicy(candidate, request))) {
+        await discoverPolicyApprovals([candidate], { component: UI_COMPONENT.otcDispatch, queryXml: "" }, request);
+        report.push(`${candidate}: Pending approval; no survey executed`);
+        continue;
+      }
       const result = await runTranscoder(request, { rulesGraph, transcoder: candidate,
         namespace, source: 'personal', sourceGraph, dryRun: true, instruction }, activity);
       results.push({ root: rootIri, transcoder: candidate, result });
@@ -633,6 +643,12 @@ export async function runTranscoder(request: Request, options: RunOptions, activ
   const triples: OutputTriple[] = [];
   const stagingGraphs: string[] = [];
   let current = options.transcoder;
+  // The registered transcoder's approval is independent of any ClassPolicy.
+  // Neither selecting it nor a dry run authorizes its execution.
+  if (!(await isApprovedPolicy(current, request))) {
+    await discoverPolicyApprovals([current], { component: UI_COMPONENT.otcDispatch, queryXml: "" }, request);
+    throw new Error(`Transcoder ${current} is not Approved in your personal Status graph.`);
+  }
   let rules = await loadTranscoder(request, options.rulesGraph, current);
   let source = options.source;
   let sourceGraph = options.sourceGraph;
@@ -651,6 +667,8 @@ export async function runTranscoder(request: Request, options: RunOptions, activ
       const next = await findSuccessor(request, options.rulesGraph, current, rules, stageGraph, output.triples);
       successors.push(...next.checks);
       if (!next.chosen) break;
+      if (!(await isApprovedPolicy(next.chosen.transcoder, request)))
+        throw new Error(`Successor transcoder ${next.chosen.transcoder} is not Approved.`);
       current = next.chosen.transcoder;
       rules = next.chosen.rules;
       source = "personal";

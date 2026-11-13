@@ -1,0 +1,20 @@
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# Session-relative graph IRIs. During graph seeding, urn:maestro:graph:<suffix>
+# is resolved to the signed-in user's <graphPrefix>/query<suffix>.
+# This keeps the source valid Turtle without hardcoding any user's graph address.
+
+<urn:maestro:graph:> rdfs:label "Maestro queries"@en .
+<urn:maestro:graph:#bookmarks> rdfs:label "Maestro bookmarks"@en .
+<urn:maestro:graph:#history> rdfs:label "Maestro history"@en .
+<urn:maestro:graph:#policy-approvals> rdfs:label "Maestro policy approvals"@en .
+<urn:maestro:graph:/appbar> rdfs:label "Maestro appbar"@en .
+<urn:maestro:graph:/graph> rdfs:label "Maestro graph registry"@en .
+<urn:maestro:graph:/ontology> rdfs:label "Maestro personal ontology"@en .
+<urn:maestro:graph:/ontology-cache> rdfs:label "Maestro ontology cache"@en .
+<urn:maestro:graph:/otc/transcoders> rdfs:label "Maestro transcoders"@en .
+<urn:maestro:graph:/shacl/policies> rdfs:label "Maestro provider policies"@en .
+<urn:maestro:graph:/status> rdfs:label "Maestro statuses"@en .
+
+<gttp://ggg.maestro.ecosys/query#history> rdfs:label "Maestro history"@en .
+<gttp://ggg.maestro.ecosys/query#bookmarks> rdfs:label "Maestro bookmarks"@en .

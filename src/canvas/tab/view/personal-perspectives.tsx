@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, Trash2, RefreshCw } from "lucide-react";
@@ -11,6 +12,7 @@ import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
 import { toLabel } from "@/lib/uri-labels";
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { readFctResponse } from "@/canvas/utils/fct-response";
+import { deletePerspectiveEntries } from "@/lib/perspective-delete";
 
 const validAppbarIcons = new Set<string>(iconNames);
 type Provider = { kind: "bookmarks" | "history"; label: string; template: string };
@@ -126,7 +128,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
   const [appbarIcon, setAppbarIcon] = useState("bookmark");
   const [appbarBusy, setAppbarBusy] = useState(false);
   const loadAppbar = useCallback(async () => {
-    const response = await fetch("/proxy/api/appbar-buttons", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list"}),cache:"no-store"});
+    const response = await fetch("/proxy/api/service?service=maestro&operationId=appbar-buttons", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list"}),cache:"no-store"});
     const result = await response.json() as {buttons?:AppbarButton[];error?:string};
     if (!response.ok) throw new Error(result.error ?? "Could not load appbar providers");
     setAppbarButtons(result.buttons ?? []);
@@ -138,7 +140,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
       if (action === "add") {
         if (!validAppbarIcons.has(appbarIcon.trim())) throw new Error("Choose a valid Lucide icon name, e.g. bookmark or map-pin.");
       }
-      const response = await fetch("/proxy/api/appbar-buttons", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,bookmark,provider,tooltip:appbarTooltip,icon:appbarIcon}),cache:"no-store"});
+      const response = await fetch("/proxy/api/service?service=maestro&operationId=appbar-buttons", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,bookmark,provider,tooltip:appbarTooltip,icon:appbarIcon}),cache:"no-store"});
       const result = await response.json() as {buttons?:AppbarButton[];error?:string};
       if (!response.ok) throw new Error(result.error ?? "Appbar update failed");
       setAppbarButtons(result.buttons ?? []); setAppbarCandidate("");
@@ -152,7 +154,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
     setLoading(true); setError(""); setNotLoggedIn(false); setCollection(null); setHtml(""); setSelected([]);
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/perspectives", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "list", kind, providerUri }), cache: "no-store", signal: controller.signal });
+        const response = await fetch("/proxy/api/service?service=maestro&operationId=perspectives", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "list", kind, providerUri }), cache: "no-store", signal: controller.signal });
         const data = await response.json() as Collection & { error?: string };
         if (response.status === 401 || response.status === 403) {
           if (!controller.signal.aborted) setNotLoggedIn(true);
@@ -178,7 +180,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
       appbarIcon: kind === "bookmarks" ? bookmarkShortcut(row, appbarButtons, collection.rows)?.icon : undefined,
       uri: row.uri, label: row.label, created: row.created, description: row.description, url: row.url, selected: selected.includes(row.uri),
       appbarAdded: Boolean(bookmarkShortcut(row, appbarButtons, collection.rows)),
-      appbarAvailable: kind === "bookmarks" && (appbarButtons.length < 3 || Boolean(bookmarkShortcut(row, appbarButtons, collection.rows))),
+      appbarAvailable: kind === "bookmarks" && (appbarButtons.length < 5 || Boolean(bookmarkShortcut(row, appbarButtons, collection.rows))),
       tags: (row.tags ?? []).join(", "), ...queryStats(row.queryXml),
       lastResultCount: row.lastResultCount == null ? "" : String(row.lastResultCount),
       lastNewCount: row.lastNewCount == null ? "" : String(row.lastNewCount),
@@ -220,9 +222,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
     if (!kind || !ids.length || !window.confirm(`Delete ${ids.length} ${kind === "history" ? "history" : "bookmark"} entr${ids.length === 1 ? "y" : "ies"}?`)) return;
     setLoading(true);
     try {
-      const response = await fetch("/proxy/api/perspectives/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, ids }), cache: "no-store" });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "Delete failed");
+      await deletePerspectiveEntries(kind, ids);
       setSelected([]); setRevision(v => v + 1);
     } catch (err) { setError(err instanceof Error ? err.message : "Delete failed"); setLoading(false); }
   }, [kind]);
@@ -260,7 +260,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
       <button type="button" aria-label="Reload perspective" title="Reload" onClick={() => setRevision(v => v + 1)} className="rounded-md p-2 hover:bg-accent"><RefreshCw className="size-4"/></button>
       {selected.length > 0 && <button type="button" onClick={() => void remove(selected)} className="inline-flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs text-destructive hover:bg-destructive/10"><Trash2 className="size-3.5"/>Delete selected ({selected.length})</button>}
     </div>
-    {error && <p role="alert" className="px-4 py-2 text-sm text-destructive">{error}</p>}
+    {error && <ErrorDetails prefix="Perspective" error={error} className="mx-4 my-2" />}
     {notLoggedIn ? <p className="p-5 text-sm text-muted-foreground">Log in to your personal graph server to view History and Bookmarks.</p>
       : loading ? <p className="p-5 text-sm text-muted-foreground">Loading {kind}…</p>
       : !collection ? <p className="p-5 text-sm text-muted-foreground">No perspective data loaded.</p>
@@ -275,7 +275,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
             const entry = collection.rows.find(row => row.uri === id);
             const found = entry && bookmarkShortcut(entry, appbarButtons, collection.rows);
             if (found) void editAppbar("remove", id, found.uri);
-            else if (appbarButtons.length < 3) { setAppbarCandidate(id); setAppbarTooltip(collection.rows.find(r=>r.uri===id)?.label ?? ""); setAppbarIcon("bookmark"); }
+            else if (appbarButtons.length < 5) { setAppbarCandidate(id); setAppbarTooltip(collection.rows.find(r=>r.uri===id)?.label ?? ""); setAppbarIcon("bookmark"); }
           }
           else if (button.dataset.perspectiveTryHost === "true") tryAtThisHost(id);
           else if (button.dataset.perspectiveOpen === "true") open(id);

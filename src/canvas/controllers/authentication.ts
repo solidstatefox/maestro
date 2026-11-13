@@ -116,7 +116,7 @@ export function createAuthenticationActions(deps: AuthenticationActionDependenci
       if (!targetUrl) return;
       setIsFetchingAvatar(true);
       try {
-        const response = await fetch("/proxy/api/auth", {
+        const response = await fetch("/proxy/api/service?service=maestro&operationId=auth", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "profile", profileUrl: targetUrl }),
@@ -198,7 +198,7 @@ export function createAuthenticationActions(deps: AuthenticationActionDependenci
       setLoginTesting(true);
       setLoginError("");
       try {
-        const response = await fetch("/proxy/api/auth", {
+        const response = await fetch("/proxy/api/service?service=maestro&operationId=auth", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -239,7 +239,7 @@ export function createAuthenticationActions(deps: AuthenticationActionDependenci
       setLoginTesting(true);
       setLoginError("");
       try {
-        const response = await fetch("/proxy/api/auth", {
+        const response = await fetch("/proxy/api/service?service=maestro&operationId=auth", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -271,7 +271,7 @@ export function createAuthenticationActions(deps: AuthenticationActionDependenci
   
         // As soon as login succeeds, load every ./graph document into <graph>/query + manifest fragment.
         try {
-          const seedResponse = await fetch("/proxy/api/graph-seed", { method: "POST", cache: "no-store", headers: proxyDebugHeaders("login-graph-seed", "Login") });
+          const seedResponse = await fetch("/proxy/api/service?service=maestro&operationId=graph-seed", { method: "POST", cache: "no-store", headers: proxyDebugHeaders("login-graph-seed", "Login") });
           const seedData = await seedResponse.json().catch(() => ({}));
           if (!seedResponse.ok || !seedData.ok) throw new Error(seedData.error || `Graph load failed (HTTP ${seedResponse.status})`);
           setPersonalPoliciesSeedError("");

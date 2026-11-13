@@ -1,3 +1,7 @@
+import { getUserGraph, updatePersonalSparql } from "@/lib/personal-sparql";
+import { buildBlankNodeRecordSparql } from "@/lib/bnode";
+import { requirePersonalLogin } from "@/lib/personal-guard";
+import { verifyApprovalBookmark } from "@/lib/policy-approval-store";
 import { currentProxyClient, withProxyClient } from "@/lib/maestro-proxy-client-preferences";
 import { weightMaestroQuery } from "@/lib/graph-server-query-scheduler";
 import { streamProxyQuery, MAESTRO_EVENT_HEADER } from "@/lib/proxy-query-stream";
@@ -7,7 +11,7 @@ import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { NextResponse } from "next/server";
 import { withGraphServerSlot } from "@/lib/server-query-scheduler";
 import { virtuosoRankFailure } from "@/lib/virtuoso-query-fallbacks";
-import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
+import { getQueryCache, queryCacheKey, setQueryCache, clearQueryCache } from "@/lib/query-cache";
 import { getConfiguredFctEndpoints, normalizeGraphServerUri, resolveConfiguredFctEndpoint, resolveFctEndpointFromAddr, fctAddrFromXml } from "@/lib/personal-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
@@ -189,8 +193,11 @@ function parseSparqlResults(responseText: string): {
  * Never rewrite arbitrary user SPARQL or remove a different ORDER BY clause. */
 function unorderedIriRankFallback(query: string, error: string): string | null {
   if (!virtuosoRankFailure(error)) return null;
-  const ranking = /\bORDER\s+BY\s+DESC\s*\(\s*<LONG::IRI_RANK>\s*\(\s*\?[A-Za-z][A-Za-z0-9_]*\s*\)\s*\)\s*(?=(?:LIMIT|OFFSET|$))/i;
-  const fallback = query.replace(ranking, "");
+  // The FCT-derived blank-node Record SELECT nests the ranked Results SELECT.
+  // Remove only the exact generated rank-only ORDER BY, including inside a
+  // subquery; never remove a user's unrelated sort or its scope constraints.
+  const ranking = /\bORDER\s+BY\s+DESC\s*\(\s*<LONG::IRI_RANK>\s*\(\s*\?[A-Za-z][A-Za-z0-9_]*\s*\)\s*\)\s*(?=(?:LIMIT|OFFSET|\}|$))/gi;
+  const fallback = query.replace(ranking, " ");
   return fallback === query ? null : fallback;
 }
 
@@ -286,6 +293,48 @@ async function handlePost(request: Request) {
   const queryTimeoutMs = Number.isInteger(requestedMs) && requestedMs >= 1000 && requestedMs <= 120000 ? requestedMs : undefined;
   try {
     const body = await request.json().catch(() => null);
+    // Generic SPARQL Update transport. Existing personal-auth credentials stay
+    // server-side; no feature-specific approval HTTP endpoint or JSON result.
+    // Every GRAPH target must be within this login's own Maestro graph namespace.
+    if (typeof body?.update === "string") {
+      const denied = requirePersonalLogin(request);
+      if (denied) return denied;
+      const update = body.update.trim();
+      const base = getUserGraph(request);
+      const clean = update.replace(/<[^>]*>|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
+      const graphs = [...update.matchAll(/\bGRAPH\s*<([^>]+)>/gi)].map(match => match[1]);
+      // Ordinary SPARQL LOAD is supported only for an authenticated user's
+      // personal graph and a credential-free HTTP(S) source URL. This replaces
+      // the old /rdf-loader route without allowing arbitrary update programs.
+      const isLoad = /^LOAD\s+<([^<>]+)>\s+INTO\s+GRAPH\s+<([^<>]+)>$/i.exec(update);
+      if (/^LOAD\b/i.test(update)) {
+        if (!isLoad || isLoad[1].length > 4096 || isLoad[2].length > 4096 ||
+            isLoad[2] !== graphs[0] || graphs.length !== 1) {
+          return NextResponse.json({error: "Expected LOAD <HTTP(S) RDF URL> INTO GRAPH <personal graph>."}, {status:400});
+        }
+        let url: URL;
+        try { url = new URL(isLoad[1]); } catch { return NextResponse.json({error:"Invalid RDF source URL."},{status:400}); }
+        if (!["http:","https:"].includes(url.protocol) || url.username || url.password ||
+            !graphs.every(uri => uri.startsWith(`${base}/`) || uri.startsWith(`${base}#`))) {
+          return NextResponse.json({error:"RDF LOAD requires a public HTTP(S) source and an authenticated personal graph."},{status:400});
+        }
+        await updatePersonalSparql(update, 600000, request);
+        clearQueryCache();
+        return new Response(null, {status:204, headers:{"Cache-Control":"no-store"}});
+      }
+
+      if (!update || update.length > 100000 || graphs.length === 0 ||
+          !graphs.every(uri => uri.startsWith(`${base}/`) || uri.startsWith(`${base}#`)) ||
+          /\b(?:SERVICE|LOAD|CREATE|DROP|MOVE|COPY|ADD|WITH|USING|FROM)\b/i.test(clean) ||
+          !/^(?:INSERT|DELETE|CLEAR)\b/i.test(update)) {
+        return NextResponse.json({ error: "SPARQL Update may affect only explicit named graphs in the authenticated personal namespace." }, { status: 400 });
+      }
+      if (update.includes("gttp://ggg.maestro.ecosys/ns/ui#status") &&
+          (typeof body.bookmarkQueryXml !== "string" || !(await verifyApprovalBookmark(body.bookmarkQueryXml, request))))
+        return NextResponse.json({ error: "Bookmark the live FCT query before modifying provider Status." }, { status: 409 });
+      await updatePersonalSparql(update, queryTimeoutMs ?? 20000, request);
+      return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+    }
     const endpointList = await getConfiguredFctEndpoints(request);
     // Every SPARQL request carries the address of its originating FCT query.
     const nested = body?.recordSelect ?? body?.recordBlankNodes ?? body?.recordValueLabels ?? body?.facetValueCount;
@@ -297,6 +346,27 @@ async function handlePost(request: Request) {
     diagnosticEndpoint = fctEndpoint ?? "";
     if (!fctEndpoint) {
       return NextResponse.json({ error: "SPARQL operation requires a registered graph server in query addr." }, { status: 400 });
+    }
+
+    // Generic read-only SPARQL transport. Used for diagnostics that cannot be
+    // represented by an RDF property (e.g. Virtuoso sys_stat) and graph-server
+    // service-description metadata. No feature-specific JSON API is needed.
+    if (typeof body?.query === "string") {
+      const query = body.query.trim();
+      const maximumQueryLength = requirePersonalLogin(request) ? 10000 : 100000;
+      if (query.length > maximumQueryLength || !/^(?:PREFIX\s+[^\n]+\s*)*(?:SELECT|ASK)\b/i.test(query) ||
+          /\b(?:INSERT|DELETE|LOAD|CLEAR|CREATE|DROP|MOVE|COPY|ADD|SERVICE)\b/i.test(
+            query.replace(/<[^>]*>|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " "))) {
+        return NextResponse.json({ error: "Expected a bounded read-only SELECT/ASK query" }, { status: 400 });
+      }
+      diagnosticOperation = "generic read-only SPARQL";
+      diagnosticQuery = query;
+      const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs, request.signal);
+      if (!response.ok) return NextResponse.json({ error: `SPARQL HTTP ${response.status}` }, { status: response.status });
+      const parsed = parseSparqlResults(responseText);
+      if (!parsed) return NextResponse.json({ error: "Invalid SPARQL results" }, { status: 502 });
+      if (response.status === 200) setQueryCache(key, responseText);
+      return NextResponse.json(parsed, { headers: { "Cache-Control": "no-store" } });
     }
 
     // Resolve still-missing URI labels only in named graphs that the existing
@@ -326,7 +396,22 @@ async function handlePost(request: Request) {
       }`;
       diagnosticOperation = "Record URI labels in discovered graphs";
       diagnosticQuery = query;
-      const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs, request.signal);
+      // A user may open a blank-node Record from a ranked FCT Results page.
+      // The Results SELECT is nested in this Record query; on Virtuoso instances
+      // without the Facet VAD, retry without ONLY the generated IRI_RANK sort.
+      let recordQuery = query;
+      let recordResult = await querySparql(fctEndpoint, recordQuery, queryTimeoutMs, request.signal);
+      if (!recordResult.response.ok && recordResult.response.status !== 206 &&
+          !isVirtuosoAnytime(recordResult.response, recordResult.responseText)) {
+        const fallback = unorderedIriRankFallback(recordQuery, recordResult.responseText + " " +
+          (recordResult.response.headers.get("X-SQL-Message") ?? ""));
+        if (fallback) {
+          recordQuery = fallback;
+          recordResult = await querySparql(fctEndpoint, recordQuery, queryTimeoutMs, request.signal);
+          diagnosticQuery = recordQuery;
+        }
+      }
+      const { responseText, response, key } = recordResult;
       const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
       if (!response.ok && !incomplete) {
         return NextResponse.json({ error: `Virtuoso SPARQL endpoint returned HTTP ${response.status}: ${responseText.trim().slice(0, 1000)}` }, { status: response.status, headers: upstreamDiagnosticHeaders(response) });
@@ -372,45 +457,43 @@ async function handlePost(request: Request) {
       } catch (error) {
         return NextResponse.json({ error: `Invalid blank-node list-values query: ${error instanceof Error ? error.message : String(error)}` }, { status: 400 });
       }
-      // Virtuoso DEFINE/PREFIX directives must be outside the nested SELECT.
-      const compiledText = compiled.query.trim();
-      const preambleMatch = compiledText.match(/^((?:(?:DEFINE|PREFIX|BASE)\s+[^\n]*\n)*)/i);
-      const preamble = preambleMatch?.[1] ?? "";
-      const innerSelect = compiledText.slice(preamble.length).trim();
-      if (!/^SELECT\b/i.test(innerSelect)) {
-        return NextResponse.json({ error: "The FCT list-values compiler did not generate a SELECT query." }, { status: 400 });
+      let query: string;
+      try {
+        // When the executed FCT-derived Record selection binds an explicit
+        // named graph, keep the actual Record triple retrieval in that graph.
+        // Only this real execution binding permits bypassing graph marshalling;
+        // a graph merely selected elsewhere in the UI does not.
+        const scopedAddr = queryXml.match(/<query\b[^>]*\baddr\s*=\s*(["'])(.*?)\1/i)?.[2]?.replace(/&amp;/g, "&") ?? "";
+        const scopedGraph = scopedAddr.includes("@") ? scopedAddr.slice(0, scopedAddr.indexOf("@")).trim() : "";
+        const executionGraphs = namedGraphs.length ? namedGraphs
+          : scopedGraph && scopedGraph !== "$ALL$" && isSafeIri(scopedGraph) ? [scopedGraph] : [];
+        query = buildBlankNodeRecordSparql({
+          compiledSelect: compiled.query,
+          graphs: executionGraphs,
+          preferredLanguage,
+          limit,
+        });
+      } catch (error) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
       }
-      // A blank-node Record exposes both outgoing properties and incoming roles.
-      // Both branches use the *same* bound ?node from the FCT-derived SELECT;
-      // result-set-local blank-node labels are never interpolated into queries.
-      // Avoid joining the two directions together (which would multiply rows).
-      const recordGraphPrefix = namedGraphs.length ? `VALUES ?recordGraph { ${iriList(namedGraphs)} } ` : "";
-      const outgoingPattern = namedGraphs.length
-        ? `${recordGraphPrefix}GRAPH ?recordGraph { ?node ?predicate ?object . }`
-        : `?node ?predicate ?object .`;
-      const incomingPattern = namedGraphs.length
-        ? `${recordGraphPrefix}GRAPH ?recordGraph { ?object ?predicate ?node . }`
-        : `?object ?predicate ?node .`;
-      const query = `${preamble}SELECT ?node ?direction ?predicate ?object WHERE {
-        { ${innerSelect} }
-        BIND(?c1 AS ?node)
-        FILTER(isBlank(?node))
-        OPTIONAL {
-          {
-            ${outgoingPattern}
-            FILTER(${preferredLanguage === "all" ? "true" : `!isLiteral(?object) || DATATYPE(?object) != <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)})`})
-            BIND("property" AS ?direction)
-          }
-          UNION
-          {
-            ${incomingPattern}
-            BIND("property-of" AS ?direction)
-          }
-        }
-      } LIMIT ${limit}`;
       diagnosticOperation = "FCT-path blank-node Record SELECT";
       diagnosticQuery = query;
-      const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs, request.signal);
+      // A user may open a blank-node Record from a ranked FCT Results page.
+      // The Results SELECT is nested in this Record query; on Virtuoso instances
+      // without the Facet VAD, retry without ONLY the generated IRI_RANK sort.
+      let recordQuery = query;
+      let recordResult = await querySparql(fctEndpoint, recordQuery, queryTimeoutMs, request.signal);
+      if (!recordResult.response.ok && recordResult.response.status !== 206 &&
+          !isVirtuosoAnytime(recordResult.response, recordResult.responseText)) {
+        const fallback = unorderedIriRankFallback(recordQuery, recordResult.responseText + " " +
+          (recordResult.response.headers.get("X-SQL-Message") ?? ""));
+        if (fallback) {
+          recordQuery = fallback;
+          recordResult = await querySparql(fctEndpoint, recordQuery, queryTimeoutMs, request.signal);
+          diagnosticQuery = recordQuery;
+        }
+      }
+      const { responseText, response, key } = recordResult;
       const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
       if (!response.ok && !incomplete) {
         return NextResponse.json({ error: `SPARQL endpoint returned HTTP ${response.status}: ${responseText.trim().slice(0, 1000)}` }, { status: response.status, headers: upstreamDiagnosticHeaders(response) });
@@ -514,8 +597,10 @@ async function handlePost(request: Request) {
     // the endpoint's SPARQL result bindings directly.
     if (body?.resultsQuery && typeof body.resultsQuery === "object") {
       const resultsQuery = body.resultsQuery.sparql;
+      const selectSyntax = typeof resultsQuery === "string"
+        ? resultsQuery.replace(/<[^>]*>|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ") : "";
       if (typeof resultsQuery !== "string" || !/^\s*(?:DEFINE\s+[^\n]+\s+)*SELECT\b/i.test(resultsQuery) ||
-          !/\bAS\s+\?c1\b/i.test(resultsQuery) || /\b(?:INSERT|DELETE|CLEAR|LOAD|CREATE|DROP|MOVE|COPY|ADD)\b/i.test(resultsQuery)) {
+          !/\bAS\s+\?c1\b/i.test(resultsQuery) || /\b(?:INSERT|DELETE|CLEAR|LOAD|CREATE|DROP|MOVE|COPY|ADD)\b/i.test(selectSyntax)) {
         return NextResponse.json({ error: "A client-generated SELECT Results SPARQL query with ?c1 is required." }, { status: 400 });
       }
       diagnosticOperation = "Results SPARQL query";

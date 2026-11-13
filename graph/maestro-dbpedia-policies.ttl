@@ -705,7 +705,7 @@
 <xsl:param name="recordUri" as="xs:string"/>
 <xsl:template match="/">
 <xsl:variable name="reviewPredicate" select="string((mctx:context/mctx:describe/fct:facets/fct:result[@type='describe']/fct:row[fct:column[1] = $recordUri and fct:column[2] = ('http://schema.org/review','https://schema.org/review','http://schema.org/reviews','https://schema.org/reviews')]/fct:column[2])[1])"/>
-<xsl:variable name="address" select="string(mctx:context/mctx:live-query/*[local-name()='query']/@addr)"/>
+<xsl:variable name="address" select="string(mctx:context/mctx:query/*[local-name()='query']/@addr)"/>
 <query addr="{$address}">
 <value datatype="uri"><xsl:value-of select="$recordUri"/></value>
 <xsl:if test="$reviewPredicate ne ''">

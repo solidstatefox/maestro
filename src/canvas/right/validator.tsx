@@ -12,6 +12,11 @@ export type RecordValidationReport = {
   violations: Array<{ path: string; message: string; value?: string }>;
   optionalMissing?: Array<{ path: string; name: string }>;
   unsupportedConstraints: string[];
+  /** Standards-compliant RDF validation graph (N-Triples). */
+  reportNTriples?: string;
+  /** XSLT-friendly projection of the validation report. */
+  reportXml?: string;
+  standard?: "SHACL Core";
 };
 
 /** A validation warning already explains the failure; avoid an additional red formatter error. */
@@ -28,13 +33,17 @@ export function RecordValidationNotice({ report, onDismiss }: { report: RecordVa
     {report.violations.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-5">{report.violations.map((violation, index) => <li key={`${violation.path}-${index}`}>{violation.message}</li>)}</ul>}
     {(report.optionalMissing?.length ?? 0) > 0 && <p className="mt-2 text-xs text-muted-foreground">Optional fields not present in this Record snapshot: {Array.from(new Set(report.optionalMissing!.map((item) => item.name))).join(", ")}. These fields are not required by the selected SHACL shape.</p>}
     {report.unsupportedConstraints.length > 0 && <p className="mt-2 break-all text-xs">Unsupported constraints: {report.unsupportedConstraints.join(", ")}</p>}
+    {report.reportNTriples && <details className="mt-2 text-xs">
+      <summary className="cursor-pointer select-none">SHACL validation report (RDF)</summary>
+      <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border p-2">{report.reportNTriples}</pre>
+    </details>}
   </div>;
 }
 
 import { useState } from "react";
 /** Isolated SHACL validation response state. */
 export function useRecordValidationState() {
-  const [recordValidation, setRecordValidation] = useState<{ conforms: boolean; complete: boolean; violations: { path: string; message: string; value?: string }[]; optionalMissing?: { path: string; name: string }[]; unsupportedConstraints: string[]; message: string } | null>(null);
+  const [recordValidation, setRecordValidation] = useState<RecordValidationReport | null>(null);
   const [isValidatingRecord, setIsValidatingRecord] = useState(false);
   return { recordValidation, setRecordValidation, isValidatingRecord, setIsValidatingRecord };
 }
@@ -58,7 +67,7 @@ export async function validateRecordSnapshot(
       const datatype = cells[2].getAttribute("datatype") || undefined;
       return [{ subject, predicate, object, objectType, ...(datatype ? { datatype } : {}) }];
     });
-    const response = await maestroQueryFetch("/proxy/api/policies", {
+    const response = await maestroQueryFetch("/proxy/api/service?service=maestro&operationId=policies", {
       method: "POST", cache: "no-store",
       headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-validate", "RecordPolicyValidation") },
       body: JSON.stringify({ action: "validate", recordUri: snapshot.uri, recordShape: policy.recordShape, triples }),

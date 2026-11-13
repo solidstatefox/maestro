@@ -12,6 +12,7 @@ export const FCT_VIEW_TYPES = {
   LIST_VALUES: "list-values",
   LIST_STATUS: "list-status",
   ASK: "ask",
+  COUNT_DISTINCT: "count-distinct",
   LIST_COUNT: "list-count",
   ALPHABET: "alphabet",
   GEO: "geo",

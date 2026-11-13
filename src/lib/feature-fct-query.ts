@@ -1,4 +1,4 @@
-/** Native FCT scopes for the three View > Features registries.
+/** Native FCT scopes for the five View > Features registries.
  * These are real <query> trees dispatched by the normal FCT engine. The
  * catalog SPARQL endpoint may enrich their RDF subjects with descriptions,
  * but it never chooses which subjects appear in the Features result list.
@@ -16,25 +16,28 @@ export function featureFctQuery(tree: FctQueryTree, feature: FeatureKind, graph:
   const view = { ...VIEW, attributes: { ...VIEW.attributes, limit: String(Math.min(500, Math.max(1, Math.trunc(limit) || 30))) } };
   let children: FctQueryNode[];
   if (feature === "policies") {
-    // Only genuinely discovered resources: the approval graph carries their
-    // status AND their successful component match. Root regex admits Pending
-    // and Approved while keeping the XML query and breadcrumb path explicit.
+    // The policy registry must list policies regardless of personal mui:status.
+    // Status is a separate optional facet, never a membership condition.
     children = [
-      { id: "feature-policy-status-values", name: "value", attributes: { datatype: "string", op: "regex" }, text: `^${MUI.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:Pending|Approved)$`, children: [] },
-      node("feature-policy-status-role", "property-of", `${MUI}status`, [
-        node("feature-policy-matched-component", "property", `${MUI}lastRequestComponent`),
-        view,
-      ]),
+      // ClassPolicy and Provider resources both qualify as policy definitions.
+      // The FCT class filter is the registry membership condition.
+      node("feature-policy-class", "class", `${MUI}ClassPolicy`),
+      view,
     ];
   } else if (feature === "formats") {
-    // The format is the widget, not the provider subject. This exactly
-    // mirrors provider -> mui:widget -> RecordViewerWidget in the shape graph.
+    // Record formatters only: a provider must supply a RecordViewerWidget.
+    children = [node("feature-provider", "class", `${MUI}Provider`),
+      node("feature-record-widget", "property", `${MUI}widget`, [node("feature-record-type", "class", `${MUI}RecordViewerWidget`)]), view];
+  } else if (feature === "curators") {
+    children = [node("feature-curator", "class", `${MUI}CurationProvider`), view];
+  } else if (feature === "facet-widgets") {
+    // Keep the view on the provider; mui:widget is an additional filter.
     children = [
-      node("feature-format-provider", "class", `${MUI}Provider`),
-      node("feature-format-widget", "property", `${MUI}widget`, [
-        node("feature-record-viewer", "class", `${MUI}RecordViewerWidget`),
-        view,
+      node("feature-facet-provider", "class", `${MUI}Provider`),
+      node("feature-facet-widget", "property", `${MUI}widget`, [
+        node("feature-facet-widget-type", "class", `${MUI}FacetWidget`),
       ]),
+      view,
     ];
   } else {
     // The input shape is the root, while the view displays the transcoder
@@ -56,9 +59,44 @@ export function featureFctQuery(tree: FctQueryTree, feature: FeatureKind, graph:
       xmlns: "http://openlinksw.com/services/facets/1.0",
       addr: `${graph}@${endpoint}`,
       graph,
-      ...(tree.attributes.timeout ? { timeout: tree.attributes.timeout } : {}),
-      ...(tree.attributes.order ? { order: tree.attributes.order } : {}),
+      src: `urn:maestro:features:${feature}`,
+      // Do not inherit source-query root attributes: the automatic History
+      // bookmarks use this exact canonical Features query for every entry.
+      // Per-widget timeouts are dispatched separately by the proxy.
     },
     children,
   };
+}
+
+/** Whether the live query already imposes this feature's identifying FCT
+ * constraints. Keep user-added filters, offsets, breadcrumbs and history intact
+ * rather than rebuilding an equivalent query every time a ribbon is visited.
+ * Only constraints in the same scope count: a class on a different branch
+ * must not masquerade as a feature query. */
+export function hasFeatureFctFilters(tree: FctQueryTree, feature: FeatureKind, graph?: string, endpoint?: string): boolean {
+  if (graph !== undefined && endpoint !== undefined && tree.attributes.addr !== `${graph}@${endpoint}`) return false;
+  const hasClass = (nodes: FctQueryNode[], iri: string) =>
+    nodes.some(item => item.name === "class" && item.attributes.iri === iri);
+  const relation = (nodes: FctQueryNode[], kind: "property" | "property-of", iri: string) =>
+    nodes.find(item => item.name === kind && item.attributes.iri === iri);
+  const children = tree.children;
+  if (feature === "policies") {
+    return hasClass(children, `${MUI}ClassPolicy`);
+  }
+  if (feature === "formats") {
+    const widget = relation(children, "property", `${MUI}widget`);
+    return hasClass(children, `${MUI}Provider`) && Boolean(widget && hasClass(widget.children, `${MUI}RecordViewerWidget`));
+  }
+  if (feature === "curators") return hasClass(children, `${MUI}CurationProvider`);
+  if (feature === "facet-widgets") {
+    const widget = relation(children, "property", `${MUI}widget`);
+    return hasClass(children, `${MUI}Provider`) &&
+      Boolean(widget && hasClass(widget.children, `${MUI}FacetWidget`));
+  }
+  const accepts = relation(children, "property-of", `${MUI}accepts`);
+  if (!hasClass(children, `${MUI}InputShape`) || !accepts) return false;
+  const widget = relation(accepts.children, "property", `${MUI}widget`);
+  return hasClass(accepts.children, `${OTC}Transcoder`) &&
+    hasClass(accepts.children, `${MUI}Provider`) &&
+    Boolean(widget && hasClass(widget.children, `${MUI}RdfTranscoderWidget`));
 }

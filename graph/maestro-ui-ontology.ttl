@@ -307,7 +307,8 @@ mui:lastResultCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ;
 mui:lastNewCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ; rdfs:label "Last known new items"@en .
 
 # Personal facet providers are discovered against properties in the active view scope.
-mui:PersonalFacetWidget a owl:Class ; rdfs:label "Personal facet widget"@en .
+mui:FacetWidget a owl:Class ; rdfs:label "Facet widget"@en .
+mui:PersonalFacetWidget a owl:Class ; rdfs:subClassOf mui:FacetWidget ; rdfs:label "Personal facet widget"@en .
 mui:DateRangeFacetWidget a owl:Class ; rdfs:subClassOf mui:PersonalFacetWidget ; rdfs:label "Date/time range facet"@en .
 
 # Authenticated personal appbar shortcuts. Instances live under the user's
@@ -320,3 +321,10 @@ mui:icon a owl:DatatypeProperty ; rdfs:label "Lucide icon name"@en ;
   dcterms:description "Kebab-case name of the Lucide icon used by an appbar button provider."@en .
 mui:tooltip a owl:DatatypeProperty ; rdfs:label "button tooltip"@en ;
   dcterms:description "Accessible tooltip text displayed for a personal appbar button provider."@en .
+
+# Curation providers publish their approved provider IRIs as an RDF collection
+# in mui:widget. A curator has no authority until the user approves it.
+mui:CurationProvider a owl:Class ;
+    rdfs:subClassOf mui:Provider ;
+    rdfs:label "Curation provider"@en ;
+    rdfs:comment "A curator whose mui:widget is an rdf:List of mui:Provider resources."@en .

@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { FctQueryNode } from "@/lib/fct-query-api";
@@ -190,22 +191,26 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
           })}
         </div>
         {fetching && <span className="text-xs text-muted-foreground">Fetching calendar counts…</span>}
-        {error && <span role="status" className="text-xs text-muted-foreground">{error}</span>}
+        {error && <ErrorDetails prefix="Calendar" error={error} />}
       </div>
     </div>
   </div>;
 }
-export function useTemporalFacetProviders(properties: string[]): Map<string, TemporalFacetProvider> {
+export type NumericFacetProvider = { uri: string; projections: Array<{ aggregate: "MIN" | "MAX" | "AVG" | "SUM"; expression: "xsd:decimal(?facetValue)" | "?facetNumber"; alias: string }> };
+export function usePersonalFacetProviders(properties: string[], queryXml = "", datatypeEvidence: Record<string, string[]> = {}): { temporal: Map<string, TemporalFacetProvider>; numeric: NumericFacetProvider[] } {
   const [providers,setProviders] = useState<Provider[]>([]);
+  const [numeric,setNumeric] = useState<NumericFacetProvider[]>([]);
   const key = useMemo(()=>[...new Set(properties)].sort().join("\n"),[properties]);
+  const evidenceKey = JSON.stringify(datatypeEvidence);
   useEffect(()=>{
-    const controller=new AbortController();setProviders([]);
+    const controller=new AbortController();setProviders([]);setNumeric([]);
     if(!key) return ()=>controller.abort();
-    void fetch("/proxy/api/personal-facet-providers",{method:"POST",cache:"no-store",signal:controller.signal,
-      headers:{"Content-Type":"application/json"},body:JSON.stringify({properties:key.split("\n"),timeoutMs:readMaestroWidgetTimeouts().personal*1000})})
-      .then(async response=>{if(!response.ok)return;const data=await response.json() as {providers?:Provider[]};if(!controller.signal.aborted)setProviders(data.providers??[]);})
+    void fetch("/proxy/api/service?service=maestro&operationId=personal-facet-providers",{method:"POST",cache:"no-store",signal:controller.signal,
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({properties:key.split("\n"),queryXml,datatypeEvidence:JSON.parse(evidenceKey),timeoutMs:readMaestroWidgetTimeouts().personal*1000})})
+      .then(async response=>{if(!response.ok)return;const data=await response.json() as {providers?:Provider[];numericProviders?:NumericFacetProvider[]};if(!controller.signal.aborted){setProviders(data.providers??[]);setNumeric(data.numericProviders??[]);}})
       .catch(()=>{});
     return ()=>controller.abort();
-  },[key]);
-  return useMemo(() => new Map(providers.map(provider => [provider.property, provider])), [providers]);
+  },[key,queryXml,evidenceKey]);
+  const temporal = useMemo(() => new Map(providers.map(provider => [provider.property, provider])), [providers]);
+  return { temporal, numeric };
 }

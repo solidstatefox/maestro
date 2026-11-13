@@ -28,7 +28,7 @@ export type PersonalStatusPage = {
 type PageResult = { statuses: Record<string, RecordStatusName[]>; hidden: string[] };
 type FacetResult = { hasStatuses: boolean; counts: Record<StatusFacetName, number>; sparql: string };
 async function requestStatus<T = {ok: boolean}>(body: object, signal?: AbortSignal): Promise<T> {
-  const response = await fetch("/proxy/api/record-status", { method: "POST", credentials: "same-origin", cache: "no-store", signal,
+  const response = await fetch("/proxy/api/service?service=maestro&operationId=record-status", { method: "POST", credentials: "same-origin", cache: "no-store", signal,
     headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!response.ok) { const detail = await response.json().catch(() => null); throw new Error(detail?.error || `Personal status operation failed (HTTP ${response.status}).`); }
   return response.json() as Promise<T>;

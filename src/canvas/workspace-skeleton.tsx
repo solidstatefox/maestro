@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ReactNode } from "react";
@@ -32,7 +33,7 @@ function CategoriesAndGraphsSkeleton({ defaultSize }: { defaultSize: number }) {
       <div className="flex shrink-0 items-center gap-1 border-b px-3 py-2 text-sm whitespace-nowrap">
         <Skeleton className="h-6 w-20" /><Skeleton className="ml-2 h-6 w-16" />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] p-3">
         <FacetContents title="Categories" rows={7} />
         <FacetContents title="Graphs" rows={4} />
       </div>
@@ -101,7 +102,7 @@ export function WorkspaceSkeleton({ message, error, ribbon, panelWidths = [25, 4
   const [left = 25, center = 45, right = 30] = panelWidths;
   return <div className="flex min-h-0 flex-1 flex-col overflow-hidden" role="status" aria-busy="true" aria-label={message}>
     <div className="shrink-0">{ribbon}</div>
-    {error && <p className="border-b px-4 py-2 text-sm text-destructive" role="alert">{error}</p>}
+    {error && <div className="border-b px-4 py-2"><ErrorDetails prefix="Graph server" error={error} /></div>}
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1" onLayout={onLayout}>
         <CategoriesAndGraphsSkeleton defaultSize={left} />

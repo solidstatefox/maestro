@@ -1,6 +1,7 @@
 "use client";
 
 import { FCT_VIEW_TYPES } from "./fct-view-types";
+import { isBlankNodeTerm } from "./bnode";
 import { attachViewToPropertyInQueryTree } from "./fct-query";
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
 
@@ -36,7 +37,7 @@ function cloneQueryNode(node: FctQueryNode): FctQueryNode {
 
 function findQueryNode(nodes: FctQueryNode[], nodeId: string): FctQueryNode | null {
   for (const node of nodes) {
-    if (node.id === nodeId) return node;
+    if ((node.id === nodeId || node.uiKey === nodeId)) return node;
     const found = findQueryNode(node.children, nodeId);
     if (found) return found;
   }
@@ -63,8 +64,8 @@ function groupValueBinding(value: QueryResultValue): { text: string; datatype?: 
 }
 
 function treeNodeContainsId(nodes: FctQueryNode[], ancestorId: string, targetId: string): boolean {
-  const contains = (node: FctQueryNode): boolean => node.id === targetId || node.children.some(contains);
-  const find = (node: FctQueryNode): boolean => node.id === ancestorId
+  const contains = (node: FctQueryNode): boolean => (node.id === targetId || node.uiKey === targetId) || node.children.some(contains);
+  const find = (node: FctQueryNode): boolean => (node.id === ancestorId || node.uiKey === ancestorId)
     ? contains(node)
     : node.children.some(find);
   return nodes.some(find);
@@ -121,7 +122,7 @@ export function createPropertyWidgetQuery(
     const reuseCarrier = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => {
       const isCarrier = !reusedCarrier && node.name === relationshipName &&
         node.attributes.iri === propertyUri &&
-        node.children.some((child) => child.id === "query-view");
+        node.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"));
       if (isCarrier) {
         reusedCarrier = true;
         const attributes = { ...node.attributes };
@@ -129,7 +130,7 @@ export function createPropertyWidgetQuery(
         return {
           ...node,
           attributes,
-          children: node.children.map((child) => child.id === "query-view"
+          children: node.children.map((child) => (child.uiKey === "query-view" || child.id === "query-view")
             ? { ...copyNode(child), attributes: { ...child.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0" }, children: [] }
             : copyNode(child)),
         };
@@ -182,7 +183,7 @@ export function createPropertyWidgetQuery(
   // For a reverse-role ancestor, the selected role already encloses the view;
   // retain that ancestor and enumerate its values without adding another edge.
   const wrapAncestor = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) => {
-    if (node.id === "query-view") {
+    if ((node.uiKey === "query-view" || node.id === "query-view")) {
       const ephemeralView: FctQueryNode = {
         ...copyNode(node),
         attributes: { ...node.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0" },
@@ -201,7 +202,7 @@ export function createPropertyWidgetQuery(
 
 function findQueryView(nodes: FctQueryNode[]): FctQueryNode | null {
   for (const node of nodes) {
-    if (node.id === "query-view") return node;
+    if ((node.uiKey === "query-view" || node.id === "query-view")) return node;
     const nested = findQueryView(node.children);
     if (nested) return nested;
   }
@@ -299,7 +300,7 @@ export function createGroupMemberQuery(
   if (option.direction === "reverse" && option.ancestorRole) {
     let movedView: FctQueryNode | undefined;
     const extractView = (node: FctQueryNode): FctQueryNode | undefined => {
-      if (node.id === "query-view") return node;
+      if ((node.uiKey === "query-view" || node.id === "query-view")) return node;
       for (const child of node.children) {
         const found = extractView(child);
         if (found) return found;
@@ -417,7 +418,7 @@ export function createDistinctCountQuery(
     nodes: FctQueryNode[],
     update: (siblings: FctQueryNode[]) => FctQueryNode[],
   ): { nodes: FctQueryNode[]; updated: boolean } => {
-    if (nodes.some((node) => node.id === "query-view")) {
+    if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) {
       return { nodes: update(nodes), updated: true };
     }
     let updated = false;
@@ -445,8 +446,8 @@ export function createDistinctCountQuery(
     const scoped = updateActiveViewScope(tree.children, (siblings) => {
       const existing = siblings.find((node) =>
         node.name === relationshipName && node.attributes.iri === uri &&
-        (kind !== "property" || node.id.startsWith("property-filter-") || node.id.startsWith("count-property-")) &&
-        (kind !== "role" || node.id.startsWith("role-filter-") || node.id.startsWith("count-role-")),
+        (kind !== "property" || (node.uiKey ?? node.id).startsWith("property-filter-") || (node.uiKey ?? node.id).startsWith("count-property-")) &&
+        (kind !== "role" || (node.uiKey ?? node.id).startsWith("role-filter-") || (node.uiKey ?? node.id).startsWith("count-role-")),
       );
       if (existing) {
         // An excluded item becomes an inclusion candidate for its count.
@@ -459,7 +460,7 @@ export function createDistinctCountQuery(
           return { ...node, attributes };
         });
       }
-      const viewIndex = siblings.findIndex((node) => node.id === "query-view");
+      const viewIndex = siblings.findIndex((node) => (node.uiKey === "query-view" || node.id === "query-view"));
       const next = [...siblings];
       next.splice(viewIndex + 1, 0, relationshipNode);
       return next;
@@ -482,7 +483,7 @@ export function createDistinctCountQuery(
           return { ...node, attributes };
         });
       }
-      const viewIndex = siblings.findIndex((node) => node.id === "query-view");
+      const viewIndex = siblings.findIndex((node) => (node.uiKey === "query-view" || node.id === "query-view"));
       const next = [...siblings];
       next.splice(viewIndex + 1, 0, classNode);
       return next;
@@ -492,7 +493,7 @@ export function createDistinctCountQuery(
     // A SPARQL result-set blank-node label cannot identify that node in a
     // later independent query. Do not mistake it for a string literal and
     // manufacture a false zero count; leave its count unavailable instead.
-    if (candidateValue?.termType === "bnode") {
+    if (isBlankNodeTerm(candidateValue?.termType)) {
       return {
         ...tree,
         children: [...tree.children, {
@@ -531,7 +532,7 @@ export function createDistinctCountQuery(
       nodes: FctQueryNode[],
       parent: FctQueryNode | null = null,
     ): FctQueryNode | null => {
-      if (nodes.some((node) => node.id === "query-view")) {
+      if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) {
         return nodes.find(matches) ?? (parent && matches(parent) ? parent : null);
       }
       for (const node of nodes) {
@@ -561,7 +562,7 @@ export function createDistinctCountQuery(
     };
     const attachToExactNode = (nodes: FctQueryNode[]): FctQueryNode[] =>
       nodes.map((node) => {
-        if (targetId && node.id === targetId) return attachValue(node);
+        if (targetId && (node.id === targetId || node.uiKey === targetId)) return attachValue(node);
         return { ...node, children: attachToExactNode(node.children) };
       });
     tree = { ...tree, children: attachToExactNode(tree.children) };
@@ -582,7 +583,7 @@ export function createDistinctCountQuery(
 
   const setCountView = (nodes: FctQueryNode[]): FctQueryNode[] =>
     nodes.map((node) => {
-      if (node.id === "query-view") {
+      if ((node.uiKey === "query-view" || node.id === "query-view")) {
         const attributes = { ...node.attributes };
         delete attributes.order;
         delete attributes["order-results"];
@@ -615,7 +616,7 @@ function updateQueryNode(
   update: (node: FctQueryNode) => FctQueryNode,
 ): FctQueryNode[] {
   return nodes.map((node) =>
-    node.id === nodeId
+    (node.id === nodeId || node.uiKey === nodeId)
       ? update(node)
       : { ...node, children: updateQueryNode(node.children, nodeId, update) },
   );

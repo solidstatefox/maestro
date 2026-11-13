@@ -1,0 +1,23 @@
+"use strict";
+// Portable regression test for the legacy Virtuoso Facet-VAD ranking fallback.
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const projectRoot = path.resolve(__dirname, "..");
+const route = fs.readFileSync(path.join(projectRoot, "src/app/proxy/api/sparql/route.ts"), "utf8");
+const line = route.split(/\r?\n/).find(line => line.trim().startsWith("const ranking = /"));
+assert.ok(line, "SPARQL route must define rank-only fallback expression");
+const literal = line.trim().replace(/^const ranking = /, "").replace(/;$/, "");
+const rankSort = vm.runInNewContext(literal);
+assert.ok(rankSort instanceof Object || typeof rankSort.test === "function");
+const record = 'SELECT ?node WHERE { { SELECT DISTINCT (?s1 AS ?c1) WHERE { ?s1 a <https://schema.org/Person> } ORDER BY DESC (<LONG::IRI_RANK>(?s1)) LIMIT 30 OFFSET 0 } BIND(?c1 AS ?node) FILTER(isBlank(?node)) } LIMIT 10000';
+const expected = record.replace('ORDER BY DESC (<LONG::IRI_RANK>(?s1)) ', ' ');
+assert.equal(record.replace(rankSort, ' '), expected, "Nested rank sort must be removed");
+const custom = 'SELECT ?s WHERE { ?s ?p ?o } ORDER BY DESC (?s) LIMIT 30';
+assert.equal(custom.replace(rankSort, ' '), custom, "User-defined sorts must be preserved");
+const multi = 'SELECT ?s WHERE { ?s ?p ?o } ORDER BY DESC (<LONG::IRI_RANK>(?s)) LIMIT 30';
+assert.ok(!multi.replace(rankSort, ' ').includes('IRI_RANK'));
+const failures = fs.readFileSync(path.join(projectRoot, 'src/lib/virtuoso-query-fallbacks.ts'), 'utf8');
+assert.ok(failures.includes('SR185'), 'Virtuoso SR185 must be recognized as an unsupported ranking function');
+console.log('Nested IRI_RANK fallback: passed');

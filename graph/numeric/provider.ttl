@@ -1,0 +1,33 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# Numeric facets are property-agnostic. Eligibility is confirmed against actual
+# numeric bindings in the live FCT focus; no hard-coded vocabulary property.
+<gttp://ggg.maestro.ui/provider/numeric-range> a mui:Provider ;
+  rdfs:label "Numeric range"@en ;
+  mui:accepts <gttp://ggg.maestro.ui/provider/numeric-range-input> ;
+  mui:widget <gttp://ggg.maestro.ui/widget/numeric-range> ;
+  # A named, tightly validated normalization policy; never executable RDF SPARQL.
+  # Operates on literal lexical form, including custom RDF datatypes and strings.
+  mui:numericCoercion "finite-lexical-v1" ;
+  mui:numericPattern "^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$" ;
+  mui:countTriple [ mui:subjectSlot "view" ; mui:predicateSlot "facetProperty" ;
+                    mui:objectSlot "facetValue" ; mui:optional true ] ;
+  mui:countProjection [ mui:aggregate "MIN" ; mui:expression "?facetNumber" ; mui:alias "min" ] ,
+                      [ mui:aggregate "MAX" ; mui:expression "?facetNumber" ; mui:alias "max" ] .
+
+<gttp://ggg.maestro.ui/provider/numeric-range-input> a mui:InputShape, sh:NodeShape ;
+  sh:property [
+    sh:path mui:inferredDatatype ;
+    sh:qualifiedValueShape [ sh:in (
+      xsd:integer xsd:int xsd:long xsd:short xsd:byte
+      xsd:decimal xsd:float xsd:double
+      xsd:positiveInteger xsd:nonNegativeInteger
+      xsd:unsignedInt xsd:unsignedLong
+    ) ] ;
+    sh:qualifiedMinCount 1
+  ] .
+<gttp://ggg.maestro.ui/widget/numeric-range> a mui:NumericRangeFacetWidget, mui:FacetWidget ;
+  rdfs:label "Numeric range slider"@en .

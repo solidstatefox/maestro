@@ -1,10 +1,11 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { graphForPrefix } from "./personal-auth";
 import { authNote, fetchWithDigestFallback } from "./digest-auth";
 import { buildInsertData, canParseRdfExtension, parseRdfDocument } from "./rdf-to-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
+import { graphServerUrlMatches } from "@/lib/graph-server-health";
 
 /** Shared server-side access to Maestro's personal SPARQL store and RDF-backed Graph registry. */
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -88,7 +89,11 @@ function getGraphManifest(): GraphManifest {
   }
   const result: GraphManifest = {};
   for (const [filename, rawGraph] of Object.entries(manifest as Record<string, unknown>)) {
-    if (!filename || filename === "manifest.json" || filename.includes("/") || filename.includes("\\") || filename.startsWith(".")) {
+    // Manifest keys are paths relative to /graph, not merely basenames.
+    // Never let RDF manifests escape the graph directory.
+    if (!/^(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_.-]+$/.test(filename) ||
+        filename.split("/").some(part => part === "." || part === "..") ||
+        filename === "manifest.json") {
       throw new Error(`Invalid RDF filename in graph/manifest.json: ${filename}`);
     }
     if (typeof rawGraph !== "string") throw new Error(`Graph for ${filename} must be a string in graph/manifest.json.`);
@@ -118,7 +123,7 @@ export function getUserGraph(request?: Request): string {
 export const getDataserversGraph = (request?: Request): string => graphForFile("dataserver-seed.ttl", request);
 /** History graph base IRI (<graph>/query). Callers append #history / #bookmarks. */
 export const getHistoryGraph = (request?: Request): string => getUserGraph(request);
-export const getOntologyGraph = (request?: Request): string => graphForFile("maestro-ui-ontology.ttl", request);
+export const getOntologyGraph = (request?: Request): string => graphForFile("rdfs/maestro-ui-ontology.ttl", request);
 export const getShapesGraph = (request?: Request): string => graphForFile("maestro-shacl-policies.ttl", request);
 export const VFCT_NS = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#";
 export const MAESTRO_IDS_NS = "gttp://ggg.maestro.ecosys/ids/";
@@ -153,7 +158,6 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
   graphDirectorySeedInProgress.add(sessionKey);
   const promise = (async (): Promise<GraphSeedResult> => {
     const loaded: GraphSeedResult = [];
-    const entries = await readdir(getGraphDirectory(), { withFileTypes: true });
     const mediaTypes: Record<string, string> = {
       ".rdf": "application/rdf+xml; charset=utf-8",
       ".rdfs": "application/rdf+xml; charset=utf-8",
@@ -170,12 +174,16 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
       ".grdf": "application/x-grdf; charset=utf-8",
     };
     const manifest = getGraphManifest();
-    const files = entries.filter((entry) => entry.isFile() && Object.hasOwn(manifest, entry.name) && mediaTypes[extname(entry.name).toLowerCase()]);
-    if (files.length === 0) throw new Error(`No supported RDF documents were found in ./graph.`);
-    const listedFiles = new Set(files.map((file) => file.name));
-    for (const filename of Object.keys(manifest)) {
-      if (!listedFiles.has(filename)) throw new Error(`Manifest entry ${filename} has no matching supported RDF file in ${getGraphDirectory()}.`);
-    }
+    const files = await Promise.all(Object.keys(manifest).map(async name => {
+      if (!mediaTypes[extname(name).toLowerCase()]) {
+        throw new Error(`Manifest entry ${name} has an unsupported RDF extension.`);
+      }
+      const path = resolve(getGraphDirectory(), name);
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile()) throw new Error(`Manifest entry ${name} has no matching RDF file in ${getGraphDirectory()}.`);
+      return { name };
+    }));
+    if (files.length === 0) throw new Error(`No RDF documents were listed in graph/manifest.json.`);
 
     const endpoint = personalSparqlUrl(request); // read endpoint (/sparql), advertised in the Datasites seed
     const writeEndpoint = personalSparqlWriteUrl(request); // /sparql-auth for sparql-auth logins
@@ -227,6 +235,14 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
         if (!alreadyListed) {
           content += `\n\n# Automatically added personal SPARQL endpoint (not explicitly listed in the seed).\n<${MAESTRO_IDS_NS}dataservers/endpoints#personal-sparql> a schema:EntryPoint ;\n    rdfs:label "Personal SPARQL" ;\n    schema:url <${endpoint.toString()}> ;\n    dcterms:isPartOf <${MAESTRO_IDS_NS}dataservers/endpoints> ;\n    schema:position "-1"^^xsd:integer .\n`;
         }
+      }
+      // labels.ttl is valid RDF with session-relative URNs. Resolve them at
+      // ingestion to the user's real named graph IRIs rather than labelling
+      // placeholder resources or hardcoding a particular user's graph prefix.
+      if (file.name === "labels.ttl") {
+        const base = getUserGraph(request);
+        content = content.replace(/<urn:maestro:graph:([^>]*)>/g, (_match, suffix: string) =>
+          `<${base}${suffix}>`);
       }
       const extension = extname(file.name).toLowerCase();
       if (canParseRdfExtension(extension)) {
@@ -297,8 +313,7 @@ export type FctEndpoint = { id: string; label: string; url: string; group: strin
 /** HTTP fallback is permitted only for host-only registry entries whose HTTPS probe returned 404. */
 export function resolveConfiguredFctEndpoint(endpoints: FctEndpoint[], requested: string): FctEndpoint | undefined {
   const normalized = normalizeGraphServerUri(requested);
-  return endpoints.find((item) => item.url === normalized ||
-    (item.schemeInferred && normalized === item.url.replace(/^https:\/\//i, "http://")));
+  return endpoints.find((item) => graphServerUrlMatches(item.url, normalized, item.schemeInferred));
 }
 type SparqlJson = { results?: { bindings?: Record<string, { type?: string; value?: string }>[] } };
 

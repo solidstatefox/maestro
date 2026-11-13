@@ -82,6 +82,7 @@ export type PersonalWidgetCardsWorkspace = Pick<WorkspaceController,
   | "setPersonalWidgets"
   | "setPropertyValue"
   | "workspaceTab"
+  | "viewFeature"
 >;
 
 export type FilterPaneDirectWorkspace = Pick<WorkspaceController,
@@ -131,6 +132,7 @@ export type FilterPaneDirectWorkspace = Pick<WorkspaceController,
   | "isLoadingGraphs"
   | "leftPanelLimit"
   | "leftWidgetLimits"
+  | "navigateFacetHeaderToProperty"
   | "navigateToPropertyPath"
   | "navigatePropertyUsage"
   | "pagedUnselectedClasses"
@@ -361,6 +363,7 @@ export type RecordPaneWorkspace = Pick<WorkspaceController,
   | "setSelectedUri"
   | "validateSelectedRecord"
   | "workspaceTab"
+  | "viewFeature"
 >;
 
 export type SettingsPaneWorkspace = Pick<WorkspaceController,
@@ -434,6 +437,13 @@ export type SettingsPaneWorkspace = Pick<WorkspaceController,
 >;
 
 export type AppBarDirectWorkspace = Pick<WorkspaceController,
+  | "setViewPanel"
+  | "setSelectedViewUri"
+  | "setViewFeature"
+  | "viewPanel"
+  | "viewFeature"
+  | "selectViewFeature"
+  | "returnShareUrl"
   | "buildCurrentShareUrl"
   | "effectiveResultsTotalCount"
   | "recordStatus"
@@ -608,8 +618,9 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "tutorialMode"
   | "widgetTimeouts"
   | "workspaceTab"
+  | "viewFeature"
 >;
 
-export type FilterPaneWorkspace = FilterPaneDirectWorkspace & PersonalWidgetCardsWorkspace & Pick<WorkspaceController, "setPersonalDateRange" | "propertyFacets" | "activePropertyFilters">;
+export type FilterPaneWorkspace = FilterPaneDirectWorkspace & PersonalWidgetCardsWorkspace & Pick<WorkspaceController, "setPersonalDateRange" | "setPersonalNumericRange" | "propertyFacets" | "activePropertyFilters" | "viewFeature" | "policyApprovalRevision" | "togglePolicyStatusFilter" | "toggleLiveStatusFilter" | "isQueryBookmarked" | "queryXml">;
 export type LeftPaneWorkspace = LeftPaneDirectWorkspace & FilterPaneWorkspace & ConfigurePaneWorkspace;
 export type AppBarWorkspace = AppBarDirectWorkspace & SettingsPaneWorkspace;

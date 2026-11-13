@@ -1,4 +1,15 @@
 "use client";
+import { probeGraphWriteAccess } from "@/lib/graph-write-probe";
+import { NAMESPACE_METADATA } from "@/lib/namespace-metadata";
+import { featureItemsFromFct } from "@/lib/feature-catalog";
+import { readRecordGraphAuthors } from "@/lib/record-authors";
+import { discoverAnalyses, discoverViews } from "@/lib/personal-sparql-reads";
+import { featuresGraph, historyGraph } from "@/lib/graph-context";
+
+
+import { callOpenApiService } from "@/lib/service-client";
+import { graphServerSoftware, graphServerDescription } from "@/lib/server-metadata";
+import { configuredTimeoutMs } from "@/lib/maestro-query-timeouts";
 import { createAuthenticationActions, useAuthenticationSessionLifecycle } from "@/canvas/controllers/authentication";
 
 import { useAuthenticationState } from "@/canvas/controllers/authentication";
@@ -26,7 +37,7 @@ import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
 import { listValuesQueryClone, parseListValuesXml, escapeXmlText, parseFctResponse, readFctResponse, presentServerError, facetLoadErrorMessage, groupValueKey, fctTermKey, facetValueKey, groupValueBinding, type EnrichedTerm, type ScopeValue, type FctResponseColumn, type FctMatch, type FctResult, type ParsedFctResponse, type ListValueProjection, type RelationshipDirection } from "@/canvas/utils/fct-response";
 import { DistinctCount, distinctCountQueryFor, personalFacetInspectorQueries, PersonalWidgetQueryListener, PersonalRoleWidget, getActiveViewPropertyFilters, getActiveViewRoleFilters, getPersonalRoleFacetNodes, treeHasPropertyFilter, compareGroupValues, type PersonalWidget, type ScopeRelationship, type GroupByOption, type GroupMembersState, type RoleWidgetStatus } from "@/canvas/left/filter";
-import { findQueryNode, queryTreeHasStatuses, ellipsize, RDF_TYPE_URI, GROUP_BY_FACET_HIGHLIGHT_CLASSES, readGraphServerFromQueryXml, readShareableUiState, parseFctQueryXml, workbenchQueryTreeApi, type ShareableUiState, APPBAR_TAB_NUMBER, VIEW_RIBBON_TAB_NUMBER, decodeAppbarTab, copyRibbonUrlParams } from "@/canvas/utils/query-controller";
+import { findQueryNode, queryTreeHasStatuses, querySourceAttribute, ellipsize, RDF_TYPE_URI, GROUP_BY_FACET_HIGHLIGHT_CLASSES, readGraphServerFromQueryXml, readShareableUiState, parseFctQueryXml, workbenchQueryTreeApi, type ShareableUiState, APPBAR_TAB_NUMBER, VIEW_RIBBON_TAB_NUMBER, decodeAppbarTab, copyRibbonUrlParams } from "@/canvas/utils/query-controller";
 
 
 import { getLocalStorageUsageBytes, formatStorageBytes, useBrowserLoggingSettings, useLocalStorageUsage } from "@/canvas/sheet/settings";
@@ -41,7 +52,9 @@ import { AnalyzeRibbon } from "@/canvas/tab/analyze/ribbon";
 import { ViewPage } from "@/canvas/tab/view/view-components";
 import { AnalyzeHistogram, useAnalyzeState, type AnalysisDefinition, type AnalysisCell, type AnalysisTable } from "@/canvas/tab/analyze/analysis-utils";
 
-import { downloadRecordDescribeSnapshot, blankNodeRecordListValuesQuery, rootBlankNodeRecordQuery, useRecordCoreState, useRecordPresentationState, useRecordPageSettings, type RecordService, type ServiceResult, type RecordValueTerm, type BlankNodeRecord, type RecordGraphAuthor } from "@/canvas/right/record";
+import { downloadRecordDescribeSnapshot, useRecordCoreState, useRecordPresentationState, useRecordPageSettings, type RecordService, type ServiceResult, type RecordGraphAuthor } from "@/canvas/right/record";
+import { blankNodeRecordListValuesQuery, rootBlankNodeRecordQuery } from "@/lib/bnode-dom";
+import { isBlankNodeLabel, parseBlankNodeRecordBindings, type BNodeRecordAnchor, type RecordValueTerm, type BlankNodeRecord } from "@/lib/bnode";
 import { parsePolicyQueryAction, resolveRecordFormatCategory, useRecordFormatSelection, type RecordPolicyOption } from "@/canvas/right/format";
 import { RecordValidationNotice, useRecordValidationState, validateRecordSnapshot } from "@/canvas/right/validator";
 import { EndpointStatusIcon, type EndpointStatus, type EndpointOption } from "@/canvas/top/appbar";
@@ -59,7 +72,7 @@ import { rememberNamespaceMetadata, rememberShortforms, setNamespacePrefixSource
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
-import { featureFctQuery } from "@/lib/feature-fct-query";
+import { featureFctQuery, hasFeatureFctFilters } from "@/lib/feature-fct-query";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { configureMaestroBrowserLogging, type BrowserLogLevel } from "@/lib/maestro-client-logging";
 import type { ReactNode, Dispatch, SetStateAction, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
@@ -98,8 +111,13 @@ import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
 import { MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, abortPendingMaestroQueries, stopPendingMaestroQueries, resumePendingMaestroQueries, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
+import { graphServerUrlMatches } from "@/lib/graph-server-health";
+import { canonicalQueryIdentityXml } from "@/lib/query-identity";
+import { navigateFacetHeaderQuery } from "@/lib/fct-facet-header-navigation";
 import { DEFAULT_MAESTRO_CONCURRENCY, readMaestroConcurrency, writeMaestroConcurrency, syncMaestroConcurrency, type MaestroConcurrency } from "@/lib/maestro-concurrency";
 import { MAESTRO_TIMEOUT_CATEGORIES, readMaestroWidgetTimeouts, writeMaestroWidgetTimeouts, type MaestroTimeoutCategory } from "@/lib/maestro-query-timeouts";
+import { readRecordGraphDiscoveryLimits } from "@/lib/record-graph-limits";
+import { recordGraphFctQuery, readRecordGraphFctResponse } from "@/lib/record-graph-marshalling";
 import { setMaestroIncompleteResults, getMaestroIncompleteResults, subscribeMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 import { resetMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 import { resetMaestroQueryExecutionClocks } from "@/lib/maestro-query-execution-clock";
@@ -411,8 +429,18 @@ export function useWorkspaceController() {
       return () => { active = false; };
     }
     setPrefixStatus("Loading namespace prefixes…");
-    fetch(`/proxy/api/ontology/prefixes?source=${prefixSource}`, { cache: "force-cache" })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+    callOpenApiService<Record<string, unknown>>(prefixSource === "zazuko" ? "zazuko" : "prefixcc", "getPrefixes")
+      .catch((error) => prefixSource === "prefixcc"
+        ? callOpenApiService<Record<string, unknown>>("zazuko", "getPrefixes") : Promise.reject(error))
+      .then((result) => {
+        const context = result["@context"] && typeof result["@context"] === "object" ? result["@context"] as Record<string, unknown> : result;
+        const prefixes: Record<string, string> = {};
+        for (const [key, value] of Object.entries(context)) {
+          const iri = typeof value === "string" ? value : value && typeof value === "object" && "@id" in value ? (value as { "@id"?: unknown })["@id"] : undefined;
+          if (/^[a-z][a-z0-9_.-]*$/i.test(key) && typeof iri === "string" && /^https?:\/\//i.test(iri)) prefixes[key] = iri;
+        }
+        return { prefixes, count: Object.keys(prefixes).length, note: "OpenAPI prefix registry" };
+      })
       .then((data: { prefixes?: Record<string, string>; count?: number; note?: string }) => {
         if (!active) return;
         setNamespacePrefixSource(data.prefixes ?? {});
@@ -435,26 +463,32 @@ export function useWorkspaceController() {
   
   
   
-  // A fresh 200 from an FCT query proves that its *own* graph server is
-  // responding. Recover a non-green status once, without updating green on
-  // every request or treating 4xx/5xx as a connectivity failure.
+  // Successful non-cached FCT requests are positive proof of endpoint health.
+  // Track that evidence separately so a slower, failed probe cannot overwrite
+  // a newer successful query response (a source of amber/green flicker).
+  const graphServerSuccessCountRef = useRef<Record<string, number>>({});
+  const graphServerLastSuccessUrlRef = useRef<Record<string, string>>({});
+  const graphHealthProbeSequenceRef = useRef<Record<string, number>>({});
   useEffect(() => {
     const onSuccess = (event: Event) => {
       const endpointUrl = (event as CustomEvent<{ endpointUrl?: string }>).detail?.endpointUrl;
       if (!endpointUrl) return;
-      const endpoint = fctEndpoints.find((item) => item.id === selectedEndpointId);
-      if (!endpoint || endpoint.url !== endpointUrl) return;
+      const endpoint = fctEndpoints.find((item) => graphServerUrlMatches(item.url, endpointUrl, item.schemeInferred));
+      if (!endpoint) return;
+      graphServerSuccessCountRef.current[endpoint.id] = (graphServerSuccessCountRef.current[endpoint.id] ?? 0) + 1;
+      graphServerLastSuccessUrlRef.current[endpoint.id] = endpointUrl;
       setEndpointStatuses((current) => {
         const previous = current[endpoint.id];
-        if (previous?.state === "ok" && previous.status === 200) return current;
+        if (previous?.state === "ok" && previous.status === 200 && previous.testedUrl === endpointUrl) return current;
         return { ...current, [endpoint.id]: {
-          id: endpoint.id, status: 200, state: "ok", testedUrl: endpoint.url,
+          id: endpoint.id, status: 200, state: "ok", testedUrl: endpointUrl,
         } };
       });
+      setEndpointHealthToast((current) => current?.endpointId === endpoint.id ? null : current);
     };
     window.addEventListener(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, onSuccess);
     return () => window.removeEventListener(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, onSuccess);
-  }, [fctEndpoints, selectedEndpointId]);
+  }, [fctEndpoints, setEndpointStatuses, setEndpointHealthToast]);
 
   const { selectedFacet, setSelectedFacet, propertiesPage, setPropertiesPage, classesPage, setClassesPage, graphsPage, setGraphsPage, graphSort, setGraphSort, graphSortPickerExpanded, setGraphSortPickerExpanded, graphListSparql, setGraphListSparql, graphText, setGraphText, graphAutoFill, setGraphAutoFill, graphFieldEditing, setGraphFieldEditing, graphNavigationHistory, setGraphNavigationHistory, graphNavigationIndex, setGraphNavigationIndex, findEndpointsEnabled, setFindEndpointsEnabled, lastManualGraphRef, restoredGraphTextRef } = useGraphScopeNavigation();
   
@@ -734,14 +768,14 @@ useEffect(() => {
   }, [queryTree.attributes.graph]);
 
   const searchNode = queryTree.children.find(
-    (node) => node.name === "text" && node.id === "query-text",
+    (node) => node.name === "text" && (node.uiKey === "query-text" || node.id === "query-text"),
   );
   // Treat any root-level URI value as the fixed-subject constraint, including
   // legacy/duplicate nodes that do not have Maestro's canonical node ID.
   const rootUriValues = queryTree.children.filter(
     (node) => node.name === "value" && node.attributes.datatype === "uri",
   );
-  const uriNode = rootUriValues.find((node) => node.id === "query-uri-value")
+  const uriNode = rootUriValues.find((node) => (node.uiKey === "query-uri-value" || node.id === "query-uri-value"))
     ?? rootUriValues.find((node) => Boolean(node.text?.trim()))
     ?? rootUriValues[0];
   const activeSearchNode = uriNode ?? searchNode;
@@ -767,7 +801,7 @@ useEffect(() => {
     searchDraftRef.current = nextText;
     setSearchDraft(nextText);
     if (activeSearchNode.name === "value" && activeSearchNode.attributes.datatype === "uri") setSavedUriDraft(nextText);
-    else if (activeSearchNode.id === "query-text") setSavedSearchDraft(nextText);
+    else if ((activeSearchNode.uiKey === "query-text" || activeSearchNode.id === "query-text")) setSavedSearchDraft(nextText);
   }, [activeSearchNode?.id, activeSearchNode?.text]);
   // The URI signal fixes the query subject; other signals search text values or clear the term.
   const querySignalMode: "uri" | "exact" | "name" | "all" | "clear" = uriNode
@@ -865,7 +899,7 @@ useEffect(() => {
   function setMainViewType(node: FctQueryNode, type: string): FctQueryNode {
     return {
       ...node,
-      attributes: node.id === "query-view"
+      attributes: (node.uiKey === "query-view" || node.id === "query-view")
         ? { ...node.attributes, type, offset: "0" }
         : node.attributes,
       children: node.children.map((child) => setMainViewType(child, type)),
@@ -983,7 +1017,7 @@ useEffect(() => {
       const withoutSearch = {
         ...queryTree,
         children: queryTree.children
-          .filter((node) => node.id !== "query-text")
+          .filter((node) => (node.uiKey !== "query-text" && node.id !== "query-text"))
           .map((node) => setMainViewType(node, FCT_VIEW_TYPES.TEXT)),
       };
       replaceQueryTree(workbenchQueryTreeApi.setValue(withoutSearch, null, [], {
@@ -1041,7 +1075,7 @@ useEffect(() => {
     const withoutSearch = {
       ...queryTree,
       children: queryTree.children
-        .filter((node) => node.id !== "query-text")
+        .filter((node) => (node.uiKey !== "query-text" && node.id !== "query-text"))
         .map((node) => setMainViewType(node, FCT_VIEW_TYPES.TEXT)),
     };
     const withoutUri = workbenchQueryTreeApi.setValue(withoutSearch, null, [], {
@@ -1279,18 +1313,10 @@ useEffect(() => {
           ? (data.endpoints as EndpointOption[]).filter((item) =>
               authSession || (item.id !== "personal-sparql" && item.label.toLowerCase() !== "personal sparql"))
           : [];
-        // The server in the authoritative query wins. Match the shorthand
-        // registry address and its expanded /sparql URL equivalently.
-        const canonicalServer = (value: string) => {
-          try {
-            const uri = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`);
-            const path = uri.pathname.replace(/\/+$/, "") || "/sparql";
-            return `${uri.host.toLowerCase()}${path}`;
-          } catch { return value.trim().toLowerCase(); }
-        };
+        // Only an inferred HTTPS registry entry may match an HTTP query addr.
+        // Preserve the live query's declared scheme and endpoint identity.
         const requested = requestedUrl
-          ? endpoints.find((item) => item.url === requestedUrl || item.id === requestedUrl ||
-              canonicalServer(item.url) === canonicalServer(requestedUrl))
+          ? endpoints.find((item) => item.id === requestedUrl || graphServerUrlMatches(item.url, requestedUrl, item.schemeInferred))
           : undefined;
         if (requestedUrl && !requested) {
           setEndpointMenuError(`The graph server in query addr is not configured: ${requestedUrl}`);
@@ -1322,8 +1348,17 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authRestoreComplete, endpointReloadRevision]);
 
-  /** Health-check precisely one selected server. Never scan the registry. */
-  async function checkSelectedGraphServer(endpoint: EndpointOption, manageProgress = true): Promise<EndpointStatus> {
+  /** Health-check precisely one registered server, using the authoritative
+   * live-query addr when it is a permitted alias of a host-only registry URL. */
+  async function checkSelectedGraphServer(endpoint: EndpointOption, manageProgress = true, targetUrl?: string): Promise<EndpointStatus> {
+    const liveServerUrl = targetUrl ?? readGraphServerFromQueryXml(queryXml) ?? "";
+    const testedUrl = graphServerUrlMatches(endpoint.url, liveServerUrl, endpoint.schemeInferred) ? liveServerUrl : endpoint.url;
+    const successCountAtStart = graphServerSuccessCountRef.current[endpoint.id] ?? 0;
+    // A later check for this endpoint supersedes earlier checks (including
+    // checks for an old HTTP/HTTPS query addr).
+    const sequence = (graphHealthProbeSequenceRef.current[endpoint.id] ?? 0) + 1;
+    graphHealthProbeSequenceRef.current[endpoint.id] = sequence;
+    const isCurrent = () => graphHealthProbeSequenceRef.current[endpoint.id] === sequence;
     setCheckingEndpointIds((current) => ({ ...current, [endpoint.id]: true }));
     if (manageProgress) {
       setIsCheckingEndpoints(true);
@@ -1333,23 +1368,37 @@ useEffect(() => {
     let status: EndpointStatus;
     try {
       const response = await fetch(
-        `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}`,
+        `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}${endpoint.schemeInferred && endpoint.url.startsWith("https://") && testedUrl === endpoint.url ? "" : `&graphServerUrl=${encodeURIComponent(testedUrl)}`}`,
         { cache: "no-store", headers: proxyDebugHeaders("endpoint-health", `EndpointHealth:${endpoint.id}`) },
       );
       const data = await response.json();
-      if (!response.ok || !data.check) throw new Error(data.error ?? "Health check failed.");
-      status = data.check as EndpointStatus;
+      // A proxy/session/registry failure says nothing about the remote graph
+      // server's availability. Treat it as inconclusive, not unreachable.
+      status = response.ok && data.check
+        ? data.check as EndpointStatus
+        : { id: endpoint.id, status: null, state: "probe-error", testedUrl };
     } catch {
-      status = { id: endpoint.id, status: null, state: "unreachable", testedUrl: endpoint.url };
+      status = { id: endpoint.id, status: null, state: "probe-error", testedUrl };
     } finally {
-      setCheckingEndpointIds((current) => ({ ...current, [endpoint.id]: false }));
-      if (manageProgress) {
-        setEndpointChecksCompleted(1);
-        setIsCheckingEndpoints(false);
+      if (isCurrent()) {
+        setCheckingEndpointIds((current) => ({ ...current, [endpoint.id]: false }));
+        if (manageProgress) {
+          setEndpointChecksCompleted(1);
+          setIsCheckingEndpoints(false);
+        }
       }
     }
-    // A host-only registry entry may resolve to HTTP, but only after HTTPS
-    // returned 404. Make that resolved URL authoritative for subsequent queries.
+    if (!isCurrent()) return status;
+    const newerSuccessForThisUrl = (graphServerSuccessCountRef.current[endpoint.id] ?? 0) !== successCountAtStart &&
+      graphServerUrlMatches(graphServerLastSuccessUrlRef.current[endpoint.id] ?? "", testedUrl);
+    // Another real query may have succeeded while the health probe was in
+    // flight. It wins over a failed or inconclusive probe for the same server.
+    if ((status.state !== "ok" || status.status !== 200) && newerSuccessForThisUrl) {
+      status = { id: endpoint.id, status: 200, state: "ok",
+        testedUrl: graphServerLastSuccessUrlRef.current[endpoint.id] ?? testedUrl };
+    }
+    // If the inferred HTTPS address did not work, the proxy may successfully
+    // resolve it to HTTP. Update a default HTTPS query only in this case.
     if (status.state === "ok" && status.status === 200 &&
         endpoint.schemeInferred && endpoint.url.startsWith("https://") &&
         status.testedUrl === endpoint.url.replace(/^https:\/\//, "http://")) {
@@ -1361,7 +1410,14 @@ useEffect(() => {
         setQueryAttribute("addr", `${address.slice(0, separator)}@${resolvedUrl}`);
       }
     }
-    setEndpointStatuses((current) => ({ ...current, [endpoint.id]: status }));
+    setEndpointStatuses((current) => {
+      const previous = current[endpoint.id];
+      // Query success can update the state before this queued update applies.
+      if (previous?.state === "ok" && previous.status === 200 &&
+          newerSuccessForThisUrl && (status.state !== "ok" || status.status !== 200)) return current;
+      if (previous?.status === status.status && previous.state === status.state && previous.testedUrl === status.testedUrl) return current;
+      return { ...current, [endpoint.id]: status };
+    });
     return status;
   }
 
@@ -1386,7 +1442,7 @@ useEffect(() => {
   /** Only a user's explicit menu selection or a saved query URI may select a server. */
   async function synchronizeFctEndpointSelection(graphServerUri: string) {
     if (!graphServerUri) return;
-    const endpoint = fctEndpoints.find((item) => item.url === graphServerUri || item.id === graphServerUri);
+    const endpoint = fctEndpoints.find((item) => item.id === graphServerUri || graphServerUrlMatches(item.url, graphServerUri, item.schemeInferred));
     if (!endpoint) throw new Error(`The query references an unconfigured graph server: ${graphServerUri}`);
     if (!authSession && (endpoint.id === "personal-sparql" || endpoint.label.toLowerCase() === "personal sparql")) {
       throw new Error("Log in before selecting the personal graph server.");
@@ -1613,49 +1669,89 @@ useEffect(() => {
     setResultsPage(resultsBatchSize, 0);
   }, [statusFilterScopeId, queryTree, deleteNode, insertNode, resultsBatchSize, setResultsPage]);
 
-  // Load vocabulary namespace labels from the app's LOD metadata route. Known
-  // prefixes are seeded synchronously, so the UI never falls back to nsN for
-  // established public vocabularies while metadata is loading.
-  useEffect(() => {
-    let active = true;
-    fetch("/proxy/api/ontology/namespaces", { cache: "force-cache" })
-      .then((response) => response.ok ? response.json() : null)
-      .then((payload: { namespaces?: unknown } | null) => {
-        if (active && payload?.namespaces) rememberNamespaceMetadata(payload.namespaces);
-      })
-      .catch(() => { /* Built-in namespace prefixes remain available offline. */ });
-    return () => { active = false; };
-  }, []);
+  // All Status choices are live-query FCT nodes. The list-status view
+  // supplies the available URIs; this toggle has no hardcoded vocabulary.
+  const toggleLiveStatusFilter = useCallback((uri: string) => {
+    if (!/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(uri)) return;
+    const scope = statusFilterScopeId ? findQueryNode(queryTree.children, statusFilterScopeId) : undefined;
+    const existing = (scope?.children ?? queryTree.children).find(node => node.name === "status" && node.text?.trim() === uri);
+    if (existing) deleteNode(existing.id);
+    else insertNode(statusFilterScopeId, { id: `status-${crypto.randomUUID()}`, name: "status", attributes: { type: "uri" }, text: uri, children: [] });
+    setResultsUiPage(0);
+    setResultsPage(resultsBatchSize, 0);
+  }, [statusFilterScopeId, queryTree, deleteNode, insertNode, resultsBatchSize, setResultsPage]);
 
-  // Ask the personal store whether this exact serialized query already has a bookmark.
+  const togglePolicyStatusFilter = useCallback((name: "Pending" | "Approved") => {
+    const uri = `gttp://ggg.maestro.ecosys/ns/ui#${name}`;
+    const isPolicyStatus = (node: FctQueryNode) => node.name === "status" &&
+      (node.text?.trim() === "gttp://ggg.maestro.ecosys/ns/ui#Pending" ||
+        node.text?.trim() === "gttp://ggg.maestro.ecosys/ns/ui#Approved");
+    const selected = queryTree.children.filter(isPolicyStatus);
+    const exists = selected.some(node => node.text?.trim() === uri);
+    const retained = queryTree.children.filter(node => !(
+      node.name === "status" && (!(node.text ?? "").trim() || isPolicyStatus(node))));
+    const nextSelected = exists ? selected.filter(node => node.text?.trim() !== uri)
+      : [...selected, { id: `policy-status-${name}`, name: "status", attributes: { type: "uri" }, text: uri, children: [] }];
+    // Mutate the live FCT tree atomically. A bare <status/> is an existential
+    // filter for any personal status, while checked siblings form an OR.
+    replaceQueryTree({ ...queryTree, children: [
+      ...retained,
+      ...(nextSelected.length ? nextSelected : [{ id: "policy-status-any", name: "status", attributes: {}, text: "", children: [] }]),
+    ] });
+    setResultsUiPage(0);
+    setResultsPage(resultsBatchSize, 0);
+  }, [queryTree, replaceQueryTree, resultsBatchSize, setResultsPage]);
+
+  // Standard vocabulary labels are local constants. External RDF vocabulary
+  // dereferencing belongs to the OpenAPI service transport, not a lookup API.
+  useEffect(() => { rememberNamespaceMetadata(NAMESPACE_METADATA); }, []);
+
+  // Bookmark identity is the canonical live query, not a transient History ID
+  // or the serializer's node IDs. Rechecking the SAME query must not briefly
+  // turn off the Bookmark button and tear down the Status widget.
+  const bookmarkQueryKey = canonicalQueryIdentityXml(queryXml);
+  const bookmarkActiveQueryKeyRef = useRef("");
+  const bookmarkCheckedQueryKeyRef = useRef("");
+  const verifiedQueryBookmarked = isQueryBookmarked && bookmarkCheckedQueryKeyRef.current === bookmarkQueryKey;
   useEffect(() => {
-    if (!personalStoreReady || !graphRegistryReady) { setIsQueryBookmarked(false); setMatchingBookmarkId(""); return; }
+    if (!personalStoreReady || !graphRegistryReady) {
+      bookmarkActiveQueryKeyRef.current = "";
+      bookmarkCheckedQueryKeyRef.current = "";
+      setIsQueryBookmarked(false);
+      setMatchingBookmarkId("");
+      return;
+    }
     if (!urlStateInitialized) return;
     let active = true;
-    setIsQueryBookmarked(false);
-    setMatchingBookmarkId("");
+    if (bookmarkActiveQueryKeyRef.current !== bookmarkQueryKey) {
+      bookmarkActiveQueryKeyRef.current = bookmarkQueryKey;
+      bookmarkCheckedQueryKeyRef.current = "";
+      setIsQueryBookmarked(false);
+      setMatchingBookmarkId("");
+    }
     const timer = window.setTimeout(async () => {
       try {
-        const response = await fetch("/proxy/api/query-favorites", {
+        const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "check", queryXml, historyId: historyBookmarkId || undefined }),
+          body: JSON.stringify({ action: "check", queryXml }),
           cache: "no-store",
         });
         const payload = await response.json() as { bookmarked?: boolean; historyId?: string | null };
         if (active && response.ok) {
+          bookmarkCheckedQueryKeyRef.current = bookmarkQueryKey;
           setIsQueryBookmarked(payload.bookmarked === true);
           setMatchingBookmarkId(payload.bookmarked && payload.historyId ? payload.historyId : "");
         }
       } catch {
-        if (active) {
-          setIsQueryBookmarked(false);
-          setMatchingBookmarkId("");
-        }
+        // An unresponsive bookmark store is not proof an unchanged query was
+        // unbookmarked. Preserve its last confirmed state until rechecked.
       }
     }, 350);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [queryXml, urlStateInitialized, bookmarkCheckRevision, historyBookmarkId, personalStoreReady, graphRegistryReady]);
+    // The canonical key, not XML node IDs or History IDs, is the bookmark dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookmarkQueryKey, urlStateInitialized, bookmarkCheckRevision, personalStoreReady, graphRegistryReady]);
 
   // Keep History navigation enabled state synchronized with the actual store.
   // With no loaded History item, the comparison cursor is the current time.
@@ -1680,7 +1776,7 @@ useEffect(() => {
         // whose enabled state it controls. Separate requests make the component
         // identity unambiguous in DevTools and server-side request logs.
         const [backResponse, forwardResponse] = await Promise.all([
-          fetch("/proxy/api/query-favorites", {
+          fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -1690,7 +1786,7 @@ useEffect(() => {
             cache: "no-store",
             signal: controller.signal,
           }),
-          fetch("/proxy/api/query-favorites", {
+          fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -1750,7 +1846,7 @@ useEffect(() => {
         // Restore the authoritative query through the store so every existing
         // query listener sees the same tree as if the user had built it in the UI.
         const restoredTextNode = restoredTree.children.find(
-          (node) => node.name === "text" && node.id === "query-text",
+          (node) => node.name === "text" && (node.uiKey === "query-text" || node.id === "query-text"),
         );
         setSearch(restoredTextNode?.text ?? "");
         // The Name / All fields / Clear Terms control is derived from the
@@ -1768,6 +1864,12 @@ useEffect(() => {
         restoredTree.attributes.addr = addressDelimiter >= 0 ? `${restoredGraph}${restoredAddress.slice(addressDelimiter)}` : restoredAddress;
         // Leave graph-less share URLs untouched so the query preprocessor can
         // resolve their graph before dispatching normal queries.
+        // A restored query owns a new Record lifetime. Do not carry a selected
+        // resource from the previous query unless share state explicitly names it.
+        if (typeof restored?.selectedUri !== "string") {
+          setSelectedUri("");
+          setExplicitBlankNodeAnchor(null);
+        }
         replaceQueryTree(restoredTree);
         if (restoredGraph !== ALL_GRAPHS) lastManualGraphRef.current = restoredGraph;
         setGraphText(restoredGraph);
@@ -1778,7 +1880,7 @@ useEffect(() => {
       // Ribbon identity is the SHACL provider resource URI, never its label.
       if (restored.viewPanel === "trail" || restored.viewPanel === "perspectives" || restored.viewPanel === "features") setViewPanel(restored.viewPanel);
       if (restored.selectedViewUri === "" || (typeof restored.selectedViewUri === "string" && restored.selectedViewUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedViewUri))) setSelectedViewUri(restored.selectedViewUri);
-      if (restored.viewFeature === null || restored.viewFeature === "policies" || restored.viewFeature === "formats" || restored.viewFeature === "transcoders") setViewFeature(restored.viewFeature);
+      if (restored.viewFeature === null || restored.viewFeature === "policies" || restored.viewFeature === "formats" || restored.viewFeature === "transcoders" || restored.viewFeature === "facet-widgets" || restored.viewFeature === "curators") setViewFeature(restored.viewFeature);
       if (typeof restored.selectedAnalysisUri === "string" && restored.selectedAnalysisUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedAnalysisUri)) setSelectedAnalysisUri(restored.selectedAnalysisUri);
       if (typeof restored.analyzeHistogram === "boolean") setAnalyzeHistogram(restored.analyzeHistogram);
       // Endpoint selection is authoritative in the restored query addr.
@@ -1848,7 +1950,7 @@ useEffect(() => {
     {
       const rootChildren = serializedQuery ? (parseFctQueryXml(serializedQuery)?.children ?? []) : [];
       const impliedUri = rootChildren.find((node) => node.name === "value" && node.attributes.datatype === "uri");
-      const impliedText = rootChildren.find((node) => node.name === "text" && node.id === "query-text");
+      const impliedText = rootChildren.find((node) => node.name === "text" && (node.uiKey === "query-text" || node.id === "query-text"));
       const impliedMode: "uri" | "exact" | "name" | "all" | "clear" = impliedUri ? "uri" : !impliedText ? "clear" : impliedText.attributes.property ? (impliedText.attributes.exact === "true" ? "exact" : "name") : "all";
       const savedMode = restored?.selectedSignalMode;
       const mode: "uri" | "exact" | "name" | "all" | "clear" | null = savedMode === "uri" || savedMode === "name" || savedMode === "exact" || savedMode === "all" || savedMode === "clear"
@@ -1943,6 +2045,26 @@ useEffect(() => {
     return url.href;
   }
 
+  // Capture the History/share URL from BEFORE a sourced query mutation.
+  // No separate teardown: restoring that URL removes the sourced query and the button.
+  const [returnShareUrl, setReturnShareUrl] = useState<string | null>(null);
+  const previousQuerySnapshotRef = useRef<{ xml: string; url: string; src: string | null } | null>(null);
+  useEffect(() => {
+    if (!urlStateInitialized) return;
+    const previous = previousQuerySnapshotRef.current;
+    const source = querySourceAttribute(queryTree);
+    if (previous && previous.xml !== queryXml) {
+      if (source && source !== previous.src && !historyRestoreInProgressRef.current) {
+        setReturnShareUrl(previous.url);
+      } else if (!source) {
+        setReturnShareUrl(null);
+      }
+    } else if (!source) {
+      setReturnShareUrl(null);
+    }
+    previousQuerySnapshotRef.current = { xml: queryXml, url: buildCurrentShareUrl(), src: source };
+  }, [urlStateInitialized, queryXml, queryTree, queryRevision, workspaceTab, viewPanel, selectedViewUri]);
+
   useEffect(() => {
     if (!urlStateInitialized) return;
     const url = new URL(buildCurrentShareUrl());
@@ -1951,7 +2073,7 @@ useEffect(() => {
 
   /** Persist one History visit for a query snapshot, preserving queue ordering. */
   async function writeHistoryVisit(queryXmlSnapshot: string, stateUrlSnapshot: string, action: { operator: "+" | "-"; xpath: string; value?: string } | null) {
-    const response = await fetch("/proxy/api/query-favorites", {
+    const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "visit", queryXml: queryXmlSnapshot, stateUrl: stateUrlSnapshot, historyAction: action }), cache: "no-store",
     });
@@ -1967,7 +2089,7 @@ useEffect(() => {
       currentParams.set("history", payload.historyId);
       window.history.replaceState(window.history.state, "", `${window.location.pathname}?${currentParams.toString()}${window.location.hash}`);
     }
-    await fetch("/proxy/api/query-favorites", {
+    await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "updateState", historyId: payload.historyId, stateUrl: visitUrl.toString() }), cache: "no-store",
     });
@@ -2002,7 +2124,7 @@ useEffect(() => {
         // Never overwrite an older visit's URL with the URL for a newer query
         // while that newer query's History item is still being written.
         if (currentId && historyVisitIdRef.current === currentId && historyVisitQueryRef.current === queryXml) {
-          await fetch("/proxy/api/query-favorites", {
+          await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "updateState", historyId: currentId, stateUrl }), cache: "no-store",
           });
@@ -2223,33 +2345,24 @@ useEffect(() => {
   // Each alphabet badge now uses the same letter-restricted WHERE clause as
   // the Results view. Virtuoso's grouped uppercase-initial aggregate produced
   // incorrect totals on DBpedia, whereas the scalar Z count returned 3.
-  const alphabetCountSparqlForLetter = (letter: string): string => {
-    const letterXml = alphabetQueryXml
-      .replace('type="alphabet"', 'type="text"')
+  // Derive each letter's count as FCT XML; compiled SPARQL remains opaque.
+  const alphabetCountQueryForLetter = (letter: string): string => {
+    if (!/^[A-Z]$/.test(letter)) throw new Error("Invalid alphabet letter.");
+    return alphabetQueryXml
+      .replace('type="alphabet"', `type="${FCT_VIEW_TYPES.COUNT_DISTINCT}"`)
       .replace('index=""', `index="${letter}"`);
-    const compiled = compileFctXmlToSparql(letterXml);
-    const start = compiled.query.indexOf("WHERE {");
-    const end = compiled.query.lastIndexOf("\n}");
-    const select = compiled.query.indexOf("SELECT");
-    if (start < 0 || end < start || select < 0 || !/^\?[A-Za-z_][A-Za-z0-9_]*$/.test(compiled.target)) {
-      throw new Error(`Cannot derive the ${letter} alphabet count from Results SPARQL.`);
-    }
-    return `${compiled.query.slice(0, select)}SELECT (COUNT(DISTINCT ${compiled.target}) AS ?ct)\n${compiled.query.slice(start, end + 2)}`;
   };
-  // The Code Block shows the actual count query for the selected letter (or
-  // A as an example when none is selected); the other 25 differ only by letter.
   const alphabetSparql = (() => {
     try {
       const selected = queryTree.children.flatMap((node) => {
         const collect = (item: FctQueryNode): string[] => item.name === "view"
-          ? [item.attributes.index ?? ""]
-          : item.children.flatMap(collect);
+          ? [item.attributes.index ?? ""] : item.children.flatMap(collect);
         return collect(node);
       }).find((letter) => /^[A-Z]$/.test(letter));
       const letter = selected || "A";
-      return `# Alphabet count for ${letter}; Maestro executes one scalar query per letter A–Z.\n${alphabetCountSparqlForLetter(letter)}`;
+      return `# Alphabet count for ${letter} is compiled exclusively from FCT XML.\n${compileFctXmlToSparql(alphabetCountQueryForLetter(letter)).query}`;
     } catch (error) {
-      return `# Alphabet count SPARQL compilation failed: ${error instanceof Error ? error.message : String(error)}`;
+      return `# Alphabet count compilation failed: ${error instanceof Error ? error.message : String(error)}`;
     }
   })();
   const currentView = (() => {
@@ -2290,10 +2403,12 @@ useEffect(() => {
   const graphProbeIdentity = `${queryXml}\u0000${selectedEndpointId}\u0000${queryRefreshRevision}`;
   const [graphProbe, setGraphProbe] = useState<{ identity: string; state: "empty" | "running" | "no-graph" | "error"; error?: string }>({ identity: "", state: "empty" });
   const graphResolutionReady = !graphAutoFill || graphAlreadySelected || (graphProbe.identity === graphProbeIdentity && graphProbe.state === "no-graph");
-  const graphHealthReady = Boolean(
-    selectedEndpointId && selectedEndpointStatus?.state === "ok" && selectedEndpointStatus.status === 200 &&
-    queryGraphServer && fctEndpoints.some((endpoint) => endpoint.id === selectedEndpointId && queryGraphServer === endpoint.url)
-  );
+  const selectedRegisteredGraphServer = fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId);
+  const queryServerMatchesSelection = Boolean(queryGraphServer && selectedRegisteredGraphServer &&
+    graphServerUrlMatches(selectedRegisteredGraphServer.url, queryGraphServer, selectedRegisteredGraphServer.schemeInferred));
+  const selectedServerProvenHealthy = Boolean(selectedEndpointStatus?.state === "ok" && selectedEndpointStatus.status === 200 &&
+    queryGraphServer && graphServerUrlMatches(selectedEndpointStatus.testedUrl ?? "", queryGraphServer));
+  const graphHealthReady = Boolean(selectedEndpointId && queryServerMatchesSelection && selectedServerProvenHealthy);
   useEffect(() => {
     if (!urlStateInitialized || !graphHealthReady || graphAlreadySelected || graphFieldEditing || !graphAutoFill) return;
     // The probe is keyed on the exact live XML, so a changed query invalidates
@@ -2327,14 +2442,9 @@ useEffect(() => {
     return () => controller.abort();
   }, [urlStateInitialized, graphHealthReady, graphAlreadySelected, graphFieldEditing, graphAutoFill, graphProbeIdentity, queryXml]);
   const endpointReadyForQuery = graphRegistryReady && graphResolutionReady && Boolean(
-    selectedEndpointId &&
-    selectedEndpointStatus?.state === "ok" &&
-    selectedEndpointStatus.status === 200 &&
-    // addr is authoritative: a restored query must not race ahead of its server.
-    (queryGraphServer && fctEndpoints.some((endpoint) =>
-      endpoint.id === selectedEndpointId &&
-      (queryGraphServer === endpoint.url)
-    ))
+    selectedEndpointId && graphHealthReady &&
+    // addr is authoritative: the verified SPARQL URL must be the one in <query>.
+    queryServerMatchesSelection
   );
 
   // History navigation holds the old pipeline suspended while the RDF History
@@ -2388,14 +2498,14 @@ useEffect(() => {
   useEffect(() => {
     if (!urlStateInitialized || !graphRegistryReady || !selectedEndpointId) return;
     const selected = fctEndpoints.find((item) => item.id === selectedEndpointId);
-    if (!selected || queryGraphServer !== selected.url) return;
-    if (selectedEndpointStatus?.state === "ok" && selectedEndpointStatus.status === 200) return;
+    if (!selected || !queryGraphServer || !graphServerUrlMatches(selected.url, queryGraphServer, selected.schemeInferred)) return;
+    if (selectedServerProvenHealthy) return;
     // One automatic health-check sequence per selected server. Query revisions
     // must not restart its progress bar; a manual Refresh can retry explicitly.
-    const probeKey = selected.url;
-    if (lastPreflightRef.current === probeKey || preflightInFlightRef.current === selected.url) return;
+    const probeKey = `${selected.id}\u0000${queryGraphServer}`;
+    if (lastPreflightRef.current === probeKey || preflightInFlightRef.current === probeKey) return;
     lastPreflightRef.current = probeKey;
-    preflightInFlightRef.current = selected.url;
+    preflightInFlightRef.current = probeKey;
     // The outer startup sequence owns the progress indicator across all retries.
     // Individual probe attempts must not reset or hide it.
     setEndpointChecksCompleted(0);
@@ -2409,19 +2519,24 @@ useEffect(() => {
         let health: EndpointStatus | undefined;
         for (let attempt = 0; attempt < 3; attempt += 1) {
           if (attempt > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, attempt * 900));
-          health = await checkSelectedGraphServer(selected, false);
+          health = await checkSelectedGraphServer(selected, false, queryGraphServer);
+          if (preflightInFlightRef.current !== probeKey) return;
           setEndpointChecksCompleted(attempt + 1);
           if (health.state === "ok" && health.status === 200) break;
         }
         if (health?.state !== "ok" || health.status !== 200) {
-          setEndpointHealthToast({ endpointId: selected.id, message: `Graph server ${selected.label} is unavailable.` });
+          setEndpointHealthToast({ endpointId: selected.id, message: health?.state === "probe-error"
+            ? `The SPARQL health probe could not verify ${selected.label}'s response format.`
+            : `Could not confirm that graph server ${selected.label} is available (${health?.state ?? "unknown"}).` });
         } else {
           setEndpointHealthToast(null);
         }
       } finally {
-        if (preflightInFlightRef.current === selected.url) preflightInFlightRef.current = "";
-        setEndpointChecksCompleted(3);
-        setIsCheckingEndpoints(false);
+        if (preflightInFlightRef.current === probeKey) {
+          preflightInFlightRef.current = "";
+          setEndpointChecksCompleted(3);
+          setIsCheckingEndpoints(false);
+        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2473,16 +2588,16 @@ useEffect(() => {
         const next: Record<string, number> = {};
         const failures: string[] = [];
         const countLetter = async (letter: string): Promise<void> => {
-          const sparql = alphabetCountSparqlForLetter(letter);
-          const response = await cachedFetchFct("/proxy/api/sparql", {
+          const queryXml = alphabetCountQueryForLetter(letter);
+          const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store", signal: controller.signal,
             headers: { "Content-Type": "application/json", ...proxyDebugHeaders("alphabet-letter-count", `AlphabetCount:${letter}`) },
-            body: JSON.stringify({ facetValueCount: { sparql, addr: queryTree.attributes.addr } }),
+            body: JSON.stringify({ queryXml }),
           });
           if (!response.ok) throw new Error(`Letter ${letter}: HTTP ${response.status}`);
-          const payload = await response.json();
-          const count = Number(payload.count);
-          if (payload.incomplete || !Number.isSafeInteger(count) || count < 0) {
+          const payload = await readFctResponse(response);
+          const count = Number(payload.rows[0]?.[0]?.value);
+          if (payload.incomplete || payload.viewType !== FCT_VIEW_TYPES.COUNT_DISTINCT || !Number.isSafeInteger(count) || count < 0) {
             throw new Error(`Letter ${letter}: incomplete or invalid count`);
           }
           next[letter] = count;
@@ -2723,8 +2838,7 @@ useEffect(() => {
   async function refreshMaestroPage() {
     const selected = fctEndpoints.find((item) => item.id === selectedEndpointId);
     if (!selected) return;
-    const status = endpointStatuses[selected.id];
-    if (!(status?.state === "ok" && status.status === 200)) {
+    if (!selectedServerProvenHealthy) {
       const health = await checkSelectedGraphServer(selected);
       if (health.state !== "ok" || health.status !== 200) {
         setEndpointHealthToast({ endpointId: selected.id, message: `Graph server ${selected.label} is unavailable.` });
@@ -2873,16 +2987,16 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     ?? Object.values(groupMembers).flatMap((group) => group.results).find((item) => item.uri === selectedUri)
     ?? groupValues.find((item) => item.uri === selectedUri);
   const blankNodeTerm = currentRecordIdentity?.termType === "bnode" ||
-    /^(?:nodeID:\/\/|_:)/i.test(selectedUri) || explicitBlankNodeAnchor?.label === selectedUri;
+    isBlankNodeLabel(selectedUri) || explicitBlankNodeAnchor?.label === selectedUri;
   const blankNodeFocus = getPropertyPath().at(-1);
   // Record identity is supplied by the Results SELECT, never inferred from
   // optional card badges. Explicit navigation from a URI Record stays valid.
-  const blankNodeAnchor = explicitBlankNodeAnchor?.label === selectedUri
+  const blankNodeAnchor: BNodeRecordAnchor | null = explicitBlankNodeAnchor?.label === selectedUri
     ? { parent: explicitBlankNodeAnchor.parent, predicate: explicitBlankNodeAnchor.predicate }
     : blankNodeTerm && currentRecordIdentity?.recordAnchor
       ? currentRecordIdentity.recordAnchor
       : null;
-  const currentRecordDescriptionKey = [selectedUri, blankNodeTerm ? "bnode" : currentRecordIdentity?.termType ?? "uri", blankNodeAnchor?.parent ?? "", blankNodeAnchor?.predicate ?? "", currentRecordIdentity?.datatype ?? "", currentRecordIdentity?.lang ?? "", selectedEndpointId, queryTree.attributes.addr ?? "",
+  const currentRecordDescriptionKey = [selectedUri, blankNodeTerm ? "bnode" : currentRecordIdentity?.termType ?? "uri", blankNodeAnchor?.parent ?? "", blankNodeAnchor?.predicate ?? "", blankNodeAnchor?.direction ?? "", blankNodeAnchor?.depth ?? "", currentRecordIdentity?.datatype ?? "", currentRecordIdentity?.lang ?? "", selectedEndpointId, queryTree.attributes.addr ?? "",
     queryTree.attributes.graph ?? "", queryTree.attributes.inference ?? "", queryTree.attributes["same-as"] ?? "",
     selectedRecordGraph, selectedRecordAuthor, recordDescriptionQueryLimit, preferredAlphabetLanguage].join("\u0000");
 
@@ -2931,34 +3045,18 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       if (cancelled) return;
       setIsCountingResults(true);
       try {
-        if (!resultsCountSparql) {
-          throw new Error("The current FCT query tree contains a condition that cannot be compiled safely to SPARQL.");
-        }
-        const hasStatuses = queryTreeHasStatuses(queryTree);
-        const response = hasStatuses
-          ? await cachedFetchFct("/proxy/api/fct", {
-              method: "POST", cache: "no-store", signal: controller.signal,
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ queryXml, countOnly: true }),
-            })
-          : await cachedFetchFct("/proxy/api/sparql", {
-              method: "POST", cache: "no-store",
-              headers: { "Content-Type": "application/json", ...proxyDebugHeaders("results-total-count", "ResultsTotalCount") },
-              body: JSON.stringify({ facetValueCount: { sparql: resultsCountSparql, addr: queryTree.attributes.addr } }),
-              signal: controller.signal,
-            });
-        let total: number;
-        if (hasStatuses) {
-          const xml = await response.text();
-          if (!response.ok) throw new Error(xml.slice(0, 500) || "State-constrained FCT count failed.");
-          const doc = new DOMParser().parseFromString(xml, "application/xml");
-          const value = doc.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0/", "column")[0]?.textContent ?? "";
-          total = Number(value);
-        } else {
-          const data = await response.json();
-          if (!response.ok) throw new Error(data.error ?? "Virtuoso SPARQL count query failed.");
-          total = Number(data.count);
-        }
+        const countQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
+          type: FCT_VIEW_TYPES.COUNT_DISTINCT, limit: "1", offset: "0",
+        }));
+        const response = await cachedFetchFct("/proxy/api/fct", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("results-total-count", "ResultsTotalCount") },
+          body: JSON.stringify({ queryXml: countQueryXml }),
+        });
+        const data = await readFctResponse(response);
+        if (data.incomplete || data.viewType !== FCT_VIEW_TYPES.COUNT_DISTINCT)
+          throw new Error("FCT count-distinct projection did not complete.");
+        const total = Number(data.rows[0]?.[0]?.value);
         if (!Number.isSafeInteger(total) || total < 0) {
           throw new Error("Virtuoso returned an invalid scalar count.");
         }
@@ -3222,13 +3320,9 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         const data = await readFctResponse(response);
         if (cancelled) return;
         rememberShortforms(data?.shortforms);
-        const focusPredicate = getPropertyPath().at(-1)?.uri;
-        const rawResults: FctResult[] = (Array.isArray(data.results) ? data.results : []).map((item: FctResult) => {
-          if (item.termType !== "bnode" || !focusPredicate) return item;
-          const structuralRole = item.scopeValues?.find((value) => value.direction === "reverse" && value.property === focusPredicate);
-          const parent = structuralRole?.values.find((value) => value.type === "uri")?.value;
-          return parent ? { ...item, recordAnchor: { parent, predicate: focusPredicate } } : item;
-        });
+        // Structural FCT ancestry is authoritative. Optional role/badge data
+        // must never manufacture a Record anchor or identify another blank node.
+        const rawResults: FctResult[] = Array.isArray(data.results) ? data.results : [];
         const uniqueResults = new Map<string, FctResult>();
         for (const item of rawResults) {
           const previous = uniqueResults.get(item.uri);
@@ -3565,13 +3659,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           const data = await request(memberXml, "GroupsMembers");
           if (!cancelled) {
             rememberShortforms(data?.shortforms);
-            const focusPredicate = getPropertyPath().at(-1)?.uri;
-            const rawResults: FctResult[] = (Array.isArray(data.results) ? data.results : []).map((item: FctResult) => {
-              if (item.termType !== "bnode" || !focusPredicate) return item;
-              const role = item.scopeValues?.find((scope) => scope.direction === "reverse" && scope.property === focusPredicate);
-              const parent = role?.values.find((value) => value.type === "uri")?.value;
-              return parent ? { ...item, recordAnchor: { parent, predicate: focusPredicate } } : item;
-            });
+            const rawResults: FctResult[] = Array.isArray(data.results) ? data.results : [];
             const uniqueResults = new Map<string, FctResult>();
             for (const item of rawResults) {
               const previous = uniqueResults.get(item.uri);
@@ -3998,13 +4086,13 @@ setGraphFacets(graphs);
   const allLoadedResults = visibleResults;
   // Match excerpts/counts are meaningful only for the root-level live <view>.
   // A nested view represents a focused path, not a root text-search result set.
-  const isRootView = queryTree.children.some((node) => node.id === "query-view");
+  const isRootView = queryTree.children.some((node) => (node.uiKey === "query-view" || node.id === "query-view"));
   // The live query is the source of truth: without a <text> node there is no
   // text match to explain, whatever the search field happens to contain.
   const liveQueryHasText = queryTree.children.some((node) => node.name === "text");
   const visibleResultsPage = allLoadedResults.slice(resultsUiPage * resultsPageSize, (resultsUiPage + 1) * resultsPageSize);
   // The lit Bookmark button is the sole client-side feature gate for Personal states.
-  const recordStatus = usePersonalRecordStatus({ enabled: personalStoreReady && isQueryBookmarked, results: visibleResultsPage, selectedUri, queryXml, resultsReady: urlStateInitialized && !isSearching && endpointReadyForQuery, pageIdentity: `${resultsOffset}:${resultsUiPage}:${resultsPageSize}:${queryRefreshRevision}`,
+  const recordStatus = usePersonalRecordStatus({ enabled: personalStoreReady && verifiedQueryBookmarked, results: visibleResultsPage, selectedUri, queryXml, resultsReady: urlStateInitialized && !isSearching && endpointReadyForQuery, pageIdentity: `${resultsOffset}:${resultsUiPage}:${resultsPageSize}:${queryRefreshRevision}`,
     onHiddenChanged: refreshQuery, selectedStatuses: selectedStatusFilters, toggleSelectedStatus: toggleSelectedStatusFilter });
   // Save last *known* query-wide Results/New observations on the History visit.
   // Unavailable statistics are never converted to zero, and stale pipelines
@@ -4019,7 +4107,7 @@ setGraphFacets(graphs);
     const key = `${historyId}:${effectiveResultsTotalCount}:${lastNewCount ?? "unknown"}`;
     if (historyMetricWriteKeyRef.current === key) return;
     historyMetricWriteKeyRef.current = key;
-    void fetch("/proxy/api/query-favorites", {
+    void fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
       method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "updateMetrics", historyId,
         lastResultCount: effectiveResultsTotalCount, lastNewCount }),
@@ -4064,12 +4152,16 @@ setGraphFacets(graphs);
   // The bound-node query is also the identity used by graph provenance.
   // A nodeID:// display label must never be interpolated as an RDF IRI; each
   // operation rebinds the node through the authoritative FCT property path.
-  const blankNodeGraphQueryXml = selectedRecordTermType === "bnode" && blankNodeAnchor
+  const blankNodeGraphQueryXml = selectedRecordTermType === "bnode"
     ? (() => {
         try {
+          if (!blankNodeAnchor) return getPropertyPath().length === 0
+            ? rootBlankNodeRecordQuery(resultsRequestXml) : "";
           return blankNodeRecordListValuesQuery(
             serializeFctQuery(queryTree), blankNodeAnchor.predicate, blankNodeAnchor.parent,
             recordDescriptionQueryLimit, explicitBlankNodeAnchor?.label === selectedUri,
+            blankNodeAnchor.direction,
+            blankNodeAnchor.depth,
           );
         } catch { return ""; }
       })()
@@ -4079,6 +4171,23 @@ setGraphFacets(graphs);
     : { iri: selectedUri };
 
   // The graph membership request is independent of optional author metadata.
+  // One Record lifecycle for URI, literal and blank-node selections. The
+  // selection may arrive before the corresponding Results response during any
+  // navigation (including History/Bookmarks, Features, Back/Forward and URL
+  // restore). Never start either Record SELECT or graph marshalling against
+  // identity metadata from a previous live query. The query's existing Results
+  // subscriber/cancellation pipeline supplies the barrier; no new tokens.
+  const recordResultsReady = endpointReadyForQuery && !isSearching &&
+    resultsLoadedQueryIdentityRef.current === activeQueryIdentityRef.current;
+  const recordGroupSelection = centralTab === "groups" && Boolean(selectedGroupRecord);
+  const recordExplicitAnchor = explicitBlankNodeAnchor?.label === selectedUri;
+  const awaitingRecordIdentity = Boolean(selectedUri) &&
+    !recordResultsReady && !recordGroupSelection && !recordExplicitAnchor;
+  const awaitingBlankNodeRecordAnchor = selectedRecordTermType === "bnode" &&
+    !blankNodeAnchor && getPropertyPath().length > 0 &&
+    (awaitingRecordIdentity || !currentRecordIdentity);
+  const recordIdentityPending = awaitingRecordIdentity || awaitingBlankNodeRecordAnchor;
+
   // Always send the authoritative query address; endpoint selection must not
   // diverge from the graph server in the live query address.
   useEffect(() => {
@@ -4091,7 +4200,7 @@ setGraphFacets(graphs);
     // A server ID alone does not guarantee that its registry, health check,
     // and authoritative query address have settled after URL restoration.
     // Avoid a transient "server not configured" error during that interval.
-    if (!selectedUri || !endpointReadyForQuery || !selectedEndpointId ||
+    if (!selectedUri || !endpointReadyForQuery || !selectedEndpointId || recordIdentityPending ||
         (selectedRecordTermType === "bnode" && !blankNodeGraphQueryXml) || selectedRecordTermType === "literal") {
       setLoadingRecordGraphs(false);
       return;
@@ -4100,35 +4209,26 @@ setGraphFacets(graphs);
     setLoadingRecordGraphs(true);
     void (async () => {
       try {
-        // A freshly restored graph-server registry can briefly lag the query
-        // preflight. Retry ONLY that transient lookup failure; never repeat
-        // expensive graph scans or silently retry other endpoint errors.
-        let data: { graphs?: string[]; error?: string } = {};
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const response = await maestroQueryFetch("/proxy/api/record-graphs", {
-            method: "POST", cache: "no-store",
-            signal: controller.signal,
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-discovery", "RecordGraphs") },
-            body: JSON.stringify({ ...graphDiscoveryIdentity, addr: queryTree.attributes.addr, operation: "graphs" }),
-          });
-          data = await response.json() as { graphs?: string[]; error?: string };
-          if (response.ok) break;
-          const temporaryRegistryMiss = response.status === 503 &&
-            /graph server from query addr is not configured/i.test(data.error ?? "");
-          if (!temporaryRegistryMiss || attempt === 2) throw new Error(data.error || "Could not discover record graphs.");
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => {
-              controller.signal.removeEventListener("abort", abort);
-              resolve();
-            }, 300 * (attempt + 1));
-            const abort = () => {
-              clearTimeout(timer);
-              reject(new DOMException("Request aborted", "AbortError"));
-            };
-            if (controller.signal.aborted) abort();
-            else controller.signal.addEventListener("abort", abort, { once: true });
-          });
+        const projection = recordGraphFctQuery({
+          addr: queryTree.attributes.addr,
+          ...(selectedRecordTermType === "bnode"
+            ? { blankQueryXml: blankNodeGraphQueryXml }
+            : { uri: selectedUri }),
+          limits: readRecordGraphDiscoveryLimits(),
+        });
+        const response = await cachedFetchFct("/proxy/api/fct", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-fct", "RecordGraphs") },
+          body: JSON.stringify({ queryXml: projection }),
+        });
+        const raw = await response.text();
+        if (!response.ok) {
+          let message = raw.slice(0, 800);
+          try { message = (JSON.parse(raw) as { error?: string }).error || message; } catch { /* FCT errors may be XML. */ }
+          throw new Error(message || "Could not marshal Record graphs.");
         }
+        const data = readRecordGraphFctResponse(raw);
+        if (!data.complete) throw new Error("Record graph marshalling was incomplete; graph list cannot be trusted.");
         if (!controller.signal.aborted) setRecordGraphs(data.graphs ?? []);
       } catch (error) {
         if (!controller.signal.aborted) {
@@ -4142,15 +4242,20 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedRecordTermType, blankNodeGraphQueryXml, selectedEndpointId, endpointReadyForQuery, queryTree.attributes.addr, queryRefreshRevision]);
+  }, [selectedUri, selectedRecordTermType, blankNodeGraphQueryXml, selectedEndpointId, endpointReadyForQuery, recordIdentityPending, queryTree.attributes.addr, queryRefreshRevision]);
 
-  // Load author provenance only after the user selects a graph family.
-  // Slow metadata queries must never delay the Graph dropdown.
+  // A graph proved by the executed FCT Record selection is displayed as a
+  // fixed label, not a dropdown. It still has graph-authorship metadata.
+  const boundRecordGraph = selectedRecordTermType === "bnode" && recordGraphs.length === 1 &&
+    queryTree.attributes.addr?.split("@", 1)[0] === recordGraphs[0] ? recordGraphs[0] : "";
+
+  // Load author provenance after a family is chosen, or once an explicit
+  // Record graph binding has been verified by the FCT response.
   useEffect(() => {
     setRecordGraphAuthors([]);
     setRecordAuthorError("");
     setSelectedRecordAuthor("");
-    if (!selectedRecordGraph || !graphsInSelectedFamily.length || !selectedUri) {
+    if (recordIdentityPending || (!selectedRecordGraph && !boundRecordGraph) || !graphsInSelectedFamily.length || !selectedUri) {
       setLoadingRecordAuthors(false);
       return;
     }
@@ -4158,14 +4263,8 @@ setGraphFacets(graphs);
     setLoadingRecordAuthors(true);
     void (async () => {
       try {
-        const response = await maestroQueryFetch("/proxy/api/record-graphs", {
-          method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-author-discovery", "RecordAuthors") },
-          body: JSON.stringify({ ...graphDiscoveryIdentity, addr: queryTree.attributes.addr, operation: "authors", graphs: graphsInSelectedFamily }),
-        });
-        const data = await response.json() as { authors?: RecordGraphAuthor[]; error?: string };
-        if (!response.ok) throw new Error(data.error || "Could not discover graph authors.");
-        if (!controller.signal.aborted) setRecordGraphAuthors(data.authors ?? []);
+        const authors = await readRecordGraphAuthors(queryTree.attributes.addr ?? "", graphsInSelectedFamily, controller.signal);
+        if (!controller.signal.aborted) setRecordGraphAuthors(authors);
       } catch (error) {
         if (!controller.signal.aborted) setRecordAuthorError(error instanceof Error ? error.message : "Could not discover graph authors.");
       } finally {
@@ -4173,7 +4272,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedRecordGraph, recordGraphs, blankNodeGraphQueryXml, queryTree.attributes.addr, queryRefreshRevision]);
+  }, [selectedUri, selectedRecordGraph, boundRecordGraph, recordGraphs, blankNodeGraphQueryXml, recordIdentityPending, queryTree.attributes.addr, queryRefreshRevision]);
 
   // Membership discovery does not change an unfiltered DESCRIBE. Only selected
   // graph/author filters need the discovered list, avoiding a second record load.
@@ -4187,6 +4286,14 @@ setGraphFacets(graphs);
       setRecordDescriptionSnapshot(null);
       setRecordDescriptionPage(0);
       setIsDescribing(false);
+      return;
+    }
+    if (recordIdentityPending) {
+      // Wait for the matching FCT Results identity for every Record term type.
+      // Do not emit a stale-selection error or begin graph marshalling.
+      setRecordDescriptionError("");
+      setRecordFormatError("");
+      setIsDescribing(true);
       return;
     }
     let cancelled = false;
@@ -4235,6 +4342,8 @@ setGraphFacets(graphs);
             : blankNodeRecordListValuesQuery(
                 serializeFctQuery(queryTree), blankNodeAnchor!.predicate, blankNodeAnchor!.parent,
                 recordDescriptionQueryLimit, explicitBlankNodeAnchor?.label === selectedUri,
+                blankNodeAnchor!.direction,
+                blankNodeAnchor!.depth,
               );
           const response = await cachedFetchFct("/proxy/api/sparql", {
             method: "POST", cache: "no-store", signal: controller.signal,
@@ -4252,33 +4361,8 @@ setGraphFacets(graphs);
           };
           if (!response.ok) throw new Error(payload.error || "Blank-node Record SELECT failed.");
           if (cancelled) return;
-          const siblings = new Map<string, { rows: RecordValueTerm[]; triples: string[] }>();
-          const fctNs = "http://openlinksw.com/services/facets/1.0/";
-          for (const binding of payload.results?.bindings ?? []) {
-            const node = binding.node, predicate = binding.predicate, object = binding.object;
-            if (node?.type !== "bnode" || !node.value) continue;
-            const id = `_:${node.value}`;
-            const group = siblings.get(id) ?? { rows: [], triples: [] };
-            // Keep the tab even when no outgoing values survive the language filter.
-            if (!predicate?.value || !object) { siblings.set(id, group); continue; }
-            const direction: "property" | "property-of" = binding.direction?.value === "property-of" ? "property-of" : "property";
-            const valueType = object.type === "uri" ? "uri" : object.type === "bnode" ? "bnode" : "literal";
-            const objectValue = valueType === "bnode" ? `_:${object.value}` : object.value;
-            group.rows.push({ property: predicate.value, value: objectValue, direction, termType: valueType,
-              ...(object.datatype ? { datatype: object.datatype } : {}),
-              ...(object["xml:lang"] ? { lang: object["xml:lang"] } : {}) });
-            const objectAttrs = ` termType="${valueType}"${object.datatype ? ` datatype="${escapeXmlText(object.datatype)}"` : ""}${object["xml:lang"] ? ` xml:lang="${escapeXmlText(object["xml:lang"])}"` : ""}`;
-            group.triples.push(`<fct:row direction="${direction}"><fct:column termType="bnode">${escapeXmlText(id)}</fct:column><fct:column termType="uri">${escapeXmlText(predicate.value)}</fct:column><fct:column${objectAttrs}>${escapeXmlText(objectValue)}</fct:column></fct:row>`);
-            siblings.set(id, group);
-          }
           const incomplete = Boolean(payload.incomplete) || (payload.results?.bindings?.length ?? 0) >= recordDescriptionQueryLimit;
-          const records: BlankNodeRecord[] = Array.from(siblings, ([id, group]) => ({
-            id,
-            rows: [...new Map(group.rows.map((row) => [
-              [row.direction, row.property, row.value, row.termType, row.datatype ?? "", row.lang ?? ""].join("\u0000"), row,
-            ])).values()],
-            xml: `<fct:facets xmlns:fct="${fctNs}"><fct:complete>${incomplete ? "no" : "yes"}</fct:complete><fct:result type="describe">${group.triples.join("")}</fct:result></fct:facets>`,
-          }));
+          const records = parseBlankNodeRecordBindings(payload.results?.bindings ?? [], incomplete);
           // The returned blank-node label is not portable between calls; only
           // use it to choose an initial tab if the endpoint happens to reuse it.
           // A label match is useful within one endpoint session but not a
@@ -4397,7 +4481,7 @@ setGraphFacets(graphs);
     }
     void loadDescription();
     return () => { cancelled = true; controller.abort(); };
-  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, blankNodeAnchor?.parent, blankNodeAnchor?.predicate, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, preferredAlphabetLanguage, queryRefreshRevision, resultsRequestXml]);
+  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, blankNodeAnchor?.parent, blankNodeAnchor?.predicate, blankNodeAnchor?.depth, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, preferredAlphabetLanguage, queryRefreshRevision, resultsRequestXml, recordIdentityPending]);
 
   // The separate Record graph dropdown loader already knows which named graphs
   // contain this resource. Reuse that list for a single background label query;
@@ -4541,16 +4625,20 @@ setGraphFacets(graphs);
     // Retain the current selection while the next record's policy is resolved;
     // the record-keyed render guard prevents showing stale formatted HTML.
     setRecordPolicyError("");
-    maestroQueryFetch("/proxy/api/policies", {
+    maestroQueryFetch("/proxy/api/service?service=maestro&operationId=policies", {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-discover", "RecordPolicyDiscovery") },
       body: JSON.stringify({ action: "discover", recordTypes, recordUri: selectedUri, queryXml,
+        triples: describedRecord.filter(item => item.direction === "property").map(item => ({
+          subject: selectedUri, predicate: item.property, object: item.value,
+          objectType: item.termType, ...(item.datatype ? { datatype: item.datatype } : {}),
+        })),
         historyUri: historyVisitQueryRef.current === queryXml ? historyVisitIdRef.current : undefined }),
       signal: controller.signal,
     }).then(async (response) => {
       const payload = await response.json() as { policies?: { uri: string; label: string; recordShape: string; matchedClasses?: string[]; templates: { uri: string; label: string }[] }[]; error?: string; debugSparql?: string };
-      if (!controller.signal.aborted) setRecordDebug((current) => ({ ...current, policyDiscovery: payload.debugSparql ?? `POST /proxy/api/policies\n${JSON.stringify({ action: "discover", recordTypes }, null, 2)}` }));
+      if (!controller.signal.aborted) setRecordDebug((current) => ({ ...current, policyDiscovery: payload.debugSparql ?? `POST /proxy/api/service?service=maestro&operationId=policies\n${JSON.stringify({ action: "discover", recordTypes }, null, 2)}` }));
       if (!response.ok) throw new Error(payload.error || `Policy lookup returned HTTP ${response.status}.`);
       if (!controller.signal.aborted) {
         const hasSavedHistoryQuery = describedRecord.some((item) => item.property === "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyQueryXML" && item.value.trim().length > 0);
@@ -4642,7 +4730,7 @@ setGraphFacets(graphs);
         const candidateClasses = classFacets.map((item) => item.uri);
         const candidateProperties = propertyFacets.map((item) => item.uri);
         const candidateRoles = roleFacets.map((item) => item.uri);
-        const facetResponse = await maestroQueryFetch("/proxy/api/policies", {
+        const facetResponse = await maestroQueryFetch("/proxy/api/service?service=maestro&operationId=policies", {
           method: "POST", cache: "no-store",
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-shacl-facet-ingestion", "RecordShaclFacets") },
           body: JSON.stringify({
@@ -4679,7 +4767,7 @@ setGraphFacets(graphs);
             return find(tree.children)?.children ?? null;
           };
           const scopeChildren = findScope(liveTree);
-          if (!scopeChildren || !scopeChildren.some((node) => node.id === "query-view")) {
+          if (!scopeChildren || !scopeChildren.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) {
             throw new Error("The current FCT view changed while SHACL facets were being discovered. Please Validate again.");
           }
           let queuedTree = liveTree;
@@ -4760,13 +4848,13 @@ setGraphFacets(graphs);
           throw new Error(`The selected format was not loaded because its SHACL validation did not pass. ${checked.message} ${checked.violations.map((v) => v.message).join(" ")}`.trim());
         }
       }
-      formatStage = "Record template retrieval (/proxy/api/policies)";
-      const templateResponse = await maestroQueryFetch("/proxy/api/policies", {
+      formatStage = "Record template retrieval (Maestro policy service)";
+      const templateResponse = await maestroQueryFetch("/proxy/api/service?service=maestro&operationId=policies", {
         method: "POST", cache: "no-store", signal: controller.signal, headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-template", "RecordPolicyTemplate") },
         body: JSON.stringify({ action: "template", template: templateUri }),
       });
       const templatePayload = await templateResponse.json() as { templateXslt?: string; enrichmentXslt?: string; nextName?: string; nextVersion?: string; error?: string; debugSparql?: string };
-      if (!preview && isCurrentRequest()) setRecordDebug((current) => ({ ...current, templateLookup: templatePayload.debugSparql ?? `POST /proxy/api/policies\n${JSON.stringify({ action: "template", template: templateUri }, null, 2)}` }));
+      if (!preview && isCurrentRequest()) setRecordDebug((current) => ({ ...current, templateLookup: templatePayload.debugSparql ?? `POST /proxy/api/service?service=maestro&operationId=policies\n${JSON.stringify({ action: "template", template: templateUri }, null, 2)}` }));
       if (!templateResponse.ok || typeof templatePayload.templateXslt !== "string") throw new Error(templatePayload.error || `Template reload returned HTTP ${templateResponse.status}.`);
       if (!preview && !enrichLinkedResources && isCurrentRequest()) setFormatterHasEnrichment(Boolean(templatePayload.enrichmentXslt));
       if (!isCurrentRequest()) return null;
@@ -4873,13 +4961,21 @@ setGraphFacets(graphs);
           .find(Boolean) || selectedUri?.split("/").pop()?.replace(/_/g," ") || "";
         if (label) {
           try {
-            const response = await fetch(`/proxy/api/commons-images?label=${encodeURIComponent(label.slice(0, 120))}`, {
-              cache: "no-store", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(7000)]),
-            });
-            if (response.ok) {
-              const payload = await response.json() as { images?: typeof commonsImages };
-              commonsImages = payload.images ?? [];
-            }
+            const data = await callOpenApiService<{ query?: { pages?: Record<string, {title?: string; imageinfo?: Array<{thumburl?: string; url?: string; descriptionurl?: string; extmetadata?: Record<string, {value?: string}>}>}> } }>(
+              "commons", "searchImages", {
+                action: "query", format: "json", generator: "search", gsrnamespace: "6",
+                gsrsearch: `filetype:bitmap intitle:"${label.slice(0, 120).replace(/["\\]/g, " ")}"`,
+                gsrlimit: "6", prop: "imageinfo", iiprop: "url|extmetadata", iiurlwidth: "1280",
+              }, AbortSignal.any([controller.signal, AbortSignal.timeout(7000)]));
+            const plain = (value: string | undefined) => (value ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+            commonsImages = Object.values(data.query?.pages ?? {}).flatMap(page => {
+              const info = page.imageinfo?.[0];
+              const url = info?.thumburl ?? info?.url ?? "";
+              if (!/^https:\/\/upload\.wikimedia\.org\//i.test(url)) return [];
+              const source = info?.descriptionurl ?? "";
+              return [{ url, credit: plain(info?.extmetadata?.Artist?.value), license: plain(info?.extmetadata?.LicenseShortName?.value),
+                source: source.startsWith("https://commons.wikimedia.org/wiki/") ? source : "", title: plain(page.title) }];
+            }).slice(0, 6);
           } catch (error) {
             if (controller.signal.aborted) return null;
             console.debug("Optional Commons images unavailable", error);
@@ -5175,34 +5271,38 @@ setGraphFacets(graphs);
         savedView.setAttribute("limit", "5");
         savedView.setAttribute("offset", "0");
         const boundedQuery = new XMLSerializer().serializeToString(savedQueryDocument);
-        const countQueryDocument = savedQueryDocument.cloneNode(true) as XMLDocument;
-        const countView = Array.from(countQueryDocument.getElementsByTagName("*")).find((element) => element.localName === "view");
-        if (!countView) throw new Error("Could not clone the saved FCT query's view for counting.");
-        // The SPARQL translator does not support view type="count". Count via a
-        // text-view clone with a larger bounded window instead, while preserving
-        // the exact saved query filters and bindings.
-        countView.setAttribute("type", FCT_VIEW_TYPES.TEXT);
-        countView.setAttribute("limit", "100000");
-        countView.setAttribute("offset", "0");
-        const countQuery = new XMLSerializer().serializeToString(countQueryDocument);
+        const savedTree = parseFctQueryXml(new XMLSerializer().serializeToString(savedQueryDocument));
+        if (!savedTree) throw new Error("Could not compile the saved query count.");
+        const countXml = serializeFctQuery(setQueryViewAttributes(savedTree, {
+          type: FCT_VIEW_TYPES.COUNT_DISTINCT, limit: "1", offset: "0",
+        }));
         const [queryResponse, countResponse] = await Promise.all([
-          cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal: controller.signal, headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("bookmark-history-query-results", "BookmarkHistoryQueryResults") }, body: boundedQuery }),
-          cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal: controller.signal, headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("bookmark-history-query-count", "BookmarkHistoryQueryCount") }, body: countQuery }),
+          cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal: controller.signal,
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("bookmark-history-query-results", "BookmarkHistoryQueryResults") }, body: boundedQuery }),
+          cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal: controller.signal,
+            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("bookmark-history-query-count", "BookmarkHistoryQueryCount") },
+            body: JSON.stringify({ queryXml: countXml }) }),
         ]);
-        const [queryResponseText, countResponseText] = await Promise.all([queryResponse.clone().text(), countResponse.clone().text()]);
+        const [queryResponseText, countResponseText] = await Promise.all([queryResponse.clone().text(), countResponse?.clone().text() ?? Promise.resolve("Count unavailable")]);
         if (!isCurrentRequest()) return null;
         const queryData = await readFctResponse(queryResponse);
-        // A count failure must not discard successful result rows. The fallback
-        // count is the number returned by the expanded text query (capped at 100k).
-        let countData: ParsedFctResponse | null = null;
-        try { countData = await readFctResponse(countResponse); } catch { /* show bounded results even if counting fails */ }
+        // Scalar COUNT is evaluated over the entire saved FCT scope, never
+        // a second result window with LIMIT 100000.
+        let total: number | null = null;
+        if (countResponse?.ok) {
+          try {
+            const data = await readFctResponse(countResponse.clone());
+            const n = data.incomplete || data.viewType !== FCT_VIEW_TYPES.COUNT_DISTINCT
+              ? NaN : Number(data.rows[0]?.[0]?.value ?? NaN);
+            if (Number.isSafeInteger(n) && n >= 0) total = n;
+          } catch { /* Preserve preview when count is unavailable. */ }
+        }
         const sparqlMatch = queryResponseText.match(/<fct:sparql>([\s\S]*?)<\/fct:sparql>/i);
         setBookmarkQueryDebug({ xml: boundedQuery, sparql: sparqlMatch ? sparqlMatch[1].replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&") : "SPARQL was not included in the FCT response.", response: queryResponseText, countResponse: countResponseText });
         if (historyCountElement) {
           historyCountElement.removeAttribute("mui:history-query-count");
-          const total = countData?.results.length;
-          historyCountElement.textContent = typeof total === "number"
-            ? `${shortenCount(total)} matching result${total === 1 ? "" : "s"}${total >= 100000 ? " (count capped at 100k)" : ""}; showing up to five.`
+          historyCountElement.textContent = total !== null
+            ? `${shortenCount(total)} matching result${total === 1 ? "" : "s"}; showing up to five.`
             : `${shortenCount(queryData.results.length)} result${queryData.results.length === 1 ? "" : "s"} returned; showing up to five (count unavailable).`;
         }
         if (historyResultsElement) {
@@ -5263,7 +5363,7 @@ setGraphFacets(graphs);
       //                      execute="true" target="template-results" />
       //   <mui:template-call scope="live" action="fctQueryTreeApi.addClass(undefined, null, 'http://example.org/Cat')" />
       // Optional direct <query> children of a sandbox call may be emitted by
-      // xsl:copy-of from /mctx:context/mctx:live-query/fct:query.
+      // xsl:copy-of from /mctx:context/mctx:query/fct:query.
       const templateCalls = Array.from(document.body.querySelectorAll("mui\\:template-call"));
       if (templateCalls.length > 64) throw new Error("The XSLT template exceeds the limit of 64 query calls.");
       const templateApi = workbenchQueryTreeApi as unknown as Record<string, (...args: unknown[]) => unknown>;
@@ -5466,7 +5566,7 @@ setGraphFacets(graphs);
     const types = Array.from(new Set([...recordTypes, ...scopeTypes]));
     if (!types.length) return;
     const controller = new AbortController();
-    void maestroQueryFetch("/proxy/api/services", {
+    void maestroQueryFetch("/proxy/api/service?service=maestro&operationId=services", {
       method: "POST", cache: "no-store",
       headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-service-discover", "RecordServices") },
       body: JSON.stringify({ action: "discover", recordTypes: types }),
@@ -5574,7 +5674,7 @@ setGraphFacets(graphs);
     if (operation.requires.some((name) => !argumentsForService[name])) return;
     setRecordServiceResults((previous) => ({...previous,[service.uri]:{html:"",error:"",loading:true,name:operation.label}}));
     try {
-      const response = await maestroQueryFetch("/proxy/api/services", {
+      const response = await maestroQueryFetch("/proxy/api/service?service=maestro&operationId=services", {
         method: "POST", cache: "no-store",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-service-execute", "RecordServiceInvocation") },
         body: JSON.stringify({action:"invoke", service:service.uri, operation:operation.uri,
@@ -5803,7 +5903,7 @@ const activeLeafId: string | null =
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/perspectives", {
+        const response = await fetch("/proxy/api/service?service=maestro&operationId=perspectives", {
           method: "POST", cache: "no-store", signal: controller.signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "approved", providerUri: selectedViewUri }),
@@ -5847,6 +5947,22 @@ const activeLeafId: string | null =
     // Applying or clearing a date range edits only its <value> constraint.
     replaceQueryTree(workbenchQueryTreeApi.setPropertyValues(tree, activeLeafId, property,
       start || end ? [{ text: "", datatype: "dateTime", attributes: {
+        ...(start ? { rangeStart: start } : {}), ...(end ? { rangeEnd: end } : {}),
+      } }] : []));
+  }, [queryTree, activeLeafId, replaceQueryTree]);
+
+/** Provider-owned numeric range slider writes an ordinary FCT <value> constraint.
+   * All query changes go through the same subscriber/history pipeline. */
+  const setPersonalNumericRange = useCallback((property: string, start: string, end: string) => {
+    const finite = (value: string) => !value || (Number.isFinite(Number(value)) && value.trim() !== "");
+    if (!finite(start) || !finite(end) || (start && end && Number(start) > Number(end))) return;
+    const scoped = getActiveViewPropertyFilters(queryTree).some(node => node.attributes.iri === property);
+    const tree = scoped ? queryTree : workbenchQueryTreeApi.addProperty(queryTree, property, activeLeafId);
+    const facet = getActiveViewPropertyFilters(tree).find(node => node.attributes.iri === property);
+    if (!facet) return;
+    replaceQueryTree(workbenchQueryTreeApi.setPropertyValues(tree, activeLeafId, property,
+      start || end ? [{ text: "", datatype: "double", attributes: {
+        coerce: "numeric", // provider-declared lexical numeric normalization
         ...(start ? { rangeStart: start } : {}), ...(end ? { rangeEnd: end } : {}),
       } }] : []));
   }, [queryTree, activeLeafId, replaceQueryTree]);
@@ -6018,22 +6134,22 @@ useEffect(() => {
   /** Whole-scope first record plus result count (the same query the center pane runs). */
   const fetchScopeSummary = async (tree: FctQueryTree, crumbId: string): Promise<FctUiResultSummary | null> => {
     try {
-      const countSparql = buildFctCountSparql(tree);
+      const countXml = serializeFctQuery(setQueryViewAttributes(tree, {
+        type: FCT_VIEW_TYPES.COUNT_DISTINCT, limit: "1", offset: "0",
+      }));
       const [textData, countResponse] = await Promise.all([
         request(serializeFctQuery(tree), `BreadcrumbPreview:${crumbId}:text`),
-        countSparql ? cachedFetchFct("/proxy/api/sparql", {
-          method: "POST",
-          cache: "no-store",
+        cachedFetchFct("/proxy/api/fct", {
+          method: "POST", cache: "no-store", signal: controller.signal,
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-preview-count", `BreadcrumbPreview:${crumbId}:count`) },
-          body: JSON.stringify({ facetValueCount: { sparql: countSparql, addr: tree.attributes.addr } }),
-          signal: controller.signal,
-        }) : Promise.resolve(null),
+          body: JSON.stringify({ queryXml: countXml }),
+        }),
       ]);
       let count: number | null = null;
-      if (countResponse?.ok) {
-        const countPayload = await countResponse.json() as { count?: unknown };
-        const parsedCount = Number(countPayload.count);
-        if (Number.isSafeInteger(parsedCount) && parsedCount >= 0) count = parsedCount;
+      if (countResponse.ok) {
+        const data = await readFctResponse(countResponse);
+        const parsedCount = Number(data.rows[0]?.[0]?.value);
+        if (!data.incomplete && data.viewType === FCT_VIEW_TYPES.COUNT_DISTINCT && Number.isSafeInteger(parsedCount) && parsedCount >= 0) count = parsedCount;
       }
       const first = count !== 0
         ? await firstExample(tree, textData, `BreadcrumbPreview:${crumbId}`)
@@ -6218,20 +6334,15 @@ useEffect(() => {
   // Keep query-selected Categories visible even if the classes endpoint omits
   // them from its current candidate list. Only current-scope <class> nodes are
   // considered; classes from another query-tree branch are deliberately ignored.
-  const classDisplayFacets = [
-    ...Array.from(selectedClasses)
-      .filter((uri) => !classFacets.some((item) => item.uri === uri))
-      .map((uri) => ({ uri, label: uri, count: 0 })),
-    ...classFacets,
-  ];
-  // The classes FCT view returns each class and its grouped count together.
-  // Do not run a per-class DistinctCount or remove classes on later count updates.
+  // Only actual FCT rows carry counts. Query-selected classes absent from a
+  // limited/paged facet response belong in Selected, but not in enumeration or
+  // its totals as invented count=0 rows.
+  const classDisplayFacets = classFacets;
   const visibleClassDisplayFacets = classDisplayFacets;
-  // Like Properties and Roles, Categories puts query-selected terms in a
-  // dedicated pane above the paged list, so selected items do not appear twice.
-  const selectedClassDisplayFacets = visibleClassDisplayFacets.filter((item) => selectedClasses.has(item.uri));
-  const unselectedClassDisplayFacets = visibleClassDisplayFacets.filter((item) => !selectedClasses.has(item.uri));
-  const categoryMetadataUrisKey = classDisplayFacets.map((item) => item.uri).sort().join("\n");
+  const selectedClassDisplayFacets = Array.from(selectedClasses, (uri) =>
+    classFacets.find((item) => item.uri === uri) ?? { uri, label: uri, count: 0 });
+  const unselectedClassDisplayFacets = classDisplayFacets.filter((item) => !selectedClasses.has(item.uri));
+  const categoryMetadataUrisKey = [...new Set([...classDisplayFacets.map((item) => item.uri), ...selectedClasses])].sort().join("\n");
   useEffect(() => {
     if (!personalStoreReady) return;
     if (!categoryMetadataUrisKey) return;
@@ -6243,7 +6354,7 @@ useEffect(() => {
       const discovered: OntologyClassMetadata[] = [];
       for (const batch of batches) {
         if (controller.signal.aborted) return;
-        const response = await fetch("/proxy/api/ontology", {
+        const response = await fetch("/proxy/api/service?service=maestro&operationId=ontology", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ uris: batch }),
@@ -6260,14 +6371,14 @@ useEffect(() => {
         return next;
       });
     })().catch((error: unknown) => {
-      if (!controller.signal.aborted) console.info("Maestro category ontology discovery or ingestion was incomplete; inspect the /proxy/api/ontology response and personal SPARQL store.", error);
+      if (!controller.signal.aborted) console.info("Maestro category ontology discovery or ingestion was incomplete; inspect the Maestro ontology service response and personal SPARQL store.", error);
     });
     return () => controller.abort();
   }, [categoryMetadataUrisKey, personalStoreReady]);
   useEffect(() => {
     if (!authSession) { setPersonalSparqlEndpoint(""); return; }
     const controller = new AbortController();
-    void fetch("/proxy/api/ontology", { signal: controller.signal })
+    void fetch("/proxy/api/service?service=maestro&operationId=ontology", { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`Personal SPARQL endpoint lookup returned HTTP ${response.status}.`);
         return await response.json() as { endpoint?: string };
@@ -6531,8 +6642,8 @@ useEffect(() => {
     const nodeName = group === "Properties" ? "property" : group === "Roles" ? "property-of" : "class";
     let facetNode = scopeNodes.find((node) =>
       node.name === nodeName && node.attributes.iri === uri &&
-      (group !== "Properties" || node.id.startsWith("property-filter-")) &&
-      (group !== "Roles" || node.id.startsWith("role-filter-")),
+      (group !== "Properties" || (node.uiKey ?? node.id).startsWith("property-filter-")) &&
+      (group !== "Roles" || (node.uiKey ?? node.id).startsWith("role-filter-")),
     );
 
     if (currentlySelected && facetNode) {
@@ -6568,8 +6679,8 @@ useEffect(() => {
     const nodeName = group === "Properties" ? "property" : group === "Roles" ? "property-of" : "class";
     return (scopeParent ? scopeParent.children : queryTree.children).some((node) =>
       node.name === nodeName && node.attributes.iri === uri && node.attributes.exclude === "yes" &&
-      (group !== "Properties" || node.id.startsWith("property-filter-")) &&
-      (group !== "Roles" || node.id.startsWith("role-filter-")),
+      (group !== "Properties" || (node.uiKey ?? node.id).startsWith("property-filter-")) &&
+      (group !== "Roles" || (node.uiKey ?? node.id).startsWith("role-filter-")),
     );
   }
 
@@ -6619,7 +6730,7 @@ useEffect(() => {
     historyHoverTimerRef.current = setTimeout(() => {
       setHistoryActionMenu(direction);
       setHistoryActionItems([]);
-      void fetch("/proxy/api/query-favorites", {
+      void fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
         method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history-actions", "HistoryActionMenu") },
         // Radiate from the loaded History item: earlier items for Back, later items for Forward.
         body: JSON.stringify({ action: "recentActions", direction, historyId: historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId || undefined) : (historyBookmarkId || undefined) }), cache: "no-store",
@@ -6690,7 +6801,7 @@ useEffect(() => {
     setConfigureQueryTransition(false);
     setHistoryNavigationPending(direction);
     try {
-      const response = await fetch("/proxy/api/query-favorites", {
+      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -6748,22 +6859,41 @@ useEffect(() => {
   /** A Features button replaces the single authoritative live FCT query,
    * exactly like navigating to a saved History query. No shadow feature query:
    * Trail, left facets, Results, and the Features cards read this same tree. */
-  async function selectViewFeature(feature: "policies" | "formats" | "transcoders" | null) {
+  const featureNavigationSequenceRef = useRef(0);
+  async function selectViewFeature(feature: FeatureKind | null) {
     if (!feature) { setViewFeature(null); return; }
+    const sequence = ++featureNavigationSequenceRef.current;
+    // If the necessary constraints already exist, this is just a ribbon
+    // selection. Do not reset the live FCT query, endpoint, pagination,
+    // breadcrumbs, filters, or user edits.
     try {
-      const response = await fetch("/proxy/api/view-features/query-config", {
-        method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ feature }),
-      });
-      const payload = await response.json() as { graph?: string; personalEndpointUrl?: string; error?: string };
-      if (!response.ok || !payload.graph || !payload.personalEndpointUrl)
-        throw new Error(payload.error || "Could not locate the personal Features graph.");
+      const payload = featuresGraph(authSession, feature);
+      if (sequence !== featureNavigationSequenceRef.current) return;
+      // A feature query is recognized only at its own graph address; a
+      // similarly named filter on another graph is not a feature query.
+      if (hasFeatureFctFilters(queryTree, feature, payload.graph, payload.personalEndpointUrl)) {
+        setWorkspaceTab("view");
+        setViewFeature(feature);
+        setViewPanel("features");
+        setCentralTab("results");
+        return;
+      }
       // Must select the personal endpoint before committing the query: the
       // graph-server selector can otherwise rewrite addr to the previous server.
       await synchronizeFctEndpointSelection(payload.personalEndpointUrl);
+      if (sequence !== featureNavigationSequenceRef.current) return;
       const tree = featureFctQuery(queryTree, feature, payload.graph, payload.personalEndpointUrl, resultsBatchSize);
       const xml = serializeFctQuery(tree);
+      // Home-style teardown before installing the one authoritative query;
+      // do not reset the store to an intermediate empty query.
+      abortPendingMaestroQueries();
+      resetMaestroQueryExecutionClocks();
+      resetMaestroIncompleteResults();
+      clearWidgetsForViewChange();
       if (!restoreQueryAndUiState(xml, null)) throw new Error("Could not restore the Features FCT query.");
+      // Switching the ribbon is a live-query navigation, even when the
+      // preceding tab was Bookmarks or another personal perspective.
+      setWorkspaceTab("view");
       setViewFeature(feature);
       setViewPanel("features");
       setSearchDraft("");
@@ -6782,11 +6912,7 @@ useEffect(() => {
     try {
       // Use the server-resolved SITE_HISTORY graph rather than duplicating its
       // default in client code, so .env.local remains authoritative.
-      const response = await fetch("/proxy/api/query-favorites/config", { cache: "no-store" });
-      const payload = await response.json() as { historyGraph?: string; personalEndpointUrl?: string; error?: string };
-      if (!response.ok || !payload.historyGraph || !payload.personalEndpointUrl) {
-        throw new Error(payload.error ?? `HTTP ${response.status}`);
-      }
+      const payload = historyGraph(authSession);
 
       // History and Bookmarks live in the personal SPARQL store, so opening either
       // view selects the personal graph server in the toolbar (and the proxy cookie).
@@ -6864,7 +6990,7 @@ useEffect(() => {
     setIsDeletingCurrentHistory(true);
     try {
       await historyWriteQueueRef.current;
-      const response = await fetch("/proxy/api/query-favorites", {
+      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history", "DeleteCurrentHistory") },
         body: JSON.stringify({ action: "deleteCurrentHistory", historyId: historyBookmarkId }),
@@ -6910,7 +7036,7 @@ useEffect(() => {
     if (isExportingBookmarks) return;
     setIsExportingBookmarks(true);
     try {
-      const response = await fetch("/proxy/api/query-favorites", {
+      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
         method: "POST", cache: "no-store",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-bookmark", "ExportBookmarks") },
         body: JSON.stringify({ action: "exportBookmarks" }),
@@ -6939,7 +7065,7 @@ useEffect(() => {
     try {
       if (file.size > 4_000_000) throw new Error("Bookmark import files must be smaller than 4 MB.");
       const imported = JSON.parse(await file.text()) as unknown;
-      const response = await fetch("/proxy/api/query-favorites", {
+      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
         method: "POST", cache: "no-store",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-bookmark", "ImportBookmarks") },
         body: JSON.stringify({ action: "importBookmarks", archive: imported }),
@@ -6957,7 +7083,7 @@ useEffect(() => {
     if (isDeletingHistory) return;
     setIsDeletingHistory(true);
     try {
-      const response = await fetch("/proxy/api/query-favorites", {
+      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
         method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-bookmark", "DeleteBookmarks") },
         body: JSON.stringify({ action: "deleteBookmarks" }), cache: "no-store",
       });
@@ -6974,7 +7100,7 @@ useEffect(() => {
     if (isDeletingHistory) return;
     setIsDeletingHistory(true);
     try {
-      const response = await fetch("/proxy/api/query-favorites", {
+      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history", "DeleteHistory") },
         body: JSON.stringify({ action: "deleteHistory" }),
@@ -7050,13 +7176,7 @@ useEffect(() => {
     };
     const loadAccess = async () => {
       try {
-        const response = await fetch("/proxy/api/graph-access", {
-          method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-info-access", "GraphInfo:access") },
-          body: JSON.stringify({ graph }),
-        });
-        const data = await response.json().catch(() => ({}));
-        if (typeof data.access !== "boolean") throw new Error(data.error ?? `Access test failed (HTTP ${response.status}).`);
+        const data = await probeGraphWriteAccess(graph);
         if (isCurrent()) setGraphInfo((current) => ({ ...current, access: data.access, accessLoading: false, accessError: data.access ? "" : String(data.error ?? "") }));
       } catch (error) {
         if (isCurrent()) setGraphInfo((current) => ({ ...current, access: false, accessLoading: false, accessError: facetLoadErrorMessage(error, "Access test failed.") }));
@@ -7100,6 +7220,22 @@ useEffect(() => {
   function handleRoleCheckboxChange(uri: string, checked: boolean, trackUsage = true) {
     if (trackUsage) setAutoConfiguredFacet("property-in", uri, false);
     setRoleFilter(uri, checked);
+  }
+
+  /** Facet headers navigate the live ball-carrier through the same FCT
+   * relationship pipeline as Properties and Roles. This changes the view
+   * focus (and therefore breadcrumbs), never just the facet presentation. */
+  function navigateFacetHeaderToProperty(iri: string) {
+    // Route from the *current* focus, even when an ancestor already carries
+    // this predicate. Keep the one existing view ID and all sibling filters.
+    const next = navigateFacetHeaderQuery(queryTree, iri);
+    if (next === queryTree) return;
+    clearTutorialPreview();
+    clearWidgetsForViewChange();
+    replaceQueryTree(next);
+    setDefaultLeftTab("personal");
+    setCentralTab("results");
+    setWorkspaceTab("browse");
   }
 
   function navigateIntoRelationship(uri: string, direction: RelationshipDirection) {
@@ -7298,26 +7434,28 @@ useEffect(() => {
     if (!scoped || !endpointReadyForQuery) return;
     breadcrumbMenuPreviewPendingRef.current.add(nodeId);
     try {
-      const sparql = buildFctCountSparql(scoped);
+      const countXml = serializeFctQuery(setQueryViewAttributes(scoped, {
+        type: FCT_VIEW_TYPES.COUNT_DISTINCT, limit: "1", offset: "0",
+      }));
       const [response, countResponse] = await Promise.all([
         cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
           headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("breadcrumb-menu-preview", `BreadcrumbMenu:${nodeId}`) },
           body: serializeFctQuery(scoped),
         }),
-        sparql ? cachedFetchFct("/proxy/api/sparql", {
+        cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-menu-count", `BreadcrumbMenu:${nodeId}:count`) },
-          body: JSON.stringify({ facetValueCount: { sparql, addr: queryTree.attributes.addr } }),
-        }) : Promise.resolve(null),
+          body: JSON.stringify({ queryXml: countXml }),
+        }),
       ]);
       const parsed = await readFctResponse(response);
       const first = parsed.results[0];
       let count: number | null = null;
-      if (countResponse?.ok) {
-        const payload = await countResponse.json() as { count?: unknown };
-        const n = Number(payload.count);
-        if (Number.isSafeInteger(n) && n >= 0) count = n;
+      if (countResponse.ok) {
+        const data = await readFctResponse(countResponse);
+        const n = Number(data.rows[0]?.[0]?.value);
+        if (!data.incomplete && data.viewType === FCT_VIEW_TYPES.COUNT_DISTINCT && Number.isSafeInteger(n) && n >= 0) count = n;
       }
       setBreadcrumbMenuPreviewSummaries((current) => ({ ...current, [nodeId]: {
         label: first?.label?.trim() || first?.title?.trim() || (first ? toLabel(first.uri, "OBJECT") : "—"),
@@ -7365,7 +7503,7 @@ useEffect(() => {
     );
     const isChildBearing = childRelationshipNodes.length > 0;
     const iri = node.attributes?.iri || "";
-    const directionSuffix = (node.name === "property-of" || node.id.startsWith("role-filter-")) ? " of" : "";
+    const directionSuffix = (node.name === "property-of" || (node.uiKey ?? node.id).startsWith("role-filter-")) ? " of" : "";
     const baseLabel = toLabel(iri, directionSuffix ? "Role" : "Property") + directionSuffix;
     const isExcluded = node.attributes?.exclude?.trim().toLowerCase() === "yes";
     const boundValues = boundValueNodes(node);
@@ -7430,10 +7568,10 @@ useEffect(() => {
 
   function queryNodeLabel(node: FctQueryNode): string {
     const iri = node.attributes.iri;
-    if (node.id === "query-everything") return "Everything";
-    if (node.id === "query-text")
+    if ((node.uiKey === "query-everything" || node.id === "query-everything")) return "Everything";
+    if ((node.uiKey === "query-text" || node.id === "query-text"))
       return node.text || "Everything";
-    if (node.id === "query-view") {
+    if ((node.uiKey === "query-view" || node.id === "query-view")) {
       return `Focus · limit ${node.attributes.limit ?? "30"} · offset ${node.attributes.offset ?? "0"}`;
     }
     if (node.name === "value")
@@ -7456,10 +7594,8 @@ useEffect(() => {
         ? `${propertyLabel} = ${literal}`
         : propertyLabel;
     }
-    if (node.name === "class" && iri) {
-      return `Class: ${toLabel(iri, "Class")}`;
-    }
-    if (node.name === "status") return `Status: ${(node.text ?? "").split("#").pop() ?? "Status"}`;
+    if (node.name === "class") return iri ? `Class: ${toLabel(iri, "Class")}` : "Any class";
+    if (node.name === "status") return (node.text ?? "").trim() ? `Status: ${(node.text ?? "").split("#").pop()}` : "Any state";
     return node.name;
   }
 
@@ -7468,7 +7604,7 @@ useEffect(() => {
   const rootClassNodes = queryTree.children.filter((node) => node.name === "class");
   const rootStatusNodes = queryTree.children.filter((node) => node.name === "status");
   // Prefer the Text node, otherwise attach root classes to a root Value node.
-  const rootClassCarrierId = queryTree.children.find((node) => node.id === "query-text")?.id
+  const rootClassCarrierId = queryTree.children.find((node) => (node.uiKey === "query-text" || node.id === "query-text"))?.id
     ?? queryTree.children.find((node) => node.name === "value")?.id
     ?? "query-everything";
   const classLabelsForQueryNode = (node: FctQueryNode): string[] => {
@@ -7477,36 +7613,36 @@ useEffect(() => {
       ? rootClassNodes.map((classNode) => classNode.attributes.iri).filter((iri): iri is string => Boolean(iri))
       : [];
     const scopedStatuses = node.children.filter((child) => child.name === "status")
-      .map((child) => (child.text ?? "").split("#").pop() ?? "");
-    const rootStatuses = node.id === rootClassCarrierId ? rootStatusNodes.map((child) => (child.text ?? "").split("#").pop() ?? "") : [];
+      .map((child) => (child.text ?? "").trim() ? (child.text ?? "").split("#").pop() ?? "" : "Any state");
+    const rootStatuses = node.id === rootClassCarrierId ? rootStatusNodes.map((child) => (child.text ?? "").trim() ? (child.text ?? "").split("#").pop() ?? "" : "Any state") : [];
     return [...Array.from(new Set([...nested, ...rootStack])).map((uri) => toLabel(uri, "Class")), ...scopedStatuses, ...rootStatuses].filter(Boolean);
   };
 
   const rootPreviewNodeId = queryTree.children.find((node) => node.name === "value" && node.attributes.datatype === "uri")?.id
-    ?? queryTree.children.find((node) => node.id === "query-text")?.id
+    ?? queryTree.children.find((node) => (node.uiKey === "query-text" || node.id === "query-text"))?.id
     ?? "query-everything";
   const renderQueryNode = (
     node: FctQueryNode,
     depth = 0,
   ): ReactNode => {
     // A nested <view> is the focus marker for its parent, not a separate tree row.
-    if (node.id === "query-view") return null;
-    const protectedNode = node.id === "query-text" || node.id === "query-view" || node.id === "query-everything";
-    const rootHasFocusView = queryTree.children.some((child) => child.id === "query-view");
+    if ((node.uiKey === "query-view" || node.id === "query-view")) return null;
+    const protectedNode = (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-view" || node.id === "query-view") || (node.uiKey === "query-everything" || node.id === "query-everything");
+    const rootHasFocusView = queryTree.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"));
     const isRoot = depth === 0;
     // A <view> belongs to its immediate parent. Color that parent's icon green
     // wherever it occurs in the tree; at the root, the standalone view focuses
     // the root search/value node instead.
-    const hasAttachedFocusView = node.children.some((child) => child.id === "query-view");
-    const isRootFocusCarrier = isRoot && rootHasFocusView && (node.id === "query-text" || node.id === "query-everything" || node.name === "value");
+    const hasAttachedFocusView = node.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"));
+    const isRootFocusCarrier = isRoot && rootHasFocusView && ((node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-everything" || node.id === "query-everything") || node.name === "value");
     const isFocusCarrier = hasAttachedFocusView || isRootFocusCarrier;
     const isRootUriValue = isRoot && node.name === "value" && node.attributes.datatype === "uri";
     const SearchModeIcon = signalOptions.find((option) => option.mode === textSearchMode)?.Icon ?? Signal;
-    const NodeIcon = node.id === "query-text"
+    const NodeIcon = (node.uiKey === "query-text" || node.id === "query-text")
       ? SearchModeIcon
-      : node.id === "query-everything"
+      : (node.uiKey === "query-everything" || node.id === "query-everything")
         ? SearchModeIcon
-        : node.id === "query-view"
+        : (node.uiKey === "query-view" || node.id === "query-view")
         ? null
         : node.name === "property"
           ? BetweenHorizontalStart
@@ -7519,7 +7655,7 @@ useEffect(() => {
                 : null;
     const nodeIconColor = isFocusCarrier
       ? "text-emerald-600 dark:text-emerald-400"
-      : node.id === "query-text" || node.id === "query-everything"
+      : (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-everything" || node.id === "query-everything")
         ? "text-black dark:text-white"
         : node.name === "property" || node.name === "property-of"
           ? "text-red-600 dark:text-red-400"
@@ -7543,12 +7679,12 @@ useEffect(() => {
     // to remove, so the minus is not shown at all.
     const isRootCarrierRow = isRoot && node.id === rootClassCarrierId;
     const rootTextOrValue = isRootCarrierRow && (
-      (node.id === "query-text" && Boolean(node.text?.trim() || search.trim())) ||
+      ((node.uiKey === "query-text" || node.id === "query-text") && Boolean(node.text?.trim() || search.trim())) ||
       (node.name === "value" && Boolean(node.text?.trim())));
     const showMinus = !isRootCarrierRow || rootTextOrValue || rootClassesOnThisNode.length > 0 || rootStatusesOnThisNode.length > 0;
     const lockedNode = protectedNode && !isRootCarrierRow;
     const visibleChildren = node.children.filter((child) =>
-      child.id !== "query-view" && child.name !== "class" && child.name !== "status" && !(inlinesValues && child.name === "value" && (Boolean(child.text) || hasValueRange(child))));
+      (child.uiKey !== "query-view" && child.id !== "query-view") && child.name !== "class" && child.name !== "status" && !(inlinesValues && child.name === "value" && (Boolean(child.text) || hasValueRange(child))));
     const hasVisibleChildren = visibleChildren.length > 0;
     const isCollapsed = collapsedQueryNodeIds.has(node.id);
     const toggleCollapsed = () => setCollapsedQueryNodeIds((current) => {
@@ -7585,7 +7721,7 @@ useEffect(() => {
               <TooltipContent>{node.name === "property-of" ? "Role" : "Property"}</TooltipContent>
             </Tooltip>
           ) : (
-            node.id === "query-text" || node.id === "query-everything"
+            (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-everything" || node.id === "query-everything")
               ? <span className="relative mt-0.5 flex size-4 shrink-0">{textSearchMode !== "clear" && <Signal strokeWidth={2.5} className="absolute inset-0 size-4 text-muted-foreground/35" aria-hidden="true" />}<NodeIcon strokeWidth={2.5} className={`absolute inset-0 size-4 ${nodeIconColor}`} aria-hidden="true" /></span>
               : <NodeIcon className={`mt-0.5 size-4 shrink-0 ${nodeIconColor}`} aria-hidden="true" />
           ))}
@@ -7603,7 +7739,7 @@ useEffect(() => {
                 className="min-w-0 break-words"
               >
                 {node.name === "value" && <span className="mr-1 inline-flex align-middle">{renderValueOperator(node)}</span>}
-                {node.id === "query-view" ? "Results view" : facetHoverPreview?.kind === "record" && node.id === rootPreviewNodeId ? facetHoverPreview.label : queryNodeLabel(node)}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
+                {(node.uiKey === "query-view" || node.id === "query-view") ? "Results view" : facetHoverPreview?.kind === "record" && node.id === rootPreviewNodeId ? facetHoverPreview.label : queryNodeLabel(node)}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
               </span>} /><TooltipContent>{node.attributes.iri ?? node.name}</TooltipContent></Tooltip>
             )}
             {inlineValues.map((value, index) => (
@@ -7760,14 +7896,25 @@ useEffect(() => {
     setIsSpongingUri(true);
     try {
       const timeoutMs = readMaestroWidgetTimeouts().other * 1000;
-      const response = await fetch("/proxy/api/sponge", {
+      // Explicit opt-in dereferencing is a Virtuoso SPARQL operation, not a
+      // separate browser-to-Maestro API. Keep it at the selected URIBurner
+      // endpoint and use the registered SPARQL transport.
+      const selectedUrl = new URL(endpoint);
+      if (!["linkeddata.uriburner.com", "uriburner.com"].includes(selectedUrl.hostname.toLowerCase()))
+        throw new Error("Sponge URI requires a registered URIBurner graph server.");
+      const target = new URL(uri);
+      if (!["http:", "https:"].includes(target.protocol) || target.username || target.password || /[<>"{}|^`\\\s]/.test(uri))
+        throw new Error("A valid HTTP(S) resource URI without credentials is required.");
+      const sparql = `DEFINE get:soft "soft"\nSELECT (?s AS ?c1) FROM <${uri}> WHERE { ?s ?p ?o } LIMIT 1`;
+      const response = await fetch("/proxy/api/sparql", {
         method: "POST", cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uri, endpoint, timeoutMs }),
+        headers: { "Content-Type": "application/json", "x-maestro-query-timeout-ms": String(timeoutMs) },
+        body: JSON.stringify({ addr: `$ALL$@${endpoint}`, resultsQuery: { sparql } }),
       });
-      const payload = await response.json() as { error?: string; authorizationRequired?: boolean };
+      const payload = await response.json() as { error?: string; results?: {bindings?: unknown[]} };
       if (!response.ok) {
-        throw new Error(payload.authorizationRequired
+        const authRequired = response.status === 401 || response.status === 403;
+        throw new Error(authRequired
           ? "URIBurner requires authorization for this operation. No credentials were sent."
           : payload.error || `URIBurner returned HTTP ${response.status}.`);
       }
@@ -7962,7 +8109,7 @@ useEffect(() => {
   // Bookmark class does not make a tag/text property view a Bookmark analysis.
   const analyzeFocusClasses = (() => {
     const find = (nodes: FctQueryNode[]): FctQueryNode[] | null => {
-      if (nodes.some(node => node.id === "query-view")) return nodes;
+      if (nodes.some(node => (node.uiKey === "query-view" || node.id === "query-view"))) return nodes;
       for (const node of nodes) { const found = find(node.children); if (found) return found; }
       return null;
     };
@@ -8002,12 +8149,10 @@ useEffect(() => {
     }, 15000);
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/views", { method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ classes }) });
-        const payload = await response.json() as { views?: DiscoveredView[]; error?: string };
-        if (!response.ok) throw new Error(payload.error || "Could not discover Views.");
+        // Round 3: use the authenticated standard SPARQL Results transport.
+        // The retired discovery route previously returned an HTML 404 here.
+        const views = await discoverViews(classes, controller.signal);
         if (!controller.signal.aborted) {
-          const views = payload.views ?? [];
           setDiscoveredViews(views);
           setSelectedViewUri((current) => current || (views[0]?.uri ?? ""));
         }
@@ -8040,59 +8185,15 @@ useEffect(() => {
     setViewFeatureError("");
     setViewFeatureHtml("");
     // Hierarchy discovery may query the graph server and dereference linked ontology RDF.
-    const timer = setTimeout(() => controller.abort(), 28000);
+    const featureTimeoutMs = configuredTimeoutMs(`feature-${viewFeature}`) || 28000;
+    const timer = setTimeout(() => controller.abort(), featureTimeoutMs);
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/view-features", {
-          method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store", signal: controller.signal,
-          body: JSON.stringify({ feature: viewFeature, featureQuery: true, queryXml: String(queryXml) }),
-        });
-        const data = await response.json() as { items?: FeatureItem[]; error?: string };
-        if (!response.ok) throw new Error(data.error || "Could not locate feature definitions.");
+        // The live FCT Results set owns population. One list-values projection
+        // retrieves card metadata and, only for a saved Bookmark, personal status.
+        const decorated = await featureItemsFromFct(String(queryXml), featureUris, viewFeature, verifiedQueryBookmarked, controller.signal);
         if (controller.signal.aborted) return;
-        const catalogByUri = new Map((data.items ?? []).map(item => [item.uri, item]));
-        // FCT Results is authoritative even when a remotely discovered policy
-        // lacks a local shape-graph description: render an IRI fallback rather
-        // than silently dropping a resource that matches the live query.
-        const items: FeatureItem[] = featureUris.map(uri => catalogByUri.get(uri) ?? { uri, label: toLabel(uri) });
-        setViewFeatureCount(items.length);
-        // The policy-management stylesheet receives persisted approval status,
-        // never implicit authority from the discovery result.
-        let decorated = items.map(item => ({ ...item, label: item.label }));
-        if (viewFeature === "policies" && items.length) {
-          // The personal graph, not a transient client bookmark ID, determines
-          // whether approval controls may be shown. The server verifies the
-          // saved query identity before returning or updating policy status.
-          const approvalAction = "list";
-          const approvals: { uri: string; status: string | null; triggeredBy?: string[]; lastRequestedBy?: string; lastRequestDate?: string; matchedRecord?: string; lastRequestHistory?: string; lastRequestComponent?: string }[] = [];
-          const policyUris = [...new Set(items.map(item => item.uri))];
-          let savedQuery = false;
-          for (let offset = 0; offset < policyUris.length; offset += 500) {
-            const approvalResponse = await fetch("/proxy/api/policy-approvals", {
-              method: "POST", cache: "no-store", signal: controller.signal,
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ action: approvalAction, queryXml, policies: policyUris.slice(offset, offset + 500) }),
-            });
-            const responseBody = await approvalResponse.json() as { entries?: typeof approvals; error?: string; bookmarkRequired?: boolean; bookmarked?: boolean };
-            if (!approvalResponse.ok && responseBody.bookmarkRequired) { savedQuery = false; break; }
-            if (!approvalResponse.ok) throw new Error(responseBody.error || "Could not load policy approval status.");
-            savedQuery = Boolean(responseBody.bookmarked);
-            approvals.push(...(responseBody.entries ?? []));
-          }
-
-          const byUri = new Map(approvals.map(entry => [entry.uri, entry]));
-          // The Policies registry contains only resources actually discovered
-          // during browsing. Never turn a catalog listing into Pending items.
-          decorated = items.filter(item => Boolean(byUri.get(item.uri)?.lastRequestComponent) &&
-              (byUri.get(item.uri)?.status === "Pending" || byUri.get(item.uri)?.status === "Approved"))
-            .map(item => ({ ...item, label: item.label,
-            bookmarked: savedQuery ? "true" : "false", status: byUri.get(item.uri)?.status ?? "",
-            triggeredBy: (byUri.get(item.uri)?.triggeredBy ?? []).join(", "), lastRequestedBy: byUri.get(item.uri)?.lastRequestedBy ?? "", lastRequestDate: byUri.get(item.uri)?.lastRequestDate ?? "",
-            lastRequestHistory: byUri.get(item.uri)?.lastRequestHistory ?? "",
-            lastRequestComponent: byUri.get(item.uri)?.lastRequestComponent ?? "",
-            matchedRecord: byUri.get(item.uri)?.matchedRecord ?? "" }));
-          setViewFeatureCount(decorated.length);
-        } else if (viewFeature === "policies") decorated = decorated.map(item => ({ ...item, bookmarked: "false" }));
+        setViewFeatureCount(decorated.length);
         const featureHtml = await renderDiscoveredViewXslt(FEATURE_VIEW_XSLT[viewFeature], decorated);
         if (!controller.signal.aborted) setViewFeatureHtml(featureHtml);
       } catch (error) {
@@ -8103,7 +8204,7 @@ useEffect(() => {
       }
     })();
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [workspaceTab, viewFeature, queryXml, featurePageUrisKey, isSearching, policyApprovalRevision, isQueryBookmarked, matchingBookmarkId]);
+  }, [workspaceTab, viewFeature, queryXml, featurePageUrisKey, isSearching, policyApprovalRevision, verifiedQueryBookmarked, matchingBookmarkId]);
   const selectedView = discoveredViews.find((view) => view.uri === selectedViewUri);
   // Registry keys are internal slugs, while FCT results contain RDF resource IRIs.
   // Join on endpoint URL first; also accept the registry's display label for
@@ -8134,9 +8235,9 @@ useEffect(() => {
       if (viewServerSoftware[id]) continue;
       void (async () => {
         try {
-          const response = await fetch(`/proxy/api/server-software?endpointId=${encodeURIComponent(id)}`, { signal: controller.signal });
-          if (!response.ok) return;
-          const data = await response.json() as { product?: string; version?: string };
+          const endpoint = fctEndpoints.find((item) => item.id === id);
+          if (!endpoint) return;
+          const data = await graphServerSoftware(endpoint.url, controller.signal);
           if (!controller.signal.aborted) setViewServerSoftware((current) => ({ ...current, [id]: { product: data.product || "Unknown", version: data.version || "" } }));
         } catch { /* Product detection is optional and must never gate the View. */ }
       })();
@@ -8151,9 +8252,10 @@ useEffect(() => {
       if (Object.prototype.hasOwnProperty.call(viewServerDescriptions, id)) continue;
       void (async () => {
         try {
-          const response = await fetch(`/proxy/api/server-description?endpointId=${encodeURIComponent(id)}`, { signal: controller.signal });
-          if (!response.ok) return;
-          const data = await response.json() as { description?: string };
+          const endpoint = fctEndpoints.find((item) => item.id === id);
+          if (!endpoint) return;
+          const description = await graphServerDescription(endpoint.url, controller.signal);
+          const data = { description };
           if (!controller.signal.aborted) setViewServerDescriptions((current) => ({ ...current, [id]: data.description ?? "" }));
         } catch { /* Optional descriptions must not block View rendering. */ }
       })();
@@ -8173,10 +8275,9 @@ useEffect(() => {
     // The server-side proxy caches rankings. Unknown domains are shown as unranked.
     void Promise.all(domains.slice(0, 30).map(async (domain) => {
       try {
-        const response = await fetch(`/proxy/api/site-rank?domain=${encodeURIComponent(domain)}`, { signal: controller.signal });
-        if (!response.ok) return;
-        const data = await response.json() as { rank?: number | null };
-        if (!controller.signal.aborted) setViewDomainRanks((prev) => ({ ...prev, [domain]: data.rank ? `#${data.rank.toLocaleString()}` : "Unranked" }));
+        const data = await callOpenApiService<{ranks?: Record<string, number>}>("rank", "rankDomain", {d: domain, n: "1"}, controller.signal);
+        const rank = Object.values(data.ranks ?? {}).filter(value => Number.isSafeInteger(value) && value > 0).at(-1) ?? null;
+        if (!controller.signal.aborted) setViewDomainRanks((prev) => ({ ...prev, [domain]: rank ? `#${rank.toLocaleString()}` : "Unranked" }));
       } catch { /* Optional ranking must never block the View. */ }
     }));
     return () => controller.abort();
@@ -8200,7 +8301,7 @@ useEffect(() => {
         const health = endpoint ? endpointStatuses[endpoint.id] : undefined;
         const software = endpoint ? viewServerSoftware[endpoint.id] : undefined;
         const healthText = checkingEndpointIds[endpoint?.id ?? ""] ? "Checking…" : health?.status !== null && health?.status !== undefined ? `HTTP ${health.status}` : health ? health.state : "Not yet pinged";
-        const healthColor = !health ? "unknown" : health.status === 200 ? "green" : health.status !== null && health.status >= 500 ? "red" : "amber";
+        const healthColor = !health || health.state === "probe-error" ? "unknown" : health.status === 200 ? "green" : health.status !== null && health.status >= 500 ? "red" : "amber";
         return { uri, label, endpoint: endpointUrl, endpointId: endpoint?.id ?? "", selected: Boolean(endpoint && endpoint.id === selectedEndpointId), group: endpoint?.group ?? "",
           favicon, rank: domain ? (viewDomainRanks[domain] ?? "Checking…") : "Unranked",
           health: healthText, healthState: healthColor, pinging: Boolean(endpoint && checkingEndpointIds[endpoint.id]), product: software?.product ?? "Unknown", version: software?.version ?? "",
@@ -8287,11 +8388,9 @@ useEffect(() => {
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch(`/proxy/api/analyze?classes=${encodeURIComponent(analyzeClassKey)}`, {cache:"no-store",signal:controller.signal});
-        const payload = await response.json() as {analyses?: AnalysisDefinition[]; error?:string};
-        if (!response.ok) throw new Error(payload.error || "Could not discover Analyze policies.");
+        // Round 3: single read-only SELECT using /proxy/api/sparql.
+        const definitions = await discoverAnalyses(JSON.parse(analyzeClassKey) as string[], controller.signal);
         if (!controller.signal.aborted) {
-          const definitions = payload.analyses ?? [];
           setAnalysisDefinitions(definitions);
           setSelectedAnalysisUri((current) => definitions.some((item) => item.uri === current) ? current : (definitions[0]?.uri ?? ""));
         }
@@ -8358,7 +8457,7 @@ useEffect(() => {
           parent.appendChild(element);
           return element;
         };
-        const liveQuery = add(root,"live-query");
+        const liveQuery = add(root,"query");
         const query = new DOMParser().parseFromString(queryXml, "application/xml");
         if (query.getElementsByTagName("parsererror").length) throw new Error("The FCT query is not well-formed XML.");
         liveQuery.appendChild(doc.importNode(query.documentElement, true));
@@ -8443,6 +8542,7 @@ useEffect(() => {
 
     return {
     buildCurrentShareUrl,
+    returnShareUrl,
     queryActivityPending: isSearching || isCountingResults || isLoadingProperties || isLoadingRoles || isLoadingClasses || isLoadingCategoryTree || isLoadingGraphs || isLoadingAlphabet || groupValuesLoading || loadingRecordGraphs || loadingRecordAuthors || isLoadingRecordPolicy || isDescribing || viewDiscoveryLoading || viewFeatureLoading || isValidatingRecord,
     FACET_PAGE_SIZE,
     RECORD_DESCRIPTION_PAGE_SIZE,
@@ -8632,7 +8732,7 @@ useEffect(() => {
     isLoadingProperties,
     isLoadingRecordPolicy,
     isLoadingRoles,
-    isQueryBookmarked,
+    isQueryBookmarked: verifiedQueryBookmarked,
     isRdfLoaderOpen,
     isRdfLoading,
     isRefreshingFailedEndpoint,
@@ -8663,6 +8763,7 @@ useEffect(() => {
     manualRecordFormatSelectionRef,
     matchingBookmarkId,
     navigateIntoRelationship,
+    navigateFacetHeaderToProperty,
     navigateQueryHistory,
     navigateResultBadge,
     navigateToPropertyPath,
@@ -8858,6 +8959,7 @@ useEffect(() => {
     setPropertiesPage,
     setPropertyValue,
     setPersonalDateRange,
+    setPersonalNumericRange,
     removeProperty,
     getPropertyPath,
     setRootSearchExpanded,
@@ -8924,6 +9026,8 @@ useEffect(() => {
     viewDiscoveryError,
     viewDiscoveryLoading,
     viewFeature,
+    toggleLiveStatusFilter,
+    togglePolicyStatusFilter,
     viewFeatureCount,
     viewFeatureError,
     viewFeatureHtml,

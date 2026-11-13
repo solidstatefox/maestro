@@ -4,6 +4,7 @@ import * as React from "react";
 import { Toast as ToastPrimitive } from "@base-ui/react/toast";
 import { CheckCircle2, Info, LoaderCircle, TriangleAlert, X, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { cn } from "cn";
 
 const toast = ToastPrimitive.createToastManager();
@@ -26,7 +27,7 @@ function ToastIcon({ type }: { type?: string }) {
 }
 function ToastList() {
   const { toasts } = ToastPrimitive.useToastManager();
-  return toasts.map((item) => <Toast key={item.id} toast={item}><ToastContent><ToastIcon type={item.type} /><div className="flex min-w-0 flex-1 flex-col gap-1"><ToastTitle /><ToastDescription /></div><ToastAction /><ToastClose /></ToastContent></Toast>);
+  return toasts.map((item) => <Toast key={item.id} toast={item}><ToastContent><ToastIcon type={item.type} /><div className="flex min-w-0 flex-1 flex-col gap-1"><ToastTitle />{item.type === "error" && typeof item.description === "string" && item.description.trim() ? <ErrorDetails error={item.description} /> : <ToastDescription />}</div><ToastAction /><ToastClose /></ToastContent></Toast>);
 }
 function Toaster({ children, toastManager = toast, ...props }: React.ComponentProps<typeof ToastPrimitive.Provider>) {
   return <ToastProvider toastManager={toastManager} {...props}>{children}<ToastPortal><ToastViewport><ToastList /></ToastViewport></ToastPortal></ToastProvider>;

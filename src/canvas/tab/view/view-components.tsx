@@ -1,4 +1,6 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
+import { describeFctSource } from "@/lib/rdf-source";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { useEffect, useState } from "react";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -6,6 +8,10 @@ import { ArrowLeft } from "lucide-react";
 import { Network } from "lucide-react";
 import type { FeatureKind } from "@/lib/feature-view-xslt";
 type ViewChoice = { uri: string };
+const BOOKMARK_APPROVAL_MESSAGE = "Bookmark this query to manage {kind} approvals. Use the highlighted Bookmark button in the appbar.";
+const FEATURE_APPROVAL_LABEL: Record<FeatureKind, string> = {
+  policies: "policy", formats: "format", "facet-widgets": "facet", transcoders: "transcoder", curators: "curator",
+};
 export interface ViewPageProps {
   viewFeature: FeatureKind | null;
   requiresBookmark?: boolean;
@@ -32,22 +38,20 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewFeature,
     if (!/^([a-z][a-z0-9+.-]*):[^\s<>"{}|^`\\]+$/i.test(uri)) return;
     setPolicyCode({ uri, code: "", query: "", loading: true, error: "" });
     try {
-      const response = await fetch("/proxy/api/policy-code", { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ policy: uri, queryXml }) });
-      const payload = await response.json() as { code?: string; query?: string; error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "Could not load policy definition.");
-      setPolicyCode({ uri, code: payload.code || "# No policy triples found in the personal shapes graph.", query: payload.query ?? "", loading: false, error: "" });
+      const { code, query } = await describeFctSource(queryXml, uri);
+      setPolicyCode({ uri, code, query, loading: false, error: "" });
     } catch (error) {
       setPolicyCode({ uri, code: "", query: "", loading: false, error: error instanceof Error ? error.message : "Could not load policy source." });
     }
   }
   return <div className="min-h-0 flex-1 overflow-auto p-4">
-                  {requiresBookmark && !policyCode && <div data-policy-bookmark-banner="true" role="status" className="mb-4 rounded-md border border-amber-400/50 bg-amber-100/80 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">Bookmark this query to manage policy approvals. Use the highlighted Bookmark button in the appbar.</div>}
+                  {requiresBookmark && !policyCode && <div data-policy-bookmark-banner="true" role="status" className="mb-4 rounded-md border border-amber-400/50 bg-amber-100/80 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{BOOKMARK_APPROVAL_MESSAGE.replace("{kind}", FEATURE_APPROVAL_LABEL[viewFeature ?? "policies"])}</div>}
                   {policyCode ? <div className="flex h-full min-h-0 flex-col gap-3">
                     <button type="button" onClick={() => setPolicyCode(null)} className="inline-flex w-fit items-center gap-2 rounded px-2 py-1 text-sm hover:bg-accent"><ArrowLeft className="size-4"/>Back to results</button>
-                    {policyCode.loading ? <p role="status">Loading policy source…</p> : policyCode.error ? <p role="alert" className="text-destructive">{policyCode.error}</p>
+                    {policyCode.loading ? <p role="status">Loading policy source…</p> : policyCode.error ? <ErrorDetails prefix="Policy source" error={policyCode.error} />
                       : <CodeBlock className="min-h-0 flex-1" code={policyCode.code} language="turtle" filename="policy.ttl" />}
                   </div> : viewFeature ? (viewFeatureLoading ? <p className="text-sm text-muted-foreground"><ElapsedStatus label={`Locating ${viewFeature}`} category="policies" clockScope="views" /></p>
-                    : viewFeatureError ? <p role="alert" className="text-sm text-destructive">{viewFeatureError}</p>
+                    : viewFeatureError ? <ErrorDetails prefix="Feature discovery" error={viewFeatureError} />
                     : viewFeatureCount === 0 ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">No applicable {viewFeature} found for the current query context.</p>
                     : <div className="maestro-discovered-view" onClick={(event) => {
                         const target = event.target as HTMLElement;
@@ -67,13 +71,13 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewFeature,
                         if (action === "toggle" || action === "forget" || action === "bookmark") onPolicyAction(uri, action, actionNode instanceof HTMLInputElement ? actionNode.checked : false);
                       }} dangerouslySetInnerHTML={{ __html: viewFeatureHtml }}/>)
                     : viewDiscoveryLoading ? <p className="text-sm text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></p>
-                    : viewDiscoveryError ? <p role="alert" className="text-sm text-destructive">{viewDiscoveryError}</p>
+                    : viewDiscoveryError ? <ErrorDetails prefix="View discovery" error={viewDiscoveryError} />
                     : !selectedView ? <div className="mx-auto max-w-lg rounded-lg border border-dashed p-8 text-center">
                         <Network className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden="true"/>
                         <h3 className="font-medium">No views found</h3>
                         <p className="mt-2 text-sm text-muted-foreground">No views match the classes at this breadcrumb scope.</p>
                       </div>
-                    : viewRenderError ? <p role="alert" className="text-sm text-destructive">{viewRenderError}</p>
+                    : viewRenderError ? <ErrorDetails prefix="View rendering" error={viewRenderError} />
                     : <div className="maestro-discovered-view" onClick={(event) => {
                         const target = event.target as HTMLElement;
                         const select = target.closest<HTMLButtonElement>("button[data-endpoint-select]");

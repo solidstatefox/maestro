@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { FacetItemDecoration } from "@/lib/facet-decoration-contract";
 import { readAutoConfiguredFacetKeys, type FacetAutofillCandidates, type AutoConfiguredFacetKey } from "@/canvas/left/configure";
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
@@ -102,6 +103,7 @@ export type PersonalWidget = {
   label: string;
   excluded: boolean;
   values: FctResult[];
+  datatypeEvidence?: string[];
   selectedValues: string[];
   page: number;
   loading: boolean;
@@ -209,13 +211,13 @@ export function DistinctCount({
     let cancelled = false;
 
     async function loadCount() {
-      let stage = "building scalar count SPARQL from the query tree";
+      let stage = "building a native FCT distinct count";
       let responseDiagnostics: unknown;
       try {
         if (!countSparqlQuery) {
           throw new Error("The current FCT query tree contains a condition that cannot be compiled safely to SPARQL.");
         }
-        stage = "executing scalar count SPARQL";
+        stage = "executing FCT count";
         // Reuse a recent verified count for this exact address and query.
         const memoKey = `${tree.attributes.addr ?? ""}\u0000${countSparqlQuery}`;
         const recent = completedFacetCounts.get(memoKey);
@@ -227,24 +229,25 @@ export function DistinctCount({
           return;
         }
         if (recent) completedFacetCounts.delete(memoKey);
-        // The selected graph server is encoded in addr, never inferred from a cookie.
-        const sparqlResponse = await maestroQueryFetch("/proxy/api/sparql", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("distinct-count-sparql", `DistinctCount:${kind}:${propertyUri ?? ""}:${uri}`) },
-          body: JSON.stringify({ facetValueCount: { sparql: countSparqlQuery, addr: tree.attributes.addr } }),
-          signal: controller.signal,
+        // Count the native facet projection. Properties, Roles and Categories
+        // retain their established countOnly semantics; no SELECT is inspected.
+        const viewType = kind === "property" ? FCT_VIEW_TYPES.PROPERTIES
+          : kind === "role" ? FCT_VIEW_TYPES.PROPERTIES_IN
+          : kind === "class" ? FCT_VIEW_TYPES.CLASSES : FCT_VIEW_TYPES.LIST_COUNT;
+        const countTree = createDistinctCountQuery(tree, kind, uri, propertyUri,
+          candidateValue, viewType, valueRelationship);
+        const countXml = serializeFctQuery(countTree);
+        const fctResponse = await maestroQueryFetch("/proxy/api/fct", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("distinct-count-fct", `DistinctCount:${kind}:${propertyUri ?? ""}:${uri}`) },
+          body: JSON.stringify({ queryXml: countXml, countOnly: true }),
         });
-        const sparqlData = await sparqlResponse.json();
-        responseDiagnostics = sparqlData;
-        if (!sparqlResponse.ok) {
-          throw new Error(sparqlData.error ?? "Failed to execute the item count against SPARQL.");
-        }
-        stage = "validating scalar count response";
-        const parsedCount = Number(sparqlData.count);
-        if (!Number.isFinite(parsedCount) || parsedCount < 0) {
-          throw new Error("The SPARQL endpoint returned an invalid item count.");
-        }
-        if (sparqlData.incomplete) throw new Error("Virtuoso returned an incomplete facet count.");
+        const fctData = await readFctResponse(fctResponse);
+        responseDiagnostics = { view: fctData.viewType, complete: !fctData.incomplete };
+        stage = "validating FCT count response";
+        const parsedCount = Number(fctData.rows[0]?.[0]?.value);
+        if (fctData.incomplete || fctData.viewType !== "count" || !Number.isSafeInteger(parsedCount) || parsedCount < 0)
+          throw new Error("FCT returned an incomplete or invalid distinct facet count.");
         if (!cancelled) {
           if (completedFacetCounts.size > 1000) completedFacetCounts.clear();
           completedFacetCounts.set(memoKey, { count: parsedCount, expires: Date.now() + FACET_COUNT_REUSE_MS });
@@ -328,7 +331,7 @@ export function DistinctCount({
  */
 export function getActiveViewPropertyFilters(tree: FctQueryTree): FctQueryNode[] {
   function findViewSiblings(nodes: FctQueryNode[]): FctQueryNode[] | null {
-    if (nodes.some((node) => node.id === "query-view")) return nodes;
+    if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) return nodes;
     for (const node of nodes) {
       const nested = findViewSiblings(node.children);
       if (nested) return nested;
@@ -348,14 +351,14 @@ export function getActiveViewPropertyFilters(tree: FctQueryTree): FctQueryNode[]
 export function getActiveViewRoleFilters(tree: FctQueryTree): FctQueryNode[] {
   function findViewScope(nodes: FctQueryNode[]): FctQueryNode[] | null {
     for (const node of nodes) {
-      if (node.children.some((child) => child.id === "query-view")) {
+      if (node.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"))) {
         return node.children;
       }
       const nested = findViewScope(node.children);
       if (nested) return nested;
     }
     // The active view can be at the root.
-    if (nodes.some((node) => node.id === "query-view")) return nodes;
+    if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) return nodes;
     return null;
   }
   return (findViewScope(tree.children) ?? []).filter(
@@ -377,7 +380,7 @@ function getRoleSelectionNodes(tree: FctQueryTree, uri: string): FctQueryNode[] 
   const facets = getActiveViewRoleFilters(tree).filter(node => node.attributes.iri === uri);
   const findCarrier = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
     for (const node of nodes) {
-      if (node.children.some(child => child.id === "query-view" || child.name === "view")) return node;
+      if (node.children.some(child => (child.uiKey === "query-view" || child.id === "query-view") || child.name === "view")) return node;
       const nested = findCarrier(node.children);
       if (nested) return nested;
     }
@@ -511,6 +514,7 @@ export function PersonalWidgetQueryListener({
               ? {
                   ...widget,
                   values,
+                  datatypeEvidence: [...new Set((data.datatypeEvidence ?? []).map(item => item.datatype))],
                   loading: false,
                   error: "",
                   page: Math.min(
@@ -678,7 +682,7 @@ export function PersonalRoleWidget({
   }, [pageCount]);
   return (
     <div className="min-h-0 flex-1 overflow-auto p-2">
-      {error && <Tooltip><TooltipTrigger render={<p className="px-2 py-1 text-xs text-destructive">Update failed: {error}</p>} /><TooltipContent>{error}</TooltipContent></Tooltip>}
+      {error && <ErrorDetails prefix="Facet update" error={error} className="mx-2 my-1" />}
       {!loading && !error && visibleValues.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">No matching values for this role.</p>}
       {visibleValues.length > 10 && (
         <div className="mb-2 flex items-center justify-between gap-2 px-1 text-xs">

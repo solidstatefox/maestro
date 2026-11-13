@@ -109,7 +109,7 @@ export function getMaestroComponentPortals(root: Element): ReactPortal[] {
       style.position = "relative";
       // MapLibre v6 in Next.js/Turbopack requires the ESM worker to be resolved
       // through the bundler before creating any Map instance.
-      maplibregl.setWorkerUrl(new URL("maplibre-gl/dist/maplibre-gl-worker.mjs", import.meta.url).toString());
+      maplibregl.setWorkerUrl("/maplibre-worker/maplibre-gl-worker.mjs");
     }
     const component = componentFor(host);
     if (!component) throw new Error("Missing registered component");

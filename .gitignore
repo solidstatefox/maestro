@@ -52,3 +52,9 @@ next-env.d.ts
 .maestro/
 # Preserved old Git metadata
 /.git-old-safety/
+
+# Node.js diagnostic reports
+report.*.*.*.*.json
+
+# Generated MapLibre worker assets
+/public/maplibre-worker/

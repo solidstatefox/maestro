@@ -7,6 +7,7 @@ import { RESULTS_PAGE_SIZE_STORAGE_KEY } from "@/canvas/sheet/settings";
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 
 import { ViewPage } from "@/canvas/tab/view/view-components";
+import { changeApprovals } from "@/lib/approval-update";
 import { facetValueKey, fctTermKey } from "@/canvas/utils/fct-response";
 import { PerspectiveProviderRuntime } from "@/canvas/tab/view/perspective-provider-runtime";
 import { useMapProviderDefinition } from "@/lib/map-provider-discovery";
@@ -27,13 +28,12 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController }) {
  const { alphabetCounts, alphabetError, alphabetIndex, alphabetLabelUris, alphabetPreflight, changeResultsPage, checkSelectedGraphServer, checkingEndpointIds, chooseFctEndpoint, discoveredViews, effectivePageSize, effectiveResultsTotalCount, fctEndpoints, isLoadingAlphabet, isSearching, preferredAlphabetLanguage, results, resultsBatchRequestPending, resultsBatchSize, resultsPageComplete, resultsPageSize, resultsPageSizeOptions, resultsUiPage, selectedEndpointId, selectedView, selectedViewUri, setNodeAttribute, setResults, setResultsPage, setResultsPageSize, setResultsUiPage, setSelectedViewUri, viewDiscoveryError, viewDiscoveryLoading, viewFeature, viewFeatureCount, viewFeatureError, viewFeatureHtml, viewFeatureLoading, viewHtml, viewRenderError, visibleResultsPage, workspaceTab } = workspace;
  const [featureLetter, setFeatureLetter] = useState("");
- const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
  const [selectAllPending, setSelectAllPending] = useState(false);
  // The approval endpoint verifies the saved query identity; client bookmark ID
  // synchronization must not hide controls for an already saved query.
- const approvalReady = viewFeature === "policies" && viewFeatureHtml.includes('data-policy-action="toggle"');
- const policyVisible = workspaceTab === "view" && workspace.viewPanel === "features" && viewFeature === "policies";
- const policyBookmarkNeeded = policyVisible && !approvalReady && viewFeatureCount > 0 && !viewFeatureLoading;
+ const approvalReady = Boolean(viewFeature && viewFeatureHtml.includes('data-policy-action="toggle"'));
+ const policyVisible = workspaceTab === "view" && workspace.viewPanel === "features" && Boolean(viewFeature);
+ const policyBookmarkNeeded = policyVisible && !workspace.isQueryBookmarked && viewFeatureCount > 0 && !viewFeatureLoading;
  useEffect(() => {
    window.dispatchEvent(new CustomEvent("maestro:policy-bookmark-attention", { detail: { active: policyBookmarkNeeded } }));
    return () => { window.dispatchEvent(new CustomEvent("maestro:policy-bookmark-attention", { detail: { active: false } })); };
@@ -50,13 +50,13 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
    ])),
    "class|http://www.w3.org/1999/02/22-rdf-syntax-ns#type": workspace.classFacets.map(facet => fctTermKey(facet.uri, "uri")),
  }), [workspace.personalWidgets, workspace.classFacets]);
- useEffect(() => { setFeatureLetter(""); setSelectedFeatures([]); }, [viewFeature]);
+ useEffect(() => { setFeatureLetter(""); }, [viewFeature]);
  const featureCards = useMemo(() => {
-   if (!viewFeature || viewFeatureLoading || !viewFeatureHtml || typeof DOMParser === "undefined") return [] as { letter: string; uri: string; approved: boolean }[];
+   if (!viewFeature || viewFeatureLoading || !viewFeatureHtml || typeof DOMParser === "undefined") return [] as { letter: string; uri: string; approved: boolean; hasStatus: boolean }[];
    const doc = new DOMParser().parseFromString(viewFeatureHtml, "text/html");
    return Array.from(doc.querySelectorAll("article")).map((card) => {
      const label = card.querySelector("h3, strong")?.textContent?.trim() ?? "";
-     return { letter: /^[a-z]/i.test(label) ? label[0].toUpperCase() : "#", uri: card.getAttribute("data-feature-uri") ?? "", approved: Boolean(card.querySelector('input[data-policy-action="toggle"]:checked')) };
+     return { letter: /^[a-z]/i.test(label) ? label[0].toUpperCase() : "#", uri: card.getAttribute("data-feature-uri") ?? "", approved: Boolean(card.querySelector('input[data-policy-action="toggle"]:checked')), hasStatus: Boolean(card.querySelector('input[data-policy-action="toggle"]')) };
    });
  }, [viewFeature, viewFeatureHtml, viewFeatureLoading]);
  const featureLetters = useMemo(() => {
@@ -66,59 +66,35 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
  }, [featureCards]);
  const visibleFeatureCards = featureCards.filter((card) => matchesAlphabetSelection(featureLetter, card.letter));
  const visibleFeatureCount = viewFeature ? visibleFeatureCards.length : viewFeatureCount;
- const selectedVisibleCount = viewFeature === "policies" ? visibleFeatureCards.filter(card => card.approved).length : visibleFeatureCards.filter(card => selectedFeatures.includes(card.uri)).length;
+ const selectedVisibleCount = visibleFeatureCards.filter(card => card.approved).length;
  async function selectAllFeatures() {
    if (!viewFeature || selectAllPending || !visibleFeatureCards.length) return;
-   if (viewFeature !== "policies") {
-     const uris = [...new Set(visibleFeatureCards.map(card => card.uri).filter(Boolean))];
-     setSelectedFeatures(current => [...new Set([...current, ...uris])]);
-     return;
-   }
    if (!approvalReady) {
      window.dispatchEvent(new Event("maestro:bookmark-query-request"));
      return;
    }
-   const pending = [...new Set(visibleFeatureCards.filter(card => !card.approved).map(card => card.uri).filter(Boolean))];
+   const pending = [...new Set(visibleFeatureCards.filter(card => card.hasStatus && !card.approved).map(card => card.uri).filter(Boolean))];
    if (!pending.length) return;
    setSelectAllPending(true);
    try {
-     const response = await fetch("/proxy/api/policy-approvals", {
-       method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
-       body: JSON.stringify({ action: "approve-all", queryXml: workspace.queryXml, policies: pending }),
-     });
-     const data = await response.json() as { error?: string; bookmarkRequired?: boolean };
-     if (!response.ok) {
-       if (data.bookmarkRequired) window.dispatchEvent(new Event("maestro:bookmark-query-request"));
-       throw new Error(data.error ?? `Policy approval update returned ${response.status}.`);
-     }
+     await changeApprovals(pending, "Approved", workspace.authSession?.graphPrefix ?? "", workspace.queryXml);
      workspace.setPolicyApprovalRevision(current => current + 1);
+     workspace.refreshQuery();
    } catch (error) {
-     toast.add({ title: "Select All failed", description: error instanceof Error ? error.message : "Unable to approve policies.", type: "error" });
+     toast.add({ title: "Approve All failed", description: error instanceof Error ? error.message : "Unable to approve policies.", type: "error" });
    } finally { setSelectAllPending(false); }
  }
- const visibleFeatureHtml = viewFeature && featureLetter && typeof DOMParser !== "undefined"
-   ? (() => { const doc = new DOMParser().parseFromString(viewFeatureHtml, "text/html");
-     for (const article of Array.from(doc.querySelectorAll("article"))) {
-       const label = article.querySelector("h3, strong")?.textContent?.trim() ?? "";
-       const letter = /^[a-z]/i.test(label) ? label[0].toUpperCase() : "#";
-       if (!matchesAlphabetSelection(featureLetter, letter)) article.remove();
-     }
-     if (viewFeature !== "policies") {
-     for (const card of Array.from(doc.querySelectorAll('article[data-feature-uri]'))) {
-       const checkbox = card.querySelector('input[data-feature-select]');
-       if (checkbox && selectedFeatures.includes(card.getAttribute('data-feature-uri') ?? '')) checkbox.setAttribute('checked', 'checked');
-     }
+ const visibleFeatureHtml = !viewFeature || typeof DOMParser === "undefined" ? viewFeatureHtml : (() => {
+   const doc = new DOMParser().parseFromString(viewFeatureHtml, "text/html");
+   for (const article of Array.from(doc.querySelectorAll('article[data-feature-uri]'))) {
+     const label = article.querySelector("h3, strong")?.textContent?.trim() ?? "";
+     const letter = /^[a-z]/i.test(label) ? label[0].toUpperCase() : "#";
+     if (featureLetter && !matchesAlphabetSelection(featureLetter, letter)) { article.remove(); continue; }
+     const uri = article.getAttribute("data-feature-uri") ?? "";
+
    }
-   return doc.body.innerHTML; })()
-   : viewFeature === "policies" ? viewFeatureHtml : (() => {
-     if (typeof DOMParser === "undefined") return viewFeatureHtml;
-     const doc = new DOMParser().parseFromString(viewFeatureHtml, "text/html");
-     for (const card of Array.from(doc.querySelectorAll('article[data-feature-uri]'))) {
-       const checkbox = card.querySelector('input[data-feature-select]');
-       if (checkbox && selectedFeatures.includes(card.getAttribute('data-feature-uri') ?? '')) checkbox.setAttribute('checked', 'checked');
-     }
-     return doc.body.innerHTML;
-   })();
+   return doc.body.innerHTML;
+ })();
  return <>
 {workspaceTab === "view" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Views">
                 {providerSelected && mapProvider ? <PerspectiveProviderRuntime provider={mapProvider} queryXml={workspace.queryXml} queryTree={workspace.queryTree} addr={workspace.queryTree.attributes.addr ?? ""} visibleFacetTerms={visibleFacetTerms} /> : personalKind && workspace.viewPanel === "perspectives" ? <PersonalPerspectives active={true} kind={personalKind} providerUri={selectedViewUri} queryXml={workspace.queryXml} /> : <>
@@ -158,29 +134,25 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                   {!viewFeature && selectedView && <span className="text-xs text-muted-foreground">{selectedView.label} · {visibleResultsPage.length} results on this page</span>}
                 </div>
                 {viewFeature && <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2 text-xs" role="toolbar" aria-label={`${viewFeature} actions`}>
-                  <button type="button" disabled={viewFeatureLoading || selectAllPending || !visibleFeatureCards.length || (selectedVisibleCount === visibleFeatureCount && (viewFeature !== "policies" || approvalReady))}
+                  <button type="button" disabled={viewFeatureLoading || selectAllPending || !visibleFeatureCards.some(card => card.hasStatus && !card.approved)}
                     className="rounded-md border px-3 py-1.5 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
                     onClick={() => void selectAllFeatures()}>
-                    {selectAllPending ? "Selecting…" : "Select All"}
+                    {selectAllPending ? "Selecting…" : "Approve All"}
                   </button>
-                  <span className="text-muted-foreground">{selectedVisibleCount} / {visibleFeatureCount} selected</span>
+                  <span className="text-muted-foreground">{selectedVisibleCount} / {visibleFeatureCount} approved</span>
                 </div>}
-                <ViewPage queryXml={workspace.queryXml} requiresBookmark={policyBookmarkNeeded} viewFeature={viewFeature} viewFeatureLoading={viewFeatureLoading} viewFeatureError={viewFeatureError} viewFeatureCount={visibleFeatureCount} viewFeatureHtml={visibleFeatureHtml} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} selectedView={selectedView} viewRenderError={viewRenderError} viewHtml={viewHtml} onSelectEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id); }} onRefreshEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (!endpoint || checkingEndpointIds[id]) return; void checkSelectedGraphServer(endpoint).catch((error) => { toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" }); }); }} onOpenResource={workspace.openRecordPropertyUri} onSelectFeature={(uri, checked) => setSelectedFeatures(current => checked ? [...new Set([...current, uri])] : current.filter(item => item !== uri))} onPolicyAction={(uri, action, checked) => {
+                <ViewPage queryXml={workspace.queryXml} requiresBookmark={policyBookmarkNeeded} viewFeature={viewFeature} viewFeatureLoading={viewFeatureLoading} viewFeatureError={viewFeatureError} viewFeatureCount={visibleFeatureCount} viewFeatureHtml={visibleFeatureHtml} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} selectedView={selectedView} viewRenderError={viewRenderError} viewHtml={viewHtml} onSelectEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id); }} onRefreshEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (!endpoint || checkingEndpointIds[id]) return; void checkSelectedGraphServer(endpoint).catch((error) => { toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" }); }); }} onOpenResource={workspace.openRecordPropertyUri} onPolicyAction={(uri, action, checked) => {
                     if (action === "bookmark" || !approvalReady) {
                       window.dispatchEvent(new Event("maestro:bookmark-query-request"));
                       return;
                     }
                     const statusAction = action === "forget" ? "forget" : checked ? "approve" : "pending";
-                    void fetch("/proxy/api/policy-approvals", { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ action: statusAction, queryXml: workspace.queryXml, policy: uri }),
-                    }).then(async response => {
-                      const data = await response.json() as { error?: string; bookmarkRequired?: boolean };
-                      if (!response.ok) {
-                        if (data.bookmarkRequired) window.dispatchEvent(new Event("maestro:bookmark-query-request"));
-                        throw new Error(data.error ?? `Policy approval update returned ${response.status}.`);
-                      }
+                    void changeApprovals([uri], statusAction === "forget" ? null : statusAction === "approve" ? "Approved" : "Pending",
+                      workspace.authSession?.graphPrefix ?? "", workspace.queryXml).then(() => {
                       workspace.setPolicyApprovalRevision(current => current + 1);
-                      if (statusAction === "forget") workspace.refreshQuery();
+                      // Approval changes can remove records from the current
+                      // Pending-only (or Approved-only) live FCT results.
+                      workspace.refreshQuery();
                     }).catch(error => toast.add({ title: "Policy approval failed", description: error instanceof Error ? error.message : "The change could not be saved.", type: "error" }));
                   }} />
                 {(viewFeature || selectedView) && <div className="flex shrink-0 items-center justify-between gap-3 border-t px-4 py-2 text-xs">

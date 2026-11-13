@@ -1,6 +1,7 @@
 "use client";
 
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
+import { ensureFctQueryIds } from "@/lib/fct-node-identity";
 import { useFctQuery, fctQueryTreeApi } from "@/lib/fct-query-api";
 import type { FctQueryTree, FctQueryNode } from "@/lib/fct-query-api";
 import type { FacetName } from "@/canvas/left/filter";
@@ -10,7 +11,7 @@ export function findQueryNode(
   nodeId: string,
 ): FctQueryNode | undefined {
   for (const node of nodes) {
-    if (node.id === nodeId) return node;
+    if (node.id === nodeId || node.uiKey === nodeId) return node;
     const found = findQueryNode(node.children, nodeId);
     if (found) return found;
   }
@@ -19,6 +20,20 @@ export function findQueryNode(
 
 export function queryTreeHasStatuses(tree: FctQueryTree): boolean {
   const visit = (nodes: FctQueryNode[]): boolean => nodes.some((node) => node.name === "status" || visit(node.children));
+  return visit(tree.children);
+}
+
+/** Query provenance is carried on the XML node that initiated non-user navigation. */
+export function querySourceAttribute(tree: FctQueryTree): string | null {
+  if (tree.attributes.src) return tree.attributes.src;
+  const visit = (nodes: FctQueryNode[]): string | null => {
+    for (const node of nodes) {
+      if (node.attributes.src) return node.attributes.src;
+      const nested = visit(node.children);
+      if (nested) return nested;
+    }
+    return null;
+  };
   return visit(tree.children);
 }
 
@@ -41,7 +56,7 @@ export type ShareableUiState = {
   workspaceTab?: "browse" | "view" | "analyze";
   viewPanel?: "trail" | "perspectives" | "features";
   selectedViewUri?: string;
-  viewFeature?: "policies" | "formats" | "transcoders" | null;
+  viewFeature?: "policies" | "formats" | "transcoders" | "facet-widgets" | "curators" | null;
   selectedAnalysisUri?: string;
   analyzeHistogram?: boolean;
   /** Explicit state for the Results/Query toolbar toggle. */
@@ -102,9 +117,14 @@ export function decodeViewRibbonTab(value: string | null): "trail" | "perspectiv
   }
 }
 
+/** Backwards-compatible provider URI migration for old History/bookmark links. */
+const LEGACY_PROVIDER_URIS: Readonly<Record<string, string>> = {
+  "urn:maestro:perspective:map": "gttp://ggg.maestro.ui/provider/map",
+};
+
 export function validRibbonProviderUri(value: string | null): string | null {
-  return value !== null && value.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(value)
-    ? value : null;
+  if (value === null || value.length > 2048 || !/^(?:https?:|gttp:|gttps:|urn:)/.test(value)) return null;
+  return LEGACY_PROVIDER_URIS[value] ?? value;
 }
 
 /** Copy authoritative ribbon parameters from a stored bookmark/history URL. */
@@ -152,7 +172,7 @@ export function readShareableUiState(search?: string): ShareableUiState | null {
   return result;
 }
 
-/** Parse the share URL's serialized FCT XML into a fresh tree with unique client-only node IDs. */
+/** Restore XML IDs into the authoritative tree; migrate Phase-1 generated ids where legacy UI IDs are required. */
 export function parseFctQueryXml(xml: string): FctQueryTree | null {
   if (typeof DOMParser === "undefined") return null;
   const document = new DOMParser().parseFromString(xml, "application/xml");
@@ -168,6 +188,8 @@ export function parseFctQueryXml(xml: string): FctQueryTree | null {
     const name = element.localName;
     const attributes: Record<string, string> = {};
     for (const attribute of Array.from(element.attributes)) attributes[attribute.name] = attribute.value;
+    const xmlId = attributes.id;
+    delete attributes.id;
     const iri = attributes.iri ?? "";
     let id: string;
     if (name === "text" && isRootChild && !hasQueryText) {
@@ -188,19 +210,21 @@ export function parseFctQueryXml(xml: string): FctQueryTree | null {
     } else {
       id = `url-${path}-${name}`;
     }
-    const baseId = id;
-    let suffix = 1;
-    while (usedIds.has(id)) id = `${baseId}-${suffix++}`;
+    // XML base36 IDs are authoritative; descriptive selectors remain UI keys.
+    // Legacy XML IDs are migrated by ensureFctQueryIds using the persisted ctr.
+    const uiKey = id;
+    id = xmlId || id;
+    if (usedIds.has(id)) id = `legacy-duplicate-${path}-${name}`;
     usedIds.add(id);
     const children = name === "view" ? [] : elementChildren(element).map((child, index) => parseNode(child, `${path}.${index}`, false));
     const text = name === "text" || name === "value" || name === "status" ? (element.textContent ?? "") : undefined;
-    return { id, name, attributes, ...(text !== undefined ? { text } : {}), children };
+    return { id, uiKey, name, attributes, ...(text !== undefined ? { text } : {}), children };
   };
   const children = elementChildren(root).map((child, index) => parseNode(child, String(index), true));
   if (!hasQueryView) {
     children.push({ id: "query-view", name: "view", attributes: { type: FCT_VIEW_TYPES.TEXT, limit: "30", offset: "0" }, children: [] });
   }
-  return { name: "query", attributes: rootAttributes, children };
+  return ensureFctQueryIds({ name: "query", attributes: rootAttributes, children });
 }
 
 

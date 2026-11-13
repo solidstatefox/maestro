@@ -1,6 +1,7 @@
+import { getPersonalStatusGraph } from "@/lib/personal-status-graph";
 import { createHash } from "node:crypto";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
-import { getHistoryGraph, getUserGraph, askPersonalSparql, queryPersonalSparql, updatePersonalSparql } from "@/lib/personal-sparql";
+import { getHistoryGraph, getUserGraph, getShapesGraph, askPersonalSparql, queryPersonalSparql, updatePersonalSparql } from "@/lib/personal-sparql";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
 const SCHEMA = "https://schema.org/identifier";
@@ -18,6 +19,7 @@ function iri(value: string): string {
   return `<${value}>`;
 }
 export const policyApprovalGraph = (request: Request): string => `${getUserGraph(request)}${POLICY_GRAPH_SUFFIX}`;
+const statusGraph = (request: Request): string => getPersonalStatusGraph(request);
 
 /** Approval-management requests require the calling FCT query to be saved as a bookmark.
  * Verify this in the personal store, not from a client-provided boolean or ID.
@@ -35,8 +37,9 @@ export async function readPolicyApprovals(uris: string[], request: Request): Pro
   if (!distinct.length) return [];
   if (distinct.length > 500 || distinct.some(uri => !validPolicyIri(uri))) throw new Error("Expected at most 500 valid policy IRIs.");
   const graph = iri(policyApprovalGraph(request));
+  const status = iri(statusGraph(request));
   const values = distinct.map(iri).join(" ");
-  const query = `SELECT ?policy ?status ?trigger ?lastRequestedBy ?lastRequestDate ?matchedRecord ?lastRequestHistory ?lastRequestComponent WHERE { VALUES ?policy { ${values} } OPTIONAL { GRAPH ${graph} { ?policy <${MUI}status> ?status . OPTIONAL { ?policy <${MUI}triggeredBy> ?trigger } OPTIONAL { ?policy <${MUI}lastRequestedBy> ?lastRequestedBy } OPTIONAL { ?policy <${MUI}lastRequestDate> ?lastRequestDate } OPTIONAL { ?policy <${MUI}matchedRecord> ?matchedRecord } OPTIONAL { ?policy <${MUI}lastRequestHistory> ?lastRequestHistory } OPTIONAL { ?policy <${MUI}lastRequestComponent> ?lastRequestComponent } } } }`;
+  const query = `SELECT ?policy ?status ?trigger ?lastRequestedBy ?lastRequestDate ?matchedRecord ?lastRequestHistory ?lastRequestComponent WHERE { VALUES ?policy { ${values} } OPTIONAL { GRAPH ${status} { ?policy <${MUI}status> ?status } } OPTIONAL { GRAPH ${graph} { OPTIONAL { ?policy <${MUI}triggeredBy> ?trigger } OPTIONAL { ?policy <${MUI}lastRequestedBy> ?lastRequestedBy } OPTIONAL { ?policy <${MUI}lastRequestDate> ?lastRequestDate } OPTIONAL { ?policy <${MUI}matchedRecord> ?matchedRecord } OPTIONAL { ?policy <${MUI}lastRequestHistory> ?lastRequestHistory } OPTIONAL { ?policy <${MUI}lastRequestComponent> ?lastRequestComponent } } } }`;
   const payload = await queryPersonalSparql(query, 20000, request);
   const rows = payload.results?.bindings ?? [];
   return distinct.map((uri) => {
@@ -51,7 +54,7 @@ export async function readPolicyApprovals(uris: string[], request: Request): Pro
  * independent optional provenance. We deliberately have no legacy fallback.
  */
 export async function discoverPolicyApprovals(uris: string[], context: PolicyMatchContext, request: Request): Promise<void> {
-  if (!validPolicyIri(context.component) || !context.component.startsWith("gttp://ggg.maestro.ui/component/"))
+  if (!validPolicyIri(context.component) || !(context.component.startsWith("gttp://ggg.maestro.ui/component/") || context.component.startsWith("urn:maestro:component:")))
     throw new Error("A registered Maestro UI component is required for policy discovery.");
   if (context.record && !validPolicyIri(context.record)) throw new Error("Invalid matching Record IRI.");
   if (context.history && !validPolicyIri(context.history)) throw new Error("Invalid History visit IRI.");
@@ -82,40 +85,28 @@ export async function discoverPolicyApprovals(uris: string[], context: PolicyMat
     WHERE { VALUES ?policy { ${values} } BIND(NOW() AS ?now)
       ${remove.map((name, index) => `OPTIONAL { GRAPH ${graph} { ?policy <${MUI}${name}> ?old${index} } }`).join(" ")}
     }`, 20000, request);
-  // Newly discovered policies are Pending; already Approved policies remain Approved.
-  await updatePersonalSparql(`INSERT { GRAPH ${graph} { ?policy <${MUI}status> <${MUI}Pending> ; <${MUI}triggeredBy> ${match} } }
-    WHERE { VALUES ?policy { ${values} } FILTER NOT EXISTS { GRAPH ${graph} { ?policy <${MUI}status> ?existing } } }`, 20000, request);
+  // A curator confers authority only when its own status is Approved.
+  // The curator's mui:widget is a genuine RDF list (rdf:first/rdf:rest),
+  // not a string, regex or Maestro-internal hard-coded allowlist.
+  const personalStatus = iri(statusGraph(request));
+  await updatePersonalSparql(`DELETE { GRAPH ${personalStatus} { ?policy <${MUI}status> <${MUI}Pending> } }
+    INSERT { GRAPH ${personalStatus} { ?policy <${MUI}status> <${MUI}Approved> } }
+    WHERE { VALUES ?policy { ${values} }
+      GRAPH ${iri(getShapesGraph(request))} {
+        ?curator a <${MUI}CurationProvider> ; <${MUI}widget> ?list .
+        ?list <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>*/<http://www.w3.org/1999/02/22-rdf-syntax-ns#first> ?policy .
+      }
+      GRAPH ${personalStatus} { ?curator <${MUI}status> <${MUI}Approved> }
+      FILTER NOT EXISTS { GRAPH ${personalStatus} { ?policy <${MUI}status> <${MUI}Approved> } }
+    }`, 20000, request);
+  // Only resources without a status (and not listed by an approved curator)
+  // enter Pending. Existing Approved resources remain unchanged.
+  await updatePersonalSparql(`INSERT { GRAPH ${iri(statusGraph(request))} { ?policy <${MUI}status> <${MUI}Pending> } GRAPH ${graph} { ?policy <${MUI}triggeredBy> ${match} } }
+    WHERE { VALUES ?policy { ${values} } FILTER NOT EXISTS { GRAPH ${iri(statusGraph(request))} { ?policy <${MUI}status> ?existing .
+        VALUES ?existing { <${MUI}Pending> <${MUI}Approved> } } } }`, 20000, request);
 }
 
 /** A provider cannot execute merely because it was discovered or selected. */
 export async function isApprovedPolicy(policy: string, request: Request): Promise<boolean> {
-  return validPolicyIri(policy) && askPersonalSparql(`ASK WHERE { GRAPH ${iri(policyApprovalGraph(request))} { ${iri(policy)} <${MUI}status> <${MUI}Approved> } }`, 15000, request);
-}
-
-export async function writePolicyApproval(policy: string, status: PolicyApprovalStatus, request: Request): Promise<void> {
-  const graph = iri(policyApprovalGraph(request));
-  const node = iri(policy);
-  if (status === null) {
-    await updatePersonalSparql(`DELETE WHERE { GRAPH ${graph} { ${node} ?predicate ?value } }`, 20000, request);
-    return;
-  }
-  const value = iri(`${MUI}${status}`);
-  await updatePersonalSparql(`DELETE { GRAPH ${graph} { ${node} <${MUI}status> ?old } }
-    INSERT { GRAPH ${graph} { ${node} <${MUI}status> ${value} } }
-    WHERE { OPTIONAL { GRAPH ${graph} { ${node} <${MUI}status> ?old } } }`, 20000, request);
-}
-
-/** Atomically approve or pend a set of policies that passed endpoint validation. */
-export async function writePolicyApprovals(policies: string[], status: Exclude<PolicyApprovalStatus, null>, request: Request): Promise<void> {
-  const distinct = [...new Set(policies)];
-  if (!distinct.length) return;
-  if (distinct.length > 500 || distinct.some(policy => !validPolicyIri(policy)))
-    throw new Error("Expected at most 500 valid policy IRIs.");
-  const graph = iri(policyApprovalGraph(request));
-  const values = distinct.map(iri).join(" ");
-  await updatePersonalSparql(`DELETE { GRAPH ${graph} { ?policy <${MUI}status> ?old } }
-    INSERT { GRAPH ${graph} { ?policy <${MUI}status> <${MUI}${status}> } }
-    WHERE { VALUES ?policy { ${values} }
-      OPTIONAL { GRAPH ${graph} { ?policy <${MUI}status> ?old } }
-    }`, 20000, request);
+  return validPolicyIri(policy) && askPersonalSparql(`ASK WHERE { GRAPH ${iri(statusGraph(request))} { ${iri(policy)} <${MUI}status> <${MUI}Approved> } }`, 15000, request);
 }

@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { Ban } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -8,7 +9,7 @@ import { BrowseQueryTreeCanvas, BrowseGroupsCanvas, BrowseChatCanvas, BrowseResu
 import { ViewTabCanvas } from "@/canvas/tab/view/page";
 import { AnalyzeTabCanvas } from "@/canvas/tab/analyze/page";
 
-import { RESULTS_PAGE_SIZE_STORAGE_KEY, RESULTS_BATCH_SIZE_OPTIONS, CENTER_PANEL_LIMIT_STORAGE_KEY, CENTER_GROUP_LIMIT_STORAGE_KEY } from "@/canvas/sheet/settings";
+import { RESULTS_PAGE_SIZE_STORAGE_KEY } from "@/canvas/sheet/settings";
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 
@@ -290,38 +291,6 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                   </select>
                   <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2.5 size-3.5 text-muted-foreground" />
                   </div>
-                  <span aria-hidden="true" className="mx-1 h-6 border-l border-border" />
-                  <label htmlFor="results-batch-size" className="shrink-0 text-muted-foreground">Batch size</label>
-                  <div className="relative inline-flex shrink-0 items-center">
-                  <select
-                    id="results-batch-size"
-                    aria-label="Server batch size"
-                    value={centralTab === "groups" && selectedGroupByOption ? groupBatchSize : resultsBatchSize}
-                    disabled={isSearching || groupValuesLoading}
-                    onChange={(event) => {
-                      const nextSize = Number(event.currentTarget.value);
-                      if (!RESULTS_BATCH_SIZE_OPTIONS.some((size) => size === nextSize)) return;
-                      if (centralTab === "groups" && selectedGroupByOption) {
-                        maestroStorageSet(CENTER_GROUP_LIMIT_STORAGE_KEY, String(nextSize));
-                        setGroupBatchSize(nextSize);
-                        setGroupBatchOffset(0);
-                        setGroupUiPage(0);
-                        setGroupHasMoreBatches(false);
-                        setGroupValues([]);
-                      } else {
-                        maestroStorageSet(CENTER_PANEL_LIMIT_STORAGE_KEY, String(nextSize));
-                        setResultsUiPage(0);
-                        setResults([]);
-                        resultsLoadedQueryIdentityRef.current = "";
-                        setResultsPage(nextSize, 0);
-                      }
-                    }}
-                    className="h-9 min-w-[5rem] appearance-none rounded-md border border-input bg-background py-2 pl-3 pr-8 text-sm"
-                  >
-                    {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
-                  </select>
-                  <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2.5 size-3.5 text-muted-foreground" />
-                  </div>
                   {selectedGroupByOption ? <><span aria-hidden="true" className="mx-1 h-6 border-l border-border" /><span className="shrink-0 text-muted-foreground">{groupValuesLoading ? "…" : `${visibleGroupValues.length} ${visibleGroupValues.length === 1 ? "group" : "groups"}`}</span></> : null}
                 </div>
               </div>
@@ -567,7 +536,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                     </Tooltip>
                   </ButtonGroup>
                 </div>
-                {searchError && endpointReadyForQuery && <p className="mt-2 text-sm text-destructive">{searchError}{searchError.includes("Could not load graphs from the personal SPARQL store") && <> Check that your <a href={personalSparqlEndpoint || undefined} target="_blank" rel="noreferrer" className="underline underline-offset-2">personal graph server</a> is online.</>}</p>}
+                {searchError && endpointReadyForQuery && <ErrorDetails prefix="Results" error={searchError} className="mt-2" />}
                 </>)}
               </div>}
             </CenterPaneBody>

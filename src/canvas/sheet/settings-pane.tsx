@@ -18,11 +18,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Label } from "@/components/ui/label";
 import { ChevronsDownUp, ChevronsUpDown, Settings, Download, Upload } from "lucide-react";
 
-import { MAESTRO_TIMEOUT_CATEGORIES } from "@/lib/maestro-query-timeouts";
+import { MAESTRO_TIMEOUT_CATEGORIES, writeMaestroWidgetTimeouts } from "@/lib/maestro-query-timeouts";
 
-import { maestroStorageSet } from "@/lib/maestro-storage";
+import { initializeMaestroStorage, maestroStorageSet } from "@/lib/maestro-storage";
+import { readRecordGraphDiscoveryLimits, writeRecordGraphDiscoveryLimits, RECORD_GRAPH_CANDIDATE_OPTIONS, RECORD_GRAPH_RESULT_OPTIONS } from "@/lib/record-graph-limits";
 
 import { Slider } from "@/components/ui/slider";
+import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
+import { useEffect, useState } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -164,6 +167,41 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     tutorialMode,
     widgetTimeouts,
   } = workspace;
+  const [masterTimeoutEnabled, setMasterTimeoutEnabled] = useState(false);
+  const [masterTimeout, setMasterTimeout] = useState(0);
+  const [masterLimit, setMasterLimit] = useState("none");
+  const [recordDiscoveryLimits, setRecordDiscoveryLimits] = useState(readRecordGraphDiscoveryLimits);
+  useEffect(() => {
+    let active = true;
+    void initializeMaestroStorage().then(() => {
+      if (active) setRecordDiscoveryLimits(readRecordGraphDiscoveryLimits());
+    });
+    return () => { active = false; };
+  }, []);
+  function updateRecordDiscoveryLimit(key: "candidates" | "graphs", value: number) {
+    const next = { ...recordDiscoveryLimits, [key]: value };
+    setRecordDiscoveryLimits(next);
+    writeRecordGraphDiscoveryLimits(next);
+  }
+  const applyMasterTimeout = (value: number) => {
+    setMasterTimeout(value);
+    const next = Object.fromEntries(MAESTRO_TIMEOUT_CATEGORIES.map(({ key }) => [key, value])) as typeof widgetTimeouts;
+    setWidgetTimeouts(next);
+    writeMaestroWidgetTimeouts(next);
+  };
+  const applyMasterLimit = (value: string) => {
+    setMasterLimit(value);
+    if (value === "none") return;
+    const limit = Number(value);
+    if (![100, 500, 1000].includes(limit)) return;
+    for (const key of LEFT_WIDGET_LIMIT_KEYS) setLeftWidgetLimit(key, limit);
+    maestroStorageSet(CENTER_PANEL_LIMIT_STORAGE_KEY, String(limit));
+    setPendingCenterBatchLimit(limit);
+    maestroStorageSet(CENTER_GROUP_LIMIT_STORAGE_KEY, String(limit));
+    setPendingGroupsBatchLimit(limit);
+    maestroStorageSet(RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY, String(limit));
+    setPendingRecordDescriptionLimit(limit);
+  };
   return (
 <Sheet open={controlsSheetOpen} onOpenChange={(open) => {
           if (open) {
@@ -349,6 +387,18 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                 </CollapsibleTrigger>
                 <CollapsibleContent className="space-y-4 border-t px-3 pb-4 pt-3">
                   <p className="text-xs text-muted-foreground">Per-widget upstream time limits. 0 uses the existing query/server default. Saved in IndexedDB.</p>
+                  <InputGroup>
+                    <InputGroupAddon align="block-start" className="justify-between">
+                      <Label htmlFor="set-all-timeouts" className="text-sm">Set all:</Label>
+                      <Switch id="set-all-timeouts" aria-label="Enable master timeout" checked={masterTimeoutEnabled}
+                        onCheckedChange={(on) => { setMasterTimeoutEnabled(on); if (on) applyMasterTimeout(masterTimeout); }} />
+                    </InputGroupAddon>
+                    {masterTimeoutEnabled && <div className="space-y-2 px-3 py-3">
+                      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span>Master timeout</span><output>{masterTimeout ? `${masterTimeout}s` : "Default"}</output></div>
+                      <Slider aria-label="Set all query timeouts in seconds" min={0} max={120} step={5}
+                        value={[masterTimeout]} onValueChange={(values) => applyMasterTimeout(values[0] ?? 0)} />
+                    </div>}
+                  </InputGroup>
                   {MAESTRO_TIMEOUT_CATEGORIES.map(({ key, label }) => (
                     <div key={key} className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
@@ -356,7 +406,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                         <output htmlFor={`widget-timeout-${key}`} className="text-xs tabular-nums text-muted-foreground">{widgetTimeouts[key] ? `${widgetTimeouts[key]}s` : "Default"}</output>
                       </div>
                       <Slider id={`widget-timeout-${key}`} aria-label={`${label} query timeout in seconds`} min={0} max={120} step={5}
-                        value={[widgetTimeouts[key]]}
+                        value={[widgetTimeouts[key]]} disabled={masterTimeoutEnabled}
                         onValueChange={(values) => setWidgetTimeouts((current) => ({ ...current, [key]: values[0] ?? 0 }))}
                         onValueCommit={(values) => changeWidgetTimeout(key, values[0] ?? 0)} />
                     </div>
@@ -369,6 +419,15 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                   {panelLimitsOpen ? <ChevronsDownUp className="size-4 text-muted-foreground" /> : <ChevronsUpDown className="size-4 text-muted-foreground" />}
                 </CollapsibleTrigger>
                 <CollapsibleContent className="space-y-4 border-t px-3 pb-4 pt-3">
+                  <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                    <Label htmlFor="set-all-limits">Set all:</Label>
+                    <select id="set-all-limits" aria-label="Set all query LIMITs" value={masterLimit}
+                      onChange={(event) => applyMasterLimit(event.currentTarget.value)}
+                      className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+                      <option value="none">none</option>
+                      {[100, 500, 1000].map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
+                    </select>
+                  </div>
                   <section className="space-y-3">
                     <h3 className="text-xs font-semibold text-muted-foreground">Left panel</h3>
               <p className="text-xs text-muted-foreground">Maximum items requested from each widget's query. Display pagination remains ten items per page.</p>
@@ -383,6 +442,24 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                   </select>
                 </div>
               ))}
+                  </section>
+                  <section className="space-y-3 border-t pt-3">
+                    <h3 className="text-xs font-semibold text-muted-foreground">Record graph discovery</h3>
+                    <p className="text-xs text-muted-foreground">Limits for the graph-provenance query on blank-node Records. Smaller values reduce peak server work but can omit some graphs or sibling nodes. They do not limit Record Properties or Roles.</p>
+                    <div className="flex items-center justify-between gap-3">
+                      <Label htmlFor="record-discovery-candidates">FCT-bound blank-node candidates</Label>
+                      <select id="record-discovery-candidates" className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                        value={recordDiscoveryLimits.candidates} onChange={(event) => updateRecordDiscoveryLimit("candidates", Number(event.currentTarget.value))}>
+                        {RECORD_GRAPH_CANDIDATE_OPTIONS.map((n) => <option key={n} value={n}>{n.toLocaleString()}</option>)}
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <Label htmlFor="record-discovery-graphs">Distinct discovered graphs</Label>
+                      <select id="record-discovery-graphs" className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                        value={recordDiscoveryLimits.graphs} onChange={(event) => updateRecordDiscoveryLimit("graphs", Number(event.currentTarget.value))}>
+                        {RECORD_GRAPH_RESULT_OPTIONS.map((n) => <option key={n} value={n}>{n.toLocaleString()}</option>)}
+                      </select>
+                    </div>
                   </section>
                   <section className="space-y-3 border-t pt-3">
                     <h3 className="text-xs font-semibold text-muted-foreground">Center panel</h3>

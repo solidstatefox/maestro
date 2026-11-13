@@ -1,0 +1,109 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# Stable identities for Maestro UI component modules and policy-discovery surfaces.
+# Identity is based on source component path; display labels do not define identity.
+mui:UIComponent a rdfs:Class ; rdfs:label "Maestro UI component" .
+mui:lastRequestComponent a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ; rdfs:label "Last matching UI component" .
+mui:lastRequestHistory a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ; rdfs:label "Last matching History visit" .
+mui:matchedRecord a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ; rdfs:label "SHACL-matched Record" .
+
+<gttp://ggg.maestro.ui/component/canvas-center-chat> a mui:UIComponent ; rdfs:label "canvas center chat" .
+<gttp://ggg.maestro.ui/component/canvas-center-pane> a mui:UIComponent ; rdfs:label "canvas center pane" .
+<gttp://ggg.maestro.ui/component/canvas-center-results> a mui:UIComponent ; rdfs:label "canvas center results" .
+<gttp://ggg.maestro.ui/component/canvas-left-configure> a mui:UIComponent ; rdfs:label "canvas left configure" .
+<gttp://ggg.maestro.ui/component/canvas-left-configure-pane> a mui:UIComponent ; rdfs:label "canvas left configure pane" .
+<gttp://ggg.maestro.ui/component/canvas-left-filter> a mui:UIComponent ; rdfs:label "canvas left filter" .
+<gttp://ggg.maestro.ui/component/canvas-left-filter-pane> a mui:UIComponent ; rdfs:label "canvas left filter pane" .
+<gttp://ggg.maestro.ui/component/canvas-left-graph-uri-tree> a mui:UIComponent ; rdfs:label "canvas left graph uri tree" .
+<gttp://ggg.maestro.ui/component/canvas-left-pane> a mui:UIComponent ; rdfs:label "canvas left pane" .
+<gttp://ggg.maestro.ui/component/canvas-left-personal-date-facet> a mui:UIComponent ; rdfs:label "canvas left personal date facet" .
+<gttp://ggg.maestro.ui/component/canvas-left-personal-widget-cards> a mui:UIComponent ; rdfs:label "canvas left personal widget cards" .
+<gttp://ggg.maestro.ui/component/canvas-left-property-usage-widget> a mui:UIComponent ; rdfs:label "canvas left property usage widget" .
+<gttp://ggg.maestro.ui/component/canvas-left-status-widget> a mui:UIComponent ; rdfs:label "canvas left status widget" .
+<gttp://ggg.maestro.ui/component/canvas-right-format> a mui:UIComponent ; rdfs:label "canvas right format" .
+<gttp://ggg.maestro.ui/component/canvas-right-pane> a mui:UIComponent ; rdfs:label "canvas right pane" .
+<gttp://ggg.maestro.ui/component/canvas-right-record> a mui:UIComponent ; rdfs:label "canvas right record" .
+<gttp://ggg.maestro.ui/component/canvas-right-record-status-buttons> a mui:UIComponent ; rdfs:label "canvas right record status buttons" .
+<gttp://ggg.maestro.ui/component/canvas-right-validator> a mui:UIComponent ; rdfs:label "canvas right validator" .
+<gttp://ggg.maestro.ui/component/canvas-sheet-settings> a mui:UIComponent ; rdfs:label "canvas sheet settings" .
+<gttp://ggg.maestro.ui/component/canvas-sheet-settings-pane> a mui:UIComponent ; rdfs:label "canvas sheet settings pane" .
+<gttp://ggg.maestro.ui/component/canvas-tab-analyze-analysis-utils> a mui:UIComponent ; rdfs:label "canvas tab analyze analysis utils" .
+<gttp://ggg.maestro.ui/component/canvas-tab-analyze-bookmark-charts> a mui:UIComponent ; rdfs:label "canvas tab analyze bookmark charts" .
+<gttp://ggg.maestro.ui/component/canvas-tab-analyze-page> a mui:UIComponent ; rdfs:label "canvas tab analyze page" .
+<gttp://ggg.maestro.ui/component/canvas-tab-analyze-ribbon> a mui:UIComponent ; rdfs:label "canvas tab analyze ribbon" .
+<gttp://ggg.maestro.ui/component/canvas-tab-browse-page> a mui:UIComponent ; rdfs:label "canvas tab browse page" .
+<gttp://ggg.maestro.ui/component/canvas-tab-browse-results-view> a mui:UIComponent ; rdfs:label "canvas tab browse results view" .
+<gttp://ggg.maestro.ui/component/canvas-tab-browse-ribbon> a mui:UIComponent ; rdfs:label "canvas tab browse ribbon" .
+<gttp://ggg.maestro.ui/component/canvas-tab-publish-page> a mui:UIComponent ; rdfs:label "canvas tab publish page" .
+<gttp://ggg.maestro.ui/component/canvas-tab-publish-ribbon> a mui:UIComponent ; rdfs:label "canvas tab publish ribbon" .
+<gttp://ggg.maestro.ui/component/canvas-tab-view-map-perspective> a mui:UIComponent ; rdfs:label "canvas tab view map perspective" .
+<gttp://ggg.maestro.ui/component/canvas-tab-view-page> a mui:UIComponent ; rdfs:label "canvas tab view page" .
+<gttp://ggg.maestro.ui/component/canvas-tab-view-personal-perspectives> a mui:UIComponent ; rdfs:label "canvas tab view personal perspectives" .
+<gttp://ggg.maestro.ui/component/canvas-tab-view-ribbon> a mui:UIComponent ; rdfs:label "canvas tab view ribbon" .
+<gttp://ggg.maestro.ui/component/canvas-tab-view-view-components> a mui:UIComponent ; rdfs:label "canvas tab view view components" .
+<gttp://ggg.maestro.ui/component/canvas-top-appbar> a mui:UIComponent ; rdfs:label "canvas top appbar" .
+<gttp://ggg.maestro.ui/component/canvas-top-appbar-pane> a mui:UIComponent ; rdfs:label "canvas top appbar pane" .
+<gttp://ggg.maestro.ui/component/canvas-top-breadcrumb> a mui:UIComponent ; rdfs:label "canvas top breadcrumb" .
+<gttp://ggg.maestro.ui/component/canvas-top-breadcrumb-renderers> a mui:UIComponent ; rdfs:label "canvas top breadcrumb renderers" .
+<gttp://ggg.maestro.ui/component/canvas-utils-incomplete-widget> a mui:UIComponent ; rdfs:label "canvas utils incomplete widget" .
+<gttp://ggg.maestro.ui/component/canvas-utils-query-inspector> a mui:UIComponent ; rdfs:label "canvas utils query inspector" .
+<gttp://ggg.maestro.ui/component/canvas-utils-workspace-controller> a mui:UIComponent ; rdfs:label "canvas utils workspace controller" .
+<gttp://ggg.maestro.ui/component/canvas-workspace> a mui:UIComponent ; rdfs:label "canvas workspace" .
+<gttp://ggg.maestro.ui/component/canvas-workspace-pane-shells> a mui:UIComponent ; rdfs:label "canvas workspace pane shells" .
+<gttp://ggg.maestro.ui/component/canvas-workspace-skeleton> a mui:UIComponent ; rdfs:label "canvas workspace skeleton" .
+<gttp://ggg.maestro.ui/component/components-ai-elements-basic-chat> a mui:UIComponent ; rdfs:label "components ai elements basic chat" .
+<gttp://ggg.maestro.ui/component/components-ai-elements-prompt-input> a mui:UIComponent ; rdfs:label "components ai elements prompt input" .
+<gttp://ggg.maestro.ui/component/components-ai-elements-task> a mui:UIComponent ; rdfs:label "components ai elements task" .
+<gttp://ggg.maestro.ui/component/components-generated-maestro-component-registry> a mui:UIComponent ; rdfs:label "components generated maestro component registry" .
+<gttp://ggg.maestro.ui/component/components-maestro-analysis-data-table> a mui:UIComponent ; rdfs:label "components maestro analysis data table" .
+<gttp://ggg.maestro.ui/component/components-maestro-xslt-components> a mui:UIComponent ; rdfs:label "components maestro xslt components" .
+<gttp://ggg.maestro.ui/component/components-otc-workbench> a mui:UIComponent ; rdfs:label "components otc workbench" .
+<gttp://ggg.maestro.ui/component/components-path-explorer> a mui:UIComponent ; rdfs:label "components path explorer" .
+<gttp://ggg.maestro.ui/component/components-theme-provider> a mui:UIComponent ; rdfs:label "components theme provider" .
+<gttp://ggg.maestro.ui/component/components-theme-toggle> a mui:UIComponent ; rdfs:label "components theme toggle" .
+<gttp://ggg.maestro.ui/component/components-ui-alert> a mui:UIComponent ; rdfs:label "components ui alert" .
+<gttp://ggg.maestro.ui/component/components-ui-alert-dialog> a mui:UIComponent ; rdfs:label "components ui alert dialog" .
+<gttp://ggg.maestro.ui/component/components-ui-attachment> a mui:UIComponent ; rdfs:label "components ui attachment" .
+<gttp://ggg.maestro.ui/component/components-ui-avatar> a mui:UIComponent ; rdfs:label "components ui avatar" .
+<gttp://ggg.maestro.ui/component/components-ui-badge> a mui:UIComponent ; rdfs:label "components ui badge" .
+<gttp://ggg.maestro.ui/component/components-ui-button> a mui:UIComponent ; rdfs:label "components ui button" .
+<gttp://ggg.maestro.ui/component/components-ui-button-group> a mui:UIComponent ; rdfs:label "components ui button group" .
+<gttp://ggg.maestro.ui/component/components-ui-card> a mui:UIComponent ; rdfs:label "components ui card" .
+<gttp://ggg.maestro.ui/component/components-ui-code-block> a mui:UIComponent ; rdfs:label "components ui code block" .
+<gttp://ggg.maestro.ui/component/components-ui-collapsible> a mui:UIComponent ; rdfs:label "components ui collapsible" .
+<gttp://ggg.maestro.ui/component/components-ui-date-time-picker> a mui:UIComponent ; rdfs:label "components ui date time picker" .
+<gttp://ggg.maestro.ui/component/components-ui-dialog> a mui:UIComponent ; rdfs:label "components ui dialog" .
+<gttp://ggg.maestro.ui/component/components-ui-dropdown-menu> a mui:UIComponent ; rdfs:label "components ui dropdown menu" .
+<gttp://ggg.maestro.ui/component/components-ui-elapsed-status> a mui:UIComponent ; rdfs:label "components ui elapsed status" .
+<gttp://ggg.maestro.ui/component/components-ui-input> a mui:UIComponent ; rdfs:label "components ui input" .
+<gttp://ggg.maestro.ui/component/components-ui-input-group> a mui:UIComponent ; rdfs:label "components ui input group" .
+<gttp://ggg.maestro.ui/component/components-ui-label> a mui:UIComponent ; rdfs:label "components ui label" .
+<gttp://ggg.maestro.ui/component/components-ui-maestro-hover-expand> a mui:UIComponent ; rdfs:label "components ui maestro hover expand" .
+<gttp://ggg.maestro.ui/component/components-ui-map> a mui:UIComponent ; rdfs:label "components ui map" .
+<gttp://ggg.maestro.ui/component/components-ui-progress> a mui:UIComponent ; rdfs:label "components ui progress" .
+<gttp://ggg.maestro.ui/component/components-ui-record-value-pages> a mui:UIComponent ; rdfs:label "components ui record value pages" .
+<gttp://ggg.maestro.ui/component/components-ui-resizable> a mui:UIComponent ; rdfs:label "components ui resizable" .
+<gttp://ggg.maestro.ui/component/components-ui-scroll-area> a mui:UIComponent ; rdfs:label "components ui scroll area" .
+<gttp://ggg.maestro.ui/component/components-ui-separator> a mui:UIComponent ; rdfs:label "components ui separator" .
+<gttp://ggg.maestro.ui/component/components-ui-sheet> a mui:UIComponent ; rdfs:label "components ui sheet" .
+<gttp://ggg.maestro.ui/component/components-ui-skeleton> a mui:UIComponent ; rdfs:label "components ui skeleton" .
+<gttp://ggg.maestro.ui/component/components-ui-slider> a mui:UIComponent ; rdfs:label "components ui slider" .
+<gttp://ggg.maestro.ui/component/components-ui-switch> a mui:UIComponent ; rdfs:label "components ui switch" .
+<gttp://ggg.maestro.ui/component/components-ui-table> a mui:UIComponent ; rdfs:label "components ui table" .
+<gttp://ggg.maestro.ui/component/components-ui-tabs> a mui:UIComponent ; rdfs:label "components ui tabs" .
+<gttp://ggg.maestro.ui/component/components-ui-toast> a mui:UIComponent ; rdfs:label "components ui toast" .
+<gttp://ggg.maestro.ui/component/components-ui-toggle> a mui:UIComponent ; rdfs:label "components ui toggle" .
+<gttp://ggg.maestro.ui/component/components-ui-toggle-group> a mui:UIComponent ; rdfs:label "components ui toggle group" .
+<gttp://ggg.maestro.ui/component/components-ui-tooltip> a mui:UIComponent ; rdfs:label "components ui tooltip" .
+<gttp://ggg.maestro.ui/component/components-ui-trace> a mui:UIComponent ; rdfs:label "components ui trace" .
+<gttp://ggg.maestro.ui/component/policies-feature> a mui:UIComponent ; rdfs:label "policies feature" .
+<gttp://ggg.maestro.ui/component/record-policy-discovery> a mui:UIComponent ; rdfs:label "record policy discovery" .
+<gttp://ggg.maestro.ui/component/view-ribbon> a mui:UIComponent ; rdfs:label "view ribbon" .
+
+# Fixed DOM furniture URNs. Dynamic facet component URNs are deliberately not
+# enumerated here; they are derived from the serialized FCT node id.
+<urn:maestro:component:appbar> a mui:UIComponent ; rdfs:label "Appbar DOM component"@en .
+<urn:maestro:component:view:ribbon> a mui:UIComponent ; rdfs:label "View ribbon DOM component"@en .
+<urn:maestro:component:left:personal> a mui:UIComponent ; rdfs:label "Personal facets DOM component"@en .
+<urn:maestro:component:left:categories> a mui:UIComponent ; rdfs:label "Categories DOM component"@en .

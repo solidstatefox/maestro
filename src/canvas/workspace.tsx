@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 
 import { PersonalWidgetQueryListener } from "@/canvas/left/filter";
 
@@ -601,7 +602,7 @@ export function MaestroWorkspace() {
   };
   collectQueryClasses(queryTree.children);
   // Use the identical live ribbon in both ready and loading layouts.
-  const workspaceRibbon = (workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewFeature={viewFeature} setViewFeature={setViewFeature} onSelectFeature={workspace.selectViewFeature} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setSelectedViewUri(uri); setViewFeature(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <AnalyzeRibbon analysisDefinitions={analysisDefinitions} selectedAnalysisUri={selectedAnalysisUri} analyzeHistogram={analyzeHistogram} isCompareAnalysis={isCompareAnalysis} firstBreadcrumbLabel={tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : undefined} firstResultTitle={visibleResultsPage[0]?.title} onSelectAnalysis={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(false); }} onSelectHistogram={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(true); }} />);
+  const workspaceRibbon = (!workspace.authSession || workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewFeature={viewFeature} setViewFeature={setViewFeature} onSelectFeature={workspace.selectViewFeature} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setViewPanel("perspectives"); setSelectedViewUri(uri); setViewFeature(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <AnalyzeRibbon analysisDefinitions={analysisDefinitions} selectedAnalysisUri={selectedAnalysisUri} analyzeHistogram={analyzeHistogram} isCompareAnalysis={isCompareAnalysis} firstBreadcrumbLabel={tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : undefined} firstResultTitle={visibleResultsPage[0]?.title} onSelectAnalysis={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(false); }} onSelectHistogram={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(true); }} />);
   if (!graphRegistryReady || selectedEndpointStatus?.state !== "ok" || selectedEndpointStatus.status !== 200) return (
     <main className="flex h-dvh min-h-[500px] flex-col bg-background text-foreground">
       <Toaster />
@@ -624,7 +625,7 @@ export function MaestroWorkspace() {
     <main className="flex h-dvh min-h-[500px] flex-col bg-background text-foreground">
       <Toaster />
       {endpointHealthToast && <div role="alert" className="fixed bottom-5 right-5 z-[200] flex max-w-md items-center gap-3 rounded-lg border border-destructive/40 bg-popover p-4 text-popover-foreground shadow-xl">
-        <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-destructive">Graph server health check failed</div><div className="mt-1 text-sm">{endpointHealthToast.message}</div></div>
+        <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-destructive">Graph server health check failed</div><ErrorDetails prefix="Graph server" error={endpointHealthToast.message} className="mt-1" /></div>
         <button type="button" className="shrink-0 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:opacity-50" disabled={isRefreshingFailedEndpoint} onClick={() => void refreshFailedEndpointAndRetry()}>{isRefreshingFailedEndpoint ? "Refreshing…" : "Refresh"}</button>
         <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" aria-label="Dismiss health check error" onClick={() => setEndpointHealthToast(null)}>×</button>
       </div>}
@@ -712,19 +713,21 @@ export function MaestroWorkspace() {
                 event.preventDefault();
                 setIsRdfLoading(true);
                 try {
-                  const response = await fetch("/proxy/api/rdf-loader", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json", ...proxyDebugHeaders("rdf-loader", "RdfLoader") },
-                    body: JSON.stringify({
-                      sourceUrl: rdfSourceUrl.trim(),
-                      targetGraph: rdfTargetGraph.trim(),
-                    }),
+                  const sourceUrl = new URL(rdfSourceUrl.trim());
+                  if (!["http:", "https:"].includes(sourceUrl.protocol) || sourceUrl.username || sourceUrl.password) throw new Error("RDF source must be a public HTTP(S) URL.");
+                  const targetGraph = rdfTargetGraph.trim();
+                  if (!/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(targetGraph)) throw new Error("Invalid RDF target graph IRI.");
+                  const update = `LOAD <${sourceUrl.href}> INTO GRAPH <${targetGraph}>`;
+                  const response = await fetch("/proxy/api/sparql", {
+                    method: "POST", cache: "no-store",
+                    headers: { "Content-Type": "application/json", ...proxyDebugHeaders("rdf-load", "RdfLoader") },
+                    body: JSON.stringify({ update }),
                   });
-                  const data = await response.json();
-                  rememberShortforms(data?.shortforms);
-                  if (!response.ok)
-                    throw new Error(data.error || "RDF load failed.");
-                  toast.add({ title: "RDF load completed", description: data.message || "The RDF document was loaded into the target graph.", type: "success" });
+                  if (!response.ok) {
+                    const data = await response.json().catch(() => ({})) as {error?: string};
+                    throw new Error(data.error || `RDF load failed (HTTP ${response.status}).`);
+                  }
+                  toast.add({ title: "RDF load completed", description: `Loaded ${sourceUrl.href} into ${targetGraph}.`, type: "success" });
                 } catch (error) {
                   toast.add({ title: "RDF load failed", description: error instanceof Error ? error.message : "RDF load failed.", type: "error" });
                 } finally {
@@ -809,7 +812,7 @@ export function MaestroWorkspace() {
 
       {endpointMenuError && (
         <p role="alert" className="border-b px-4 py-1.5 text-xs text-destructive">
-          <>{endpointMenuError}{endpointMenuError.includes("Could not load graphs from the personal SPARQL store") && <> Check that your <a href={personalSparqlEndpoint || undefined} target="_blank" rel="noreferrer" className="underline underline-offset-2">personal graph server</a> is online.</>}</>
+          <ErrorDetails prefix="Graph menu" error={endpointMenuError} />
         </p>
       )}
 
@@ -827,8 +830,9 @@ export function MaestroWorkspace() {
               }
             }}>
             <LeftCanvasPanel workspace={workspace} />
-            <ResizableHandle withHandle />
+            <ResizableHandle withHandle className="!w-px !min-w-px !max-w-px shrink-0" />
             <CenterCanvasPanel workspace={workspace} />
+            {workspaceTab === "browse" && <ResizableHandle withHandle className="!w-px !min-w-px !max-w-px shrink-0" />}
             <RightCanvasPanel workspace={workspace} />
           </ResizablePanelGroup>
 

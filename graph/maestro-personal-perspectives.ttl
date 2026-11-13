@@ -119,5 +119,5 @@ Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@av
   sh:path vfct:historyCreated ;
   sh:or ( [ sh:datatype xsd:dateTime ] [ sh:datatype xsd:date ]
           [ sh:datatype xsd:gYearMonth ] [ sh:datatype xsd:gYear ] [ sh:datatype xsd:string ] ) .
-<gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> a mui:DateRangeFacetWidget ;
+<gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> a mui:DateRangeFacetWidget, mui:FacetWidget ;
   rdfs:label "Date/time"@en .

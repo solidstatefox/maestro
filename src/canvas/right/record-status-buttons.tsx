@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { Star, EyeOff, Eye, EyeClosed } from "lucide-react";
 import type { PersonalStatusPage } from "@/canvas/controllers/personal-record-status";
 export function RecordStarButton({ statuses }: { statuses: PersonalStatusPage }) {
@@ -25,6 +26,6 @@ export function RecordStatusButtons({ statuses }: { statuses: PersonalStatusPage
       title={hidden ? "Unhide Record" : "Hide Record"}>
       {hidden ? <Eye className="size-4" aria-hidden="true" /> : <EyeClosed className="size-4" aria-hidden="true" />}{hidden ? "Unhide" : "Hide"}
     </button>
-    {statuses.error && <span role="alert" className="text-xs text-destructive">{statuses.error}</span>}
+    {statuses.error && <ErrorDetails prefix="Record Status" error={statuses.error} />}
   </div>;
 }

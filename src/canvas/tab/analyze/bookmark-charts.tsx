@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -26,7 +27,7 @@ export function BookmarkCharts({ queryXml, providerUri }: { queryXml: string; pr
     setRows([]); setError(""); setLoading(true);
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/bookmark-analysis", {
+        const response = await fetch("/proxy/api/service?service=maestro&operationId=bookmark-analysis", {
           method: "POST", cache: "no-store", signal: controller.signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ kind, queryXml }),
@@ -49,7 +50,7 @@ export function BookmarkCharts({ queryXml, providerUri }: { queryXml: string; pr
   })), [rows]);
   const tags = useMemo(() => rows.filter(r=>r.label).sort((a,b)=>b.count-a.count).slice(0,100).map(r=>({label:r.label,count:r.count})),[rows]);
   if (loading) return <p className="p-4 text-sm text-muted-foreground">Analyzing bookmarks…</p>;
-  if (error) return <p role="alert" className="p-4 text-sm text-destructive">{error}</p>;
+  if (error) return <ErrorDetails prefix="Bookmark analysis" error={error} className="m-4" />;
   if (!rows.length) return <p className="p-4 text-sm text-muted-foreground">No matching bookmark data for this analysis.</p>;
   if (kind === "tags") return <section className="min-h-0 w-full p-4" aria-label="Bookmark tags pie chart">
     <h2 className="mb-2 text-sm font-medium">Bookmark tags</h2>

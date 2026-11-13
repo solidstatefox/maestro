@@ -2,7 +2,7 @@
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { useEffect, useMemo, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
-import { Server, Database, Globe, LayoutGrid, Network, ShieldCheck, FileCode2, ArrowLeftRight, Blocks, Bookmark, History } from "lucide-react";
+import { Server, Database, Globe, LayoutGrid, Network, ShieldCheck, FileCode2, ArrowLeftRight, Landmark, Blocks, Bookmark, History } from "lucide-react";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import { useMapProviderDefinition } from "@/lib/map-provider-discovery";
 import type { FeatureKind } from "@/lib/feature-view-xslt";
@@ -44,7 +44,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
       return () => { controller.abort(); window.clearTimeout(clear); };
     }
     setPersonalDiscoveryPending(true);
-    void fetch("/proxy/api/perspectives", {
+    void fetch("/proxy/api/service?service=maestro&operationId=perspectives", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "discover", classes: classKey.split("\n"), queryXml, trigger: triggerUri, historyUri }),
       cache: "no-store", signal: controller.signal,
@@ -80,7 +80,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
   // A saved Map selection must survive initial Configure discovery. An empty
   // geospatial property list during startup is not a deliberate user pivot.
   return <MaestroHoverExpand active={viewPanel} onChange={onRibbonPanelChange} panels={[
-          { id: "trail", label: "Trail", content: <nav aria-label="Navigation breadcrumbs" className="flex flex-wrap items-start gap-2">
+          { id: "trail", label: "Trail", content: <nav aria-label="Navigation breadcrumbs" className="flex w-max flex-nowrap items-start gap-2">
             {breadcrumbs}
           </nav> },
           { id: "perspectives", label: "Perspectives", content: <div className="flex h-full flex-wrap items-center gap-1" role="toolbar" aria-label="View perspectives">
@@ -121,12 +121,14 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
             {([
               { id: "policies", label: "Policies", Icon: ShieldCheck },
               { id: "formats", label: "Formats", Icon: FileCode2 },
+              { id: "facet-widgets", label: "Facets", Icon: LayoutGrid },
               { id: "transcoders", label: "Transcoders", Icon: ArrowLeftRight },
+              { id: "curators", label: "Curators", Icon: Landmark },
             ] as const).map(({ id, label, Icon }) => {
               const active = viewFeature === id;
               return <button type="button" key={id}
                 className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${active ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
-                aria-pressed={active} onClick={() => onSelectFeature(viewFeature === id ? null : id)}>
+                aria-pressed={active} onClick={() => onSelectFeature(id)}>
                 <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{label}
               </button>;
             })}

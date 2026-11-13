@@ -27,7 +27,7 @@ export function createHistoryActionRestorer({
 }): (historyId: string) => Promise<void> {
   return async function restoreHistoryActionItem(historyId: string): Promise<void> {
     try {
-      const response = await fetch("/proxy/api/query-favorites", { method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history-actions", "RestoreHistoryAction") }, body: JSON.stringify({ action: "getHistoryItem", historyId }), cache: "no-store" });
+      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", { method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history-actions", "RestoreHistoryAction") }, body: JSON.stringify({ action: "getHistoryItem", historyId }), cache: "no-store" });
       const payload = await response.json() as { found?: boolean; queryXml?: string; stateUrl?: string; error?: string };
       if (!response.ok || !payload.found || !payload.queryXml) throw new Error(payload.error ?? "Could not load this History item.");
       const tree = parseFctQueryXml(payload.queryXml);

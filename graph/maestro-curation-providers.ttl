@@ -1,0 +1,60 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+
+# An ordinary discoverable curator. Its approval has to be granted by the user;
+# the presence of this file grants no authority by itself.
+<gttp://ggg.maestro.ecosys/shacl/curator/maestro-graph> a mui:CurationProvider ;
+    rdfs:label "Maestro graph providers curator"@en ;
+    dct:creator "Maestro" ;
+    dct:description "Curates the provider resources declared by Maestro's /graph RDF files."@en ;
+    mui:widget _:curatedProviderList .
+
+# Explicit, flat RDF List of every mui:Provider declared in /graph (including /otc/transcoders).
+_:curatedProviderList a rdf:List ; rdf:first <gttp://ggg.maestro.ecosys/analyze/bookmark-activity> ;
+    rdf:rest _:curatedProviderList1 .
+_:curatedProviderList1 rdf:first <gttp://ggg.maestro.ecosys/analyze/bookmark-tags> ;
+    rdf:rest _:curatedProviderList2 .
+_:curatedProviderList2 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective> ;
+    rdf:rest _:curatedProviderList3 .
+_:curatedProviderList3 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/entrypoint> ;
+    rdf:rest _:curatedProviderList4 .
+_:curatedProviderList4 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/history-perspective> ;
+    rdf:rest _:curatedProviderList5 .
+_:curatedProviderList5 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-0> ;
+    rdf:rest _:curatedProviderList6 .
+_:curatedProviderList6 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-1> ;
+    rdf:rest _:curatedProviderList7 .
+_:curatedProviderList7 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/record-1-template-2> ;
+    rdf:rest _:curatedProviderList8 .
+_:curatedProviderList8 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/record-2-template-3> ;
+    rdf:rest _:curatedProviderList9 .
+_:curatedProviderList9 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/record-3-template-4> ;
+    rdf:rest _:curatedProviderList10 .
+_:curatedProviderList10 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/record-4-template-5> ;
+    rdf:rest _:curatedProviderList11 .
+_:curatedProviderList11 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/record-5-template-6> ;
+    rdf:rest _:curatedProviderList12 .
+_:curatedProviderList12 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/record-6-template-7> ;
+    rdf:rest _:curatedProviderList13 .
+_:curatedProviderList13 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/record-7-template-8> ;
+    rdf:rest _:curatedProviderList14 .
+_:curatedProviderList14 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/record-8-template-9> ;
+    rdf:rest _:curatedProviderList15 .
+_:curatedProviderList15 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/temporal-created> ;
+    rdf:rest _:curatedProviderList16 .
+_:curatedProviderList16 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/temporal-history> ;
+    rdf:rest _:curatedProviderList17 .
+_:curatedProviderList17 rdf:first <gttp://ggg.maestro.ui/provider/map> ;
+    rdf:rest _:curatedProviderList18 .
+_:curatedProviderList18 rdf:first <gttp://ggg.maestro.ui/provider/numeric-range> ;
+    rdf:rest _:curatedProviderList19 .
+_:curatedProviderList19 rdf:first <gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTResponseModeExtractor> ;
+    rdf:rest _:curatedProviderList20 .
+_:curatedProviderList20 rdf:first <gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTTopicExtractor> ;
+    rdf:rest _:curatedProviderList21 .
+_:curatedProviderList21 rdf:first <gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTUserSentimentExtractor> ;
+    rdf:rest _:curatedProviderList22 .
+_:curatedProviderList22 rdf:first <gttp://ggg.openlink.sw/nlp/transcoder#ConversationRoot> ;
+    rdf:rest rdf:nil .

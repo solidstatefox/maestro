@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { ConfigureWorkspaceContent } from "@/canvas/left/configure-pane";
 import { FilterWorkspaceContent } from "@/canvas/left/filter-pane";
@@ -230,10 +231,10 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
                     {(!isLoadingProperties && propertyFacets.length === 0 && propertyFacetError) || (!isLoadingRoles && roleFacets.length === 0 && roleFacetError) ? (
                       <div role="alert" className="flex min-w-0 max-w-full flex-col gap-0.5 px-2 text-xs text-destructive">
                         {!isLoadingProperties && propertyFacets.length === 0 && propertyFacetError ? (
-                          <p className="break-words"><span className="font-medium">Properties could not be loaded:</span> {propertyFacetError}</p>
+                          <ErrorDetails prefix="Properties" error={propertyFacetError} />
                         ) : null}
                         {!isLoadingRoles && roleFacets.length === 0 && roleFacetError ? (
-                          <p className="break-words"><span className="font-medium">Roles could not be loaded:</span> {roleFacetError}</p>
+                          <ErrorDetails prefix="Roles" error={roleFacetError} />
                         ) : null}
                       </div>
                     ) : null}
@@ -289,7 +290,7 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
                 )}
               </div>
               <div
-                className={`min-h-0 flex-1 overflow-y-auto p-3 ${defaultLeftTab === "facets" ? "" : "bg-background"}`}
+                className={`min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] p-3 ${defaultLeftTab === "facets" ? "" : "bg-background"}`}
                 style={defaultLeftTab === "facets" ? { backgroundColor: CONFIGURE_LIST_BACKGROUND_COLOR } : undefined}
               >
                 <ConfigureWorkspaceContent workspace={workspace} />

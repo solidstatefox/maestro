@@ -41,12 +41,12 @@ export async function transformMaestroRecordXslt(
   if (queryDocument.documentElement.localName !== "query") throw new Error("The live query has no query root.");
 
   const envelope = checkedXml(
-    `<mctx:context xmlns:mctx="${CONTEXT_NS}" xmlns:fct="${FCT_RESPONSE_NS}"><mctx:describe/><mctx:live-query/></mctx:context>`,
+    `<mctx:context xmlns:mctx="${CONTEXT_NS}" xmlns:fct="${FCT_RESPONSE_NS}"><mctx:describe/><mctx:query/></mctx:context>`,
     "XSLT context",
   );
   envelope.getElementsByTagNameNS(CONTEXT_NS, "describe")[0]
     .appendChild(envelope.importNode(describedRecord.documentElement, true));
-  envelope.getElementsByTagNameNS(CONTEXT_NS, "live-query")[0]
+  envelope.getElementsByTagNameNS(CONTEXT_NS, "query")[0]
     .appendChild(envelope.importNode(queryDocument.documentElement, true));
   if (commonsImages.length) {
     const gallery = envelope.createElementNS(CONTEXT_NS, "mctx:commons-gallery");
@@ -96,12 +96,12 @@ export async function transformMaestroQueryXslt(
   const queryDocument = checkedXml(liveQueryXml, "Cloned live FCT query");
   if (queryDocument.documentElement.localName !== "query") throw new Error("The live query has no query root.");
   const envelope = checkedXml(
-    `<mctx:context xmlns:mctx="${CONTEXT_NS}" xmlns:fct="${FCT_RESPONSE_NS}"><mctx:describe/><mctx:live-query/></mctx:context>`,
+    `<mctx:context xmlns:mctx="${CONTEXT_NS}" xmlns:fct="${FCT_RESPONSE_NS}"><mctx:describe/><mctx:query/></mctx:context>`,
     "XSLT query-pivot context",
   );
   envelope.getElementsByTagNameNS(CONTEXT_NS, "describe")[0]
     .appendChild(envelope.importNode(describedRecord.documentElement, true));
-  envelope.getElementsByTagNameNS(CONTEXT_NS, "live-query")[0]
+  envelope.getElementsByTagNameNS(CONTEXT_NS, "query")[0]
     .appendChild(envelope.importNode(queryDocument.documentElement, true));
   const xml = await transformWithMaestroSaxon(
     stylesheetText,

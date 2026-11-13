@@ -1,0 +1,30 @@
+@prefix dcterms: <http://purl.org/dc/terms/> .
+# Maestro query-history / Bookmark class relationship.
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix bookmark: <http://www.w3.org/2002/01/bookmark#> .
+@prefix vfct: <https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#> .
+@prefix schema: <https://schema.org/> .
+
+bookmark:Bookmark a rdfs:Class ;
+    rdfs:subClassOf vfct:QueryHistoryVisit ;
+    rdfs:label "Bookmark"@en ;
+    rdfs:comment "A query-history visit explicitly saved by the user; Bookmarks have a query identity hash; views no longer require an identifier property filter."@en .
+
+vfct:QueryHistoryVisit a rdfs:Class ;
+    rdfs:label "Query history visit"@en .
+
+
+# Annotations for referenced VFCT vocabulary terms.
+vfct:QueryHistoryVisit dcterms:description "Query History Visit class in the ontology vocabulary."@en .
+vfct:historyCreated rdfs:label "history Created"@en ; dcterms:description "history Created property in the ontology vocabulary."@en .
+vfct:historyQueryXML rdfs:label "history Query XML"@en ; dcterms:description "history Query XML property in the ontology vocabulary."@en .
+vfct:historyStateUrl rdfs:label "history State Url"@en ; dcterms:description "history State Url property in the ontology vocabulary."@en .
+
+# Descriptions of additional VFCT vocabulary terms referenced by Maestro.
+vfct:QueryBookmark rdfs:label "Query bookmark"@en ; dcterms:description "A stored bookmark representing a saved faceted query."@en .
+vfct:created rdfs:label "Created"@en ; dcterms:description "Creation date or timestamp associated with a faceted browser resource."@en .
+vfct:historyAction rdfs:label "History action"@en ; dcterms:description "Operation recorded for a faceted query history visit."@en .
+vfct:label rdfs:label "Label"@en ; dcterms:description "Human-readable label used by a faceted query resource."@en .
+vfct:queryXML rdfs:label "Query XML"@en ; dcterms:description "Serialized faceted query in XML form."@en .
+vfct:savedQuery rdfs:label "Saved query"@en ; dcterms:description "Link to a saved faceted query resource."@en .

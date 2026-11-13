@@ -1,3 +1,4 @@
+import { createBlankNodeLabelAllocator } from "@/lib/bnode";
 /**
  * Converts an RDF document (Turtle, N-Triples, N3, TriG, N-Quads, RDF/XML) into a single SPARQL
  * `INSERT DATA { GRAPH <g> { ... } }` update.
@@ -90,10 +91,10 @@ function serializeLiteral(term: RdfTerm): string {
   return `"${escaped}"`;
 }
 
-function serializeTerm(term: RdfTerm, bnodePrefix: string): string {
+function serializeTerm(term: RdfTerm, bnodeId: (label: string) => string): string {
   switch (term.termType) {
     case "NamedNode": return serializeIri(term.value);
-    case "BlankNode": return `_:${bnodePrefix}${term.value.replace(/[^A-Za-z0-9_]/g, "_")}`;
+    case "BlankNode": return `_:${bnodeId(term.value)}`;
     case "Literal": return serializeLiteral(term);
     default: throw new Error(`Unsupported RDF term type "${term.termType}" (variables and quoted triples cannot be loaded).`);
   }
@@ -115,10 +116,12 @@ const MAX_UPDATE_BYTES = 900_000;
  */
 export function buildInsertData(graph: string, triples: RdfTriple[]): string {
   const safeGraph = assertSafeGraphIri(graph);
-  const lines = triples.map((triple) => {
-    const bnodePrefix = "m";
-    return `${serializeTerm(triple.subject, bnodePrefix)} ${serializeTerm(triple.predicate, bnodePrefix)} ${serializeTerm(triple.object, bnodePrefix)} .`;
-  });
+  // Keep all blank-node identities in ONE INSERT DATA scope; allocate valid,
+  // collision-free labels rather than replacing punctuation with underscores.
+  const bnodeId = createBlankNodeLabelAllocator("m");
+  const lines = triples.map((triple) =>
+    `${serializeTerm(triple.subject, bnodeId)} ${serializeTerm(triple.predicate, bnodeId)} ${serializeTerm(triple.object, bnodeId)} .`,
+  );
   const update = `INSERT DATA { GRAPH <${safeGraph}> {\n${lines.join("\n")}\n} }`;
   if (Buffer.byteLength(update, "utf8") > MAX_UPDATE_BYTES) {
     throw new Error(`The document is too large (${Buffer.byteLength(update, "utf8")} bytes) to load with a single SPARQL INSERT DATA request.`);

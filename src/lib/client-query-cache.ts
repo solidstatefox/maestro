@@ -345,17 +345,29 @@ export const MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS = "maestro:graph-server-reques
 async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const body = typeof init?.body === "string" ? init.body : "";
+  // Most FCT requests use JSON.stringify({ queryXml }). Regexing the JSON
+  // directly misses addr=\"...\" and discards valid success evidence.
+  let fctXml = body;
+  if (body.trimStart().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(body) as { queryXml?: unknown };
+      fctXml = typeof parsed.queryXml === "string" ? parsed.queryXml : "";
+    } catch { fctXml = ""; }
+  }
   const isFctQuery = /\/proxy\/api\/fct(?:[/?]|$)/.test(url) &&
     (init?.method ?? "GET").toUpperCase() === "POST" &&
-    /<(?:(?:[A-Za-z][\w.-]*):)?query(?:\s|>)/.test(body);
-  // A query's addr is authoritative. Don't mark the *selected* endpoint
-  // healthy because an unrelated personal-store or other proxy call worked.
-  const address = isFctQuery ? body.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "" : "";
-  const endpointUrl = address.includes("@") ? address.slice(address.indexOf("@") + 1) : "";
+    /<(?:(?:[A-Za-z][\w.-]*):)?query(?:\s|>)/.test(fctXml);
+  // A query's addr is authoritative. Don't mark an unrelated personal
+  // SPARQL endpoint healthy because an FCT proxy request completed.
+  const isStatusProjection = /<view\b[^>]*\btype\s*=\s*["']list-status["']/i.test(fctXml);
+  const address = isFctQuery && !isStatusProjection ? fctXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "" : "";
+  const endpointUrl = address.includes("@") ? address.slice(address.indexOf("@") + 1).replace(/&amp;/g, "&") : "";
   try {
     const response = await scheduledGraphFetch(input, init);
     if (!init?.signal?.aborted && typeof window !== "undefined") {
-      if (response.status === 200 && endpointUrl) {
+      // A proxy cache hit and a federated Status projection do not prove the
+      // underlying graph server responded to this request.
+      if (response.status === 200 && endpointUrl && response.headers.get("X-Maestro-Cache") !== "HIT") {
         window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, { detail: { endpointUrl } }));
       } else if (response.status >= 400 && /\/proxy\/api\/(?:fct|sparql|record-graphs|policies|xslt)(?:[/?]|$)/.test(url)) {
         console.warn(`[Maestro] Request returned HTTP ${response.status}: ${url}`);
@@ -392,6 +404,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
     return monitoredProxyFetch(input, init);
   }
   const requestHeaders = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+  if (urlStr.includes("/proxy/api/fct")) requestHeaders.set("x-maestro-concurrency", JSON.stringify(readMaestroConcurrency()));
   const debugSource = [requestHeaders.get("x-maestro-debug-source") || "", requestHeaders.get("x-maestro-debug-component") || ""].join(" ");
   const timeoutMs = configuredTimeoutMs(debugSource);
   if (timeoutMs) requestHeaders.set("x-maestro-query-timeout-ms", String(timeoutMs));
@@ -422,7 +435,8 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
   };
   // Personal state assertions are mutable independently of the live XML.
   // A cache hit here could display a pre-Seen or pre-Hidden result set.
-  if (urlStr.includes("/proxy/api/fct") && typeof init?.body === "string" && /<(?:[\w.-]+:)?state\b/i.test(init.body)) {
+  if (urlStr.includes("/proxy/api/fct") && typeof init?.body === "string" &&
+      (/<(?:[\w.-]+:)?status\b/i.test(init.body) || init.body.includes("urn:maestro:features:"))) {
     return track(await monitoredProxyFetch(input, init));
   }
   const key = computeClientCacheKey(urlStr, init);

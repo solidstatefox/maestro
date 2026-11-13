@@ -6,7 +6,7 @@ import { FACET_GROUPS as facets, FACET_ITEM_GAP_CLASS, PROPERTY_ROLE_ITEM_GAP_CL
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
 
-import { distinctCountQueryFor } from "@/canvas/left/filter";
+import { DistinctCount, distinctCountQueryFor } from "@/canvas/left/filter";
 import { ellipsize, RDF_TYPE_URI } from "@/canvas/utils/query-controller";
 
 import { createFacetItem, type FacetItem, type FacetName } from "@/canvas/left/filter";
@@ -15,6 +15,7 @@ import { CONFIGURE_HEADER_BACKGROUND_COLOR, CONFIGURE_HEADER_BORDER_COLOR } from
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 
 import { toLabel } from "@/lib/uri-labels";
+import { selectedFacetCount, selectedFacetLabel } from "@/lib/selected-facet-presentation";
 
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 
@@ -165,8 +166,8 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
           const facet = items.find((item) => item.key === key);
           return {
             key,
-            label: facet?.label ?? toLabel(key, group === "Properties" ? "Property" : "Role"),
-            count: facet?.count ?? 0,
+            label: selectedFacetLabel(key, group === "Properties" ? "Property" : "Role", facet?.label),
+            count: selectedFacetCount(facet?.count),
             example: exampleForFacetItem(key, facet?.example),
           };
         },
@@ -225,7 +226,7 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                               ? setGraphsPage
                               : setRolesPage;
 
-                      if ((group === "Properties" || group === "Roles") && items.length === 0) return null;
+                      if ((group === "Properties" || group === "Roles") && items.length === 0 && selectedItems.length === 0) return null;
 
                       return (
                         <section
@@ -361,7 +362,9 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                                       )}
                                       {item.example && !(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) && <button type="button" title={item.example.label} disabled={facetListStale || item.example.termType !== "uri"} onClick={() => showClassResults(item.example!.uri, activeLeafId)} className="block break-words text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>e.g.</em> {ellipsize(item.example.label)}</button>}
 									  </div>
-                                      <span className="shrink-0 text-xs text-muted-foreground">{shortenCount(item.count)}</span>
+                                      <span className="shrink-0 text-xs text-muted-foreground">{item.count === null
+                                        ? <DistinctCount tree={queryTree} kind={group === "Properties" ? "property" : "role"} uri={item.key} />
+                                        : shortenCount(item.count)}</span>
                                     </div>
                                   ))}
                                 </div>

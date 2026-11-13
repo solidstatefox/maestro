@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
@@ -10,7 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuLabel
 import { Trace, TraceCollapsible, TraceCollapsibleTrigger, TraceCollapsibleContent, TraceIcon, TraceLine, TraceTitle, TraceDescription } from "@/components/ui/trace";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { QWEN_THINKING_BUDGETS, type QwenThinkingBudget } from "@/lib/qwen-thinking";
+import { QWEN_THINKING_BUDGETS, qwenThinkingOptions, type QwenThinkingBudget } from "@/lib/qwen-thinking";
 import { PromptInput, PromptInputTextarea, PromptInputSubmit } from "@/components/ai-elements/prompt-input";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { appendAssistantActivity, readAssistantActivity, clearAssistantActivity, ASSISTANT_ACTIVITY_CHANGED, type AssistantActivity } from "@/lib/assistant-activity";
@@ -346,7 +347,7 @@ export function BasicAssistantChat({
         // Fetch the menu first. This endpoint performs no LLM requests.
         const controller = new AbortController();
         currentFetchRef.current = controller;
-        const response = await fetch("/proxy/api/otc/chat", { cache: "no-store", signal: controller.signal });
+        const response = await fetch("/proxy/api/service?service=maestro&operationId=otc-chat", { cache: "no-store", signal: controller.signal });
         const data = await response.json().catch(() => ({})) as {
           error?: string; rulesGraph?: string;
           surveys?: Array<{ uri: string; title: string; description: string }>;
@@ -371,18 +372,24 @@ export function BasicAssistantChat({
       } else {
         const controller = new AbortController();
         currentFetchRef.current = controller;
-        const response = await fetch("/api/assistant", {
+        // OpenAPI chat-completions operation through Maestro's one /service
+        // transport; the IteraCompute credential remains server-side.
+        const response = await fetch("/proxy/api/service", {
           signal: controller.signal, method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: nextMessages.map(({ role, content }) => ({ role, content })), thinkingBudget }),
+          body: JSON.stringify({ service: "iteracompute", operationId: "createChatCompletion", payload: {
+            model: "qwen/qwen3.8-27b",
+            messages: nextMessages.map(({ role, content }) => ({ role, content })),
+            ...qwenThinkingOptions(thinkingBudget, 2048),
+          } }),
         });
         const payload = await response.json().catch(() => ({})) as {
-          error?: string; message?: string;
-          usage?: { input?: number; output?: number; total?: number };
+          error?: string | {message?: string}; choices?: Array<{ message?: {content?: string} }>;
+          usage?: {prompt_tokens?: number; completion_tokens?: number; total_tokens?: number};
         };
-        if (!response.ok) throw new Error(payload.error || `Assistant request failed (HTTP ${response.status}).`);
-        answer = typeof payload.message === "string" ? payload.message.trim() : "";
+        if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : payload.error?.message || `Assistant request failed (HTTP ${response.status}).`);
+        answer = payload.choices?.[0]?.message?.content?.trim() ?? "";
         if (!answer) throw new Error("Maestro returned an empty response.");
-        usage = payload.usage;
+        usage = payload.usage ? {input:payload.usage.prompt_tokens, output:payload.usage.completion_tokens, total:payload.usage.total_tokens} : undefined;
       }
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(), role: "assistant", content: answer,
@@ -486,7 +493,7 @@ export function BasicAssistantChat({
           }
           if (flush && buffer.trim()) { handleLine(buffer); buffer = ""; }
         };
-        xhr.open("POST", "/proxy/api/otc/chat");
+        xhr.open("POST", "/proxy/api/service?service=maestro&operationId=otc-chat");
         xhr.setRequestHeader("Accept", "application/x-ndjson");
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable && event.total > 0) updateAttachmentStatus("uploading", Math.min(100, Math.round(100 * event.loaded / event.total)));
@@ -733,7 +740,7 @@ export function BasicAssistantChat({
             <Bubble role="assistant"><span className="inline-flex items-center gap-2 text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Maestro is thinking…</span></Bubble>
           </Message>
         )}
-        {error && <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p>}
+        {error && <ErrorDetails prefix="Maestro chat" error={error} className="px-3 py-2" />}
       </div>
       {composerHost && createPortal(<form onSubmit={submit} className="w-full">
         <PromptInput>

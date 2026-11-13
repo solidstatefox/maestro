@@ -66,7 +66,7 @@ export function classifyMaestroRequest(url: string, headers: Headers, body: stri
   if (body.includes('"selectEndpointUrl"') || body.includes('"selectEndpointId"') || body.includes('"health"') || url.includes("health=1")) return null;
   const source = `${headers.get("x-maestro-debug-source") ?? ""} ${headers.get("x-maestro-debug-component") ?? ""}`.toLowerCase();
   if (/alphabet-letter-count|distinct-count|count-sparql|results-total-count|facet-value-count|query-count|subject-count|history-query-count|bookmark-history-query-count/.test(source) ||
-      /"facetValueCount"\s*:/.test(body) || /"countOnly"\s*:\s*true/.test(body) || /<view\b[^>]*type=["']alphabet["']/.test(body)) return "count";
+      /"facetValueCount"\s*:/.test(body) || /"countOnly"\s*:\s*true/.test(body) || /<view\b[^>]*type=["'](?:alphabet|count-distinct)["']/.test(body)) return "count";
   if (/results|groupby|group-by|record|analyze|view-results/.test(source)) return "interactive";
   return "facet";
 }

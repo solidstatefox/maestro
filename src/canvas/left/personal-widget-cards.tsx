@@ -1,7 +1,8 @@
 "use client";
 import { FacetDecorationControl, FacetItemDecoration } from "@/lib/facet-decoration-contract";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
-import { TemporalFacetContent, type TemporalFacetProvider } from "@/canvas/left/personal-date-facet";
+import { NumericFacetContent } from "@/canvas/left/personal-numeric-facet";
+import { TemporalFacetContent, type TemporalFacetProvider, type NumericFacetProvider } from "@/canvas/left/personal-date-facet";
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
@@ -13,6 +14,7 @@ import maestroLanguages from "@/data/maestro-languages.json";
 
 import { toLabel } from "@/lib/uri-labels";
 import { facetPropertyLabel } from "@/lib/facet-property-label";
+import { dynamicUiComponentUrn } from "@/lib/maestro-ui-component-ids";
 
 import type { ReactNode } from "react";
 
@@ -93,11 +95,14 @@ const TEXT_SEARCH_NAME_PROPERTIES = [
 ] as const;
 
 import type { PersonalWidgetCardsWorkspace } from "@/canvas/controllers/workspace-interfaces";
+import { isCoercibleNumericLexical } from "@/lib/virtuoso-numeric-coercion";
 export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspace, layout: "column" | "grid", temporal?: {
   providers: Map<string, TemporalFacetProvider>;
   scopeNodes: FctQueryNode[];
   queryXml: string;
   onRangeChange: (property: string, start: string, end: string) => void;
+  numericProviders?: NumericFacetProvider[];
+  onNumericRangeChange?: (property: string, start: string, end: string) => void;
 }): ReactNode {
   const { FACET_PAGE_SIZE, activeLeafId, activePropertyFilters, autoConfiguredFacetKeys, beginFacetHoverPreview, clearTutorialPreview, deleteNode, endpointReadyForQuery, facetCandidateCounts, facetHoverPreview, findPropertyPathNode, groupByOptions, groupedPersonalFacetUri, navigateIntoRelationship, navigateToPropertyPath, personalWidgetCardRefs, personalWidgets, queryTree, removeProperty, scrollToGroupForFacetValue, setCentralTab, setFacetCandidateCounts, setGroupByPropertyUri, setPersonalWidgets, setPropertyValue, workspaceTab } = workspace;
     return (
@@ -108,11 +113,17 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
             : "grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
         }
       >
-        {personalWidgets.map((widget) => {
+        {personalWidgets.filter(widget => !(Boolean(workspace.viewFeature) && widget.uri === "gttp://ggg.maestro.ecosys/ns/ui#status")).map((widget) => {
+          // A rendered facet in the FCT scope is addressable by the same ID
+          // serialized on its <property> node. Unbound discovery suggestions
+          // have no query node and must not fabricate one.
+          const boundNode = activePropertyFilters.find(node => node.name === "property" && node.attributes.iri === widget.uri);
+          const componentId = boundNode ? dynamicUiComponentUrn("property", boundNode.id) : undefined;
           const isGroupByFacet = workspaceTab === "browse" && groupedPersonalFacetUri === widget.uri;
           const canGroupByFacet = workspaceTab === "browse" && groupByOptions.some((option) => option.key === `forward:${widget.uri}`);
           return (
           <article
+            id={componentId}
             key={widget.uri}
             ref={(element) => { if (element) personalWidgetCardRefs.current.set(widget.uri, element); else personalWidgetCardRefs.current.delete(widget.uri); }}
             className={`flex min-w-0 flex-col ${isGroupByFacet ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "rounded-md" : ""}`}
@@ -349,7 +360,15 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                           </button>
                         </div>
                       )}
-                      <div className={FACET_ITEM_GAP_CLASS}>
+                      <div className="flex min-w-0 items-start gap-2">
+                        {widget.values.some(value => value.termType === "literal" && isCoercibleNumericLexical(value.uri)) &&
+                          temporal?.numericProviders?.find(provider => provider.projections.some(p => p.alias === "min") && provider.projections.some(p => p.alias === "max")) && temporal.onNumericRangeChange && (
+                          <NumericFacetContent
+                            provider={temporal.numericProviders.find(provider => provider.projections.some(p => p.alias === "min") && provider.projections.some(p => p.alias === "max"))!}
+                            tree={queryTree} property={widget.uri} selected={queryFilter}
+                            onRangeChange={temporal.onNumericRangeChange} />
+                        )}
+                        <div className={`${FACET_ITEM_GAP_CLASS} min-w-0 flex-1`}>
                         {pageValues.map((value, valueIndex) => {
                           const countQuery = distinctCountQueryFor(queryTree, "value", value.uri, widget.uri, value, { direction: "forward" });
                           const isZeroCount = facetCandidateCounts[countQuery] === 0;
@@ -410,6 +429,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                           </div>
                           );
                         })}
+                        </div>
                       </div>
                     </>
                   );

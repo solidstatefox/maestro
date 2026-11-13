@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { createBreadcrumbRenderers } from "@/canvas/top/breadcrumb-renderers";
 import { RESULTS_PAGE_SIZE_STORAGE_KEY } from "@/canvas/sheet/settings";
@@ -38,8 +39,8 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                 {<div role="toolbar" aria-label="Analyze table actions" className="flex shrink-0 items-center gap-2 border-b bg-muted/30 px-3 py-1 text-muted-foreground">
                   <button type="button" className="inline-flex items-center gap-1.5 rounded border border-border/60 bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground disabled:cursor-not-allowed" title="Export (coming soon)" aria-label="Export" disabled><Download aria-hidden="true" className="size-4"/>Export</button>
                 </div>}
-                {analysisError && !isBookmarkAnalysis(selectedAnalysisUri) && <p role="alert" className="p-3 text-sm text-destructive">{analysisError}</p>}
-                {analysisValuesError && <p role="alert" className="p-3 text-xs text-amber-600">Facet values could not be loaded: {analysisValuesError}</p>}
+                {analysisError && !isBookmarkAnalysis(selectedAnalysisUri) && <ErrorDetails prefix="Analysis" error={analysisError} className="m-3" />}
+                {analysisValuesError && <ErrorDetails prefix="Analysis facet values" error={analysisValuesError} className="m-3" />}
                 {analysisLoading && !analysisTable && !isBookmarkAnalysis(selectedAnalysisUri) && <p className="p-3 text-xs text-muted-foreground"><ElapsedStatus label="Building analysis" category="other" clockScope="analysis" /></p>}
                 <div className="min-h-0 flex-1 overflow-auto">
                   {isBookmarkAnalysis(selectedAnalysisUri) && <BookmarkCharts queryXml={workspace.queryXml} providerUri={selectedAnalysisUri} />}

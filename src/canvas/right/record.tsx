@@ -1,106 +1,11 @@
 "use client";
 import { toast } from "@/components/ui/toast";
 
-import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
-
-/**
- * Derive a blank-node Record query from the actual Results FCT path.
- *
- * A reverse-role badge can be a sibling of <view> (the usual Results shape)
- * or the view-bearing relationship itself. In either case bind the badge URI
- * on that exact <property-of> node and leave the complete FCT constraints
- * intact. The view must focus on the blank node, not on the URI badge.
- *
- * Blank nodes opened from an unrelated URI Record table do not have a matching
- * Results path: only that explicit navigation may use a standalone URI anchor.
- */
-export function blankNodeRecordListValuesQuery(
-  sourceXml: string, predicate: string, parentUri: string, limit: number,
-  allowDirectAnchorFallback = false,
-): string {
-  const doc = new DOMParser().parseFromString(sourceXml, "application/xml");
-  if (doc.querySelector("parsererror")) throw new Error("Invalid Results FCT XML.");
-  const ns = "http://openlinksw.com/services/facets/1.0";
-  const view = Array.from(doc.getElementsByTagNameNS(ns, "view"))[0];
-  if (!view || !view.parentElement) throw new Error("Results query has no view carrier.");
-  const carrier = view.parentElement;
-  const hasRolePredicate = (node: Element) =>
-    node.localName === "property-of" && node.getAttribute("iri") === predicate;
-
-  // Most commonly the role is an immediate sibling of <view> inside the
-  // property that binds the blank node. Do not move <view> in this case.
-  const siblingRole = Array.from(carrier.children).find(hasRolePredicate);
-  // Alternatively, <view> may be carried by the reverse relationship itself;
-  // its immediate parent binds the blank node when it is a forward property.
-  const carrierRole = hasRolePredicate(carrier) && carrier.parentElement?.localName === "property"
-    ? carrier : null;
-  const selectedRole = siblingRole ?? carrierRole;
-
-  if (selectedRole && !allowDirectAnchorFallback) {
-    const value = doc.createElementNS(ns, "value");
-    value.setAttribute("datatype", "uri");
-    value.textContent = parentUri;
-    selectedRole.appendChild(value);
-    if (selectedRole === carrierRole) {
-      // The selected role binds the parent URI; focus the outgoing property
-      // that binds the blank node, retaining the rest of the original path.
-      carrier.parentElement!.appendChild(view);
-    }
-  } else if (allowDirectAnchorFallback) {
-    // A blank node clicked in a URI Record table is not necessarily in the
-    // active Results path. Build a separate URI-anchored path only for it.
-    const root = doc.documentElement;
-    while (root.firstChild) root.removeChild(root.firstChild);
-    const value = doc.createElementNS(ns, "value");
-    value.setAttribute("datatype", "uri");
-    value.textContent = parentUri;
-    root.appendChild(value);
-    const property = doc.createElementNS(ns, "property");
-    property.setAttribute("iri", predicate);
-    root.appendChild(property);
-    property.appendChild(view);
-  } else {
-    throw new Error("The selected reverse-property badge is not present at the active Results view scope.");
-  }
-
-  view.setAttribute("type", FCT_VIEW_TYPES.LIST_VALUES);
-  view.setAttribute("limit", String(limit));
-  view.setAttribute("offset", "0");
-  view.removeAttribute("sort");
-  view.removeAttribute("badges");
-  doc.documentElement.setAttribute("order", "no");
-  return new XMLSerializer().serializeToString(doc);
-}
-
-/** Rebind root-level blank nodes through the current Results page, not a URI parent. */
-export function rootBlankNodeRecordQuery(sourceXml: string): string {
-  const doc = new DOMParser().parseFromString(sourceXml, "application/xml");
-  if (doc.querySelector("parsererror")) throw new Error("Invalid Results FCT XML.");
-  const ns = "http://openlinksw.com/services/facets/1.0";
-  const view = Array.from(doc.getElementsByTagNameNS(ns, "view"))[0];
-  if (!view || view.parentElement !== doc.documentElement) {
-    throw new Error("Root blank-node Records require a root-level Results view.");
-  }
-  // Keep the search, class/property filters, index letter, page and ordering.
-  // Each blank node is rebound and described inside one SPARQL response.
-  view.setAttribute("type", FCT_VIEW_TYPES.LIST_VALUES);
-  view.removeAttribute("badges");
-  return new XMLSerializer().serializeToString(doc);
-}
-
-
 import { useEffect, useRef, useState } from "react";
 
 /** State and graph-provenance selection shared by Record subviews. */
-export type RecordValueTerm = {
-    property: string;
-    value: string;
-    direction: "property" | "property-of";
-    termType: "uri" | "literal" | "bnode";
-    datatype?: string;
-    lang?: string;
-  };
-export type BlankNodeRecord = { id: string; rows: RecordValueTerm[]; xml: string };
+import type { RecordValueTerm, BlankNodeRecord } from "@/lib/bnode";
+export type { RecordValueTerm, BlankNodeRecord } from "@/lib/bnode";
 export type RecordGraphAuthor = { graph: string; author: string; predicate: string };
 export function useRecordCoreState() {
   // An RDF blank-node label identifies a node only within the SELECT result set.

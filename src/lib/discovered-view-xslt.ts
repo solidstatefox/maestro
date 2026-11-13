@@ -97,6 +97,8 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
             // Checked state is input-only, never executable code.
           } else if (name === "data-feature-open-uri" && element.localName.toLowerCase() === "button") {
             // Trusted View controller validates the IRI before changing the root query.
+          } else if (name === "data-feature-appbar" && element.localName.toLowerCase() === "button" && attribute.value === "true") {
+            // Pin/unpin is validated by the personal appbar service.
           } else if (name === "data-feature-code" && element.localName.toLowerCase() === "button" && attribute.value === "true") {
             // Code viewer action is delegated and URI-validated by the Features view.
           } else if (name === "data-feature-uri" && element.localName.toLowerCase() === "article") {

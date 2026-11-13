@@ -2,8 +2,8 @@
   "dataserver-seed.ttl": "/graph",
   "maestro-shacl-policies.ttl": "/shacl/policies",
   "maestro-dbpedia-policies.ttl": "/shacl/policies",
-  "maestro-ui-ontology.ttl": "/ontology-cache",
-  "maestro-history-bookmark-schema.ttl": "/ontology-cache",
+  "rdfs/maestro-ui-ontology.ttl": "/ontology-cache",
+  "rdfs/maestro-history-bookmark-schema.ttl": "/ontology-cache",
   "otc-transcoders.rdf": "/otc/transcoders",
   "maestro-services.ttl": "/shacl/policies",
   "maestro-analyze.ttl": "/shacl/policies",
@@ -13,9 +13,13 @@
   "maestro-resource-metadata-shacl-policies.ttl": "/shacl/policies",
   "maestro-resource-metadata-otc-transcoders.ttl": "/otc/transcoders",
   "maestro-resource-metadata-graph.ttl": "/graph",
-  "maestro-resource-metadata-ontology-cache.ttl": "/ontology-cache",
+  "rdfs/maestro-resource-metadata-ontology-cache.ttl": "/ontology-cache",
   "maestro-authorship-policies.ttl": "/shacl/policies",
   "maestro-authorship-transcoders.ttl": "/otc/transcoders",
-  "maestro-ui-components.ttl": "/shacl/policies",
-  "maestro-map-perspective.ttl": "/shacl/policies"
+  "rdfs/maestro-ui-components.ttl": "/shacl/policies",
+  "map/provider.ttl": "/shacl/policies",
+  "numeric/provider.ttl": "/shacl/policies",
+  "rdfs/maestro-node-shape-hierarchy.ttl": "/ontology-cache",
+  "maestro-curation-providers.ttl": "/shacl/policies",
+  "labels.ttl": "/graph"
 }

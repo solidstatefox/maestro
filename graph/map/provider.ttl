@@ -1,0 +1,560 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix schema: <https://schema.org/> .
+@prefix schemahttp: <http://schema.org/> .
+@prefix geo: <http://www.w3.org/2003/01/geo/wgs84_pos#> .
+@prefix georss: <http://www.georss.org/georss/> .
+@prefix geosparql: <http://www.opengis.net/ont/geosparql#> .
+
+# The Map perspective is a discoverable SHACL provider, not a native ribbon
+# entry or a native facet renderer. The provider subject uses the migrated gttp: URI.
+# The provider stylesheet owns MapLibre, projections, controls, and decorations.
+<gttp://ggg.maestro.ui/provider/map> a mui:Provider ;
+  rdfs:label "Map"@en ;
+  mui:icon "map-pin" ;
+  mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/map-input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/shacl/template#MapPerspective> ;
+  mui:queryTemplate <gttp://ggg.maestro.ecosys/shacl/template#MapGeographicQuery> ;
+  mui:resultTemplate <gttp://ggg.maestro.ecosys/shacl/template#MapCoordinateResults> ;
+  mui:paletteTemplate <gttp://ggg.maestro.ecosys/shacl/template#MapPalette> ;
+  schema:author "ChatGPT (GPT-6)" .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/map-input> a mui:InputShape, sh:NodeShape ;
+  rdfs:label "Map input shape"@en ;
+  rdfs:comment "A geographic resource must provide at least one supported coordinate or geometry representation."@en ;
+  sh:or (
+    [ sh:property [ sh:path geo:lat ; sh:minCount 1 ; mui:mapBinding "lat" ] ;
+      sh:property [ sh:path geo:long ; sh:minCount 1 ; mui:mapBinding "lng" ] ]
+    [ sh:property [ sh:path schema:latitude ; sh:minCount 1 ; mui:mapBinding "lat" ] ;
+      sh:property [ sh:path schema:longitude ; sh:minCount 1 ; mui:mapBinding "lng" ] ]
+    [ sh:property [ sh:path schemahttp:latitude ; sh:minCount 1 ; mui:mapBinding "lat" ] ;
+      sh:property [ sh:path schemahttp:longitude ; sh:minCount 1 ; mui:mapBinding "lng" ] ]
+    [ sh:property [ sh:path georss:point ; sh:minCount 1 ; mui:mapBinding "point" ] ]
+    [ sh:property [ sh:path geo:lat_long ; sh:minCount 1 ; mui:mapBinding "point" ] ]
+    [ sh:property [ sh:path geosparql:asWKT ; sh:minCount 1 ; mui:mapBinding "wkt" ] ]
+    [ sh:property [ sh:path ( geosparql:hasGeometry geosparql:asWKT ) ; sh:minCount 1 ; mui:mapBinding "wkt" ] ]
+  ) .
+
+<gttp://ggg.maestro.ecosys/shacl/template#MapPerspective> a mui:PerspectiveWidget ;
+  rdfs:label "Map perspective and facet decoration"@en ;
+  mui:templateContent """<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:mctx="gttp://ggg.maestro.ui/context" exclude-result-prefixes="mctx">
+<xsl:output method="html" omit-xml-declaration="yes"/>
+<xsl:template match="/mctx:context">
+<section data-maestro-map="true" data-component-urn="{mctx:component/@uri}" data-provider-uri="{mctx:metadata/mctx:entry[@name='providerUri']}" class="flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Map perspective">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b px-3 py-2 text-sm">
+    <label for="maestro-map-color-by" class="shrink-0 font-medium">Color by:</label>
+    <select id="maestro-map-color-by" data-map-colorby="true" class="min-w-0 max-w-72 rounded-md border bg-background px-2 py-1 text-sm">
+      <option value="">None</option>
+      <xsl:for-each select="(mctx:query//*[local-name()='view'])[1]/../*[local-name()='property' or local-name()='property-of' or local-name()='class']">
+        <xsl:variable name="direction"><xsl:choose><xsl:when test="local-name()='class'">class</xsl:when><xsl:when test="local-name()='property-of'">reverse</xsl:when><xsl:otherwise>forward</xsl:otherwise></xsl:choose></xsl:variable>
+        <xsl:variable name="iri"><xsl:choose><xsl:when test="local-name()='class'">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</xsl:when><xsl:otherwise><xsl:value-of select="@iri"/></xsl:otherwise></xsl:choose></xsl:variable>
+        <option value="{concat($direction,'|',$iri)}" data-iri="{$iri}" data-direction="{$direction}">
+          <xsl:choose><xsl:when test="local-name()='class'">Categories</xsl:when><xsl:otherwise><xsl:call-template name="local-label"><xsl:with-param name="uri" select="@iri"/></xsl:call-template><xsl:if test="$direction='reverse'"> of</xsl:if></xsl:otherwise></xsl:choose>
+        </option>
+      </xsl:for-each>
+    </select>
+    <span data-map-status="true" role="status" class="text-xs text-muted-foreground">Locating map resources…</span>
+    <span data-map-error="true" role="alert" hidden="hidden" class="text-xs text-destructive"/>
+  </div>
+  <div class="flex min-h-[300px] min-w-0 flex-1 overflow-hidden">
+    <div data-map-canvas="true" class="relative min-h-[300px] min-w-0 flex-1"/>
+  </div>
+  <div hidden="hidden">
+    <textarea data-provider-field="queryXml"><xsl:value-of select="mctx:query-text"/></textarea>
+    <xsl:for-each select="mctx:metadata/mctx:entry">
+      <textarea data-provider-field="{@name}"><xsl:value-of select="."/></textarea>
+    </xsl:for-each>
+    <xsl:for-each select="mctx:facet-values/mctx:facet/mctx:term">
+      <span data-facet-term="true" data-facet-key="{../@key}"><xsl:value-of select="."/></span>
+    </xsl:for-each>
+  </div>
+  <script type="text/javascript"><![CDATA[
+/* Map's entire service implementation is provider-owned. This script is
+ * emitted by the Map XSLT and is not part of the Maestro application runtime. */
+(async function () {
+  const script = document.currentScript;
+  const root = script && script.closest('[data-maestro-map]');
+  const api = window.MaestroProvider;
+  if (!root || !api) return;
+  const urn = root.dataset.componentUrn;
+  const signal = api.getMountSignal(urn);
+  if (!signal || signal.aborted) return;
+  const field = name => root.querySelector('[data-provider-field="' + name + '"]')?.value || '';
+  const providerUri = root.dataset.providerUri;
+  const queryXml = field('queryXml');
+  const shapeUri = field('shapeUri');
+  const queryStylesheet = field('queryStylesheet');
+  const resultStylesheet = field('resultStylesheet');
+  const paletteStylesheet = field('paletteStylesheet');
+  const facetStylesheet = field('facetStylesheet');
+  const addr = new DOMParser().parseFromString(queryXml, 'application/xml').documentElement.getAttribute('addr') || '';
+  const select = root.querySelector('[data-map-colorby]');
+  const status = root.querySelector('[data-map-status]');
+  const error = root.querySelector('[data-map-error]');
+  const canvas = root.querySelector('[data-map-canvas]');
+  const facetOptions = Array.from(select.options).filter(option => option.value);
+  const facetDefinitions = [...new Map(facetOptions.map(option => [option.value, {
+    key: option.value, iri: option.dataset.iri, direction: option.dataset.direction,
+    label: option.textContent.trim()
+  }])).values()];
+  for (const option of facetOptions) {
+    if (option.textContent.includes('://')) {
+      const iri = option.dataset.iri;
+      const local = iri.slice(Math.max(iri.lastIndexOf('#'), iri.lastIndexOf('/')) + 1);
+      try { option.textContent = decodeURIComponent(local) + (option.dataset.direction === 'reverse' ? ' of' : ''); }
+      catch { option.textContent = local; }
+    }
+  }
+  for (const facet of facetDefinitions) {
+    facet.label = facetOptions.find(option => option.value === facet.key)?.textContent || facet.label;
+  }
+  const facetTerms = new Map();
+  for (const node of root.querySelectorAll('[data-facet-term]')) {
+    const key = node.getAttribute('data-facet-key');
+    if (!facetTerms.has(key)) facetTerms.set(key, []);
+    facetTerms.get(key).push(node.textContent || '');
+  }
+  const termKey = (value, datatype, lang) => JSON.stringify([
+    value,
+    datatype === 'http://www.w3.org/2001/XMLSchema#string' ||
+      datatype === 'http://www.openlinksw.com/schemas/facets/dtp/plainstring' ? 'string' :
+      (datatype || (lang ? '' : 'uri')),
+    (lang || '').toLowerCase()
+  ]);
+  const currentQuery = new DOMParser().parseFromString(queryXml, 'application/xml');
+  const view = Array.from(currentQuery.getElementsByTagName('*')).find(node => node.localName === 'view');
+  const scope = view?.parentElement;
+  const selectedTerms = selected => {
+    const result = new Set();
+    if (!scope || !selected) return result;
+    for (const node of Array.from(scope.children)) {
+      const direction = node.localName === 'class' ? 'class' : node.localName === 'property-of' ? 'reverse' : 'forward';
+      const iri = node.localName === 'class' ? 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type' : node.getAttribute('iri');
+      if (direction + '|' + iri !== selected.key) continue;
+      if (node.localName === 'class' && node.getAttribute('iri')) result.add(termKey(node.getAttribute('iri'), 'uri'));
+      for (const val of Array.from(node.children).filter(n => n.localName === 'value')) {
+        result.add(termKey(val.textContent || '', val.getAttribute('datatype') || (val.getAttribute('xml:lang') ? '' : 'string'), val.getAttribute('xml:lang') || ''));
+      }
+    }
+    return result;
+  };
+  const parseXml = source => {
+    const doc = new DOMParser().parseFromString(source, 'application/xml');
+    if (doc.querySelector('parsererror')) throw new Error('Invalid provider XML result');
+    return doc;
+  };
+  const makeNode = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  };
+  const localLabel = uri => {
+    const label = uri.slice(Math.max(uri.lastIndexOf('#'), uri.lastIndexOf('/')) + 1);
+    try { return decodeURIComponent(label); } catch { return label; }
+  };
+  let points = [];
+  let palette = new Map();
+  let markers = [];
+  let map;
+  let activeColorRequest;
+  let resizeObserver;
+  let themeObserver;
+  let maplibre;
+  signal.addEventListener('abort', () => {
+    activeColorRequest?.abort();
+    resizeObserver?.disconnect();
+    themeObserver?.disconnect();
+    markers.forEach(marker => marker.remove());
+    if (map) { try { map.remove(); } catch { /* Browser worker already terminated */ } }
+  }, { once: true });
+  const showingError = (message) => { error.textContent = message || ''; error.hidden = !message; };
+  const statusText = (message) => { status.textContent = message; };
+  const setUrlColor = key => {
+    const params = new URLSearchParams(window.location.search);
+    if (key) params.set('colorBy', key); else params.delete('colorBy');
+    window.history.replaceState(window.history.state, '', window.location.pathname + '?' + params.toString() + window.location.hash);
+    if (key) {
+      const separator = key.indexOf('|');
+      window.dispatchEvent(new CustomEvent('maestro:colorby-selection', { detail: { direction: key.slice(0, separator), iri: key.slice(separator + 1) } }));
+    }
+  };
+  const drawMarkers = () => {
+    if (!map || !maplibre || signal.aborted) return;
+    for (const marker of markers) marker.remove();
+    markers = [];
+    for (const point of points) {
+      const dot = makeNode('div', 'size-4 rounded-full border-2 border-white shadow-lg');
+      dot.style.backgroundColor = palette.get(point.colorTermKey) || '#7c3aed';
+      const card = makeNode('div', 'max-w-72 rounded-lg bg-background p-3 text-foreground shadow-md');
+      card.appendChild(makeNode('div', 'line-clamp-2 text-sm font-semibold', point.title === point.uri ? localLabel(point.uri) : point.title));
+      card.appendChild(makeNode('div', 'mt-1 break-all text-xs text-muted-foreground', point.uri));
+      const selected = facetDefinitions.find(facet => facet.key === select.value);
+      if (selected && point.colorValue) card.appendChild(makeNode('div', 'mt-2 text-xs', selected.label + ': ' + point.colorValue));
+      card.appendChild(makeNode('div', 'mt-1 text-xs tabular-nums text-muted-foreground', point.lat.toFixed(5) + ', ' + point.lng.toFixed(5)));
+      const popup = new maplibre.Popup({ offset: 16, closeButton: false }).setDOMContent(card);
+      const marker = new maplibre.Marker({ element: dot }).setLngLat([point.lng, point.lat]).addTo(map);
+      dot.addEventListener('mouseenter', () => { if (!signal.aborted) popup.setLngLat([point.lng, point.lat]).addTo(map); });
+      dot.addEventListener('mouseleave', () => popup.remove());
+      dot.addEventListener('click', () => { if (!signal.aborted) popup.setLngLat([point.lng, point.lat]).addTo(map); });
+      markers.push(marker);
+    }
+  };
+  const publishDecorations = async () => {
+    if (signal.aborted) return;
+    const active = select.value;
+    const specs = facetDefinitions.map(facet => ({
+      iri: facet.iri, direction: facet.direction,
+      items: facet.key === active ? [...new Set([...points.map(point => point.colorTermKey), ...(facetTerms.get(active) || [])].filter(Boolean))]
+        .map(value => ({ value, color: palette.get(value) || '' })) : []
+    }));
+    await api.decorateFacets(providerUri, facetStylesheet, specs, active, (action, key) => {
+      if (action !== 'toggle-colorby' || signal.aborted) return;
+      select.value = select.value === key ? '' : key;
+      void recolor();
+    });
+  };
+  const projectionRows = (xml, projected, selected) => {
+    const doc = parseXml(xml);
+    const errorNode = Array.from(doc.getElementsByTagName('*')).find(node => node.localName === 'error');
+    if (errorNode) throw new Error(errorNode.textContent || 'FCT projection failed');
+    for (const row of Array.from(doc.getElementsByTagName('*')).filter(node => node.localName === 'row')) {
+      const columns = Array.from(row.children).filter(node => node.localName === 'column');
+      const uri = columns[0]?.textContent?.trim();
+      if (!uri) continue;
+      const existing = projected.get(uri) || new Map();
+      for (const column of columns.slice(2)) {
+        if (column.getAttribute('property') !== selected.iri || (column.getAttribute('direction') || 'forward') !== (selected.direction === 'class' ? 'forward' : selected.direction)) continue;
+        for (const term of Array.from(column.children).filter(node => node.localName === 'value')) {
+          const value = term.textContent || '';
+          if (!value || value === '-') continue;
+          const datatype = term.getAttribute('datatype') || (term.getAttribute('xml:lang') ? '' : 'string');
+          const key = termKey(value, datatype, term.getAttribute('xml:lang') || '');
+          existing.set(key, { value, termKey: key });
+        }
+      }
+      projected.set(uri, existing);
+    }
+  };
+  const doProjection = async (selected, requestSignal) => {
+    const clone = parseXml(queryXml);
+    const projectionView = Array.from(clone.getElementsByTagName('*')).find(node => node.localName === 'view');
+    if (!projectionView) throw new Error('Live FCT query has no view');
+    projectionView.setAttribute('type', 'list-values');
+    projectionView.removeAttribute('badges');
+    const projectionXml = new XMLSerializer().serializeToString(clone);
+    const projected = new Map();
+    for (let i = 0; i < points.length; i += 100) {
+      if (requestSignal.aborted) return;
+      const batch = points.slice(i, i + 100);
+      const xml = await api.projectValues(projectionXml, batch.map(point => ({ type: 'uri', value: point.uri })),
+        [{ property: selected.iri, direction: selected.direction === 'class' ? 'forward' : selected.direction }], requestSignal);
+      projectionRows(xml, projected, selected);
+    }
+    if (requestSignal.aborted) return;
+    const frequency = new Map();
+    for (const terms of projected.values()) for (const term of terms.values()) frequency.set(term.termKey, (frequency.get(term.termKey) || 0) + 1);
+    const filtered = selectedTerms(selected);
+    points = points.map(point => {
+      const choices = [...(projected.get(point.uri)?.values() || [])].sort((a, b) =>
+        Number(filtered.has(b.termKey)) - Number(filtered.has(a.termKey)) ||
+        (frequency.get(a.termKey) || 0) - (frequency.get(b.termKey) || 0) ||
+        a.termKey.localeCompare(b.termKey));
+      return { ...point, colorValue: choices[0]?.value || '', colorTermKey: choices[0]?.termKey || '' };
+    });
+  };
+  const recolor = async () => {
+    if (activeColorRequest) activeColorRequest.abort();
+    activeColorRequest = new AbortController();
+    const colorSignal = activeColorRequest.signal;
+    const key = select.value;
+    const selected = facetDefinitions.find(facet => facet.key === key);
+    setUrlColor(key);
+    showingError('');
+    try {
+      if (selected && points.length) await doProjection(selected, colorSignal);
+      else points = points.map(point => ({ ...point, colorValue: '', colorTermKey: '' }));
+      if (colorSignal.aborted || signal.aborted) return;
+      const values = [...new Set([...points.map(point => point.colorTermKey), ...(facetTerms.get(key) || [])].filter(Boolean))].sort();
+      const doc = document.implementation.createDocument(null, 'palette');
+      for (const value of values) {
+        const term = doc.createElement('term'); term.setAttribute('key', value); doc.documentElement.appendChild(term);
+      }
+      const paletteXml = await api.transformXml(paletteStylesheet, new XMLSerializer().serializeToString(doc), colorSignal);
+      if (colorSignal.aborted || signal.aborted) return;
+      palette = new Map(Array.from(parseXml(paletteXml).documentElement.children).map(node => [node.getAttribute('key'), node.getAttribute('hex')]));
+      drawMarkers();
+      await publishDecorations();
+    } catch (reason) {
+      if (!colorSignal.aborted && !signal.aborted) {
+        showingError('Color By values unavailable: ' + (reason?.message || String(reason)));
+        await publishDecorations();
+      }
+    }
+  };
+  select.addEventListener('change', () => { void recolor(); });
+  const restored = new URLSearchParams(window.location.search).get('colorBy') || '';
+  if (restored && facetDefinitions.some(facet => facet.key === restored)) select.value = restored;
+  try {
+    statusText('Locating map resources…');
+    maplibre = await api.loadLibrary('maplibre-gl');
+    if (signal.aborted) return;
+    const dark = () => document.documentElement.classList.contains('dark');
+    const style = () => dark() ? 'https://tiles.openfreemap.org/styles/dark' : 'https://tiles.openfreemap.org/styles/positron';
+    map = new maplibre.Map({ container: canvas, style: style(), center: [0, 15], zoom: 1 });
+    map.addControl(new maplibre.NavigationControl(), 'top-right');
+    map.addControl(new maplibre.FullscreenControl(), 'top-right');
+    map.addControl(new maplibre.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: false }), 'top-right');
+    const fallback = { version: 8, sources: { osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, attribution: '© OpenStreetMap contributors' } }, layers: [{ id: 'osm', type: 'raster', source: 'osm' }] };
+    let usedFallback = false;
+    map.on('error', event => {
+      if (!usedFallback && !map.isStyleLoaded()) { usedFallback = true; map.setStyle(fallback); }
+      else if (!signal.aborted) showingError(event.error?.message || 'Map tiles unavailable');
+    });
+    themeObserver = new MutationObserver(() => { if (!signal.aborted && !usedFallback) map.setStyle(style()); });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    resizeObserver = new ResizeObserver(() => { if (!signal.aborted) map.resize(); });
+    resizeObserver.observe(canvas);
+    const compiled = await api.compileQuery(queryXml, shapeUri, queryStylesheet, signal);
+    const resultXml = await api.executeQuery({ kind: 'sparql', addr, sparql: compiled.sparql }, signal);
+    const pointsXml = await api.transformXml(resultStylesheet, resultXml, signal);
+    if (signal.aborted) return;
+    const seen = new Set();
+    points = Array.from(parseXml(pointsXml).documentElement.children).flatMap(node => {
+      if (node.localName !== 'point') return [];
+      const uri = node.getAttribute('uri');
+      const lat = Number(node.getAttribute('lat'));
+      const lng = Number(node.getAttribute('lng'));
+      if (!uri || seen.has(uri) || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return [];
+      seen.add(uri);
+      return [{ uri, lat, lng, title: node.getAttribute('title') || uri, colorTermKey: '', colorValue: '' }];
+    });
+    statusText(points.length + ' mapped resources');
+    if (points.length) {
+      const bounds = new maplibre.LngLatBounds();
+      points.forEach(point => bounds.extend([point.lng, point.lat]));
+      map.resize();
+      map.fitBounds(bounds, { padding: 48, maxZoom: 12, duration: 0 });
+    }
+    await recolor();
+  } catch (reason) {
+    if (!signal.aborted) { statusText('Map query failed'); showingError(reason?.message || String(reason)); }
+  }
+})();
+
+]]></script>
+</section>
+</xsl:template>
+<xsl:template name="local-label">
+  <xsl:param name="uri"/>
+  <xsl:choose>
+    <xsl:when test="contains($uri,'#')"><xsl:call-template name="local-label"><xsl:with-param name="uri" select="substring-after($uri,'#')"/></xsl:call-template></xsl:when>
+    <xsl:when test="contains($uri,'/')"><xsl:call-template name="local-label"><xsl:with-param name="uri" select="substring-after($uri,'/')"/></xsl:call-template></xsl:when>
+    <xsl:otherwise><xsl:value-of select="$uri"/></xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+<!-- Compatibility with the existing generic facet decoration slots. -->
+<xsl:template match="/context[@mode='facets']">
+  <decorations>
+    <xsl:apply-templates select="facets/facet" mode="decorate">
+      <xsl:with-param name="colorDirection" select="@colorDirection"/>
+      <xsl:with-param name="colorIri" select="@colorIri"/>
+    </xsl:apply-templates>
+  </decorations>
+</xsl:template>
+<xsl:template match="facet" mode="decorate">
+  <xsl:param name="colorDirection"/><xsl:param name="colorIri"/>
+  <xsl:variable name="isColorFacet" select="@direction=$colorDirection and @iri=$colorIri"/>
+  <facet-decoration direction="{@direction}" iri="{@iri}">
+    <control icon="paintbrush" action="toggle-colorby" active="{$isColorFacet}">
+      <xsl:attribute name="label"><xsl:choose>
+        <xsl:when test="$isColorFacet">Stop coloring map by this facet</xsl:when>
+        <xsl:otherwise>Color map by this facet</xsl:otherwise>
+      </xsl:choose></xsl:attribute>
+    </control>
+    <xsl:if test="$isColorFacet">
+      <xsl:for-each select="item[string-length(@color) &gt; 0]">
+        <item-decoration value="{@value}" color="{@color}"/>
+      </xsl:for-each>
+    </xsl:if>
+  </facet-decoration>
+</xsl:template>
+</xsl:stylesheet>""" .
+
+
+<gttp://ggg.maestro.ecosys/shacl/template#MapGeographicQuery> a mui:QueryTemplate ;
+  rdfs:label "SHACL-driven geographic FCT query"@en ;
+  mui:templateContent """<?xml version="1.0" encoding="UTF-8"?>
+<!-- The map provider's own FCT -> SPARQL query transform.
+     Accepted paths are read from the actual mui:accepts SHACL shape triples,
+     not copied into TypeScript or maintained as a second geographic vocabulary.
+     The mui:mapBinding annotation on each SHACL property shape identifies the
+     output variable populated by that constraint (lat/lng/point/wkt). -->
+<xsl:stylesheet version="1.0"
+ xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+ xmlns:mctx="gttp://ggg.maestro.ui/context"
+ xmlns:s="http://www.w3.org/2005/sparql-results#"
+ exclude-result-prefixes="mctx s">
+ <xsl:output method="xml" omit-xml-declaration="yes"/>
+ <xsl:key name="by-subject" match="s:result" use="s:binding[@name='s']/*[1]"/>
+ <xsl:variable name="sh" select="'http://www.w3.org/ns/shacl#'"/>
+ <xsl:variable name="rdf" select="'http://www.w3.org/1999/02/22-rdf-syntax-ns#'"/>
+ <xsl:variable name="mui" select="'gttp://ggg.maestro.ecosys/ns/ui#'"/>
+ <xsl:variable name="rdfs" select="'http://www.w3.org/2000/01/rdf-schema#'"/>
+
+ <xsl:template match="/mctx:context">
+  <xsl:variable name="focus" select="mctx:compiled/@target"/>
+  <xsl:variable name="addr" select="mctx:query/*[local-name()='query']/@addr"/>
+  <xsl:variable name="graph" select="substring-before($addr, '@')"/>
+  <xsl:variable name="or-triple" select="(mctx:shape/s:sparql/s:results/s:result[s:binding[@name='p']/s:uri=concat($sh,'or')])[1]"/>
+  <xsl:variable name="or-list" select="string($or-triple/s:binding[@name='o']/*[1])"/>
+  <xsl:variable name="view" select="(mctx:query//*[local-name()='view'])[1]"/>
+  <query-request timeout="{mctx:compiled/@timeout}" valid="{boolean($or-list != '' and count(mctx:shape/s:sparql/s:results/s:result[s:binding[@name='p']/s:uri=concat($rdf,'first')]) &gt; 0)}">
+   <sparql>
+    <xsl:value-of select="mctx:compiled/mctx:prefix"/>
+    <xsl:text>SELECT DISTINCT </xsl:text><xsl:choose><xsl:when test="$focus = '?c1'"><xsl:text>?c1</xsl:text></xsl:when><xsl:otherwise><xsl:text>(</xsl:text><xsl:value-of select="$focus"/><xsl:text> AS ?c1)</xsl:text></xsl:otherwise></xsl:choose><xsl:text> ?lat ?lng ?point ?wkt ?title WHERE {&#10; { SELECT DISTINCT </xsl:text><xsl:value-of select="$focus"/>
+    <xsl:text> WHERE {&#10;</xsl:text><xsl:value-of select="mctx:compiled/mctx:where"/><xsl:text>&#10;} }&#10;</xsl:text>
+    <xsl:if test="contains($graph,':') and not(starts-with($graph,'$'))">
+      <xsl:text>GRAPH &lt;</xsl:text><xsl:value-of select="$graph"/><xsl:text>&gt; {&#10;</xsl:text>
+    </xsl:if>
+    <xsl:text>{&#10;</xsl:text>
+    <xsl:call-template name="alternatives">
+      <xsl:with-param name="node" select="$or-list"/>
+      <xsl:with-param name="focus" select="$focus"/>
+      <xsl:with-param name="first" select="'true'"/>
+    </xsl:call-template>
+    <xsl:text>&#10;} OPTIONAL { </xsl:text><xsl:value-of select="$focus"/><xsl:text> &lt;</xsl:text><xsl:value-of select="concat($rdfs,'label')"/><xsl:text>&gt; ?title . }&#10;</xsl:text>
+    <xsl:if test="contains($graph,':') and not(starts-with($graph,'$'))"><xsl:text>}&#10;</xsl:text></xsl:if>
+    <xsl:text>} LIMIT 1000</xsl:text>
+   </sparql>
+   <facets>
+    <xsl:for-each select="$view/../*[local-name()='property' or local-name()='property-of' or local-name()='class']">
+     <xsl:variable name="direction">
+      <xsl:choose><xsl:when test="local-name()='property-of'">reverse</xsl:when><xsl:when test="local-name()='class'">class</xsl:when><xsl:otherwise>forward</xsl:otherwise></xsl:choose>
+     </xsl:variable>
+     <facet id="{@id}" direction="{$direction}">
+      <xsl:attribute name="iri"><xsl:choose><xsl:when test="local-name()='class'">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</xsl:when><xsl:otherwise><xsl:value-of select="@iri"/></xsl:otherwise></xsl:choose></xsl:attribute>
+     </facet>
+    </xsl:for-each>
+   </facets>
+  </query-request>
+ </xsl:template>
+
+ <xsl:template name="alternatives">
+  <xsl:param name="node"/><xsl:param name="focus"/><xsl:param name="first"/>
+  <xsl:if test="$node != '' and $node != concat($rdf,'nil')">
+   <xsl:variable name="first-triple" select="key('by-subject',$node)[s:binding[@name='p']/s:uri=concat($rdf,'first')]"/>
+   <xsl:variable name="branch" select="string($first-triple/s:binding[@name='o']/*[1])"/>
+   <xsl:variable name="next-triple" select="key('by-subject',$node)[s:binding[@name='p']/s:uri=concat($rdf,'rest')]"/>
+   <xsl:variable name="next" select="string($next-triple/s:binding[@name='o']/*[1])"/>
+   <xsl:if test="$first != 'true'"><xsl:text>&#10;UNION&#10;</xsl:text></xsl:if>
+   <xsl:text>{&#10;</xsl:text>
+   <xsl:for-each select="key('by-subject',$branch)[s:binding[@name='p']/s:uri=concat($sh,'property')]">
+    <xsl:variable name="property" select="string(s:binding[@name='o']/*[1])"/>
+    <xsl:variable name="binding" select="string(key('by-subject',$property)[s:binding[@name='p']/s:uri=concat($mui,'mapBinding')]/s:binding[@name='o']/*[1])"/>
+    <xsl:variable name="path" select="key('by-subject',$property)[s:binding[@name='p']/s:uri=concat($sh,'path')]/s:binding[@name='o']/*[1]"/>
+    <xsl:if test="string($path) != '' and ($binding='lat' or $binding='lng' or $binding='point' or $binding='wkt')">
+     <xsl:value-of select="$focus"/><xsl:text> </xsl:text>
+     <xsl:choose><xsl:when test="local-name($path)='uri'"><xsl:text>&lt;</xsl:text><xsl:value-of select="$path"/><xsl:text>&gt;</xsl:text></xsl:when>
+      <xsl:otherwise><xsl:call-template name="sequence-path"><xsl:with-param name="node" select="string($path)"/></xsl:call-template></xsl:otherwise>
+     </xsl:choose>
+     <xsl:text> ?</xsl:text><xsl:value-of select="$binding"/><xsl:text> .&#10;</xsl:text>
+    </xsl:if>
+   </xsl:for-each>
+   <xsl:text>}</xsl:text>
+   <xsl:call-template name="alternatives"><xsl:with-param name="node" select="$next"/><xsl:with-param name="focus" select="$focus"/><xsl:with-param name="first" select="'false'"/></xsl:call-template>
+  </xsl:if>
+ </xsl:template>
+
+ <xsl:template name="sequence-path">
+  <xsl:param name="node"/>
+  <xsl:variable name="first" select="key('by-subject',$node)[s:binding[@name='p']/s:uri=concat($rdf,'first')]"/>
+  <xsl:variable name="rest" select="key('by-subject',$node)[s:binding[@name='p']/s:uri=concat($rdf,'rest')]"/>
+  <xsl:if test="string($first/s:binding[@name='o']/*[1]) != ''">
+   <xsl:text>&lt;</xsl:text><xsl:value-of select="$first/s:binding[@name='o']/*[1]"/><xsl:text>&gt;</xsl:text>
+   <xsl:variable name="next" select="string($rest/s:binding[@name='o']/*[1])"/>
+   <xsl:if test="$next != concat($rdf,'nil') and $next != ''">
+    <xsl:text>/</xsl:text><xsl:call-template name="sequence-path"><xsl:with-param name="node" select="$next"/></xsl:call-template>
+   </xsl:if>
+  </xsl:if>
+ </xsl:template>
+</xsl:stylesheet>""" .
+
+<gttp://ggg.maestro.ecosys/shacl/template#MapCoordinateResults> a mui:QueryResultTemplate ;
+  rdfs:label "Map coordinate normalization"@en ;
+  mui:templateContent """<?xml version="1.0" encoding="UTF-8"?>
+<!-- Map provider transformation. Geographic semantics and RDF result parsing
+     live here; Maestro's query bridge supplies standard SPARQL Results XML. -->
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:s="http://www.w3.org/2005/sparql-results#" exclude-result-prefixes="s">
+ <xsl:output method="xml" omit-xml-declaration="yes"/>
+ <xsl:template match="/s:sparql">
+  <points><xsl:apply-templates select="s:results/s:result"/></points>
+ </xsl:template>
+ <xsl:template match="s:result">
+  <xsl:variable name="uri" select="string(s:binding[@name='c1']/s:uri)"/>
+  <xsl:variable name="lat-field" select="string(s:binding[@name='lat']/*[1])"/>
+  <xsl:variable name="lng-field" select="string(s:binding[@name='lng']/*[1])"/>
+  <xsl:variable name="point" select="normalize-space(translate(string(s:binding[@name='point']/*[1]),',',' '))"/>
+  <xsl:variable name="wkt" select="string(s:binding[@name='wkt']/*[1])"/>
+  <xsl:variable name="inside" select="normalize-space(substring-before(substring-after($wkt,'('),')'))"/>
+  <xsl:variable name="lat">
+   <xsl:choose>
+    <xsl:when test="$lat-field != '' and $lng-field != ''"><xsl:value-of select="$lat-field"/></xsl:when>
+    <xsl:when test="$point != ''"><xsl:value-of select="substring-before(concat($point,' '),' ')"/></xsl:when>
+    <xsl:when test="contains(concat(' ',translate($wkt,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ')),' POINT') and contains($wkt,'(') and contains($wkt,')')"><xsl:value-of select="normalize-space(substring-after($inside,' '))"/></xsl:when>
+   </xsl:choose>
+  </xsl:variable>
+  <xsl:variable name="lng">
+   <xsl:choose>
+    <xsl:when test="$lat-field != '' and $lng-field != ''"><xsl:value-of select="$lng-field"/></xsl:when>
+    <xsl:when test="$point != ''"><xsl:value-of select="normalize-space(substring-after($point,' '))"/></xsl:when>
+    <xsl:when test="contains(concat(' ',translate($wkt,'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ')),' POINT') and contains($wkt,'(') and contains($wkt,')')"><xsl:value-of select="substring-before(concat($inside,' '),' ')"/></xsl:when>
+   </xsl:choose>
+  </xsl:variable>
+  <xsl:if test="$uri != '' and string($lat) != '' and string($lng) != '' and number($lat) = number($lat) and number($lng) = number($lng) and number($lat) &gt;= -90 and number($lat) &lt;= 90 and number($lng) &gt;= -180 and number($lng) &lt;= 180">
+   <point uri="{$uri}" lat="{$lat}" lng="{$lng}">
+    <xsl:attribute name="title"><xsl:choose><xsl:when test="s:binding[@name='title']/*[1]"><xsl:value-of select="s:binding[@name='title']/*[1]"/></xsl:when><xsl:otherwise><xsl:value-of select="$uri"/></xsl:otherwise></xsl:choose></xsl:attribute>
+   </point>
+  </xsl:if>
+ </xsl:template>
+</xsl:stylesheet>""" .
+
+<gttp://ggg.maestro.ecosys/shacl/template#MapPalette> a mui:QueryResultTemplate ;
+  rdfs:label "Map palette"@en ;
+  mui:templateContent """<?xml version="1.0" encoding="UTF-8"?>
+<!-- Provider-owned categorical palette. The source terms are RDF term keys,
+     not display labels. Lexical sorting makes coloring stable across pagination. -->
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+ <xsl:output method="xml" omit-xml-declaration="yes"/>
+ <xsl:template match="/palette">
+  <xsl:variable name="terms" select="term[@key != '' and not(@key = preceding-sibling::term/@key)]"/>
+  <colors>
+   <xsl:for-each select="$terms">
+    <xsl:sort select="@key"/>
+    <xsl:variable name="h" select="20 + (360 * (position() - 1) div count($terms))"/>
+    <xsl:variable name="sector" select="($h mod 360) div 60"/>
+    <xsl:variable name="diff" select="($sector mod 2) - 1"/>
+    <xsl:variable name="absdiff"><xsl:choose><xsl:when test="$diff &lt; 0"><xsl:value-of select="-$diff"/></xsl:when><xsl:otherwise><xsl:value-of select="$diff"/></xsl:otherwise></xsl:choose></xsl:variable>
+    <xsl:variable name="c" select="(1 - (1 - 0.86)) * 0.76"/>
+    <xsl:variable name="x" select="$c * (1 - number($absdiff))"/>
+    <xsl:variable name="m" select="0.43 - $c div 2"/>
+    <xsl:variable name="r"><xsl:choose><xsl:when test="$sector &lt; 1"><xsl:value-of select="$c"/></xsl:when><xsl:when test="$sector &lt; 2"><xsl:value-of select="$x"/></xsl:when><xsl:when test="$sector &lt; 4">0</xsl:when><xsl:when test="$sector &lt; 5"><xsl:value-of select="$x"/></xsl:when><xsl:otherwise><xsl:value-of select="$c"/></xsl:otherwise></xsl:choose></xsl:variable>
+    <xsl:variable name="g"><xsl:choose><xsl:when test="$sector &lt; 1"><xsl:value-of select="$x"/></xsl:when><xsl:when test="$sector &lt; 3"><xsl:value-of select="$c"/></xsl:when><xsl:when test="$sector &lt; 4"><xsl:value-of select="$x"/></xsl:when><xsl:otherwise>0</xsl:otherwise></xsl:choose></xsl:variable>
+    <xsl:variable name="b"><xsl:choose><xsl:when test="$sector &lt; 2">0</xsl:when><xsl:when test="$sector &lt; 3"><xsl:value-of select="$x"/></xsl:when><xsl:when test="$sector &lt; 5"><xsl:value-of select="$c"/></xsl:when><xsl:otherwise><xsl:value-of select="$x"/></xsl:otherwise></xsl:choose></xsl:variable>
+    <color key="{@key}">
+     <xsl:attribute name="hex">#<xsl:call-template name="hex2"><xsl:with-param name="v" select="round((number($r)+$m)*255)"/></xsl:call-template><xsl:call-template name="hex2"><xsl:with-param name="v" select="round((number($g)+$m)*255)"/></xsl:call-template><xsl:call-template name="hex2"><xsl:with-param name="v" select="round((number($b)+$m)*255)"/></xsl:call-template></xsl:attribute>
+    </color>
+   </xsl:for-each>
+  </colors>
+ </xsl:template>
+ <xsl:template name="hex2">
+  <xsl:param name="v"/>
+  <xsl:variable name="hex" select="'0123456789abcdef'"/>
+  <xsl:value-of select="substring($hex, floor($v div 16) + 1, 1)"/>
+  <xsl:value-of select="substring($hex, ($v mod 16) + 1, 1)"/>
+ </xsl:template>
+</xsl:stylesheet>""" .

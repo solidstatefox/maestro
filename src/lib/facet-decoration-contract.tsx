@@ -32,7 +32,7 @@ export async function publishXsltFacetDecorations(source: string, stylesheet: st
   const xml = `<context mode="facets" colorDirection="${escapeAttr(direction)}" colorIri="${escapeAttr(iri)}"><facets>${facets.map(facet =>
     `<facet direction="${facet.direction}" iri="${escapeAttr(facet.iri)}">${facet.items.map(item =>
       `<item value="${escapeAttr(item.value)}" color="${escapeAttr(item.color)}"/>`).join("")}</facet>`).join("")}</facets></context>`;
-  const output = await transformWithMaestroSaxon(stylesheet, xml);
+  const output = await transformWithMaestroSaxon(stylesheet, xml, { providerExecutableMarkup: true });
   const parsed = new DOMParser().parseFromString(output, "application/xml");
   if (parsed.querySelector("parsererror")) throw new Error("Facet decoration XSLT returned invalid XML.");
   const rules = new Map<string, Decoration>();
@@ -47,7 +47,7 @@ export async function publishXsltFacetDecorations(source: string, stylesheet: st
       const color = item.getAttribute("color") ?? "";
       if (/^#[0-9a-f]{6}$/i.test(color)) colors.set(item.getAttribute("value") ?? "", color);
     }
-    rules.set(facetKey(direction, iri), { icon: control.getAttribute("icon") ?? "", action: control.getAttribute("action") ?? "", label: control.getAttribute("label") ?? "Provider action", selected: control.getAttribute("selected") === "true", colors });
+    rules.set(facetKey(direction, iri), { icon: control.getAttribute("icon") ?? "", action: control.getAttribute("action") ?? "", label: control.getAttribute("label") ?? "Provider action", selected: control.getAttribute("active") === "true" || control.getAttribute("selected") === "true", colors });
   }
   // A superseded Saxon transformation must never re-enable a stale legend.
   if (generation === publishGeneration) publish({ source, facets: rules, onAction });

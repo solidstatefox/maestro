@@ -44,7 +44,7 @@ const FORBIDDEN_EXTENSIONS = /(?:http:\/\/saxon\.sf\.net\/|http:\/\/saxonica\.co
 export async function transformWithMaestroSaxon(
   stylesheetText: string,
   sourceXml: string,
-  options: { recordUri?: string; outputLimit?: number; signal?: AbortSignal } = {},
+  options: { recordUri?: string; outputLimit?: number; signal?: AbortSignal; providerExecutableMarkup?: boolean } = {},
 ): Promise<string> {
   if (options.signal?.aborted) throw new DOMException("Transformation canceled", "AbortError");
   if (stylesheetText.length > 250000 || XMLValidator.validate(stylesheetText) !== true ||
@@ -52,7 +52,7 @@ export async function transformWithMaestroSaxon(
       !/<(?:[\w.-]+:)?(?:stylesheet|transform)\b/.test(stylesheetText)) {
     throw new Error("Invalid or oversized Maestro XSLT stylesheet.");
   }
-  if (FORBIDDEN_FUNCTIONS.test(stylesheetText) || FORBIDDEN_INSTRUCTIONS.test(stylesheetText) || FORBIDDEN_EXTENSIONS.test(stylesheetText) || FORBIDDEN_OUTPUT.test(stylesheetText)) {
+  if (FORBIDDEN_FUNCTIONS.test(stylesheetText) || FORBIDDEN_INSTRUCTIONS.test(stylesheetText) || FORBIDDEN_EXTENSIONS.test(stylesheetText) || (!options.providerExecutableMarkup && FORBIDDEN_OUTPUT.test(stylesheetText))) {
     throw new Error("External resource access and extensions are not permitted in Maestro templates.");
   }
   if (XMLValidator.validate(sourceXml) !== true) throw new Error("Invalid Maestro transformation input XML.");

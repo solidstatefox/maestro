@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { createBreadcrumbRenderers } from "@/canvas/top/breadcrumb-renderers";
 
@@ -69,7 +70,7 @@ export function BrowseGroupsCanvas({ workspace }: { workspace: WorkspaceControll
                   {groupByOptions.length > 0 ? (
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                       {groupValuesLoading ? <p className="shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground"><ElapsedStatus label="Loading group values" category="groups" /></p> : null}
-                      {groupValuesError ? <p className="shrink-0 rounded-md border border-destructive/40 p-3 text-sm text-destructive">{groupValuesError}</p> : null}
+                      {groupValuesError ? <ErrorDetails prefix="Grouped results" error={groupValuesError} /> : null}
                       {!groupValuesLoading && !groupValuesError && groupValues.length === 0 && !(isGroupByCategory && isLoadingClasses) ? <p className="shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground">No values found for this relationship in the current scope.</p> : null}
                       <div className="min-w-0 flex-1 overflow-y-auto p-3">
                         <div className="flex flex-col gap-3">

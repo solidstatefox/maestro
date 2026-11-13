@@ -96,7 +96,7 @@ export function OtcWorkbench({ graphServerLabel, graphServerUrl, personalGraphSe
     const checkLogin = async () => {
       // A session-cookie lookup only; this endpoint never contacts the Personal graph server.
       try {
-        const response = await fetch("/proxy/api/otc", { method: "GET", cache: "no-store" });
+        const response = await fetch("/proxy/api/service?service=maestro&operationId=otc", { method: "GET", cache: "no-store" });
         const body = await response.json() as { authenticated?: boolean };
         if (!cancelled) setLoginStatus(response.ok && body.authenticated ? "authenticated" : "signed-out");
       } catch {
@@ -150,7 +150,7 @@ export function OtcWorkbench({ graphServerLabel, graphServerUrl, personalGraphSe
     setResult(null); setOptions([]); setSelected("");
     setStatus("Importing OTC definitions and SHACL validators…");
     const rulesText = await rulesFile.text();
-    await send("/proxy/api/otc/import", { action: "append", graph: nextRules, extension: ".rdf", content: rulesText });
+    await send("/proxy/api/service?service=maestro&operationId=otc-import", { action: "append", graph: nextRules, extension: ".rdf", content: rulesText });
     setRulesGraph(nextRules);
     setStatus("Parsing OpenAI chatlog Turtle…");
     const raw = await sourceFile.text();
@@ -167,14 +167,14 @@ export function OtcWorkbench({ graphServerLabel, graphServerUrl, personalGraphSe
         content = await writeNTriples(quads.slice(i, end));
       }
       if (content.length > 400_000) throw new Error(`A single RDF triple near index ${i} exceeds the upload budget.`);
-      await send("/proxy/api/otc/import", { action: "append", graph: nextSource, extension: ".nt", content });
+      await send("/proxy/api/service?service=maestro&operationId=otc-import", { action: "append", graph: nextSource, extension: ".nt", content });
       i = end;
       setStatus(`Loading chatlog into the Personal graph server: ${i.toLocaleString()} / ${quads.length.toLocaleString()} triples`);
     }
-    const verification = await send("/proxy/api/otc/import", { action: "verify", graph: nextSource });
+    const verification = await send("/proxy/api/service?service=maestro&operationId=otc-import", { action: "verify", graph: nextSource });
     if (!verification.exists) throw new Error("Chatlog upload finished but its graph could not be verified.");
     setSourceGraph(nextSource);
-    const listed = await send("/proxy/api/otc", { action: "list", rulesGraph: nextRules });
+    const listed = await send("/proxy/api/service?service=maestro&operationId=otc", { action: "list", rulesGraph: nextRules });
     const found = listed.transcoders as Option[];
     if (!Array.isArray(found) || !found.length) throw new Error("No OTC transcoders were found in the imported rules graph.");
     setOptions(found);
@@ -186,7 +186,7 @@ export function OtcWorkbench({ graphServerLabel, graphServerUrl, personalGraphSe
     const base = graphBase();
     if (!sourceGraph || !rulesGraph || !selected) throw new Error("Import both files and select a transcoder first.");
     setStatus(publish ? "Validating and publishing transcoded RDF…" : "Evaluating OTC surveys with Maestro and checking successors…");
-    const response = await send("/proxy/api/otc", {
+    const response = await send("/proxy/api/service?service=maestro&operationId=otc", {
       action: "run", rulesGraph, transcoder: selected, source: "personal", sourceGraph,
       namespace: base, dryRun: !publish,
     });

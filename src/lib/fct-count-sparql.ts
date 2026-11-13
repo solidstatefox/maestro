@@ -2,6 +2,7 @@ import { ALL_GRAPHS } from "./graph-address-mode";
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
 import { normalizeFctValue } from "./fct-value-policy";
 import { buildVirtuosoFullTextExpression } from "./virtuoso-full-text";
+import { guardedNumericRangeFilter, numericFacetBinding, NUMERIC_FACET_PROJECTION } from "./virtuoso-numeric-coercion";
 
 type CompilerState = {
   nextVariable: number;
@@ -67,6 +68,14 @@ function appendValueFilter(node: FctQueryNode, subject: string, state: CompilerS
       state.errors.push("The FCT rangeStart must not exceed rangeEnd.");
       return;
     }
+    if (node.attributes.coerce && node.attributes.coerce !== "numeric") {
+      state.errors.push("Unsupported FCT range coercion policy.");
+      return;
+    }
+    if (node.attributes.coerce === "numeric" && !numeric) {
+      state.errors.push("Numeric coercion is only valid for numeric FCT ranges.");
+      return;
+    }
     for (const [bound, operator] of [[start, ">="], [end, "<="]] as const) {
       if (bound === undefined) continue;
       const term = valueTerm({ ...node, text: bound });
@@ -74,7 +83,7 @@ function appendValueFilter(node: FctQueryNode, subject: string, state: CompilerS
         state.errors.push("Invalid FCT range bound.");
         return;
       }
-      state.patterns.push(`FILTER (${subject} ${operator} ${term})`);
+      state.patterns.push(`FILTER ${node.attributes.coerce === "numeric" ? guardedNumericRangeFilter(subject, operator, term) : `(${subject} ${operator} ${term})`}`);
     }
     return;
   }
@@ -107,7 +116,7 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
   for (const node of nodes) {
     switch (node.name) {
       case "view": {
-        if (node.id === "query-view" || state.viewVariable === null) state.viewVariable = subject;
+        if ((node.uiKey === "query-view" || node.id === "query-view") || state.viewVariable === null) state.viewVariable = subject;
         compileNodes(node.children, subject, state);
         break;
       }
@@ -187,8 +196,16 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
   }
 }
 
+/** A provider contributes projections and a relationship to the existing count
+ * graph, not an arbitrary top-level SPARQL query. Expressions and aliases are
+ * validated before interpolation; the base COUNT(DISTINCT view) is unchanged. */
+export type FacetCountExtension = {
+  predicate: string;
+  projections: Array<{ aggregate: "MIN" | "MAX" | "AVG" | "SUM"; expression: "xsd:decimal(?facetValue)" | typeof NUMERIC_FACET_PROJECTION; alias: string }>;
+};
+
 /** Compile the app's supported FCT query-tree subset directly to a scalar SPARQL count. */
-export function buildFctCountSparql(tree: FctQueryTree): string | null {
+export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountExtension): string | null {
   const state: CompilerState = {
     nextVariable: 0,
     viewVariable: null,
@@ -264,6 +281,24 @@ export function buildFctCountSparql(tree: FctQueryTree): string | null {
     whereBody = `GRAPH ${graphIri} {\n    ${whereBody.replace(/\n/g, "\n    ")}\n  }`;
   }
 
-  const countQuery = `SELECT (COUNT(DISTINCT ${state.viewVariable}) AS ?ct) WHERE {\n  ${whereBody.replace(/\n/g, "\n  ")}\n}`;
-  return [...queryAttributes, countQuery].join("\n");
+  let extraProjections = "";
+  if (extension) {
+    const predicate = iriTerm(extension.predicate);
+    if (!predicate || !extension.projections.length || extension.projections.length > 8 ||
+        extension.projections.some(item => !/^(MIN|MAX|AVG|SUM)$/.test(item.aggregate) ||
+          !["xsd:decimal(?facetValue)", NUMERIC_FACET_PROJECTION].includes(item.expression) || !/^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(item.alias)) ||
+        new Set(extension.projections.map(item => item.alias)).size !== extension.projections.length ||
+        extension.projections.some(item => item.alias === "ct")) return null;
+    // An OPTIONAL triple preserves the original count even when a resource has
+    // no numeric values. Preserve named graph scope for this provider binding.
+    const coercible = extension.projections.some(item => item.expression === NUMERIC_FACET_PROJECTION);
+    if (coercible && extension.projections.some(item => item.expression !== NUMERIC_FACET_PROJECTION)) return null;
+    const relation = `${state.viewVariable} ${predicate} ?facetValue . ${coercible ? numericFacetBinding() : "FILTER (isNumeric(?facetValue))"}`;
+    const extraPattern = graph && graph !== ALL_GRAPHS ? `GRAPH <${graph}> { ${relation} }` : relation;
+    whereBody += `\nOPTIONAL { ${extraPattern} }`;
+    extraProjections = extension.projections.map(item =>
+      ` (${item.aggregate}(${item.expression}) AS ?${item.alias})`).join("");
+  }
+  const countQuery = `SELECT (COUNT(DISTINCT ${state.viewVariable}) AS ?ct)${extraProjections} WHERE {\n  ${whereBody.replace(/\n/g, "\n  ")}\n}`;
+  return [...queryAttributes, ...(extension ? ["PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>"] : []), countQuery].join("\n");
 }

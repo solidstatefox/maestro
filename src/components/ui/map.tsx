@@ -222,7 +222,7 @@ function Map({
     // MapLibre 6 uses a separate ESM worker importing a sibling shared module.
     // Turbopack may rename those modules independently, breaking the worker URL.
     // Serve the unmodified pair from the same path instead of a bundled asset.
-    maplibregl.setWorkerUrl("/api/maplibre-worker/maplibre-gl-worker.mjs")
+    maplibregl.setWorkerUrl("/maplibre-worker/maplibre-gl-worker.mjs")
     mapInstance.current = new maplibregl.Map({
       container: mapContainer.current,
       style: styleUrl,

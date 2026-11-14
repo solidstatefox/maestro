@@ -2,7 +2,7 @@
 import { ErrorDetails } from "@/components/ui/error-details";
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import type { FctQueryNode } from "@/lib/fct-query-api";
+import { snapshotFctQueryXml, type FctQueryNode } from "@/lib/fct-query-api";
 import { readMaestroWidgetTimeouts } from "@/lib/maestro-query-timeouts";
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { readFctResponse } from "@/canvas/utils/fct-response";
@@ -41,7 +41,7 @@ function normalizedBucket(value: string, resolution: Resolution) {
 /** Clone the live query, remove only this facet's date range, and move its view
  * to the matching Personal property, retaining graph scope and other filters. */
 function calendarQuery(queryXml: string, property: string, resolution: Resolution): string | null {
-  const doc = new DOMParser().parseFromString(queryXml, "application/xml");
+  const doc = new DOMParser().parseFromString(snapshotFctQueryXml(queryXml, "data"), "application/xml");
   if (doc.querySelector("parsererror")) return null;
   const view = Array.from(doc.getElementsByTagName("*")).find(el => el.localName === "view");
   if (!view?.parentElement) return null;
@@ -203,7 +203,9 @@ export function usePersonalFacetProviders(properties: string[], queryXml = "", d
   const key = useMemo(()=>[...new Set(properties)].sort().join("\n"),[properties]);
   const evidenceKey = JSON.stringify(datatypeEvidence);
   useEffect(()=>{
-    const controller=new AbortController();setProviders([]);setNumeric([]);
+    const controller=new AbortController();
+    // Retain last approved provider metadata during transient facet refreshes.
+    // The displayed widget must not disappear between revalidation requests.
     if(!key) return ()=>controller.abort();
     void fetch("/proxy/api/service?service=maestro&operationId=personal-facet-providers",{method:"POST",cache:"no-store",signal:controller.signal,
       headers:{"Content-Type":"application/json"},body:JSON.stringify({properties:key.split("\n"),queryXml,datatypeEvidence:JSON.parse(evidenceKey),timeoutMs:readMaestroWidgetTimeouts().personal*1000})})

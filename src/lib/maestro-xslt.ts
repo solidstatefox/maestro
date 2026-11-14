@@ -1,4 +1,5 @@
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
+import { snapshotFctQueryXml } from "@/lib/fct-query-api";
 
 /**
  * Record-policy XSLT 3.0 adapter. The stylesheet is stored in the graph and
@@ -37,7 +38,7 @@ export async function transformMaestroRecordXslt(
       describedRecord.documentElement.namespaceURI !== FCT_RESPONSE_NS) {
     throw new Error("XSLT input must contain an FCT DESCRIBE response.");
   }
-  const queryDocument = checkedXml(liveQueryXml, "Cloned live FCT query");
+  const queryDocument = checkedXml(snapshotFctQueryXml(liveQueryXml, "data"), "FCT query API snapshot");
   if (queryDocument.documentElement.localName !== "query") throw new Error("The live query has no query root.");
 
   const envelope = checkedXml(
@@ -93,7 +94,7 @@ export async function transformMaestroQueryXslt(
       describedRecord.documentElement.namespaceURI !== FCT_RESPONSE_NS) {
     throw new Error("Query pivot input must contain an FCT Record snapshot.");
   }
-  const queryDocument = checkedXml(liveQueryXml, "Cloned live FCT query");
+  const queryDocument = checkedXml(snapshotFctQueryXml(liveQueryXml, "data"), "FCT query API snapshot");
   if (queryDocument.documentElement.localName !== "query") throw new Error("The live query has no query root.");
   const envelope = checkedXml(
     `<mctx:context xmlns:mctx="${CONTEXT_NS}" xmlns:fct="${FCT_RESPONSE_NS}"><mctx:describe/><mctx:query/></mctx:context>`,

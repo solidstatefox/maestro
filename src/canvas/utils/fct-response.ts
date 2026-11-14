@@ -1,6 +1,7 @@
 "use client";
 
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
+import { snapshotFctQueryXml } from "@/lib/fct-query-api";
 import { toLabel } from "@/lib/uri-labels";
 import { rdfBindingKind } from "@/lib/bnode";
 
@@ -65,7 +66,7 @@ export type ListValueProjection = { property: string; direction: "forward" | "re
  * Projection columns are passed separately to the proxy and are never added
  * as FCT relationship nodes or custom attributes. */
 export function listValuesQueryClone(xml: string): string {
-  const document = new DOMParser().parseFromString(xml, "application/xml");
+  const document = new DOMParser().parseFromString(snapshotFctQueryXml(xml, "data"), "application/xml");
   if (document.querySelector("parsererror")) throw new Error("Invalid FCT query XML.");
   const view = Array.from(document.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0", "view"))[0]
     ?? Array.from(document.getElementsByTagName("view"))[0];

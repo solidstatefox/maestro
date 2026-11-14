@@ -205,7 +205,7 @@ export type FacetCountExtension = {
 };
 
 /** Compile the app's supported FCT query-tree subset directly to a scalar SPARQL count. */
-export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountExtension): string | null {
+export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountExtension, kindDirection?: "property" | "role", probeKind?: string): string | null {
   const state: CompilerState = {
     nextVariable: 0,
     viewVariable: null,
@@ -281,6 +281,33 @@ export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountEx
     whereBody = `GRAPH ${graphIri} {\n    ${whereBody.replace(/\n/g, "\n    ")}\n  }`;
   }
 
+  // Kind availability uses the same compiled FCT focus and graph scope as counts.
+  // One VALUES + EXISTS SELECT evaluates every kind without N network calls.
+  // Single-kind ASK variants are used only when an endpoint rejects batching.
+  if (kindDirection) {
+    const kinds = ["web-url", "string", "numeric", "date", "email", "phone"];
+    if (probeKind !== undefined && !kinds.includes(probeKind)) return null;
+    const value = "?maestroKindValue";
+    const valueStr = `STR(${value})`;
+    const numeric = `(isLiteral(${value}) && (DATATYPE(${value}) IN (<http://www.w3.org/2001/XMLSchema#integer>, <http://www.w3.org/2001/XMLSchema#decimal>, <http://www.w3.org/2001/XMLSchema#float>, <http://www.w3.org/2001/XMLSchema#double>, <http://www.w3.org/2001/XMLSchema#int>, <http://www.w3.org/2001/XMLSchema#long>, <http://www.w3.org/2001/XMLSchema#short>, <http://www.w3.org/2001/XMLSchema#byte>, <http://www.w3.org/2001/XMLSchema#nonNegativeInteger>, <http://www.w3.org/2001/XMLSchema#positiveInteger>, <http://www.w3.org/2001/XMLSchema#unsignedInt>, <http://www.w3.org/2001/XMLSchema#unsignedLong>, <http://www.w3.org/2001/XMLSchema#unsignedShort>, <http://www.w3.org/2001/XMLSchema#unsignedByte>) || REGEX(${valueStr}, "^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$")))`;
+    const date = `(isLiteral(${value}) && (DATATYPE(${value}) IN (<http://www.w3.org/2001/XMLSchema#date>, <http://www.w3.org/2001/XMLSchema#dateTime>, <http://www.w3.org/2001/XMLSchema#time>, <http://www.w3.org/2001/XMLSchema#gYear>, <http://www.w3.org/2001/XMLSchema#gYearMonth>) || REGEX(${valueStr}, "^[0-9]{4}-[0-9]{2}-[0-9]{2}")))`;
+    const email = `REGEX(${valueStr}, "^(mailto:)?[^@ ]+@[^@ ]+[.][^@ ]+$", "i")`;
+    const phone = `REGEX(${valueStr}, "^(tel:)?[+]?[0-9()+ .-]{7,}$", "i")`;
+    const web = `((isIRI(${value}) || isLiteral(${value})) && REGEX(${valueStr}, "^https?://", "i"))`;
+    const choices = [web, `isLiteral(${value}) && !(${numeric} || ${date} || ${email} || ${phone} || ${web})`, numeric, date, email, phone];
+    const check = probeKind ? choices[kinds.indexOf(probeKind)] : kinds.map((kind, i) => `(?maestroKind = "${kind}" && (${choices[i]}))`).join(" || ");
+    const relation = kindDirection === "property"
+      ? `${state.viewVariable} ?maestroKindPredicate ${value} .`
+      : `${value} ?maestroKindPredicate ${state.viewVariable} .`;
+    const pattern = graph && graph !== ALL_GRAPHS ? `GRAPH <${graph}> { ${relation} }` : relation;
+    const condition = `FILTER (${check})`;
+    const kindValues = kinds.map(k => `"${k}"`).join(" ");
+    const discoveryBody = probeKind
+      ? `${pattern}\n  ${condition}`
+      : `VALUES ?maestroKind { ${kindValues} }\n  FILTER EXISTS { ${pattern} ${condition} }`;
+    const inner = `${whereBody}\n  ${discoveryBody}`;
+    return [...queryAttributes, `${probeKind ? "ASK" : "SELECT DISTINCT ?maestroKind"} WHERE {\n  ${inner.replace(/\n/g, "\n  ")}\n}`].join("\n");
+  }
   let extraProjections = "";
   if (extension) {
     const predicate = iriTerm(extension.predicate);
@@ -301,4 +328,9 @@ export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountEx
   }
   const countQuery = `SELECT (COUNT(DISTINCT ${state.viewVariable}) AS ?ct)${extraProjections} WHERE {\n  ${whereBody.replace(/\n/g, "\n  ")}\n}`;
   return [...queryAttributes, ...(extension ? ["PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>"] : []), countQuery].join("\n");
+}
+
+/** Batched FCT-scoped kind preflight. No independently assembled query path. */
+export function buildFctKindAvailabilitySparql(tree: FctQueryTree, direction: "property" | "role", kind?: string): string | null {
+  return buildFctCountSparql(tree, undefined, direction, kind);
 }

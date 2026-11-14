@@ -1,13 +1,12 @@
-import { getPersonalStatusGraph } from "@/lib/personal-status-graph";
 import { UI_COMPONENT } from "@/lib/maestro-ui-component-ids";
 import { NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { getShapesGraph, queryPersonalSparql, askPersonalSparql, waitForPersonalGraphSeed } from "@/lib/personal-sparql";
+import { getShapesGraph, queryPersonalSparql, waitForPersonalGraphSeed } from "@/lib/personal-sparql";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
 import { requirePersonalLogin } from "@/lib/personal-guard";
-import { policyApprovalGraph, readPolicyApprovals, discoverPolicyApprovals } from "@/lib/policy-approval-store";
+import { readPolicyApprovals, discoverPolicyApprovals } from "@/lib/policy-approval-store";
 
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const SH = "http://www.w3.org/ns/shacl#";
@@ -40,18 +39,19 @@ export async function POST(request: Request) {
       recordShape?: unknown;
       template?: unknown;
       triples?: unknown;
-      classes?: unknown;
-      properties?: unknown;
-      roles?: unknown;
-      classQuery?: unknown;
-      propertyQuery?: unknown;
-      roleQuery?: unknown;
+      uris?: unknown;
     } | null;
     if (!body || typeof body.action !== "string") {
       return NextResponse.json({ error: "A policy action is required." }, { status: 400 });
     }
     // Login reloads CLEAR and repopulate the SHACL graph. Do not read it midway.
     await waitForPersonalGraphSeed(request);
+    if (body.action === "statuses") {
+      const uris = Array.isArray(body.uris) ? [...new Set(body.uris.filter(safeIri))].slice(0, 500) : [];
+      if (!uris.length) return NextResponse.json({ approvals: [] }, {headers:{"Cache-Control":"no-store"}});
+      return NextResponse.json({ approvals: await readPolicyApprovals(uris, request) },
+        {headers:{"Cache-Control":"no-store"}});
+    }
 
     if (body.action === "discover") {
       const types = Array.isArray(body.recordTypes) ? [...new Set(body.recordTypes.filter(safeIri))] : [];
@@ -137,8 +137,7 @@ export async function POST(request: Request) {
       // Both the ClassPolicy and the supplying Provider must be Approved.
       // A direct request to the template endpoint cannot bypass approval.
       const graph = sparqlIri(getShapesGraph(request));
-      const approvedGraph = sparqlIri(getPersonalStatusGraph(request));
-      const query = `PREFIX rdf: <${RDF}>\nPREFIX sh: <${SH}>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?templateXslt ?enrichmentXslt WHERE {
+      const query = `PREFIX rdf: <${RDF}>\nPREFIX sh: <${SH}>\nPREFIX mui: <${MUI}>\nSELECT DISTINCT ?policy ?provider ?templateXslt ?enrichmentXslt WHERE {
         GRAPH ${graph} { ?policy a mui:ClassPolicy ; mui:forClass ?class ; mui:widget ?widgetClass .
           ?provider a mui:Provider ; mui:accepts ?inputShape ; mui:widget ${sparqlIri(body.template)} .
           ?inputShape a mui:InputShape ; sh:class ?class .
@@ -146,12 +145,15 @@ export async function POST(request: Request) {
           FILTER(CONTAINS(STR(?templateXslt), 'xsl:stylesheet'))
           OPTIONAL { ${sparqlIri(body.template)} mui:enrichmentTemplate ?enrichmentTemplate . ?enrichmentTemplate (rdf:value|mui:templateContent) ?enrichmentXslt }
         }
-        GRAPH ${approvedGraph} { ?policy mui:status mui:Approved . ?provider mui:status mui:Approved }
-      } LIMIT 1`;
+      } LIMIT 50`;
       const payload = await queryPersonalSparql(query, 20000, request);
-      const templateXslt = get((payload.results?.bindings?.[0] ?? {}) as BindingRow, "templateXslt");
+      const rows = (payload.results?.bindings ?? []) as BindingRow[];
+      const statuses = await readPolicyApprovals([...new Set(rows.flatMap(row => [get(row, "policy"), get(row, "provider")]).filter(safeIri))], request);
+      const approved = new Set(statuses.filter(item => item.status === "Approved").map(item => item.uri));
+      const selected = rows.find(row => approved.has(get(row, "policy")) && approved.has(get(row, "provider")));
+      const templateXslt = selected ? get(selected, "templateXslt") : "";
       if (!templateXslt) return NextResponse.json({ error: `Template ${body.template} is not available from an Approved policy.`, }, { status: 403 });
-      const enrichmentXslt = get((payload.results?.bindings?.[0] ?? {}) as BindingRow, "enrichmentXslt");
+      const enrichmentXslt = selected ? get(selected, "enrichmentXslt") : "";
       if (enrichmentXslt.length > 250000) return NextResponse.json({ error: "Formatter enrichment XSLT is too large." }, { status: 413 });
       if (templateXslt.length > 250000) return NextResponse.json({ error: "XSLT template is too large." }, { status: 413 });
       // Resolve the actual installed runtime version instead of trusting a version copied into the template.
@@ -160,79 +162,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ templateXslt, enrichmentXslt, nextName: nextPackage.name, nextVersion: nextPackage.version, debugSparql: query });
     }
 
-    if (body.action === "facet-discover" || body.action === "validate") {
+    if (body.action === "validate") {
       if (!safeIri(body.recordShape)) return NextResponse.json({ error: "A valid policy shape is required." }, { status: 400 });
       const shape = sparqlIri(body.recordShape);
-      const approvedGraph = sparqlIri(getPersonalStatusGraph(request));
-      const approved = await askPersonalSparql(`PREFIX mui: <${MUI}>
-        ASK WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} { ?policy a mui:ClassPolicy ; mui:recordShape ${shape} }
-                    GRAPH ${approvedGraph} { ?policy mui:status mui:Approved } }`, 12000, request);
-      if (!approved) return NextResponse.json({ error: "This SHACL policy has not been Approved." }, { status: 403 });
-    }
-
-    if (body.action === "facet-discover") {
-      // Discovery is explicitly triggered by the Record Validate button.
-      // The three FCT facet query clones are carried as scope provenance, while
-      // their resolved classes/properties/roles provide bounded candidate IRIs.
-      const data = body as typeof body & {
-        classes?: unknown; properties?: unknown; roles?: unknown;
-        classQuery?: unknown; propertyQuery?: unknown; roleQuery?: unknown;
-      };
-      const bounded = (value: unknown): string[] => Array.isArray(value) && value.length <= 500
-        ? [...new Set(value.filter(safeIri))] : [];
-      const classes = bounded(data.classes);
-      const forward = bounded(data.properties);
-      const reverse = bounded(data.roles);
-      const snapshots = [data.classQuery, data.propertyQuery, data.roleQuery];
-      if (snapshots.some((item) => typeof item !== "string" || item.length > 200000))
-        return NextResponse.json({ error: "The cloned FCT facet queries are required." }, { status: 400 });
-      // The selected record's SHACL shape is authoritative. Scanning all
-      // Categories/Properties/Roles candidate target shapes can turn a simple
-      // Record Validate into an expensive endpoint-wide join (and return no
-      // rows after Virtuoso ANYTIME). The clone snapshots are still retained
-      // as scope context; only sh:property of this record shape is ingested.
-      if (!safeIri(body.recordShape)) {
-        return NextResponse.json({ error: "A valid Record SHACL shape IRI is required." }, { status: 400 });
-      }
-      // Read the SHACL path term directly. The previous OPTIONAL/FILTER/BIND
-      // projection could leave ?path unbound even when a sh:path triple existed.
-      // Inverse paths are blank nodes carrying sh:inversePath; ordinary paths
-      // are IRI-valued sh:path terms. Neither needs a computed SPARQL binding.
-      const shapesGraph = getShapesGraph(request);
-      const query = `PREFIX sh: <${SH}>\nPREFIX rdf: <${RDF}>\nSELECT DISTINCT ?propertyShape ?rawPath ?inverse ?alternative ?name WHERE { GRAPH ${sparqlIri(shapesGraph)} {
-        ${sparqlIri(body.recordShape)} sh:property ?propertyShape .
-        ?propertyShape sh:path ?rawPath .
-        OPTIONAL { ?propertyShape sh:name ?name }
-        OPTIONAL { ?rawPath sh:inversePath ?inverse }
-        OPTIONAL { ?rawPath sh:alternativePath/rdf:rest*/rdf:first ?alternative }
-      } } LIMIT 300`;
-      const payload = await queryPersonalSparql(query, 20000, request);
-      const rows = (payload.results?.bindings ?? []) as BindingRow[];
-      const facets = [...new Map(rows.flatMap((row) => {
-        const inverse = row.inverse?.type === "uri" ? get(row, "inverse") : "";
-        const direct = row.rawPath?.type === "uri" ? get(row, "rawPath") : "";
-        const alternative = row.alternative?.type === "uri" ? get(row, "alternative") : "";
-        const uri = inverse || alternative || direct;
-        // Categories already own rdf:type, so it must not become a Personal facet.
-        if (!safeIri(uri) || uri === `${RDF}type`) return [];
-        const direction: "forward" | "reverse" = inverse ? "reverse" : "forward";
-        return [{ uri, direction, label: get(row, "name") || "" }];
-      }).map((facet) => [`${facet.direction}:${facet.uri}`, facet])).values()];
-      // A successful SELECT with no paths does not prove a shape has none:
-      // check whether its sh:property links are present in the installed graph.
-      let propertyShapes: number | undefined;
-      if (!rows.length) {
-        const diagnostics = await queryPersonalSparql(
-          `PREFIX sh: <${SH}>\nSELECT (COUNT(?propertyShape) AS ?ct) WHERE { GRAPH ${sparqlIri(shapesGraph)} { ${sparqlIri(body.recordShape)} sh:property ?propertyShape } }`,
-          20000, request,
-        );
-        propertyShapes = Number(get(((diagnostics.results?.bindings ?? [])[0] ?? {}) as BindingRow, "ct") || 0);
-        proxyLog("warn", "policies.facet-discover.no-paths", { recordShape: body.recordShape, shapesGraph, propertyShapes });
-      } else {
-        propertyShapes = new Set(rows.map((row) => get(row, "propertyShape")).filter(Boolean)).size;
-      }
-      proxyLog("info", "policies.facet-discover", { count: facets.length, rawPaths: rows.length, propertyShapes, recordShape: body.recordShape });
-      return NextResponse.json({ facets, graph: shapesGraph, propertyShapes, rawPaths: rows.length });
+      const matching = await queryPersonalSparql(`PREFIX mui: <${MUI}>
+        SELECT DISTINCT ?policy WHERE { GRAPH ${sparqlIri(getShapesGraph(request))} { ?policy a mui:ClassPolicy ; mui:recordShape ${shape} } } LIMIT 40`, 12000, request);
+      const approvedPolicies = await readPolicyApprovals((matching.results?.bindings ?? []).map(row => row.policy?.value ?? "").filter(safeIri), request);
+      if (!approvedPolicies.some(entry => entry.status === "Approved"))
+        return NextResponse.json({ error: "This SHACL policy has not been Approved." }, { status: 403 });
     }
 
     if (body.action === "validate") {

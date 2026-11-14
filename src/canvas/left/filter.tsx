@@ -5,6 +5,7 @@ import { readAutoConfiguredFacetKeys, type FacetAutofillCandidates, type AutoCon
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
+import { findGroupCarrier } from "@/lib/fct-groups-carrier";
 import { toLabel, rememberShortforms } from "@/lib/uri-labels";
 import { proxyDebugHeaders, proxyDebugFingerprint } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
@@ -146,6 +147,7 @@ export function personalFacetInspectorQueries(
   propertyUri: string,
   candidate?: FctResult,
   valueRelationship?: { direction: "forward" | "reverse"; nodeId?: string },
+  grouped = false,
 ): { id: string; label: string; query: string; filename: string; language: "xml" | "sparql" }[] {
   const compile = (xml: string): string => {
     try {
@@ -154,6 +156,17 @@ export function personalFacetInspectorQueries(
       return `# Unable to compile the facet query: ${error instanceof Error ? error.message : String(error)}`;
     }
   };
+  if (grouped) {
+    // A groups view supplies both group values and their distinct membership
+    // counts (?ct). The XML is the live query; no candidate LIST_COUNT or
+    // separate facet-values query represents the operation being inspected.
+    const compiled = compile(valuesXml);
+    return [
+      { id: "personal-groups-sparql", label: "SPARQL", query: compiled, filename: "personal-groups.sparql", language: "sparql" },
+      { id: "personal-groups-count-xml", label: "Counts XML", query: valuesXml, filename: "personal-groups-counts.xml", language: "xml" },
+      { id: "personal-groups-count-sparql", label: "Counts SPARQL", query: compiled, filename: "personal-groups-counts.sparql", language: "sparql" },
+    ];
+  }
   const unavailable = "No value returned yet; a candidate-specific count query is not available.";
   const countTree = candidate
     ? createDistinctCountQuery(tree, "value", candidate.uri, propertyUri, candidate, FCT_VIEW_TYPES.LIST_COUNT, valueRelationship)
@@ -338,7 +351,11 @@ export function getActiveViewPropertyFilters(tree: FctQueryTree): FctQueryNode[]
     }
     return null;
   }
-  return (findViewSiblings(tree.children) ?? []).filter((node) =>
+  // A groups view moves <view> into the grouped relationship. The facet
+  // widgets still describe the incoming resource selection (the parent scope),
+  // NOT the grouped term, so discover them beside the grouping carrier.
+  const scope = findViewSiblings(tree.children) ?? [];
+  return scope.filter((node) =>
     node.name === "property" && typeof node.attributes.iri === "string" && node.attributes.iri.length > 0,
   );
 }
@@ -361,7 +378,8 @@ export function getActiveViewRoleFilters(tree: FctQueryTree): FctQueryNode[] {
     if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) return nodes;
     return null;
   }
-  return (findViewScope(tree.children) ?? []).filter(
+  const scope = findViewScope(tree.children) ?? [];
+  return scope.filter(
     (node) => node.name === "property-of" &&
       typeof node.attributes.iri === "string",
   );

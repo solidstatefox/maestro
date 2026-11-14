@@ -3,6 +3,9 @@
 import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 
 export type ConfigurePaneWorkspace = Pick<WorkspaceController,
+  | "commitConfigureFacetChanges"
+  | "configureSelectedProperties"
+  | "configureSelectedRoles"
   | "FACET_PAGE_SIZE"
   | "activeLeafId"
   | "activePropertyFilters"
@@ -36,6 +39,10 @@ export type ConfigurePaneWorkspace = Pick<WorkspaceController,
   | "propertyFacetWarning"
   | "propertyFacets"
   | "queryTree"
+  | "configurePropertyKind"
+  | "setConfigurePropertyKind"
+  | "configureRoleKind"
+  | "setConfigureRoleKind"
   | "queryWithoutPagingXml"
   | "roleFacetError"
   | "roleFacetWarning"
@@ -306,6 +313,7 @@ export type RecordPaneWorkspace = Pick<WorkspaceController,
   | "queryTree"
   | "queryTreeHeightDbRef"
   | "queryXml"
+  | "preferredAlphabetLanguage"
   | "recordAuthorError"
   | "recordAuthors"
   | "recordControlsOpen"
@@ -313,6 +321,7 @@ export type RecordPaneWorkspace = Pick<WorkspaceController,
   | "recordDescribeIncomplete"
   | "recordDescriptionError"
   | "recordDescriptionSnapshot"
+  | "recordDescriptionQueryLimit"
   | "recordFormatEnabled"
   | "recordFormatError"
   | "recordFormatMenuOpen"

@@ -1,0 +1,35 @@
+/* Record source selected by Shift-click. Owned by the Record controller and
+   rendered against RDFa values in both default and XSLT formats.
+   This is a viewer decoration, never a formatter or RDF assertion. */
+.maestro-record-explorer [data-maestro-followed-source="true"] {
+  background-color: rgb(219 234 254 / 0.9); /* sky-100 */
+  box-shadow: inset 0 0 0 1px rgb(2 132 199 / 0.65);
+  border-radius: 0.25rem;
+  color: rgb(7 89 133);
+  transition: background-color 120ms ease-in-out;
+}
+.maestro-record-explorer [data-maestro-followed-predicate="true"] {
+  color: rgb(3 105 161);
+  font-weight: 650;
+  text-decoration: underline;
+  text-decoration-color: rgb(2 132 199 / 0.5);
+  text-underline-offset: 3px;
+}
+.dark .maestro-record-explorer [data-maestro-followed-source="true"] {
+  background-color: rgb(12 74 110 / 0.55);
+  box-shadow: inset 0 0 0 1px rgb(56 189 248 / 0.65);
+  color: rgb(186 230 253);
+}
+.dark .maestro-record-explorer [data-maestro-followed-predicate="true"] { color: rgb(125 211 252); }
+
+/* Wand selections are visually distinct from the followed source. They are
+ * derived from the controller's queue and survive Record formatter rerenders. */
+.maestro-record-explorer [data-maestro-wanded="true"]:not([data-maestro-followed-source]) {
+  background-color: rgb(59 130 246 / 0.10);
+  box-shadow: inset 0 0 0 1px rgb(59 130 246 / 0.32);
+  border-radius: 0.2rem;
+}
+.dark .maestro-record-explorer [data-maestro-wanded="true"]:not([data-maestro-followed-source]) {
+  background-color: rgb(96 165 250 / 0.16);
+  box-shadow: inset 0 0 0 1px rgb(96 165 250 / 0.4);
+}

@@ -8,7 +8,6 @@ type Handler = (request: Request) => Promise<Response>;
 const operations: Record<string, { GET?: Handler; POST?: Handler }> = {
   'appbar-buttons': { POST: async request => (await import("@/app/proxy/api/service/handlers/appbar-buttons")).POST(request) },
   'auth': { POST: async request => (await import("@/app/proxy/api/service/handlers/auth")).POST(request) },
-  'bookmark-analysis': { POST: async request => (await import("@/app/proxy/api/service/handlers/bookmark-analysis")).POST(request) },
   'graph-seed': { POST: async request => (await import("@/app/proxy/api/service/handlers/graph-seed")).POST(request) },
   'ontology': { POST: async request => (await import("@/app/proxy/api/service/handlers/ontology")).POST(request), GET: async request => (await import("@/app/proxy/api/service/handlers/ontology")).GET(request) },
   'otc': { POST: async request => (await import("@/app/proxy/api/service/handlers/otc")).POST(request), GET: async request => (await import("@/app/proxy/api/service/handlers/otc")).GET(request) },

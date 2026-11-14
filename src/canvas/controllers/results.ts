@@ -6,7 +6,6 @@ import type { GroupMembersState } from "@/canvas/left/filter";
 
 /** State owned by the results subsystem. Query-tree mutations still use the authoritative FCT store. */
 export function useResultsState() {
-  const [groupByPropertyUri, setGroupByPropertyUri] = useState("");
   const groupByBeforeCodeViewRef = useRef("");
   const [resultsUiPage, setResultsUiPage] = useState(0);
   const [groupUiPage, setGroupUiPage] = useState(0);
@@ -43,8 +42,6 @@ export function useResultsState() {
   const [initialBrowseTriggered, setInitialBrowseTriggered] = useState(false);
 
   return {
-    groupByPropertyUri,
-    setGroupByPropertyUri,
     groupByBeforeCodeViewRef,
     resultsUiPage,
     setResultsUiPage,

@@ -1,10 +1,8 @@
-import { recordFeatureDiscovery } from "@/lib/discovery-server";
 import { isBlankNodeTerm } from "@/lib/bnode";
 import { normalizeMaestroConcurrency } from "@/lib/maestro-concurrency";
 import { clientFromRequest, newProxyClientId, MAESTRO_CLIENT_COOKIE, saveProxyClientPreferences } from "@/lib/maestro-proxy-client-preferences";
 import { rescheduleMaestroQueries } from "@/lib/graph-server-query-scheduler";
-import { promoteApprovedCurators } from "@/lib/curator-approvals";
-import { getUserGraph, queryPersonalSparql } from "@/lib/personal-sparql";
+import { getUserGraph, getShapesGraph, graphForFile, waitForPersonalGraphSeed, queryPersonalSparql } from "@/lib/personal-sparql";
 import { currentProxyClient, withProxyClient } from "@/lib/maestro-proxy-client-preferences";
 import { weightMaestroQuery } from "@/lib/graph-server-query-scheduler";
 import { streamProxyQuery, MAESTRO_EVENT_HEADER } from "@/lib/proxy-query-stream";
@@ -12,7 +10,7 @@ import { traceVirtuosoDispatch } from "@/lib/proxy-query-events";
 import { createHash } from "node:crypto";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
 import { cloneFctListStatusView } from "@/lib/fct-status-projection";
-import { verifyApprovalBookmark } from "@/lib/policy-approval-store";
+import { verifyApprovalBookmark, readPolicyApprovals } from "@/lib/policy-approval-store";
 import { getPersonalStatusGraph, getQueryObservationGraph } from "@/lib/personal-status-graph";
 import { unscopedGraph, ALL_GRAPHS } from "@/lib/graph-address-mode";
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
@@ -472,6 +470,32 @@ async function expandListValues(args: {
       existing.push(value);
     }
   }
+  // One authorized, bookmarked list-values projection returns the *effective*
+  // Status state of every URI. This includes virtual Unseen and Pending, and
+  // curated Approved without requiring copied provider approval triples.
+  const statusColumns = columns.flatMap((column, index) => column.property === MUI_STATUS && column.direction === "forward" && !column.path?.length ? [index] : []);
+  if (statusColumns.length) {
+    const resourceIris = values.filter(validIri);
+    // The approval store accepts bounded VALUES batches. A large FCT page
+    // must not fail because it contains more than 500 distinct RDF subjects.
+    const policies = [] as Awaited<ReturnType<typeof readPolicyApprovals>>;
+    for (let index = 0; index < resourceIris.length; index += 500)
+      policies.push(...await readPolicyApprovals(resourceIris.slice(index, index + 500), args.request));
+    const approval = new Map(policies.map(item => [item.uri, item.status]));
+    const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
+    for (const resource of resourceIris) for (const index of statusColumns) {
+      const key = `${resource}\u0000${index}`;
+      const existing = rows[key] ?? [];
+      // Discard stale legacy Pending/Approved literals; the current effective
+      // approval is calculated from curator membership and implementation digest.
+      const active = existing.filter(term => term.value !== `${MUI}Pending` && term.value !== `${MUI}Approved`);
+      if (!active.some(term => term.value === `${MUI}Seen` || term.value === `${MUI}Unseen`))
+        active.push({ type: "uri", value: `${MUI}Unseen` });
+      const effectiveApproval = approval.get(resource);
+      if (effectiveApproval) active.push({ type: "uri", value: `${MUI}${effectiveApproval}` });
+      rows[key] = active;
+    }
+  }
   return { rows, query: queries.join("\n\n"), complete, upstream };
 }
 
@@ -728,11 +752,11 @@ async function handlePost(request: Request) {
     // FCT status filter. This must not depend on having a <status> node: an
     // ordinary, bookmarked Features query also needs its Status facet counts.
     const bookmarkQueryXml = typeof body?.bookmarkQueryXml === "string" ? body.bookmarkQueryXml : queryXml;
-    const isFeatureQuery = /\bsrc\s*=\s*["']urn:maestro:features:(?:policies|formats|facet-widgets|transcoders|curators)["']/.test(rootTag);
+    const isFeatureQuery = /\bsrc\s*=\s*["']urn:maestro:features:(?:policies|formats|facet-widgets|transcoders|curators|fsm-providers)["']/.test(rootTag);
     const featureKind = rootTag.match(/\bsrc\s*=\s*["']urn:maestro:features:([^"']+)["']/)?.[1] ?? "";
     const hasSavedFeatureQuery = isFeatureQuery && compiled.view !== FCT_VIEW_TYPES.LIST_STATUS &&
       await verifyApprovalBookmark(bookmarkQueryXml, request);
-    if (hasSavedFeatureQuery) await promoteApprovedCurators(request);
+
     // list-status is an FCT view, not a policy-approvals JSON API.  Its focus
     // is the (unpaginated) cloned live query; the personal Status graph supplies
     // the grouped status bindings. The federated compiler omits SERVICE when
@@ -752,6 +776,8 @@ async function handlePost(request: Request) {
       const statusSelection = compileFctXmlToSparql(statusViewXml, undefined, false, false, false, false, {
         liveEndpoint: endpoint.url, executionEndpoint: personalEndpoint,
         defaultStatusAddr: `${getPersonalStatusGraph(request)}@${personalEndpoint}`,
+        validateShapesGraph: getShapesGraph(request),
+        providerOtcGraph: graphForFile("otc-transcoders.rdf",request),
       });
       if (statusSelection.view !== FCT_VIEW_TYPES.LIST_STATUS)
         return fctError("Could not derive Status from the bookmarked live query.", 400);
@@ -766,14 +792,21 @@ async function handlePost(request: Request) {
         vars: ["c1", "c2"], elapsedMs: Date.now() - started, complete: true,
         timeoutMs: compiled.timeoutMs }), { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
-    const executionEndpoint = hasStatusConstraints ? personalSparqlUrl(request).toString() : endpoint.url;
-    if (hasStatusConstraints) {
+    const isValidate = compiled.view === FCT_VIEW_TYPES.VALIDATE && !graphOnly && !countOnly;
+    if (isValidate) {
+      if (!getPersonalSession(request)) return fctError("Log in before discovering SHACL shapes.", 401);
+      await waitForPersonalGraphSeed(request);
+    }
+    const executionEndpoint = (hasStatusConstraints || isValidate) ? personalSparqlUrl(request).toString() : endpoint.url;
+    if (hasStatusConstraints || isValidate) {
       // Compile all status constraints directly from the FCT XML. No SPARQL
       // post-processing, WHERE extraction, or variable rewriting is permitted.
       const personalEndpoint = personalSparqlUrl(request).toString();
       compiled = compileFctXmlToSparql(queryXml, view, graphOnly, countOnly, false, false, {
         liveEndpoint: endpoint.url, executionEndpoint: personalEndpoint,
         defaultStatusAddr: `${getPersonalStatusGraph(request)}@${personalEndpoint}`,
+        validateShapesGraph: getShapesGraph(request),
+        providerOtcGraph: graphForFile("otc-transcoders.rdf",request),
       });
     }
     const isDescribe = compiled.view === FCT_VIEW_TYPES.DESCRIBE;
@@ -854,7 +887,7 @@ async function handlePost(request: Request) {
     }
     // Personal-status selections can change without changing the live FCT XML.
     // Never serve an old state-constrained response from the proxy cache.
-    const cachedResponse = (hasStatusConstraints || hasSavedFeatureQuery) ? null : getQueryCache<{ body: string; contentType: string; status: number }>(responseCacheKey);
+    const cachedResponse = (hasStatusConstraints || hasSavedFeatureQuery || isValidate) ? null : getQueryCache<{ body: string; contentType: string; status: number }>(responseCacheKey);
     if (cachedResponse) {
       return new Response(cachedResponse.body, {
         status: cachedResponse.status,
@@ -864,7 +897,7 @@ async function handlePost(request: Request) {
     stage = "execute";
     const startedAt = Date.now();
     let activeQuery = compiled.query;
-    let queryResult = await executeSparql(executionEndpoint, activeQuery, isDescribe && !compiled.describeLiteral && !compiled.describeExpanded ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || hasSavedFeatureQuery);
+    let queryResult = await executeSparql(executionEndpoint, activeQuery, isDescribe && !compiled.describeLiteral && !compiled.describeExpanded ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || hasSavedFeatureQuery || isValidate);
     let countFreeFallback = false;
     let unorderedFallback = false;
     // A failed IRI_RANK sort should not make the primary Results pane unusable.
@@ -934,7 +967,7 @@ async function handlePost(request: Request) {
       // No partial answer or cache entry is allowed to masquerade as source.
       if (compiled.describeExpanded && (partial || bindings.length > (compiled.describeMaxTriples ?? 0)))
         return fctError(`Expanded RDF subgraph is incomplete; increase the limit (maximum 5000 triples), reduce the FCT scope, or simplify the shape.`, 422);
-      if (!hasStatusConstraints && !hasSavedFeatureQuery && response.status === 200 && !partial) setQueryCache(key, text);
+      if (!hasStatusConstraints && !hasSavedFeatureQuery && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
       // A literal Record can be returned promptly without a second network
       // query merely to decorate the subjects of its incoming Roles.
       const labels = compiled.describeLiteral || compiled.describeExpanded ? new Map<string, string>()
@@ -949,7 +982,7 @@ async function handlePost(request: Request) {
         ...fctUpstreamMetadata(response, text),
       });
       const xml = `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.DESCRIBE}">${describeRows}</fct:result></fct:facets>`;
-      if (!hasStatusConstraints && !hasSavedFeatureQuery && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+      if (!hasStatusConstraints && !hasSavedFeatureQuery && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...incompleteHeaders } });
     }
 
@@ -965,25 +998,18 @@ async function handlePost(request: Request) {
         ...fctUpstreamMetadata(response, text),
       });
       const xml = `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.ASK}"><fct:boolean>${askBoolean ? "true" : "false"}</fct:boolean></fct:result></fct:facets>`;
-      if (!hasStatusConstraints && !hasSavedFeatureQuery && response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+      if (!hasStatusConstraints && !hasSavedFeatureQuery && !isValidate && response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
     const parsed = parseResults(text);
     if (!parsed && !anytime) return fctError("Virtuoso SPARQL endpoint returned an invalid SPARQL Results JSON document", 502, text.slice(0, 1500));
-    // Approval discovery belongs to the FCT result lifecycle, before cards or
-    // list-status projections read personal assertions. Never scan GRAPH ?g.
-    if (hasSavedFeatureQuery && parsed && !partial && !countOnly && !graphOnly &&
-        compiled.view === FCT_VIEW_TYPES.LIST) {
-      await recordFeatureDiscovery(request, featureKind,
-        (parsed.results?.bindings ?? []).map(row => row.c1?.type === "uri" ? row.c1.value : "").filter(Boolean));
-    }
     // An ANYTIME timeout can arrive with an error-only body and no result rows.
     // No rows were received: do not fabricate rows or report a complete empty set.
     if (!parsed && anytime) proxyLog("warn", "fct.anytime-no-rows", { view: compiled.view, status: response.status });
     let bindings = parsed?.results?.bindings ?? [];
     let vars = parsed?.head?.vars ?? [];
-    if (!hasStatusConstraints && !hasSavedFeatureQuery && response.status === 200 && !partial) setQueryCache(key, text);
-    const labels = countOnly || compiled.view === FCT_VIEW_TYPES.LIST_VALUES ||
+    if (!hasStatusConstraints && !hasSavedFeatureQuery && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
+    const labels = countOnly || compiled.view === FCT_VIEW_TYPES.VALIDATE || compiled.view === FCT_VIEW_TYPES.LIST_VALUES ||
       (compiled.graphOnly && compiled.view === FCT_VIEW_TYPES.GRAPHS && /<view\b[^>]*\brecord=["']yes["']/i.test(queryXml))
       ? new Map<string, string>()
       : await resolveFctLabels(endpoint.url,
@@ -1065,7 +1091,7 @@ async function handlePost(request: Request) {
       execMilliseconds,
       execDbActivity,
     });
-    if (!hasStatusConstraints && !hasSavedFeatureQuery && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+    if (!hasStatusConstraints && !hasSavedFeatureQuery && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...(unorderedFallback ? { "X-Maestro-Ordering-Fallback": "true" } : {}),
       ...(countFreeFallback ? { "X-Maestro-Count-Fallback": "unavailable" } : {}), ...incompleteHeaders } });
   } catch (error) {

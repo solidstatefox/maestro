@@ -388,7 +388,6 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
             <Tooltip><TooltipTrigger render={<button type="button" onClick={() => {
               resetQuery();
               setSearch("");
-              setGroupByPropertyUri("");
               if (centralTab === "groups") setCentralTab("results");
               setSearchPipelineRun((current) => current + 1);
             }} aria-label="Reset query to home" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25"><Home className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Reset query</TooltipContent></Tooltip>
@@ -398,10 +397,10 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
           {graphProbe.identity === graphProbeIdentity && graphProbe.state === "error" && !graphAlreadySelected &&
             <ErrorDetails prefix="Graph discovery" error={graphProbe.error ?? "Graph discovery failed"} />}
           {/* One address: [graph]@[graph server], with no gap around the at-sign. */}
-          <div className="relative z-20 w-[min(24rem,45vw)] shrink-0 self-stretch">
+          <div className="relative z-20 w-fit min-w-[38rem] max-w-[calc(100vw-12rem)] shrink-0 self-stretch">
           <div role="group" aria-label="Graph address: graph at graph server"
             onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setGraphAddressEditing(false); }}
-            className={`flex min-w-0 items-stretch rounded-md border border-input bg-background focus-within:ring-1 focus-within:ring-ring ${graphAddressEditing ? "absolute inset-y-0 left-0 z-50 w-[min(48rem,calc(100vw-2rem))] shadow-lg" : "relative h-full w-full overflow-hidden"}`}>
+            className={`flex min-w-0 items-stretch rounded-md border border-input bg-background focus-within:ring-1 focus-within:ring-ring ${graphAddressEditing ? "absolute inset-y-0 left-0 z-50 w-[min(48rem,calc(100vw-2rem))] shadow-lg" : "relative h-full w-full"}`}>
 
             <Tooltip><TooltipTrigger render={<button
               type="button"
@@ -416,7 +415,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               <WandSparkles aria-hidden="true" className="size-4" />
               
             </button>} /><TooltipContent>{graphAutoFill ? "Auto-fill enabled: empty graph addresses are discovered; X switches to Everywhere" : "Auto-fill off: X clears the graph without selecting Everywhere. Click to enable."}</TooltipContent></Tooltip>
-            <div className="group/graph-input flex min-w-0 flex-1 items-stretch overflow-hidden bg-transparent">
+            <div className="group/graph-input flex min-w-[min(22rem,42vw)] flex-[1_1_32rem] items-stretch overflow-hidden bg-transparent">
               <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={() => void openGraphInfo()}
@@ -439,11 +438,11 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                 onKeyDown={(event) => { if (event.key === "Enter") applyGraphText(); }}
                 placeholder="Enter graph URI"
                 aria-label="Site URI"
-                className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
+                className="min-w-[min(20rem,40vw)] flex-1 bg-transparent px-3 py-2 text-sm outline-none"
               /> : <button type="button" title={queryTree.attributes.graph || "Enter graph URI"}
                 aria-label={`Edit graph: ${queryTree.attributes.graph ? toLabel(queryTree.attributes.graph) : "No graph selected"}`}
                 onClick={() => setGraphAddressEditing(true)}
-                className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm hover:bg-accent/40">
+                className="min-w-[min(20rem,40vw)] flex-1 truncate px-3 py-2 text-left text-sm hover:bg-accent/40">
                 {queryTree.attributes.graph ? toLabel(queryTree.attributes.graph) : "Graph"}
               </button>
               )}
@@ -495,21 +494,21 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
             <Label htmlFor="fct-endpoint" aria-label="Graph server" className="flex shrink-0 items-center border-x border-border/60 px-2 text-muted-foreground">
               <AtSign aria-hidden="true" className="size-4" />
             </Label>
-            <div className="flex min-w-0 flex-1 items-stretch">
-              <ButtonGroup aria-label="Graph server selection, discovery, and refresh" className="group/graph-server-input min-w-0 flex-1 border-0 shadow-none [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
+            <div className="flex w-fit min-w-0 shrink-0 items-stretch">
+              <ButtonGroup aria-label="Graph server selection, discovery, and refresh" className="group/graph-server-input w-fit min-w-0 flex-none border-0 shadow-none [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
                     <DropdownMenu>
                       <Tooltip><TooltipTrigger render={<DropdownMenuTrigger asChild><button
                         id="fct-endpoint"
                         type="button"
                         disabled={isCheckingEndpoints || fctEndpoints.length === 0}
                         aria-label="Choose graph server"
-                        className="flex w-full min-w-0 items-center gap-2 rounded-none bg-transparent px-4 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex w-fit min-w-0 shrink-0 items-center gap-1 whitespace-nowrap rounded-none bg-transparent px-2 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <EndpointStatusIcon status={selectedEndpointStatus} />
-                        <span className="min-w-0 truncate">{fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
+                        <span className="min-w-0 whitespace-nowrap">{fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
                         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                       </button></DropdownMenuTrigger>} /><TooltipContent>{"Choose which FCT endpoint receives queries"}</TooltipContent></Tooltip>
-                      <DropdownMenuContent align="start" className="z-50 w-max min-w-80 max-w-[calc(100vw-2rem)]">
+                      <DropdownMenuContent align="start" className="z-50 w-max min-w-max max-w-[calc(100vw-2rem)]">
                         {fctEndpoints.length === 0 ? <DropdownMenuLabel>{isCheckingEndpoints ? "Loading endpoints…" : "No endpoints configured"}</DropdownMenuLabel> : [...new Set(fctEndpoints.map((endpoint) => endpoint.group || "Endpoints"))].map((group) => (
                           <Fragment key={group}>
                             <DropdownMenuLabel>{group}</DropdownMenuLabel>
@@ -518,7 +517,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                               const statusText = status?.status != null ? `HTTP ${status.status}` : status ? status.state : "Not yet pinged";
                               return <DropdownMenuItem key={endpoint.id} onSelect={() => void chooseFctEndpoint(endpoint.id)} className="flex min-w-0 items-center gap-2">
                                 <EndpointStatusIcon status={status} />
-                                <span className="min-w-0 flex-1 truncate">{endpoint.label}</span>
+                                <span className="min-w-0 flex-1 whitespace-nowrap">{endpoint.label}</span>
                                 <span className="shrink-0 text-xs text-muted-foreground">{statusText}</span>
                                 {endpoint.id === selectedEndpointId ? <Check className="size-3.5 shrink-0" aria-label="Selected" /> : null}
                               </DropdownMenuItem>;

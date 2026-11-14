@@ -4,6 +4,7 @@
  * This module may be imported only where DOMParser/XMLSerializer are available.
  */
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
+import { snapshotFctQueryXml } from "@/lib/fct-query-clone";
 import { isStructuralReverseRole } from "@/lib/bnode";
 
 /**
@@ -23,7 +24,7 @@ export function blankNodeRecordListValuesQuery(
   parentDirection?: "forward" | "reverse",
   anchorDepth?: number,
 ): string {
-  const doc = new DOMParser().parseFromString(sourceXml, "application/xml");
+  const doc = new DOMParser().parseFromString(snapshotFctQueryXml(sourceXml, "data"), "application/xml");
   if (doc.querySelector("parsererror")) throw new Error("Invalid Results FCT XML.");
   const ns = "http://openlinksw.com/services/facets/1.0";
   const view = Array.from(doc.getElementsByTagNameNS(ns, "view"))[0];
@@ -88,7 +89,7 @@ export function blankNodeRecordListValuesQuery(
     value.setAttribute("datatype", "uri");
     value.textContent = parentUri;
     root.appendChild(value);
-    const property = doc.createElementNS(ns, "property");
+    const property = doc.createElementNS(ns, parentDirection === "reverse" ? "property-of" : "property");
     property.setAttribute("iri", predicate);
     root.appendChild(property);
     property.appendChild(view);
@@ -107,7 +108,7 @@ export function blankNodeRecordListValuesQuery(
 
 /** Rebind root-level blank nodes through the current Results page, not a URI parent. */
 export function rootBlankNodeRecordQuery(sourceXml: string): string {
-  const doc = new DOMParser().parseFromString(sourceXml, "application/xml");
+  const doc = new DOMParser().parseFromString(snapshotFctQueryXml(sourceXml, "data"), "application/xml");
   if (doc.querySelector("parsererror")) throw new Error("Invalid Results FCT XML.");
   const ns = "http://openlinksw.com/services/facets/1.0";
   const view = Array.from(doc.getElementsByTagNameNS(ns, "view"))[0];
@@ -119,4 +120,28 @@ export function rootBlankNodeRecordQuery(sourceXml: string): string {
   view.setAttribute("type", FCT_VIEW_TYPES.LIST_VALUES);
   view.removeAttribute("badges");
   return new XMLSerializer().serializeToString(doc);
+}
+
+/**
+ * Extend an already URI-anchored, FCT-derived blank-node Record to a nested
+ * blank-node RDFa value. This stays within the original URI anchor and all
+ * intervening property/role steps; no response-local _: label is queried.
+ */
+export function extendBlankNodeRecordQuery(sourceXml: string, predicate: string,
+  direction: "forward" | "reverse", limit: number): string {
+  const document = new DOMParser().parseFromString(snapshotFctQueryXml(sourceXml, "data"), "application/xml");
+  if (document.querySelector("parsererror")) throw new Error("Invalid anchored blank-node Record FCT query.");
+  const ns = "http://openlinksw.com/services/facets/1.0";
+  const view = Array.from(document.getElementsByTagNameNS(ns, "view"))[0];
+  if (!view || !view.parentElement) throw new Error("Blank-node query has no active view.");
+  const next = document.createElementNS(ns, direction === "reverse" ? "property-of" : "property");
+  next.setAttribute("iri", predicate);
+  view.parentElement.appendChild(next);
+  next.appendChild(view);
+  view.setAttribute("type", FCT_VIEW_TYPES.LIST_VALUES);
+  view.setAttribute("limit", String(limit));
+  view.setAttribute("offset", "0");
+  view.removeAttribute("sort");
+  view.removeAttribute("badges");
+  return new XMLSerializer().serializeToString(document);
 }

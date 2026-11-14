@@ -21,6 +21,7 @@ const approval: Projection[] = [
 ];
 
 function activation(feature: FeatureKind, target: string): string {
+  if (feature === "fsm-providers") return "Activation: RDF-defined state transitions executed by the XState v5 adapter.";
   if (feature === "curators") return "Activation: approve this curator to trust its mui:widget RDF list of providers.";
   if (feature === "policies") return "Activation: a matching resource must satisfy this provider's SHACL policy.";
   if (feature === "transcoders") return "Activation: the input must satisfy the transcoder's input shape.";
@@ -32,11 +33,26 @@ export async function featureItemsFromFct(
   queryXml: string, uris: string[], feature: FeatureKind, bookmarked: boolean, signal?: AbortSignal,
 ): Promise<FeatureItem[]> {
   const records = await fctProjectPage(queryXml, uris, [...meta, ...(bookmarked ? approval : [])], signal, bookmarked);
+  // Feature *items* come exclusively from FCT. Approval is independent
+  // client-policy metadata: a listed provider is effectively Approved only
+  // while a current curator is Approved for its implementation digest.
+  let approvals = new Map<string,"Approved" | "Pending" | null>();
+  if (bookmarked && uris.length) {
+    const response = await fetch("/proxy/api/service?service=maestro&operationId=policies", {
+      method: "POST", credentials: "same-origin", cache: "no-store", signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({action:"statuses",uris:[...new Set(uris)].slice(0,500)}),
+    });
+    const body = await response.json() as {error?:string;approvals?:Array<{uri:string;status:"Approved"|"Pending"|null}>};
+    if(!response.ok || body.error)throw new Error(body.error||`Provider approval lookup failed (HTTP ${response.status})`);
+    approvals = new Map((body.approvals??[]).map(item=>[item.uri,item.status]));
+  }
   return records.map(record => {
     const values = (iri: string) => record.properties.get(iri);
     const resolvedTarget = first(values(`${mui}forClass`)) || first(values(`${sh}class`));
     const statusValues = (values(`${mui}status`) || []).map(item => item.value);
-    const status = statusValues.includes(`${mui}Approved`) ? "Approved" : statusValues.includes(`${mui}Pending`) ? "Pending" : "";
+    const status = bookmarked ? (approvals.get(record.uri) ?? "") :
+      statusValues.includes(`${mui}Approved`) ? "Approved" : statusValues.includes(`${mui}Pending`) ? "Pending" : "";
     const detail = first(values(`${mui}recordShape`)) || first(values(`${mui}widget`)) || first(values(`${otc}outputShape`));
     const item: FeatureItem & Record<string, string> = {
       uri: record.uri,

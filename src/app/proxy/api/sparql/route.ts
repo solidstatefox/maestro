@@ -1,3 +1,4 @@
+import { buildFctKindAvailabilitySparql } from "@/lib/fct-count-sparql";
 import { getUserGraph, updatePersonalSparql } from "@/lib/personal-sparql";
 import { buildBlankNodeRecordSparql } from "@/lib/bnode";
 import { requirePersonalLogin } from "@/lib/personal-guard";
@@ -99,7 +100,7 @@ function decodeSparqlHtmlEntities(sourceQuery: string): string {
     .replace(/&amp;/gi, "&");
 }
 
-function validateFacetValueCountQuery(query: string): string | null {
+function validateFacetValueCountQuery(query: string, numericDomain = false): string | null {
   const sparseQuery = query.trim();
   if (!sparseQuery || sparseQuery.length > 100_000) return null;
 
@@ -119,7 +120,26 @@ function validateFacetValueCountQuery(query: string): string | null {
 
   // The client owns query construction. The proxy accepts only the scalar
   // COUNT query shape for this operation and forwards it unchanged.
-  if (!/^SELECT\s*\(\s*COUNT\s*\(\s*(?:DISTINCT\s+\?[A-Za-z_][A-Za-z0-9_]*|\*)\s*\)\s+AS\s+\?ct\s*\)\s+WHERE\s*\{/i.test(selectQuery)) return null;
+  const scalarCount = /^SELECT\s*\(\s*COUNT\s*\(\s*(?:DISTINCT\s+\?[A-Za-z_][A-Za-z0-9_]*|\*)\s*\)\s+AS\s+\?ct\s*\)/i;
+  const countPrefix = selectQuery.match(scalarCount);
+  if (!countPrefix) return null;
+  const remainder = selectQuery.slice(countPrefix[0].length);
+  if (numericDomain) {
+    // Only the two fixed projections emitted by the approved numeric provider.
+    // Reject other expressions rather than accepting arbitrary aggregate SPARQL.
+    // SPARQL does not guarantee ordering of RDF multi-valued projection
+    // declarations; either MIN/MAX or MAX/MIN is valid. Require exactly one
+    // of each fixed expression and alias, followed immediately by WHERE.
+    const projections: Array<"min" | "max"> = [];
+    let remaining = remainder;
+    for (let index = 0; index < 2; index++) {
+      const projection = remaining.match(/^\s*\(\s*(MIN|MAX)\s*\(\s*\?facetNumber\s*\)\s+AS\s+\?(min|max)\s*\)/i);
+      if (!projection || projection[1].toLowerCase() !== projection[2].toLowerCase()) return null;
+      projections.push(projection[2].toLowerCase() as "min" | "max");
+      remaining = remaining.slice(projection[0].length);
+    }
+    if (new Set(projections).size !== 2 || !/^\s+WHERE\s*\{/i.test(remaining)) return null;
+  } else if (!/^\s+WHERE\s*\{/i.test(remainder)) return null;
   // Ignore operation-looking words inside RDF IRIs, string literals, and
   // comments. Count text searches may legitimately contain terms such as
   // "with", "delete", or "create"; they are not SPARQL update operations.
@@ -337,7 +357,7 @@ async function handlePost(request: Request) {
     }
     const endpointList = await getConfiguredFctEndpoints(request);
     // Every SPARQL request carries the address of its originating FCT query.
-    const nested = body?.recordSelect ?? body?.recordBlankNodes ?? body?.recordValueLabels ?? body?.facetValueCount;
+    const nested = body?.recordSelect ?? body?.recordBlankNodes ?? body?.recordValueLabels ?? body?.facetValueCount ?? body?.kindAvailability;
     const explicitAddr = (typeof nested?.addr === "string" ? nested.addr : "") ||
       (typeof body?.addr === "string" ? body.addr : "") ||
       fctAddrFromXml(nested?.queryXml ?? body?.queryXml);
@@ -642,14 +662,51 @@ async function handlePost(request: Request) {
         orderingFallback: actualQuery !== resultsQuery }, { headers: sparqlResponseHeaders(response, incomplete) });
     }
 
+    if (body?.kindAvailability && typeof body.kindAvailability === "object") {
+      const { tree, direction } = body.kindAvailability;
+      if (!tree || typeof tree !== "object" || tree.name !== "query" ||
+          !Array.isArray(tree.children) || !tree.attributes || typeof tree.attributes.addr !== "string" ||
+          !["property", "role"].includes(direction) || JSON.stringify(tree).length > 100000) {
+        return NextResponse.json({error: "Kind preflight requires a bounded FCT query tree and direction."}, {status: 400});
+      }
+      const query = buildFctKindAvailabilitySparql(tree, direction);
+      if (!query) return NextResponse.json({error: "Cannot compile the FCT kind scope."}, {status: 400});
+      const allKinds = ["web-url", "string", "numeric", "date", "email", "phone"];
+      diagnosticOperation = "FCT kind availability batched SELECT";
+      diagnosticQuery = query;
+      const batch = await querySparql(fctEndpoint, query, queryTimeoutMs, request.signal);
+      const batchParsed = batch.response.ok ? parseSparqlResults(batch.responseText) : null;
+      const partial = batch.response.status === 206 || isVirtuosoAnytime(batch.response, batch.responseText);
+      if (batch.response.ok && !partial && batchParsed && batchParsed.head.vars.includes("maestroKind")) {
+        const kinds = [...new Set(batchParsed.results.bindings.map(row => row.maestroKind?.value).filter((kind): kind is string => !!kind && allKinds.includes(kind)))];
+        return NextResponse.json({ kinds, query, method: "batch" });
+      }
+      // Compatibility fallback: six independent ASK statements derived from
+      // the *same* FCT focus, not arbitrary client-supplied SPARQL strings.
+      const individual = await Promise.all(allKinds.map(async kind => {
+        const ask = buildFctKindAvailabilitySparql(tree, direction, kind);
+        if (!ask) throw new Error("Could not compile FCT Kind ASK query");
+        const result = await querySparql(fctEndpoint, ask, queryTimeoutMs, request.signal);
+        if (!result.response.ok || result.response.status === 206 || isVirtuosoAnytime(result.response, result.responseText))
+          throw new Error(`Kind ASK ${kind} failed with HTTP ${result.response.status}`);
+        const json = JSON.parse(result.responseText) as { boolean?: unknown };
+        if (typeof json.boolean !== "boolean") throw new Error(`Invalid ASK result for ${kind}`);
+        return json.boolean ? kind : null;
+      }));
+      return NextResponse.json({ kinds: individual.filter((kind): kind is string => kind !== null), query, method: "asks" });
+    }
+
     if (body?.facetValueCount && typeof body.facetValueCount === "object") {
       const sourceQuery = body.facetValueCount.sparql;
       if (typeof sourceQuery !== "string") {
         return NextResponse.json({ error: "The client-generated scalar count SPARQL query is required." }, { status: 400 });
       }
-      const countQuery = validateFacetValueCountQuery(sourceQuery);
+      const numericDomain = body.facetValueCount.numericDomain === true;
+      const countQuery = validateFacetValueCountQuery(sourceQuery, numericDomain);
       if (!countQuery) {
-        return NextResponse.json({ error: "The client must provide a scalar COUNT(...) AS ?ct SPARQL query." }, { status: 400 });
+        return NextResponse.json({ error: numericDomain
+          ? "Numeric facet requires COUNT(?ct), MIN(?facetNumber) and MAX(?facetNumber) projections."
+          : "The client must provide a scalar COUNT(...) AS ?ct SPARQL query." }, { status: 400 });
       }
 
       // Count against the graph server named by the FCT query, not the shared
@@ -693,6 +750,14 @@ async function handlePost(request: Request) {
         return NextResponse.json({ error: "Virtuoso returned an invalid SPARQL count result." }, { status: 502, headers: upstreamDiagnosticHeaders(response) });
       }
       if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
+      if (numericDomain) {
+        const row = parsed.results.bindings[0];
+        const min = row?.min?.value ?? null;
+        const max = row?.max?.value ?? null;
+        if (!parsed.head.vars.includes("min") || !parsed.head.vars.includes("max"))
+          return NextResponse.json({ error: "Virtuoso omitted numeric facet domain projections." }, { status: 502 });
+        return NextResponse.json({ count, min, max, query: countQuery, incomplete }, { headers: sparqlResponseHeaders(response, incomplete) });
+      }
       return NextResponse.json({ count, query: countQuery, incomplete }, { headers: sparqlResponseHeaders(response, incomplete) });
     }
 

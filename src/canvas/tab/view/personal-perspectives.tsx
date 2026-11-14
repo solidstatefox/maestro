@@ -13,6 +13,7 @@ import { toLabel } from "@/lib/uri-labels";
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { readFctResponse } from "@/canvas/utils/fct-response";
 import { deletePerspectiveEntries } from "@/lib/perspective-delete";
+import { snapshotFctQueryXml } from "@/lib/fct-query-api";
 
 const validAppbarIcons = new Set<string>(iconNames);
 type Provider = { kind: "bookmarks" | "history"; label: string; template: string };
@@ -61,7 +62,7 @@ function queryStats(xml: string) {
  * The list's own <view> may be on a property, but bookmark/history entries
  * must be intersected against resources satisfying the whole FCT query. */
 function rootResourceQuery(xml: string): string | null {
-  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const doc = new DOMParser().parseFromString(snapshotFctQueryXml(xml, "data"), "application/xml");
   if (doc.querySelector("parsererror") || doc.documentElement.localName !== "query") return null;
   const root = doc.documentElement;
   const isConstrained = Array.from(root.children).some(el => ["class", "property", "property-of", "text", "status", "value"].includes(el.localName));

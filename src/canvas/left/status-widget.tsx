@@ -25,7 +25,10 @@ export function StatusFacetWidget<T extends string>({ names, selected, counts, t
           filename={fctQuery ? "status-list-status.xml" : filename ?? "statuses-query.sparql"}
           countQuery={countQuery} countFilename="status-count.sparql" primaryTabLabel={fctQuery ? "FCT list-status" : "Status SPARQL"} />}
       </div>
-      <span className="text-xs text-muted-foreground">{shortenCount(counts === null ? names.length : names.reduce((total, name) => total + (counts[name] ?? 0), 0))}</span>
+      <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+        {loading && <ElapsedStatus label="" category="personal" clockScope="statuses" />}
+        {shortenCount(counts === null ? names.length : names.reduce((total, name) => total + (counts[name] ?? 0), 0))}
+      </span>
     </header>
     <div className={FACET_ITEM_GAP_CLASS}>
       {names.filter(name => selected.has(name) || counts === null || counts[name] === undefined || counts[name]! > 0).map(name => <label key={name} className="flex w-full cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-0.5 text-sm hover:bg-accent/50">
@@ -35,7 +38,6 @@ export function StatusFacetWidget<T extends string>({ names, selected, counts, t
         <span className="shrink-0 text-xs text-muted-foreground">{counts === null || counts[name] === undefined ? "—" : shortenCount(counts[name])}</span>
       </label>)}
     </div>
-    {loading && <p className="px-2 py-1 text-xs text-muted-foreground"><ElapsedStatus label="Loading Status" category="personal" clockScope="statuses" /></p>}
     {error && <ErrorDetails error={error} prefix="Status" className="mx-2 my-1" />}
   </article>;
 }

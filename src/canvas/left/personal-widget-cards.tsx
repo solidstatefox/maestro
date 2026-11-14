@@ -2,6 +2,7 @@
 import { FacetDecorationControl, FacetItemDecoration } from "@/lib/facet-decoration-contract";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { NumericFacetContent } from "@/canvas/left/personal-numeric-facet";
+import { formatNumericFacetLabels, isNumericFacetLexical } from "@/lib/numeric-facet-format";
 import { TemporalFacetContent, type TemporalFacetProvider, type NumericFacetProvider } from "@/canvas/left/personal-date-facet";
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
@@ -121,6 +122,9 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
           const componentId = boundNode ? dynamicUiComponentUrn("property", boundNode.id) : undefined;
           const isGroupByFacet = workspaceTab === "browse" && groupedPersonalFacetUri === widget.uri;
           const canGroupByFacet = workspaceTab === "browse" && groupByOptions.some((option) => option.key === `forward:${widget.uri}`);
+          const inspectorXml = isGroupByFacet
+            ? serializeFctQuery(queryTree)
+            : serializeFctQuery(createPropertyWidgetQuery(queryTree, widget.uri, "forward", undefined, true));
           return (
           <article
             id={componentId}
@@ -136,7 +140,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <Tooltip><TooltipTrigger render={<button
                     type="button"
-                    className={`break-words text-left text-sm font-semibold underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : "text-inherit"}`}
+                    className={`inline-flex items-center gap-1 break-words text-left text-sm font-semibold underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : "text-inherit"}`}
                     onMouseEnter={() => beginFacetHoverPreview(widget.uri, "forward", facetPropertyLabel(widget.uri), "personal")}
                     onMouseLeave={clearTutorialPreview}
                     onClick={() => {
@@ -147,8 +151,8 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     }}
                   >
                     <IncompleteWidgetIndicator source={`personal:${widget.uri}`} />
-                    {isGroupByFacet && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
-                    {widget.excluded && <CircleSlash className="mr-1 inline size-3.5 shrink-0" aria-label="Excluded" />}
+                    {isGroupByFacet && <UsersRound className="inline size-4 shrink-0" aria-label="Group by" />}
+                    {widget.excluded && <CircleSlash className="inline size-3.5 shrink-0" aria-label="Excluded" />}
                     {facetPropertyLabel(widget.uri)}
                   </button>} /><TooltipContent>{`Navigate to ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} scope`}</TooltipContent></Tooltip>
                   {autoConfiguredFacetKeys.has(`property::${widget.uri}`) && (
@@ -156,15 +160,16 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                   )}
                   <div className="flex shrink-0 items-center gap-1">
                     <QueryInspectorButton
-                      query={serializeFctQuery(createPropertyWidgetQuery(queryTree, widget.uri, "forward", undefined, true))}
+                      query={inspectorXml}
                       filename={`facet-${facetPropertyLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}.xml`}
                       primaryTabLabel="XML"
                       extraQueries={personalFacetInspectorQueries(
                         queryTree,
-                        serializeFctQuery(createPropertyWidgetQuery(queryTree, widget.uri, "forward", undefined, true)),
+                        inspectorXml,
                         widget.uri,
                         widget.values[0],
                         { direction: "forward" },
+                        isGroupByFacet,
                       )}
                     />
                     {workspaceTab === "browse" && !widget.excluded && (
@@ -305,6 +310,15 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     page * FACET_PAGE_SIZE,
                     (page + 1) * FACET_PAGE_SIZE,
                   );
+                  const numericProvider = temporal?.numericProviders?.find(provider =>
+                    provider.projections.some(p => p.alias === "min") && provider.projections.some(p => p.alias === "max"));
+                  const hasNumericValues = widget.values.some(value => value.termType === "literal" && isCoercibleNumericLexical(value.uri));
+                  const numericLabels = numericProvider && hasNumericValues
+                    ? formatNumericFacetLabels(orderedValues.filter(value => value.termType === "literal" && isNumericFacetLexical(value.uri)).map(value => value.uri),
+                        typeof navigator !== "undefined" ? navigator.language : "en-US")
+                    : [];
+                  const numericLabelByLexical = new Map(orderedValues.filter(value => value.termType === "literal" && isNumericFacetLexical(value.uri))
+                    .map((value, index) => [value.uri, numericLabels[index]] as const));
                   return (
                     <>
                       {widget.values.length > FACET_PAGE_SIZE && (
@@ -361,10 +375,9 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                         </div>
                       )}
                       <div className="flex min-w-0 items-start gap-2">
-                        {widget.values.some(value => value.termType === "literal" && isCoercibleNumericLexical(value.uri)) &&
-                          temporal?.numericProviders?.find(provider => provider.projections.some(p => p.alias === "min") && provider.projections.some(p => p.alias === "max")) && temporal.onNumericRangeChange && (
+                        {numericProvider && (hasNumericValues || widget.loading) && temporal?.onNumericRangeChange && (
                           <NumericFacetContent
-                            provider={temporal.numericProviders.find(provider => provider.projections.some(p => p.alias === "min") && provider.projections.some(p => p.alias === "max"))!}
+                            provider={numericProvider}
                             tree={queryTree} property={widget.uri} selected={queryFilter}
                             onRangeChange={temporal.onNumericRangeChange} />
                         )}
@@ -373,7 +386,8 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                           const countQuery = distinctCountQueryFor(queryTree, "value", value.uri, widget.uri, value, { direction: "forward" });
                           const isZeroCount = facetCandidateCounts[countQuery] === 0;
                           const valueInputId = `personal-facet-value-${personalWidgets.indexOf(widget)}-${valueIndex}`;
-                          const valueLabel = value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri;
+                          const valueLabel = numericLabelByLexical.get(value.uri) || (value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri);
+                          const numericFormatted = numericLabelByLexical.has(value.uri) && valueLabel !== value.uri;
                           return (
                           <div
                             key={`${facetValueKey(value)}-${valueIndex}`}
@@ -406,11 +420,20 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                                 type="button"
                                 onClick={() => scrollToGroupForFacetValue(value)}
                                 className={`min-w-0 flex-1 cursor-pointer break-words text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isZeroCount ? "text-destructive" : ""}`}
-                              >{valueLabel}</button>} /><TooltipContent>{`Scroll to group ${valueLabel}`}</TooltipContent></Tooltip>
+                              >{valueLabel}</button>} /><TooltipContent>{numericFormatted ? `Exact numeric value: ${value.uri}` : `Scroll to group ${valueLabel}`}</TooltipContent></Tooltip>
                             ) : (
-                              <label htmlFor={valueInputId} className={`min-w-0 flex-1 break-words cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}>
-                                {valueLabel}
-                              </label>
+                              numericFormatted ? (
+                                <Tooltip>
+                                  <TooltipTrigger render={<label htmlFor={valueInputId} className={`min-w-0 flex-1 break-words cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}>
+                                    {valueLabel}
+                                  </label>} />
+                                  <TooltipContent>Exact value: {value.uri}</TooltipContent>
+                                </Tooltip>
+                              ) : (
+                                <label htmlFor={valueInputId} className={`min-w-0 flex-1 break-words cursor-pointer ${isZeroCount ? "text-destructive" : ""}`}>
+                                  {valueLabel}
+                                </label>
+                              )
                             )}
                             <DistinctCount
                               enabled={endpointReadyForQuery}

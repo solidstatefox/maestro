@@ -18,6 +18,7 @@ import { useBookmarksState } from "@/canvas/controllers/bookmarks";
 import { useGraphServersState } from "@/canvas/controllers/graph-servers";
 import { useGraphScopeState, useGraphScopeNavigation } from "@/canvas/controllers/graph-scope";
 import { useQuerySessionState, useQuerySessionController } from "@/canvas/controllers/query-session";
+import { reconcileFctBreadcrumbTrail } from "@/lib/fct-breadcrumb-reconcile";
 import { usePreferencesState, readToolbarToggleState } from "@/canvas/controllers/preferences";
 import { useFacetsState, useFacetRuntimeState } from "@/canvas/controllers/facets";
 import { useResultsState } from "@/canvas/controllers/results";
@@ -25,6 +26,7 @@ import { usePersonalRecordStatus } from "@/canvas/controllers/personal-record-st
 import type { StatusFacetName } from "@/lib/personal-status-vocabulary";
 import { canUsePersonalStore } from "@/lib/personal-session-access";
 import { useRecordState } from "@/canvas/controllers/record";
+import { loadRecordDescription } from "@/canvas/controllers/record-description-loader";
 import { useViewState } from "@/canvas/controllers/view";
 import { usePublishState } from "@/canvas/controllers/publish";
 import { useChatState } from "@/canvas/controllers/chat";
@@ -61,6 +63,8 @@ import { EndpointStatusIcon, type EndpointStatus, type EndpointOption } from "@/
 import { renderValueOperator } from "@/canvas/top/breadcrumb";
 
 import { FCT_VIEW_TYPES, type FctViewType } from "@/lib/fct-view-types";
+import { findGroupCarrier, groupKeyFromCarrier, markFctGroup, ungroupForMembers, GROUP_PREVIOUS_SESSION_KEY } from "@/lib/fct-groups-carrier";
+import { snapshotFctQueryXml } from "@/lib/fct-query-api";
 import { propertyUsageNavigation, type PropertyUsageDirection } from "@/lib/property-usage-query";
 import type { FctValue } from "@/lib/fct-query-api";
 import maestroLanguages from "@/data/maestro-languages.json";
@@ -291,7 +295,7 @@ export function useWorkspaceController() {
     expandedUris, setExpandedUris,
   } = useFacetsState();
   const {
-    groupByPropertyUri, setGroupByPropertyUri, groupByBeforeCodeViewRef, resultsUiPage,
+    groupByBeforeCodeViewRef, resultsUiPage,
     setResultsUiPage, groupUiPage, setGroupUiPage, groupBatchSize,
     setGroupBatchSize, groupBatchOffset, setGroupBatchOffset, groupHasMoreBatches,
     setGroupHasMoreBatches, groupCardRefs, pendingGroupScrollRef, groupValues,
@@ -762,6 +766,119 @@ useEffect(() => {
     deleteNode,
   } = useQuerySessionController();
 
+  // Configure edits are a draft. Only Return to Filters commits them to the
+  // single authoritative FCT tree, producing one subscriber notification.
+  const [pendingConfigureFacets, setPendingConfigureFacets] = useState<Record<string, boolean>>({});
+  const queueConfigureFacet = (direction: "property" | "role", uri: string, selected: boolean) => {
+    setPendingConfigureFacets((current) => ({ ...current, [`${direction}:${uri}`]: selected }));
+  };
+  const commitConfigureFacetChanges = () => {
+    const entries = Object.entries(pendingConfigureFacets);
+    if (entries.length === 0) { setDefaultLeftTab("personal"); return; }
+    let next = queryTree;
+    const path = getPropertyPath();
+    const parentId = path.at(-1)?.id ?? null;
+    for (const [key, checked] of entries) {
+      const separator = key.indexOf(":");
+      const direction = key.slice(0, separator);
+      const uri = key.slice(separator + 1);
+      if (direction === "property") {
+        next = checked ? workbenchQueryTreeApi.addProperty(next, uri, parentId)
+                       : workbenchQueryTreeApi.removeProperty(next, uri, parentId);
+      } else if (direction === "role") {
+        next = workbenchQueryTreeApi.setRoleFilter(next, uri, checked);
+      }
+    }
+    setPendingConfigureFacets({});
+    replaceQueryTree(next);
+    setPersonalWidgets((current) => {
+      const updated = current.filter((widget) => pendingConfigureFacets[`property:${widget.uri}`] !== false);
+      for (const [key, checked] of entries) {
+        if (!checked || !key.startsWith("property:")) continue;
+        const uri = key.slice("property:".length);
+        if (uri === RDF_TYPE_URI || updated.some((widget) => widget.uri === uri)) continue;
+        updated.push({ uri, label: toLabel(uri, "Property"), excluded: false, values: [], selectedValues: [], page: 0, loading: true, error: "" });
+      }
+      return updated;
+    });
+    setDefaultLeftTab("personal");
+  };
+
+  // The live <view> stays at the current focus. A sibling relationship
+  // marked group="true" supplies the grouping dimension and direction.
+  const setGroupedViewAttributes = (tree: FctQueryTree, viewId: string, attributes: Record<string, string>): FctQueryTree => {
+    const scope = findGroupCarrier(tree);
+    if (!scope || scope.view.id !== viewId) return tree;
+    // Derived edits use the supplied query API rather than editing tree nodes.
+    return workbenchQueryTreeApi.replaceNode(tree, viewId, { ...scope.view, attributes, children: [] });
+  };
+  const groupByPropertyUri = groupKeyFromCarrier(queryTree);
+  const setGroupByPropertyUri = (value: string) => {
+    if (value === groupByPropertyUri) return;
+    const location = findGroupCarrier(queryTree);
+    if (!location) return;
+    const readPrevious = (): { addr: string; viewId: string; attributes: Record<string, string> } | null => {
+      try {
+        const raw = window.sessionStorage.getItem(GROUP_PREVIOUS_SESSION_KEY);
+        return raw ? JSON.parse(raw) as { addr: string; viewId: string; attributes: Record<string, string> } : null;
+      } catch { return null; }
+    };
+    if (!value) {
+      const saved = readPrevious();
+      try { window.sessionStorage.removeItem(GROUP_PREVIOUS_SESSION_KEY); } catch { /* storage disabled */ }
+      const applicable = saved?.addr === queryTree.attributes.addr && saved?.viewId === location.view.id;
+      const next = markFctGroup(queryTree, null);
+      const old = applicable ? saved.attributes : null;
+      const attributes = { ...location.view.attributes, ...(old ?? {}) };
+      for (const key of ["by", "bucket", "lexical", "previousType", "previousLimit", "previousOffset"]) delete attributes[key];
+      replaceQueryTree(setGroupedViewAttributes(next, location.view.id, attributes));
+      return;
+    }
+    const separator = value.indexOf(":");
+    const direction = value.slice(0, separator);
+    const iri = value.slice(separator + 1);
+    if (!iri || (direction !== "forward" && direction !== "reverse")) return;
+    const name = direction === "forward" ? "property" : "property-of";
+    const existing = location.siblings.find((node) => node.name === name && node.attributes.iri === iri);
+    if (!groupByPropertyUri) {
+      try { window.sessionStorage.setItem(GROUP_PREVIOUS_SESSION_KEY, JSON.stringify({
+        addr: queryTree.attributes.addr, viewId: location.view.id, attributes: { ...location.view.attributes },
+      })); } catch { /* local restoration is optional */ }
+    }
+    const grouped = markFctGroup(queryTree, { id: existing?.id, name, iri });
+    const next = setGroupedViewAttributes(grouped, location.view.id, {
+      ...location.view.attributes, type: FCT_VIEW_TYPES.LIST, limit: String(groupBatchSize), offset: "0",
+    });
+    replaceQueryTree(next);
+    setGroupBatchOffset(0);
+  };
+
+  // The paging controls for grouped results edit the live groups view.
+  // No independent Group-by paging keys are needed in a share URL.
+  const setGroupBatchSizeFromUi: typeof setGroupBatchSize = (nextValue) => {
+    const next = typeof nextValue === "function" ? nextValue(groupBatchSize) : nextValue;
+    setGroupBatchSize(next);
+    if (groupByPropertyUri) {
+      const view = findGroupCarrier(queryTree)?.view;
+      if (view) replaceQueryTree(workbenchQueryTreeApi.setNodeAttribute(queryTree, view.id, "limit", String(next)));
+    }
+  };
+  const setGroupBatchOffsetFromUi: typeof setGroupBatchOffset = (nextValue) => {
+    const next = typeof nextValue === "function" ? nextValue(groupBatchOffset) : nextValue;
+    setGroupBatchOffset(next);
+    if (groupByPropertyUri) {
+      const view = findGroupCarrier(queryTree)?.view;
+      if (view) replaceQueryTree(workbenchQueryTreeApi.setNodeAttribute(queryTree, view.id, "offset", String(next)));
+    }
+  };
+  useEffect(() => {
+    if (!groupByPropertyUri) return;
+    const view = findGroupCarrier(queryTree)?.view;
+    const size = Number(view?.attributes.limit);
+    const offset = Number(view?.attributes.offset);
+    if (RESULTS_BATCH_SIZE_OPTIONS.some((option) => option === size)) setGroupBatchSize(size);
+    if (Number.isSafeInteger(offset) && offset >= 0) setGroupBatchOffset(offset);
+  }, [groupByPropertyUri]);
 
   useEffect(() => {
     setGraphsPage(0);
@@ -1243,50 +1360,23 @@ useEffect(() => {
     else if (previousActiveIds.join("|") !== activeIds.join("|")) ancestorGhostRetainedRef.current = false;
     previousActiveGhostPathRef.current = activeIds;
 
-    // Only relationships in the authoritative query can appear as breadcrumbs.
-    const existingIds = new Set<string>();
-    const scopeRelationships = new Map<string, FctQueryNode[]>();
-    const collect = (nodes: FctQueryNode[], scopeId: string) => {
-      const relationships = nodes.filter((node) =>
-        (node.name === "property" || node.name === "property-of") && Boolean(node.attributes.iri?.trim()),
-      );
-      scopeRelationships.set(scopeId, relationships);
-      for (const node of relationships) existingIds.add(node.id);
-      for (const node of nodes) collect(node.children, node.id);
-    };
-    collect(queryTree.children, "query-root");
-    const currentScopeIds = new Map(Array.from(scopeRelationships, ([id, nodes]) => [id, nodes.map((node) => node.id)]));
-    const previousScopeIds = previousScopeRelationshipsRef.current;
-    const scopeId = activePath[activePath.length - 1]?.id ?? "query-root";
-    const siblingNodes = scopeRelationships.get(scopeId) ?? [];
-    const newlyAdded = siblingNodes.filter((node) => !(previousScopeIds.get(scopeId) ?? []).includes(node.id));
-    previousScopeRelationshipsRef.current = currentScopeIds;
-
+    // Reconcile ghost breadcrumbs from the authoritative subscribed query.
+    // A replacement may reuse the same compact XML IDs for unrelated predicates;
+    // the shared framework checks predicate, direction *and* parent scope,
+    // rather than retaining a stale trail by node ID alone.
+    const previousScopes = previousScopeRelationshipsRef.current;
     setBreadcrumbTrail((current) => {
-      const retained = current.filter((crumb) => existingIds.has(crumb.id));
-      const activeIsPrefix = activePath.length <= retained.length &&
-        activePath.every((crumb, index) => crumb.id === retained[index]?.id);
-      let nextTrail = activeIsPrefix ? retained : activePath;
-
-      // An ancestor-navigation suffix is owned by the user's navigation, so
-      // Configure additions cannot silently replace its muted path.
-      if (ancestorGhostRetainedRef.current && nextTrail.length > activePath.length) return nextTrail;
-
-      // A Configure addition at the root (or any active scope) creates a
-      // single ghost successor without moving <view>. When there is already an
-      // automatic ghost, the *latest* added sibling takes that slot.
-      const candidate = newlyAdded[newlyAdded.length - 1] ??
-        (nextTrail.length <= activePath.length ? siblingNodes[siblingNodes.length - 1] : undefined);
-      if (candidate) {
-        nextTrail = [...activePath, {
-          id: candidate.id,
-          uri: candidate.attributes.iri ?? "",
-          name: candidate.name,
-        }];
-        ancestorGhostRetainedRef.current = false;
-      }
-      return nextTrail;
+      const next = reconcileFctBreadcrumbTrail(
+        queryTree, activePath, current, previousScopes, ancestorGhostRetainedRef.current,
+      );
+      ancestorGhostRetainedRef.current = next.retainedAncestorGhost;
+      return next.trail;
     });
+    // Remember signatures for the next query notification, not just node IDs.
+    // Compute these independently of React's queued state updater.
+    previousScopeRelationshipsRef.current = reconcileFctBreadcrumbTrail(
+      queryTree, activePath, [], previousScopes, false,
+    ).scopeSignatures;
   }, [queryTree, getPropertyPath, queryRevision]);
 
 
@@ -1336,7 +1426,12 @@ useEffect(() => {
           return choice?.id ?? current;
         });
       } catch (error) {
-        if (!cancelled) setEndpointMenuError(
+        // Registry loading is control-plane work. A canceled fetch (for example
+        // during teardown of an older application version) is not evidence of
+        // a graph-server failure and must never become a banner error.
+        const aborted = error instanceof Error && (error.name === "AbortError" ||
+          /signal is aborted without reason/i.test(error.message));
+        if (!cancelled && !aborted) setEndpointMenuError(
           error instanceof Error ? error.message : "Could not load graph servers.",
         );
         // Keep both the existing menu and selection on fetch failure.
@@ -1880,7 +1975,7 @@ useEffect(() => {
       // Ribbon identity is the SHACL provider resource URI, never its label.
       if (restored.viewPanel === "trail" || restored.viewPanel === "perspectives" || restored.viewPanel === "features") setViewPanel(restored.viewPanel);
       if (restored.selectedViewUri === "" || (typeof restored.selectedViewUri === "string" && restored.selectedViewUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedViewUri))) setSelectedViewUri(restored.selectedViewUri);
-      if (restored.viewFeature === null || restored.viewFeature === "policies" || restored.viewFeature === "formats" || restored.viewFeature === "transcoders" || restored.viewFeature === "facet-widgets" || restored.viewFeature === "curators") setViewFeature(restored.viewFeature);
+      if (restored.viewFeature === null || restored.viewFeature === "policies" || restored.viewFeature === "formats" || restored.viewFeature === "transcoders" || restored.viewFeature === "facet-widgets" || restored.viewFeature === "curators" || restored.viewFeature === "fsm-providers") setViewFeature(restored.viewFeature);
       if (typeof restored.selectedAnalysisUri === "string" && restored.selectedAnalysisUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedAnalysisUri)) setSelectedAnalysisUri(restored.selectedAnalysisUri);
       if (typeof restored.analyzeHistogram === "boolean") setAnalyzeHistogram(restored.analyzeHistogram);
       // Endpoint selection is authoritative in the restored query addr.
@@ -1911,11 +2006,9 @@ useEffect(() => {
       if (["facets", "personal", "community"].includes(restored.defaultLeftTab ?? "")) setDefaultLeftTab(restored.defaultLeftTab!);
       if (restored.focusListOrder === "Properties" || restored.focusListOrder === "Roles") setFocusListOrder(restored.focusListOrder);
       if (typeof restored.focusWidgetsSuppressed === "boolean") setFocusWidgetsSuppressed(restored.focusWidgetsSuppressed);
-      if (typeof restored.groupByPropertyUri === "string") setGroupByPropertyUri(restored.groupByPropertyUri);
+      // Group-by carrier, batch limit and offset are restored from the authoritative FCT <view>.
       if (typeof restored.resultsUiPage === "number" && Number.isFinite(restored.resultsUiPage)) setResultsUiPage(Math.max(0, Math.floor(restored.resultsUiPage)));
       if (typeof restored.groupUiPage === "number" && Number.isFinite(restored.groupUiPage)) setGroupUiPage(Math.max(0, Math.floor(restored.groupUiPage)));
-      if (typeof restored.groupBatchSize === "number" && RESULTS_BATCH_SIZE_OPTIONS.some((n) => n === restored.groupBatchSize)) setGroupBatchSize(restored.groupBatchSize);
-      if (typeof restored.groupBatchOffset === "number" && Number.isFinite(restored.groupBatchOffset)) setGroupBatchOffset(Math.max(0, Math.floor(restored.groupBatchOffset)));
       if (typeof restored.resultsPageSize === "number" && Number.isFinite(restored.resultsPageSize) && restored.resultsPageSize > 0) setResultsPageSize(restored.resultsPageSize);
       if (typeof restored.selectedUri === "string") setSelectedUri(restored.selectedUri);
       // Clear Terms removes <text> from q, so preserve the hidden draft separately
@@ -2023,11 +2116,8 @@ useEffect(() => {
       defaultLeftTab,
       focusListOrder,
       focusWidgetsSuppressed,
-      groupByPropertyUri,
       resultsUiPage,
       groupUiPage,
-      groupBatchSize,
-      groupBatchOffset,
       resultsPageSize,
       selectedUri,
       graphText,
@@ -2069,7 +2159,7 @@ useEffect(() => {
     if (!urlStateInitialized) return;
     const url = new URL(buildCurrentShareUrl());
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft, viewPanel, selectedViewUri, viewFeature, selectedAnalysisUri, analyzeHistogram]);
+  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft, viewPanel, selectedViewUri, viewFeature, selectedAnalysisUri, analyzeHistogram]);
 
   /** Persist one History visit for a query snapshot, preserving queue ordering. */
   async function writeHistoryVisit(queryXmlSnapshot: string, stateUrlSnapshot: string, action: { operator: "+" | "-"; xpath: string; value?: string } | null) {
@@ -2173,7 +2263,7 @@ useEffect(() => {
     historyWriteQueueRef.current = historyWriteQueueRef.current.then(synchronizeWhenCollapsed, synchronizeWhenCollapsed);
     // Do not cancel queued writes in effect cleanup; pending History is flushed
     // when the root breadcrumb search field closes.
-  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, groupByPropertyUri, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession, selectedSignalMode, viewPanel, selectedViewUri, viewFeature, selectedAnalysisUri, analyzeHistogram]);
+  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession, selectedSignalMode, viewPanel, selectedViewUri, viewFeature, selectedAnalysisUri, analyzeHistogram]);
 
   // The graph text box may contain an unapplied draft distinct from the query's graph binding.
   // Restore that draft after the query-graph synchronization effect has run once.
@@ -2184,12 +2274,18 @@ useEffect(() => {
   }, [urlStateInitialized, queryRevision]);
 
   const activeViewPropertyFilters = getActiveViewPropertyFilters(queryTree);
-  const rdfTypePropertyNode = activeViewPropertyFilters.find((node) => node.attributes.iri === RDF_TYPE_URI);
+  // In Groups mode the carrier itself is the selected relationship. Its
+  // siblings (not the children of its <view>) remain the Group-by options.
+  const groupingScope = findGroupCarrier(queryTree);
+  const groupCandidates = getActiveViewPropertyFilters(queryTree);
+  const groupPropertyCandidates = groupCandidates.filter((node) => node.name === "property");
+  const groupRoleCandidates = getActiveViewRoleFilters(queryTree);
+  const rdfTypePropertyNode = groupPropertyCandidates.find((node) => node.attributes.iri === RDF_TYPE_URI);
   const groupByOptions: GroupByOption[] = [
     { key: "", uri: "", direction: "forward", label: "none", nodeId: "" },
     // RDF type is permanent dropdown furniture, but it uses the ordinary forward-property grouping path.
     ...(rdfTypePropertyNode?.attributes.exclude?.trim().toLowerCase() === "yes" ? [] : [{ key: `forward:${RDF_TYPE_URI}`, uri: RDF_TYPE_URI, direction: "forward" as const, label: "Category", nodeId: rdfTypePropertyNode?.id ?? "group-by-rdf-type" }]),
-    ...activeViewPropertyFilters.flatMap((node) => {
+    ...groupPropertyCandidates.flatMap((node) => {
       const uri = node.attributes.iri;
       if (typeof uri !== "string" || !uri || uri === RDF_TYPE_URI || node.attributes.exclude?.trim().toLowerCase() === "yes") return [];
       return [{ key: `forward:${uri}`, uri, direction: "forward" as const, label: toLabel(uri, "Property"), nodeId: node.id }];
@@ -2197,7 +2293,7 @@ useEffect(() => {
     // Only reverse-role nodes explicitly selected in Focus belong in Group By.
     // A <property-of> ancestor that merely contains the active <view> is a
     // navigation/scope breadcrumb, not a checked relationship selection.
-    ...getActiveViewRoleFilters(queryTree).flatMap((node) => {
+    ...groupRoleCandidates.flatMap((node) => {
       const uri = node.attributes.iri;
       if (typeof uri !== "string" || !uri || node.attributes.exclude?.trim().toLowerCase() === "yes") return [];
       return [{ key: `reverse:${uri}`, uri, direction: "reverse" as const, label: `${toLabel(uri, "Role")} of`, nodeId: node.id }];
@@ -2205,7 +2301,7 @@ useEffect(() => {
   ];
   const selectedGroupByOption = groupByOptions.find((option) => option.key !== "" && option.key === groupByPropertyUri) ?? null;
   useEffect(() => {
-    if (urlStateInitialized && endpointReadyForQuery && groupByPropertyUri && !groupByOptions.some((option) => option.key === groupByPropertyUri)) {
+    if (urlStateInitialized && endpointReadyForQuery && groupByPropertyUri && groupByOptions.length > 1 && !groupByOptions.some((option) => option.key === groupByPropertyUri)) {
       // Opening Code Block does not mutate the FCT query. Ignore transient
       // facet-option gaps during that pane switch; restore the grouping when
       // returning to Results instead of treating the pane switch as deselection.
@@ -2291,12 +2387,16 @@ useEffect(() => {
     setCentralTab("results");
     setWorkspaceTab("browse");
   }
+  const [configurePropertyKind, setConfigurePropertyKind] = useState("all");
+  const [configureRoleKind, setConfigureRoleKind] = useState("all");
   const queryWithoutPagingXml = useCallback(
   (viewType?: FctViewType, sortByCount = false, classTree = false) =>
     serializeFctQuery(
-      setQueryViewAttributes(queryTree, {
+      setQueryViewAttributes(ungroupForMembers(queryTree), {
         ...(viewType ? { type: viewType } : {}),
         sort: sortByCount ? "count" : "",
+        kind: viewType === FCT_VIEW_TYPES.PROPERTIES ? configurePropertyKind
+          : viewType === FCT_VIEW_TYPES.PROPERTIES_IN ? configureRoleKind : "",
         // tree="yes" adds every superclass up to the root, so the view returns one row per
         // (class, parent) edge and needs a much larger window than the flat list.
         limit: String(viewType === FCT_VIEW_TYPES.CLASSES ? leftWidgetLimits.categories
@@ -2307,7 +2407,7 @@ useEffect(() => {
         ...(classTree ? { tree: "yes" } : {}),
       }),
     ),
-  [queryTree, leftPanelLimit, leftWidgetLimits.categories, leftWidgetLimits.properties, leftWidgetLimits.roles, leftWidgetLimits.graphs],
+  [queryTree, leftPanelLimit, leftWidgetLimits.categories, leftWidgetLimits.properties, leftWidgetLimits.roles, leftWidgetLimits.graphs, configurePropertyKind, configureRoleKind],
 );
   // Snapshot the semantic facet requests. Effects depend on their serialized XML,
   // not queryWithoutPagingXml's callback identity (which changes on every tree edit).
@@ -3640,7 +3740,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       setGroupMembers((current) => ({ ...current, [key]: { results: current[key]?.results ?? [], loading: true, error: "" } }));
       void (async () => {
         try {
-          const memberTree = createGroupMemberQuery(queryTree, selectedGroupByOption, groupValue);
+          const memberTree = createGroupMemberQuery(ungroupForMembers(queryTree), selectedGroupByOption, groupValue);
           const memberXml = serializeFctQuery(setQueryViewAttributes(memberTree, {
             type: FCT_VIEW_TYPES.TEXT, limit: String(resultsBatchSize), offset: "0",
             // Group By member Records need their URI parent binding in the
@@ -4382,87 +4482,20 @@ setGraphFacets(graphs);
           }));
           return;
         }
-        const response = await cachedFetchFct("/proxy/api/sparql", {
-          method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-select-language", "RecordDescription") },
-          body: JSON.stringify({ recordSelect: {
-            queryXml: serializeFctQuery(queryTree),
-            iri: selectedUri, termType: selectedRecordTermType,
-            ...(recordFocusPredicate ? { focusPredicate: recordFocusPredicate } : {}),
-            ...(selectedRecordDatatype && selectedRecordDatatype !== "string" && selectedRecordTermType === "literal" ? { datatype: selectedRecordDatatype } : {}),
-            ...(selectedRecordLanguage ? { lang: selectedRecordLanguage } : {}),
-            limit: recordDescriptionQueryLimit, preferredLanguage: preferredAlphabetLanguage,
-            ...(selectedRecordGraph || selectedRecordAuthor ? { graphs: selectedGraphs } : {}),
-          } }),
+        const record = await loadRecordDescription({
+          queryXml: serializeFctQuery(queryTree), value: selectedUri,
+          termType: selectedRecordTermType as "uri" | "literal",
+          datatype: selectedRecordDatatype, lang: selectedRecordLanguage,
+          focusPredicate: recordFocusPredicate,
+          graphs: selectedGraphs, limit: recordDescriptionQueryLimit,
+          preferredLanguage: preferredAlphabetLanguage, signal: controller.signal,
         });
-        const data = await response.json() as {
-          error?: string; incomplete?: boolean; query?: string;
-          results?: { bindings?: Array<Record<string, {
-            type: string; value: string; datatype?: string; "xml:lang"?: string;
-          }>> };
-        };
-        if (!response.ok) throw new Error(data.error || "Record SELECT failed.");
-        const fetchedBindings = data.results?.bindings ?? [];
-        snapshotIncomplete = Boolean(data.incomplete);
         if (!cancelled) {
-          setRecordDescribeIncomplete(snapshotIncomplete);
-          setRecordDebug((current) => ({ ...current,
-            xml: `POST /proxy/api/sparql\n${JSON.stringify({ recordSelect: { iri: selectedUri, termType: selectedRecordTermType, datatype: selectedRecordDatatype, lang: selectedRecordLanguage, limit: recordDescriptionQueryLimit, preferredLanguage: preferredAlphabetLanguage, graphs: selectedGraphs } }, null, 2)}`,
-            sparql: data.query ?? "Record SELECT query unavailable.",
-          }));
-        }
-        // URI labels are independently enriched in the background. The Record
-        // SELECT intentionally returns only the three RDF triple columns.
-        for (const binding of fetchedBindings) {
-          const subject = binding.subject, predicate = binding.predicate, object = binding.object;
-          if (!subject?.value || !predicate?.value || !object?.value) continue;
-          const objectType = object.type === "uri" ? "uri" : object.type === "bnode" ? "bnode" : "literal";
-          const objectValue = objectType === "bnode" ? `_:${object.value}` : object.value;
-          snapshotTerms.push({ subject: subject.value, predicate: predicate.value,
-            object: objectValue, objectType, ...(object.datatype ? { datatype: object.datatype } : {}),
-            ...(object["xml:lang"] ? { lang: object["xml:lang"] } : {}) });
-          const matchesRecordObject = object.value === selectedUri &&
-            (selectedRecordTermType === "uri" ? object.type === "uri" :
-             selectedRecordTermType === "literal" ? object.type === "literal" &&
-               (object["xml:lang"] ?? "").toLowerCase() === (selectedRecordLanguage ?? "").toLowerCase() &&
-               (!selectedRecordDatatype || !object.datatype || object.datatype === selectedRecordDatatype) :
-             object.type === "bnode");
-          const direction: "property" | "property-of" | null = selectedRecordTermType === "uri" && subject.value === selectedUri
-            ? "property" : matchesRecordObject ? "property-of" : null;
-          if (direction) rows.push({ property: predicate.value,
-            value: direction === "property" ? objectValue : subject.value, direction,
-            termType: direction === "property" ? objectType : "uri",
-            ...(direction === "property" && object.datatype ? { datatype: object.datatype } : {}),
-            ...(direction === "property" && object["xml:lang"] ? { lang: object["xml:lang"] } : {}),
-          });
-
-        }
-        // Deduplicate the authoritative RDF triples (not auxiliary labels).
-        snapshotTerms = [...new Map(snapshotTerms.map((term) => [
-          [term.subject, term.predicate, term.object, term.objectType, term.datatype ?? "", term.lang ?? ""].join("\u0000"), term,
-        ])).values()];
-        rows = [...new Map(rows.map((row) => [
-          [row.direction, row.property, row.value, row.termType, row.datatype ?? "", row.lang ?? ""].join("\u0000"), row,
-        ])).values()];
-        // Record SELECT applies LIMIT to eligible triples. A full page may
-        // have additional rows on the endpoint.
-        snapshotIncomplete = snapshotIncomplete || snapshotTerms.length >= recordDescriptionQueryLimit;
-        if (!cancelled) setRecordDescribeIncomplete(snapshotIncomplete);
-        // Normalize the actual Default-viewer rows for both filtered and unfiltered
-        // requests. Never feed a different/raw server representation to XSLT.
-        {
-          const fctNs = "http://openlinksw.com/services/facets/1.0/";
-          const triplesXml = snapshotTerms
-            .filter((triple) => selectedRecordTermType === "uri" ? triple.subject === selectedUri || triple.object === selectedUri : triple.object === selectedUri)
-            .map((triple) => {
-              const attrs = ` termType="${escapeXmlText(triple.objectType)}"${triple.datatype ? ` datatype="${escapeXmlText(triple.datatype)}"` : ""}${triple.lang ? ` xml:lang="${escapeXmlText(triple.lang)}"` : ""}`;
-              return `<fct:row><fct:column termType="uri">${escapeXmlText(triple.subject)}</fct:column><fct:column termType="uri">${escapeXmlText(triple.predicate)}</fct:column><fct:column${attrs}>${escapeXmlText(triple.object)}</fct:column></fct:row>`;
-            }).join("");
-          snapshotXml = `<fct:facets xmlns:fct="${fctNs}"><fct:complete>${snapshotIncomplete ? "no" : "yes"}</fct:complete><fct:result type="describe">${triplesXml}</fct:result></fct:facets>`;
-        }
-        if (!cancelled) {
-          setRecordDescriptionSnapshot({ key: currentRecordDescriptionKey, uri: selectedUri, xml: snapshotXml, incomplete: snapshotIncomplete });
-          setDescribedRecord(rows);
+          setRecordDescribeIncomplete(record.incomplete);
+          setRecordDebug(current => ({ ...current, xml: record.debug, sparql: record.query }));
+          setRecordDescriptionSnapshot({ key: currentRecordDescriptionKey, uri: selectedUri,
+            xml: record.xml, incomplete: record.incomplete });
+          setDescribedRecord(record.rows);
           setDescribedRecordUri(selectedUri);
         }
       } catch (error) {
@@ -4727,27 +4760,34 @@ setGraphFacets(graphs);
       // Validate is the sole trigger for ingesting SHACL-discovered Personal facets.
       // Query clones preserve the live scope but cannot mutate its view.
       try {
-        const candidateClasses = classFacets.map((item) => item.uri);
-        const candidateProperties = propertyFacets.map((item) => item.uri);
-        const candidateRoles = roleFacets.map((item) => item.uri);
-        const facetResponse = await maestroQueryFetch("/proxy/api/service?service=maestro&operationId=policies", {
-          method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-shacl-facet-ingestion", "RecordShaclFacets") },
-          body: JSON.stringify({
-            action: "facet-discover", recordShape: policyOverride.recordShape,
-            classes: candidateClasses, properties: candidateProperties, roles: candidateRoles,
-            classQuery: classFacetQueryXml, propertyQuery: propertyFacetQueryXml, roleQuery: roleFacetQueryXml,
-          }),
+        // Shape discovery is an FCT view over the same live focus scope.
+        // Its compiler joins the W3C SHACL Core target declarations inside
+        // the personal SHACL GRAPH. No precomputed TypeScript candidate lists,
+        // parallel SHACL SPARQL service or generated-SPARQL manipulation.
+        const validateTree = setQueryViewAttributes(workbenchQueryTreeApi.getDataTree(), {
+          type: FCT_VIEW_TYPES.VALIDATE, limit: "1000", offset: "0",
         });
-        const facetPayload = await facetResponse.json() as { facets?: { uri: string; direction: "forward" | "reverse"; label: string }[]; graph?: string; propertyShapes?: number; rawPaths?: number; error?: string };
-        if (!facetResponse.ok) throw new Error(facetPayload.error || `SHACL facet discovery returned HTTP ${facetResponse.status}.`);
-        // Collect the complete SHACL path set before touching the live query.
-        // Direction + IRI is the identity; preserve order and deduplicate.
-        const queuedFacets = Array.from(new Map((facetPayload.facets ?? [])
-          .filter((facet) => facet && /^https?:\/\/|^gttps?:\/\/|^[a-z][a-z0-9+.-]*:/i.test(facet.uri))
-          .map((facet) => [`${facet.direction}:${facet.uri}`, facet])).values());
+        const validateQueryXml = serializeFctQuery(validateTree);
+        const facetResponse = await maestroQueryFetch("/proxy/api/fct", {
+          method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/xml", ...proxyDebugHeaders("record-shacl-fct-validate", "RecordShaclFacets") },
+          body: validateQueryXml,
+        });
+        const facetXml = await facetResponse.text();
+        if (!facetResponse.ok) throw new Error(`SHACL FCT validate returned HTTP ${facetResponse.status}: ${facetXml.slice(0, 500)}`);
+        const facetPayload = parseFctResponse(facetXml);
+        if (facetPayload.error) throw new Error(facetPayload.error);
+        if (facetPayload.incomplete) throw new Error("SHACL discovery was incomplete; retry validation with a narrower scope or longer timeout.");
+        if (facetPayload.viewType !== FCT_VIEW_TYPES.VALIDATE) throw new Error("Expected an FCT validate view response.");
+        const queuedFacets = Array.from(new Map(facetPayload.rows.flatMap((row) => {
+          const path = row[2];
+          if (path?.termType !== "uri" || !/^[a-z][a-z0-9+.-]*:/i.test(path.value) || path.value === RDF_TYPE_URI) return [];
+          const direction = row[3]?.value === "reverse" ? "reverse" as const : "forward" as const;
+          const facet = { uri: path.value, direction, label: "" };
+          return [[`${direction}:${path.value}`, facet] as const];
+        })).values());
         if (!queuedFacets.length) {
-          setRecordPolicyError(`Validation completed, but no Personal facets could be derived from ${policyOverride.recordShape} in ${facetPayload.graph ?? "the configured shapes graph"}. Discovered ${facetPayload.propertyShapes ?? "unknown"} property shapes and ${facetPayload.rawPaths ?? "unknown"} paths. ${facetPayload.propertyShapes === 0 ? "Check whether the SHACL policy document is loaded into your personal graph server." : "Check the shape paths and supported forward/inverse property forms."}`);
+          setRecordPolicyError("Validation completed, but the FCT validate query returned no supported SHACL property paths in this focus scope.");
         } else {
           // Use the *current* authoritative snapshot, not the tree captured
           // before the asynchronous validation and SHACL requests began.
@@ -5395,7 +5435,7 @@ setGraphFacets(graphs);
           if (scope !== "sandbox") throw new Error("Only sandboxed template queries may execute before the live queue is flushed.");
           if (++executedSandboxQueries > 4) throw new Error("The XSLT template exceeds four sandbox query executions.");
           let queryXml = explicitQuery ? explicitQuery.outerHTML : serializeFctQuery(sandboxTree);
-          const isolatedQuery = new DOMParser().parseFromString(queryXml, "application/xml");
+          const isolatedQuery = new DOMParser().parseFromString(snapshotFctQueryXml(queryXml, "data"), "application/xml");
           if (isolatedQuery.querySelector("parsererror") || isolatedQuery.documentElement.localName !== "query") {
             throw new Error("Sandbox template query is not a valid FCT XML query.");
           }
@@ -6330,6 +6370,15 @@ useEffect(() => {
       .map((node) => node.attributes.iri)
       .filter((iri): iri is string => typeof iri === "string"),
   );
+  const configureSelectedProperties = new Set(selectedProperties);
+  const configureSelectedRoles = new Set(selectedRoles);
+  for (const [key, checked] of Object.entries(pendingConfigureFacets)) {
+    const separator = key.indexOf(":");
+    const collection = key.startsWith("property:") ? configureSelectedProperties : configureSelectedRoles;
+    const uri = key.slice(separator + 1);
+    if (checked) collection.add(uri); else collection.delete(uri);
+  }
+
   const selectedClasses = new Set(getClassesAtNode(activeLeafId));
   // Keep query-selected Categories visible even if the classes endpoint omits
   // them from its current candidate list. Only current-scope <class> nodes are
@@ -6581,6 +6630,10 @@ useEffect(() => {
 
   // Single source of truth for both checkbox changes and property-label clicks.
   function handlePropertyCheckboxChange(uri: string, checked: boolean, trackUsage = true) {
+    if (defaultLeftTab === "facets") {
+      queueConfigureFacet("property", uri, checked);
+      return;
+    }
     // rdf:type may still be needed in the authoritative query for Result Badges
     // and Group By Category, but must never create a Personal facet widget.
     if (uri === RDF_TYPE_URI && checked) {
@@ -6898,7 +6951,6 @@ useEffect(() => {
       setViewPanel("features");
       setSearchDraft("");
       setSavedSearchDraft("");
-      setGroupByPropertyUri("");
       setCentralTab("results");
       setControlsSheetOpen(false);
     } catch (error) {
@@ -6908,6 +6960,13 @@ useEffect(() => {
 
   async function loadHistoryQuery(includeFavorites = false) {
     if (isLoadingHistoryQuery) return;
+    // An explicit Show action invalidates an outstanding asynchronous Feature
+    // navigation. A late provider load must never route back to Features.
+    ++featureNavigationSequenceRef.current;
+    setWorkspaceTab("browse");
+    setViewFeature(null);
+    setViewPanel("trail");
+    setSelectedViewUri("");
     setIsLoadingHistoryQuery(true);
     try {
       // Use the server-resolved SITE_HISTORY graph rather than duplicating its
@@ -6964,10 +7023,15 @@ useEffect(() => {
       if (!restoreQueryAndUiState(historyQueryXml, null)) {
         throw new Error("Could not restore the generated History query.");
       }
+      // URL/live-query restoration can carry a tab snapshot. The explicit
+      // Show action always lands on Browse regardless of that snapshot.
+      setWorkspaceTab("browse");
+      setViewFeature(null);
+      setViewPanel("trail");
+      setSelectedViewUri("");
 
       setSearchDraft("");
       setSavedSearchDraft("");
-      setGroupByPropertyUri("");
       setCentralTab("results");
       setControlsSheetOpen(false);
       toast.add({
@@ -7218,6 +7282,10 @@ useEffect(() => {
   }
 
   function handleRoleCheckboxChange(uri: string, checked: boolean, trackUsage = true) {
+    if (defaultLeftTab === "facets") {
+      queueConfigureFacet("role", uri, checked);
+      return;
+    }
     if (trackUsage) setAutoConfiguredFacet("property-in", uri, false);
     setRoleFilter(uri, checked);
   }
@@ -8458,7 +8526,7 @@ useEffect(() => {
           return element;
         };
         const liveQuery = add(root,"query");
-        const query = new DOMParser().parseFromString(queryXml, "application/xml");
+        const query = new DOMParser().parseFromString(snapshotFctQueryXml(queryXml, "data"), "application/xml");
         if (query.getElementsByTagName("parsererror").length) throw new Error("The FCT query is not well-formed XML.");
         liveQuery.appendChild(doc.importNode(query.documentElement, true));
         const breadcrumbRoot = add(root,"breadcrumbs");
@@ -8697,6 +8765,10 @@ useEffect(() => {
     handleFetchProfile,
     handleLoginSubmit,
     handlePropertyCheckboxChange,
+    pendingConfigureFacets,
+    configureSelectedProperties,
+    configureSelectedRoles,
+    commitConfigureFacetChanges,
     handleRoleCheckboxChange,
     handleTestConnection,
     histogramColumns,
@@ -8796,6 +8868,7 @@ useEffect(() => {
     queryTreeHeightPercent,
     queryTreeOpen,
     queryWithoutPagingXml,
+    configurePropertyKind, setConfigurePropertyKind, configureRoleKind, setConfigureRoleKind,
     queryXml,
     rdfSourceUrl,
     rdfTargetGraph,
@@ -8920,8 +8993,8 @@ useEffect(() => {
     setGraphSortPickerExpanded,
     setGraphText,
     setGraphsPage,
-    setGroupBatchOffset,
-    setGroupBatchSize,
+    setGroupBatchOffset: setGroupBatchOffsetFromUi,
+    setGroupBatchSize: setGroupBatchSizeFromUi,
     setGroupByPropertyUri,
     setGroupHasMoreBatches,
     setGroupUiPage,

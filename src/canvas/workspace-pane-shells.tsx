@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode, Ref } from "react";
+import type { MouseEventHandler, ReactNode, Ref } from "react";
 import { ResizablePanel } from "@/components/ui/resizable";
 
 /** These are the same resizable pane frames used by live Maestro and its loading state. */
@@ -21,6 +21,6 @@ export function LeftPaneBody({ children }: { children: ReactNode }) {
 export function CenterPaneBody({ children, paneRef }: { children: ReactNode; paneRef?: Ref<HTMLElement> }) {
   return <section ref={paneRef} className="flex h-full min-h-0 min-w-0 flex-col">{children}</section>;
 }
-export function RightPaneBody({ children }: { children: ReactNode }) {
-  return <section className="flex h-full min-h-0 min-w-0 flex-col">{children}</section>;
+export function RightPaneBody({ children, paneRef, onClickCapture }: { children: ReactNode; paneRef?: Ref<HTMLElement>; onClickCapture?: MouseEventHandler<HTMLElement> }) {
+  return <section ref={paneRef} onClickCapture={onClickCapture} className="flex h-full min-h-0 min-w-0 flex-col">{children}</section>;
 }

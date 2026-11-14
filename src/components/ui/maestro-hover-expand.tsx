@@ -23,7 +23,7 @@ export function MaestroHoverExpand({ active, onChange, panels }: {
           aria-label={panel.label} className={`flex w-9 shrink-0 cursor-pointer items-center justify-center bg-muted/30 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground ${expanded ? "border-r" : ""}`}>
           <span className="[writing-mode:vertical-rl] rotate-180">{panel.label}</span>
         </button>
-        <div className={`w-max min-w-0 max-w-[calc(100vw-114px)] overflow-x-auto overflow-y-hidden px-3 py-2 ${expanded ? "" : "hidden"}`} aria-hidden={!expanded}>
+        <div className={`min-w-0 flex-1 overflow-x-auto overflow-y-hidden px-3 py-2 ${expanded ? "" : "hidden"}`} aria-hidden={!expanded}>
           {expanded ? panel.content : null}
         </div>
       </motion.section>;

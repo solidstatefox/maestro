@@ -32,12 +32,13 @@ type CanonicalNode = {
 function canonicalPart(part: XmlPart, selectionOnly = false): CanonicalNode | null {
   const name = Object.keys(part).find(key => key !== ":@" && key !== "#text" && key !== "#comment");
   if (!name || name.startsWith("?")) return null;
+  if (selectionOnly && name.split(":").pop() === "a") return null;
   // As before, Status selections do not partition the query-hash graph.
   if (name.split(":").pop() === "status") return null;
   const rawAttributes = (part[":@"] ?? {}) as Record<string, unknown>;
   const isView = name.split(":").pop() === "view";
   const attrs = Object.entries(rawAttributes)
-    .filter(([key]) => !IGNORED.has(key) && !(isView && (selectionOnly || PAGING.has(key))))
+    .filter(([key]) => !IGNORED.has(key) && !(selectionOnly && key === "group") && !(isView && (selectionOnly || PAGING.has(key))))
     .map(([key, value]) => [key, String(value)] as [string, string])
     .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   const rawChildren = Array.isArray(part[name]) ? part[name] as XmlPart[] : [];
@@ -92,7 +93,8 @@ export function canonicalQueryIdentityXml(xml: string): string {
 /** Canonical identity for comparing the selection of a derived FCT view with
  * its bookmarked live query. Ignore <view> attributes because list-status
  * deliberately changes the view type and pagination, but retain the <view>
- * node at its original position in the breadcrumb/property tree. All graph,
+ * node at its original position in the breadcrumb/property tree. Viewer-plane
+ * grouping markers are also excluded from selection identity. All graph,
  * path, class, value, text and other selection constraints still participate.
  * Unlike this projection comparison, bookmark hashes retain the view type. */
 export function canonicalFctSelectionXml(xml: string): string {

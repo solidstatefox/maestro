@@ -1,4 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { graphForPrefix } from "./personal-auth";
@@ -252,6 +253,20 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
         let update: string;
         try {
           const triples = await parseRdfDocument(content, extension, destinationGraph);
+          // File-scoped implementation digest (conservative: editing another
+          // provider in the same document also requires curator reapproval).
+          // Hash the on-disk source *before* adding any generated RDF triples.
+          const implementationDigest = `sha256:${createHash("sha256").update(content, "utf8").digest("hex")}`;
+          const rdfType = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+          const mui = "gttp://ggg.maestro.ecosys/ns/ui#";
+          const subjects = [...new Set(triples.filter(triple => triple.predicate.value === rdfType &&
+            triple.object.value === `${mui}Provider` && triple.subject.termType === "NamedNode")
+            .map(triple => triple.subject.value))];
+          for (const uri of subjects) triples.push({
+            subject: { termType: "NamedNode", value: uri },
+            predicate: { termType: "NamedNode", value: `${mui}implementationDigest` },
+            object: { termType: "Literal", value: implementationDigest },
+          });
           update = buildInsertData(destinationGraph, triples);
         } catch (error) {
           throw new Error(`Could not parse RDF document ${file.name}: ${error instanceof Error ? error.message : String(error)}`);
@@ -282,6 +297,13 @@ export async function ensureGraphDirectorySeeded(request?: Request, options: { f
     // After the manifest reload, reinstate the shared Record state vocabulary/SHACL restriction.
     const { ensurePersonalStatusSchema } = await import("@/lib/personal-status-server");
     await ensurePersonalStatusSchema(request!);
+    // Machine definitions may have changed during reseed. Never execute a
+    // previous RDF definition under a new policy version.
+    const { invalidateServerStatusMachines } = await import("@/lib/status-machine-server");
+    invalidateServerStatusMachines();
+    // Old copied provider approval triples are deliberately NOT treated as
+    // authority. Do not delete blanket status assertions here: curators are
+    // themselves mui:Providers and must retain their direct Approved grant.
     return loaded;
   })();
   graphDirectorySeedPromises.set(sessionKey, promise);
@@ -405,13 +427,22 @@ export async function updatePersonalSparql(update: string, timeoutMs = 30000, re
   const endpoint = personalSparqlWriteUrl(request);
   const response = await fetchWithDigestFallback(endpoint, {
     method: "POST",
-    headers: personalSparqlHeaders(request, "application/sparql-update; charset=UTF-8", "text/plain, text/html, application/json, */*"),
+    headers: personalSparqlHeaders(request, "application/sparql-update", "text/plain, application/json;q=0.9"),
     body: update,
     cache: "no-store",
     signal: AbortSignal.timeout(timeoutMs),
   });
-  const body = (await response.text()).slice(0, 3000);
-  if (!response.ok) throw new Error(`Personal SPARQL update returned HTTP ${response.status}: ${body || "no response details"}${authNote(response) ? ` [${authNote(response)}]` : ""}`);
+  const rawBody = (await response.text()).slice(0, 10000);
+  // Virtuoso's protected /sparql-auth service can return its interactive HTML
+  // query console on a failed machine request. Never forward that markup to UI.
+  const plainBody = rawBody.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]*>/g, " ").replace(/&(?:nbsp|#160);/gi, " ")
+    .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&").replace(/\s+/g, " ").trim();
+  const body = (response.headers.get("content-type") ?? "").toLowerCase().includes("text/html")
+    ? plainBody.slice(0, 650) : rawBody.slice(0, 1600);
+  if (!response.ok) throw new Error(`Personal SPARQL update returned HTTP ${response.status} (${endpoint.pathname}): ${body || response.statusText || "no response details"}${authNote(response) ? ` [${authNote(response)}]` : ""}`);
   if (/(?:Virtuoso\s+Exception|Error\s+SR|SPARQL\s+UPDATE\s+Error|failed)/i.test(body) && !/0 errors/i.test(body)) {
     throw new Error(`Personal SPARQL update failed: ${body}`);
   }

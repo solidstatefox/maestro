@@ -1,8 +1,10 @@
-import { cloneFctListStatusView } from "@/lib/fct-status-projection";
+import { cloneFctListStatusView, cloneFctStatusAskView } from "@/lib/fct-status-projection";
 export { cloneFctListStatusView } from "@/lib/fct-status-projection";
 import { getOntologyGraph, personalSparqlUrl, queryPersonalSparql, updatePersonalSparql } from "@/lib/personal-sparql";
 import { getPersonalStatusGraph, getQueryObservationGraph } from "@/lib/personal-status-graph";
 import { MUI_NS, MUI_STATUS, MUI_HIDDEN, MUI_LAST_LOCATED_AT, RECORD_STATUSES, type RecordStatusName } from "@/lib/personal-status-vocabulary";
+import { loadServerStatusMachines } from "@/lib/status-machine-server";
+import { STATUS_MUI, STATUS_RDFS, effectiveStatus, machineForTarget, transitionStatus } from "@/lib/status-machine-runtime";
 
 /** No status object or subject can be an RDF literal or blank node. */
 function iri(value: string): string {
@@ -43,25 +45,39 @@ export async function ensurePersonalStatusSchema(request: Request): Promise<void
   await updatePersonalSparql(`INSERT DATA { GRAPH ${g} { ${statements.join("\n")} } }`, 30000, request);
 }
 
-/** Atomic mutually exclusive read/unread transition. Stars are orthogonal. */
+/** Apply a machine trigger, not a hard-coded status toggle. Persist only the
+ * track's assertion delta. Parallel read, visibility, and star tracks survive. */
+async function executeResourceTrigger(request: Request, resource: string, trigger: string, intended: string): Promise<void> {
+  const subject = iri(resource), g = statusGraph(request);
+  const machines = await loadServerStatusMachines(request);
+  const machine = machineForTarget(machines, `${STATUS_RDFS}Resource`);
+  const existing = await queryPersonalSparql(`SELECT DISTINCT ?status WHERE { GRAPH ${g} { ${subject} ${predicate} ?status } }`, 20000, request);
+  const assertions = (existing.results?.bindings ?? []).map(row => row.status?.value ?? "").filter(Boolean);
+  const values = effectiveStatus(machine, assertions);
+  const current = Object.values(values);
+  if (current.includes(intended)) return; // Idempotent re-display/toggle.
+  const transition = transitionStatus(machine, assertions, trigger);
+  if (transition.to !== intended) throw new Error(`FSM ${machine.uri} rejected ${trigger} -> ${intended}`);
+  const track = machine.tracks.get(transition.dimension);
+  if (!track) throw new Error("Missing RDF status track.");
+  const members = [...track.states].map(iri).join(", ");
+  const insert = transition.add ? `GRAPH ${g} { ${subject} ${predicate} ${iri(transition.add)} }` : "";
+  await updatePersonalSparql(`DELETE { GRAPH ${g} { ${subject} ${predicate} ?old } }
+    INSERT { ${insert} } WHERE { OPTIONAL { GRAPH ${g} { ${subject} ${predicate} ?old . FILTER(?old IN (${members})) } } }`, 30000, request);
+}
+
 export async function updateRecordStatus(request: Request, queryHash: string, uri: string, status: RecordStatusName, enabled: boolean): Promise<void> {
-  const subject = iri(uri), g = statusGraph(request), object = iri(RECORD_STATUSES[status]);
-  if (status === "Seen" || status === "Unseen") {
-    const desired = enabled ? status : (status === "Seen" ? "Unseen" : "Seen");
-    const inverse = desired === "Seen" ? "Unseen" : "Seen";
-    await updatePersonalSparql(`DELETE { GRAPH ${g} { ${subject} ${predicate} ${iri(RECORD_STATUSES[inverse])} } } INSERT { GRAPH ${g} { ${subject} ${predicate} ${iri(RECORD_STATUSES[desired])} } } WHERE { OPTIONAL { GRAPH ${g} { ${subject} ${predicate} ${iri(RECORD_STATUSES[inverse])} } } }`, 30000, request);
-  } else {
-    await updatePersonalSparql(enabled
-      ? `INSERT DATA { GRAPH ${g} { ${subject} ${predicate} ${object} } }`
-      : `DELETE DATA { GRAPH ${g} { ${subject} ${predicate} ${object} } }`, 30000, request);
-  }
+  validatedHash(queryHash);
+  const trigger = status === "Starred" ? (enabled ? "Star" : "Unstar") :
+    (status === "Seen" ? enabled : !enabled) ? "ViewRecord" : "MarkUnread";
+  const destination = status === "Starred" ? (enabled ? "Starred" : "Unstarred") :
+    trigger === "ViewRecord" ? "Seen" : "Unseen";
+  await executeResourceTrigger(request, uri, `${STATUS_MUI}${trigger}`, `${STATUS_MUI}${destination}`);
 }
 
 export async function updateHiddenRecord(request: Request, uri: string, hidden: boolean): Promise<void> {
-  const g = statusGraph(request), subject = iri(uri);
-  await updatePersonalSparql(hidden
-    ? `INSERT DATA { GRAPH ${g} { ${subject} ${predicate} ${hiddenObject} } }`
-    : `DELETE DATA { GRAPH ${g} { ${subject} ${predicate} ${hiddenObject} } }`, 30000, request);
+  await executeResourceTrigger(request, uri, `${STATUS_MUI}${hidden ? "Hide" : "Unhide"}`,
+    `${STATUS_MUI}${hidden ? "Hidden" : "Visible"}`);
 }
 
 export async function listHiddenRecords(request: Request): Promise<string[]> {
@@ -83,6 +99,15 @@ export async function recordPageStatus(request: Request, queryHash: string, uris
     if (name) { const item = statuses[uri] ?? (statuses[uri] = []); if (!item.includes(name)) item.push(name); }
     if (row.hidden?.value === "true" || row.hidden?.value === "1") hidden.add(uri);
   }
+  // These page-local values feed Record buttons, NOT the Status facet.
+  // Resolve only the RDF-defined initial read state, without persisting it.
+  const machine = machineForTarget(await loadServerStatusMachines(request), `${STATUS_RDFS}Resource`);
+  for (const uri of items) {
+    const recorded = statuses[uri] ?? [];
+    const effective = effectiveStatus(machine, recorded.map(name => `${MUI_NS}${name}`));
+    const read = effective[`${MUI_NS}ReadStatus`];
+    if (read === `${MUI_NS}Unseen` && !recorded.includes("Unseen")) (statuses[uri] ??= []).push("Unseen");
+  }
   return { statuses, hidden: [...hidden] };
 }
 
@@ -94,10 +119,10 @@ export async function recordLocatedPage(request: Request, queryHash: string, uri
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(executionTime) || !Number.isFinite(Date.parse(executionTime))) throw new Error("Invalid query execution timestamp.");
   const items = [...new Set(uris)].slice(0, 150);
   if (!items.length) return;
-  const values = items.map(iri).join(" "), g = statusGraph(request), observation = observationGraph(request, queryHash);
+  const values = items.map(iri).join(" "), observation = observationGraph(request, queryHash);
   await ensureQueryHashGraphMetadata(request, queryHash);
-  // Exclude SELECT-listed existing statuses; resources with only Stars remain Unseen.
-  await updatePersonalSparql(`INSERT { GRAPH ${g} { ?s ${predicate} ${iri(RECORD_STATUSES.Unseen)} } } WHERE { VALUES ?s { ${values} } FILTER NOT EXISTS { GRAPH ${g} { ?s ${predicate} ${iri(RECORD_STATUSES.Seen)} } } FILTER NOT EXISTS { GRAPH ${g} { ?s ${predicate} ${iri(RECORD_STATUSES.Unseen)} } } }`, 30000, request);
+  // No write of effective initial Unseen: only explicit read transitions
+  // materialize epistemic status. Observations remain query-scoped.
   // A resource's lastLocatedAt is updated on an explicit new execution only.
   await updatePersonalSparql(`DELETE { GRAPH ${observation} { ?s ${locatedPredicate} ?old } } INSERT { GRAPH ${observation} { ?s ${locatedPredicate} "${executionTime}"^^${typeDate} } } WHERE { VALUES ?s { ${values} } OPTIONAL { GRAPH ${observation} { ?s ${locatedPredicate} ?old } } }`, 30000, request);
 }
@@ -156,12 +181,10 @@ export async function buildFederatedStatusAsk(request: Request, liveQueryXml: st
   if (!endpoint?.url || !/^https?:\/\//i.test(endpoint.url)) throw new Error("The query graph server is not registered for federated Status.");
   const personalEndpoint = personalSparqlUrl(request).toString();
   const personalAddress = `${getPersonalStatusGraph(request)}@${personalEndpoint}`;
-  const escapedAddress = personalAddress.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
   const clone = cloneFctListStatusView(liveQueryXml);
-  // Derive the preview ASK by changing the FCT view and adding a real Status
-  // constraint. The translator owns SERVICE and GRAPH generation.
-  const askXml = clone.replace('<view type="list-status"/>',
-    `<status addr="${escapedAddress}"/><view type="ask"/>`);
+  // Derive ASK from the original FCT XML through the central query API.
+  // No source-level search/replace, and no inspection of compiled SPARQL.
+  const askXml = cloneFctStatusAskView(liveQueryXml, personalAddress);
   const askQuery = compileFctXmlToSparql(askXml, FCT_VIEW_TYPES.ASK, false, false, false, false, {
     liveEndpoint: endpoint.url, executionEndpoint: personalEndpoint,
     defaultStatusAddr: personalAddress,
@@ -180,8 +203,8 @@ export async function buildFederatedStatusAsk(request: Request, liveQueryXml: st
 }
 
 /** Counts come from the accumulated query-hash graph, never from just the
- * current page and never from a remote SERVICE join. A located resource with
- * no Seen assertion is New, regardless of whether Unseen was explicitly set. */
+ * current page and never from a remote SERVICE join. The asserted-only New facet includes only resources with an explicit
+ * mui:Unseen triple, not effective virtual Unseen. */
 export async function queryFederatedStatusCounts(request: Request, _liveQueryXml: string, queryHash: string): Promise<{
   hasStatuses: boolean; counts: Record<RecordStatusName | "New" | "Hidden", number>; sparql: string;
 }> {
@@ -191,7 +214,7 @@ export async function queryFederatedStatusCounts(request: Request, _liveQueryXml
   const located = `GRAPH ${observation} { ?c1 ${locatedPredicate} ?located }`;
   const base = `PREFIX mui: <${MUI_NS}>\n`;
   const definitions = {
-    New: `${located} FILTER NOT EXISTS { GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Seen)} } }`,
+    New: `${located} GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Unseen)} }`,
     Seen: `${located} GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Seen)} }`,
     Starred: `${located} GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Starred)} }`,
     Hidden: `${located} GRAPH ${g} { ?c1 ${predicate} ${hiddenObject} }`,
@@ -205,7 +228,7 @@ export async function queryFederatedStatusCounts(request: Request, _liveQueryXml
   }));
   const counts: Record<RecordStatusName | "New" | "Hidden", number> = { New: 0, Unseen: 0, Seen: 0, Starred: 0, Hidden: 0 };
   for (const [name, value] of entries) counts[name as keyof typeof counts] = value;
-  counts.Unseen = counts.New; // Legacy internal alias; only New is displayed.
+  counts.Unseen = counts.New; // New is the UI label for asserted Unseen.
   const sparql = query(definitions.New);
   return { hasStatuses: counts.New + counts.Seen + counts.Starred + counts.Hidden > 0, counts, sparql };
 }
@@ -222,8 +245,17 @@ export async function queryFederatedStatusResults(request: Request, liveQueryXml
   const { base, service: source, endpointUrl } = await buildFederatedStatusAsk(request, liveQueryXml, queryHash, true);
   const g = statusGraph(request);
   const ordinary = selected.filter((name) => name !== "Hidden");
-  const statusConstraints = ordinary.length
-    ? `FILTER EXISTS { GRAPH ${g} { ?c1 ${predicate} ?selectedStatus } FILTER(?selectedStatus IN (${[...new Set(ordinary.map((name) => iri(RECORD_STATUSES[name === "New" ? "Unseen" : name as RecordStatusName])))].join(", ")})) }`
+  // This is the asserted-status facet. Effective initial states belong to
+  // the FSM evaluator, not to the Status widget or its filters.
+  const wantsUnseen = ordinary.some(name => name === "New" || name === "Unseen");
+  const assertedStatuses = [...new Set(ordinary.filter(name => name !== "New" && name !== "Unseen")
+    .map(name => iri(RECORD_STATUSES[name as RecordStatusName])))];
+  const epistemicAlternatives = [
+    wantsUnseen ? `EXISTS { GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Unseen)} } }` : "",
+    assertedStatuses.length ? `EXISTS { GRAPH ${g} { ?c1 ${predicate} ?selectedStatus . FILTER(?selectedStatus IN (${assertedStatuses.join(", ")})) } }` : "",
+  ].filter(Boolean);
+  const statusConstraints = epistemicAlternatives.length
+    ? `FILTER(${epistemicAlternatives.join(" || ")})`
     : "";
   const hideConstraint = selected.includes("Hidden")
     ? `FILTER EXISTS { GRAPH ${g} { ?c1 ${predicate} ${hiddenObject} } }`

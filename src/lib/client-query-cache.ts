@@ -472,7 +472,11 @@ export function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Pr
   // Endpoint selection, health checks, and other control-plane requests must
   // not be aborted merely because the live query changes.
   const body = typeof init?.body === "string" ? init.body : "";
-  if (!/\/proxy\/api\/(?:fct|sparql|policies|xslt)/.test(url) ||
+  // GET /fct loads the endpoint registry or probes health. It is control-plane
+  // work, not a live FCT query, and must survive query navigation/cancellation.
+  const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+  if ((method === "GET" && /\/proxy\/api\/fct(?:[/?]|$)/.test(url)) ||
+      !/\/proxy\/api\/(?:fct|sparql|policies|xslt)/.test(url) ||
       body.includes('"selectEndpointId"') || body.includes('"selectEndpointUrl"') || body.includes('"health"')) {
     return cachedFetchFctImpl(input, init);
   }

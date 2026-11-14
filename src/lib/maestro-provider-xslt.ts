@@ -1,6 +1,7 @@
 "use client";
 
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
+import { snapshotFctQueryXml } from "@/lib/fct-query-api";
 
 /** Generic XSLT input envelope. All providers receive mctx:query; Record
  * providers also receive mctx:describe. Derived FCT/SPARQL result XML is
@@ -21,7 +22,8 @@ export function createProviderXsltContext(options: {
   metadata?: Record<string, string>;
   facetValues?: Record<string, string[]>;
 }): string {
-  const live = xmlDoc(options.queryXml, "live FCT query");
+  const detachedQueryXml = snapshotFctQueryXml(options.queryXml, "data");
+  const live = xmlDoc(detachedQueryXml, "FCT query snapshot");
   if (live.documentElement.localName !== "query") throw new Error("The provider requires an FCT query root.");
   const context = xmlDoc(`<mctx:context xmlns:mctx="${MAESTRO_CONTEXT_NS}"><mctx:query/><mctx:describe/><mctx:results/><mctx:component/><mctx:metadata/><mctx:facet-values/><mctx:query-text/></mctx:context>`, "provider context");
   const attach = (name: string, source?: XMLDocument): void => {
@@ -31,7 +33,7 @@ export function createProviderXsltContext(options: {
   if (options.describeXml) attach("describe", xmlDoc(options.describeXml, "Record DESCRIBE"));
   if (options.resultXml) attach("results", xmlDoc(options.resultXml, "derived query results"));
   if (options.componentUrn) context.getElementsByTagNameNS(MAESTRO_CONTEXT_NS, "component")[0].setAttribute("uri", options.componentUrn);
-  context.getElementsByTagNameNS(MAESTRO_CONTEXT_NS, "query-text")[0].textContent = options.queryXml;
+  context.getElementsByTagNameNS(MAESTRO_CONTEXT_NS, "query-text")[0].textContent = detachedQueryXml;
   const metadata = context.getElementsByTagNameNS(MAESTRO_CONTEXT_NS, "metadata")[0];
   for (const [name, value] of Object.entries(options.metadata ?? {})) {
     const entry = context.createElementNS(MAESTRO_CONTEXT_NS, "mctx:entry");

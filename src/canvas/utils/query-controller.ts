@@ -56,7 +56,7 @@ export type ShareableUiState = {
   workspaceTab?: "browse" | "view" | "analyze";
   viewPanel?: "trail" | "perspectives" | "features";
   selectedViewUri?: string;
-  viewFeature?: "policies" | "formats" | "transcoders" | "facet-widgets" | "curators" | null;
+  viewFeature?: "policies" | "formats" | "transcoders" | "facet-widgets" | "curators" | "fsm-providers" | null;
   selectedAnalysisUri?: string;
   analyzeHistogram?: boolean;
   /** Explicit state for the Results/Query toolbar toggle. */
@@ -68,11 +68,8 @@ export type ShareableUiState = {
   defaultLeftTab?: "facets" | "personal" | "community";
   focusListOrder?: "Properties" | "Roles";
   focusWidgetsSuppressed?: boolean;
-  groupByPropertyUri?: string;
   resultsUiPage?: number;
   groupUiPage?: number;
-  groupBatchSize?: number;
-  groupBatchOffset?: number;
   resultsPageSize?: number;
   selectedUri?: string;
   graphText?: string;

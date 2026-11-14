@@ -57,4 +57,10 @@ _:curatedProviderList20 rdf:first <gttp://ggg.openlink.sw/nlp/transcoder#ChatGPT
 _:curatedProviderList21 rdf:first <gttp://ggg.openlink.sw/nlp/transcoder#ChatGPTUserSentimentExtractor> ;
     rdf:rest _:curatedProviderList22 .
 _:curatedProviderList22 rdf:first <gttp://ggg.openlink.sw/nlp/transcoder#ConversationRoot> ;
+    rdf:rest _:curatedProviderList23 .
+_:curatedProviderList23 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/resource-status-machine> ;
+    rdf:rest _:curatedProviderList24 .
+_:curatedProviderList24 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/provider-approval-machine> ;
+    rdf:rest _:curatedProviderList25 .
+_:curatedProviderList25 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/curator-approval-machine> ;
     rdf:rest rdf:nil .

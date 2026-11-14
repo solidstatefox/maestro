@@ -1,8 +1,10 @@
 "use client";
 
 import { FCT_VIEW_TYPES } from "./fct-view-types";
+import { findGroupCarrier, ungroupForMembers, markFctGroup } from "./fct-groups-carrier";
 import { isBlankNodeTerm } from "./bnode";
 import { attachViewToPropertyInQueryTree } from "./fct-query";
+import { fctQueryTreeApi, cloneFctQueryNode } from "./fct-query-api";
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
 
 export type QueryResultValue = {
@@ -27,13 +29,7 @@ export type DistinctCountKind = "property" | "class" | "role" | "value";
 const COUNT_QUERY_LIMIT = 1000;
 const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
-function cloneQueryNode(node: FctQueryNode): FctQueryNode {
-  return {
-    ...node,
-    attributes: { ...node.attributes },
-    children: node.name === "view" ? [] : node.children.map(cloneQueryNode),
-  };
-}
+const cloneQueryNode = (node: FctQueryNode): FctQueryNode => cloneFctQueryNode(node, "data");
 
 function findQueryNode(nodes: FctQueryNode[], nodeId: string): FctQueryNode | null {
   for (const node of nodes) {
@@ -89,10 +85,10 @@ export function createPersonalRoleValuesQuery(tree: FctQueryTree, roleNode: FctQ
       ? node.children.filter((child) => child.name !== "value")
       : node.children).map(withoutSelectedValues),
   });
+  const dataTree = fctQueryTreeApi.getDataTree(tree);
   const snapshot: FctQueryTree = {
-    ...tree,
-    attributes: { ...tree.attributes },
-    children: tree.children.map(withoutSelectedValues),
+    ...dataTree,
+    children: dataTree.children.map(withoutSelectedValues),
   };
   return createPropertyWidgetQuery(snapshot, roleNode.attributes.iri ?? "", "reverse", roleNode.id, true);
 }
@@ -104,11 +100,13 @@ export function createPropertyWidgetQuery(
   selectedNodeId?: string,
   forPersonalFacet = false,
 ): FctQueryTree {
-  const copyNode = (node: FctQueryNode): FctQueryNode => ({
-    ...node,
-    attributes: { ...node.attributes },
-    children: node.name === "view" ? [] : node.children.map(copyNode),
-  });
+  // Facet candidate values belong to the incoming resource selection. In
+  // groups mode the live view is on the grouped term; derive a parent-scope
+  // query without modifying the authoritative grouped query or its breadcrumbs.
+  // The selected group facet itself uses createGroupValuesQuery instead.
+  tree = fctQueryTreeApi.getDataTree(tree);
+  if (forPersonalFacet) tree = ungroupForMembers(tree);
+  const copyNode = (node: FctQueryNode): FctQueryNode => cloneFctQueryNode(node, "data");
   const selectedRoleIsAncestor = direction === "reverse" && Boolean(selectedNodeId) &&
     treeNodeContainsId(tree.children, selectedNodeId!, "query-view");
 
@@ -230,36 +228,18 @@ export function createGroupValuesQuery(
   option: GroupByOption,
   paging: { limit: number; offset: number } = { limit: 30, offset: 0 },
 ): FctQueryTree {
-  const sourceClone: FctQueryTree = {
-    ...sourceTree,
-    attributes: { ...sourceTree.attributes },
-    children: sourceTree.children.map(cloneQueryNode),
-  };
-  const viewAttributes = (type: string) => ({ type, sort: "count", limit: String(paging.limit), offset: String(paging.offset) });
-
-  if (option.direction === "forward" && option.uri === RDF_TYPE_URI) {
-    return setQueryViewAttributes(sourceClone, viewAttributes(FCT_VIEW_TYPES.CLASSES));
-  }
-
-  if (option.direction === "reverse") {
-    const stripRoleValues = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => ({
-      ...node,
-      attributes: { ...node.attributes },
-      children: node.id === option.nodeId
-        ? node.children.filter((child) => child.name !== "value").map(cloneQueryNode)
-        : stripRoleValues(node.children),
-    }));
-    const unconstrained: FctQueryTree = { ...sourceClone, children: stripRoleValues(sourceClone.children) };
-    return setQueryViewAttributes(
-      createPropertyWidgetQuery(unconstrained, option.uri, "reverse", option.nodeId, true),
-      viewAttributes(FCT_VIEW_TYPES.LIST),
-    );
-  }
-
-  return setQueryViewAttributes(
-    createPropertyWidgetQuery(sourceClone, option.uri, "forward", undefined, true),
-    viewAttributes(FCT_VIEW_TYPES.LIST),
-  );
+  const clean = ungroupForMembers(sourceTree);
+  const marked = markFctGroup(clean, {
+    id: findQueryNode(clean.children, option.nodeId)?.id,
+    name: option.direction === "reverse" ? "property-of" : "property",
+    iri: option.uri,
+  });
+  return setQueryViewAttributes(marked, {
+    type: FCT_VIEW_TYPES.LIST,
+    limit: String(paging.limit),
+    offset: String(paging.offset),
+    order: "yes",
+  });
 }
 
 export function createGroupMemberQuery(
@@ -267,11 +247,11 @@ export function createGroupMemberQuery(
   option: GroupByOption,
   groupValue: QueryResultValue,
 ): FctQueryTree {
-  let tree: FctQueryTree = {
+  let tree: FctQueryTree = ungroupForMembers({
     ...sourceTree,
     attributes: { ...sourceTree.attributes },
     children: sourceTree.children.map(cloneQueryNode),
-  };
+  });
   let bindingNodeId = option.nodeId;
   // Group-by furniture (such as rdf:type) can be selected even when that
   // relationship is not already a filter in the live query. Build the same
@@ -627,7 +607,7 @@ export function setQueryViewAttributes(
   sourceTree: FctQueryTree,
   attributes: Record<string, string>,
 ): FctQueryTree {
-  const tree = cloneQueryTree(sourceTree);
+  const tree = fctQueryTreeApi.getDataTree(sourceTree);
   return {
     ...tree,
     children: updateQueryNode(tree.children, "query-view", (node) => ({
@@ -656,6 +636,3 @@ export function createRecordDescriptionQuery(
   };
 }
 
-function cloneQueryTree(tree: FctQueryTree): FctQueryTree {
-  return { ...tree, attributes: { ...tree.attributes }, children: tree.children.map(cloneQueryNode) };
-}

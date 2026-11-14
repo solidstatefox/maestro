@@ -1,6 +1,7 @@
 "use client";
 
 import { fctRead } from "./fct-client";
+import { snapshotFctQueryXml } from "./fct-query-api";
 import { createBlankNodeLabelAllocator, BNODE_DESCRIBE_MAX_TRIPLES } from "@/lib/bnode";
 
 const iri = (value: string) => /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(value);
@@ -8,7 +9,7 @@ const esc = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;"
 /** Read RDF through the normal FCT DESCRIBE view, scoped to the live graph address. */
 export async function describeFctSource(liveXml: string, resource: string, signal?: AbortSignal): Promise<{code: string; query: string}> {
   if (!iri(resource)) throw new Error("Invalid RDF resource IRI.");
-  const doc = new DOMParser().parseFromString(liveXml, "application/xml");
+  const doc = new DOMParser().parseFromString(snapshotFctQueryXml(liveXml, "data"), "application/xml");
   if (doc.querySelector("parsererror")) throw new Error("Malformed live FCT XML.");
   const root = doc.documentElement;
   if (root.localName !== "query" || !root.getAttribute("addr")) throw new Error("FCT graph address is missing.");

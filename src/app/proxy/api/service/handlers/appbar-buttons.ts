@@ -49,7 +49,7 @@ async function ensureFeatureBookmarks(request: Request) {
   const catalog = [
     { kind: "policies", title: "Policies", icon: "shield-check" },
     { kind: "formats", title: "Formats", icon: "file-code-2" },
-    { kind: "facet-widgets", title: "Facets", icon: "layout-grid" },
+    { kind: "facet-widgets", title: "Facets", icon: "filter" },
     { kind: "transcoders", title: "Transcoders", icon: "arrow-left-right" },
     { kind: "curators", title: "Curators", icon: "landmark" },
   ] as const;
@@ -82,6 +82,12 @@ async function ensureFeatureBookmarks(request: Request) {
   });
   // Never delete unrelated user-defined appbar pins during automatic initialization.
   for (const entry of entries) {
+    if (entry.kind === "facet-widgets") {
+      // Refresh the icon of an existing generated shortcut as well.
+      await updatePersonalSparql(`DELETE { GRAPH ${appbarGraph} { ${entry.button} <${MUI}icon> ?oldIcon } }
+        INSERT { GRAPH ${appbarGraph} { ${entry.button} <${MUI}icon> "filter" } }
+        WHERE { GRAPH ${appbarGraph} { ${entry.button} a <${MUI}AppbarButtonProvider> ; <${MUI}icon> ?oldIcon } }`, 20000, request);
+    }
     // 1. Create a real vfct:QueryHistoryVisit at login. The stable ID prevents
     // duplicate visits on refresh, while the first-login creation time persists.
     await updatePersonalSparql(`INSERT { GRAPH ${historyGraph} {

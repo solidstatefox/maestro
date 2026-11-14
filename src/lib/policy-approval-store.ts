@@ -1,7 +1,9 @@
 import { getPersonalStatusGraph } from "@/lib/personal-status-graph";
+import { loadServerStatusMachines } from "@/lib/status-machine-server";
+import { STATUS_MUI, effectiveStatus, machineForTarget } from "@/lib/status-machine-runtime";
 import { createHash } from "node:crypto";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
-import { getHistoryGraph, getUserGraph, getShapesGraph, askPersonalSparql, queryPersonalSparql, updatePersonalSparql } from "@/lib/personal-sparql";
+import { getHistoryGraph, getUserGraph, getShapesGraph, graphForFile, askPersonalSparql, queryPersonalSparql, updatePersonalSparql } from "@/lib/personal-sparql";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
 const SCHEMA = "https://schema.org/identifier";
@@ -39,12 +41,53 @@ export async function readPolicyApprovals(uris: string[], request: Request): Pro
   const graph = iri(policyApprovalGraph(request));
   const status = iri(statusGraph(request));
   const values = distinct.map(iri).join(" ");
-  const query = `SELECT ?policy ?status ?trigger ?lastRequestedBy ?lastRequestDate ?matchedRecord ?lastRequestHistory ?lastRequestComponent WHERE { VALUES ?policy { ${values} } OPTIONAL { GRAPH ${status} { ?policy <${MUI}status> ?status } } OPTIONAL { GRAPH ${graph} { OPTIONAL { ?policy <${MUI}triggeredBy> ?trigger } OPTIONAL { ?policy <${MUI}lastRequestedBy> ?lastRequestedBy } OPTIONAL { ?policy <${MUI}lastRequestDate> ?lastRequestDate } OPTIONAL { ?policy <${MUI}matchedRecord> ?matchedRecord } OPTIONAL { ?policy <${MUI}lastRequestHistory> ?lastRequestHistory } OPTIONAL { ?policy <${MUI}lastRequestComponent> ?lastRequestComponent } } } }`;
+  const shapes = iri(getShapesGraph(request));
+  const otc = iri(graphForFile("otc-transcoders.rdf", request));
+  const query = `SELECT ?policy ?status ?curated ?isProvider ?isOtcProvider ?isCurator ?isClassPolicy ?trigger ?lastRequestedBy ?lastRequestDate ?matchedRecord ?lastRequestHistory ?lastRequestComponent WHERE {
+    VALUES ?policy { ${values} }
+    OPTIONAL { GRAPH ${status} { ?policy <${MUI}status> ?status } }
+    OPTIONAL { GRAPH ${shapes} { ?policy a <${MUI}Provider> } BIND(true AS ?isProvider) }
+    OPTIONAL { GRAPH ${otc} { ?policy a <${MUI}Provider> } BIND(true AS ?isOtcProvider) }
+    OPTIONAL { GRAPH ${shapes} { ?policy a <${MUI}CurationProvider> } BIND(true AS ?isCurator) }
+    OPTIONAL { GRAPH ${shapes} { ?policy a <${MUI}ClassPolicy> } BIND(true AS ?isClassPolicy) }
+    OPTIONAL {
+      GRAPH ${shapes} {
+        ?curator a <${MUI}CurationProvider> ; <${MUI}widget>/<http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>*/<http://www.w3.org/1999/02/22-rdf-syntax-ns#first> ?policy .
+      }
+      { GRAPH ${shapes} { ?policy <${MUI}implementationDigest> ?currentDigest } }
+      UNION { GRAPH ${otc} { ?policy <${MUI}implementationDigest> ?currentDigest } }
+      GRAPH ${status} {
+        ?curator <${MUI}status> <${MUI}Approved> ; <${MUI}approvedDigest> ?grant .
+        ?grant <${MUI}forProvider> ?policy ; <${MUI}implementationDigest> ?currentDigest .
+      }
+      BIND(true AS ?curated)
+    }
+    OPTIONAL { GRAPH ${graph} { OPTIONAL { ?policy <${MUI}triggeredBy> ?trigger } OPTIONAL { ?policy <${MUI}lastRequestedBy> ?lastRequestedBy } OPTIONAL { ?policy <${MUI}lastRequestDate> ?lastRequestDate } OPTIONAL { ?policy <${MUI}matchedRecord> ?matchedRecord } OPTIONAL { ?policy <${MUI}lastRequestHistory> ?lastRequestHistory } OPTIONAL { ?policy <${MUI}lastRequestComponent> ?lastRequestComponent } } }
+  }`;
   const payload = await queryPersonalSparql(query, 20000, request);
   const rows = payload.results?.bindings ?? [];
+  const machines = await loadServerStatusMachines(request);
+  const curatorMachine = machineForTarget(machines, `${STATUS_MUI}CurationProvider`);
+  const providerMachine = machineForTarget(machines, `${STATUS_MUI}Provider`);
+  const classPolicyMachine = machineForTarget(machines, `${STATUS_MUI}ClassPolicy`);
   return distinct.map((uri) => {
     const matching = rows.filter((row) => row.policy?.value === uri);
-    const status = matching.some(row => row.status?.value === `${MUI}Approved`) ? "Approved" : matching.some(row => row.status?.value === `${MUI}Pending`) ? "Pending" : null;
+    const provider = matching.some(row => row.isProvider?.value === "true" || row.isOtcProvider?.value === "true" || row.isProvider?.value === "1" || row.isOtcProvider?.value === "1");
+    const curator = matching.some(row => row.isCurator?.value === "true" || row.isCurator?.value === "1");
+    const curated = matching.some(row => row.curated?.value === "true" || row.curated?.value === "1");
+    // Providers have two independent approval paths: a direct user grant or
+    // version-matched membership in a currently approved curator's RDF list.
+    const policy = provider || curator || matching.some(row => row.isClassPolicy?.value === "true" || row.isClassPolicy?.value === "1");
+    const assertions = [...new Set(matching.map(row => row.status?.value ?? "").filter(Boolean))];
+    const curatorDecision = curator ? effectiveStatus(curatorMachine, assertions)[`${STATUS_MUI}ApprovalStatus`] : "";
+    // Revoking a direct grant leaves an independently curated grant intact;
+    // revoking a curator leaves a direct grant intact.
+    const providerDecision = provider && !curator
+      ? (curated || effectiveStatus(providerMachine, assertions)[`${STATUS_MUI}ApprovalStatus`] === `${STATUS_MUI}Approved`
+          ? `${STATUS_MUI}Approved` : `${STATUS_MUI}Pending`) : "";
+    const policyDecision = !provider && !curator ? effectiveStatus(classPolicyMachine, assertions)[`${STATUS_MUI}ApprovalStatus`] : "";
+    const effective = curator ? curatorDecision : provider ? providerDecision : policyDecision;
+    const status: PolicyApprovalStatus = policy ? (effective === `${STATUS_MUI}Approved` ? "Approved" : "Pending") : null;
     return { uri, status, triggeredBy: [...new Set(matching.map(row => row.trigger?.value ?? "").filter(Boolean))], lastRequestedBy: matching.map(row => row.lastRequestedBy?.value).find(Boolean), lastRequestDate: matching.map(row => row.lastRequestDate?.value).find(Boolean), matchedRecord: matching.map(row => row.matchedRecord?.value).find(Boolean), lastRequestHistory: matching.map(row => row.lastRequestHistory?.value).find(Boolean), lastRequestComponent: matching.map(row => row.lastRequestComponent?.value).find(Boolean) };
   });
 }
@@ -85,28 +128,14 @@ export async function discoverPolicyApprovals(uris: string[], context: PolicyMat
     WHERE { VALUES ?policy { ${values} } BIND(NOW() AS ?now)
       ${remove.map((name, index) => `OPTIONAL { GRAPH ${graph} { ?policy <${MUI}${name}> ?old${index} } }`).join(" ")}
     }`, 20000, request);
-  // A curator confers authority only when its own status is Approved.
-  // The curator's mui:widget is a genuine RDF list (rdf:first/rdf:rest),
-  // not a string, regex or Maestro-internal hard-coded allowlist.
-  const personalStatus = iri(statusGraph(request));
-  await updatePersonalSparql(`DELETE { GRAPH ${personalStatus} { ?policy <${MUI}status> <${MUI}Pending> } }
-    INSERT { GRAPH ${personalStatus} { ?policy <${MUI}status> <${MUI}Approved> } }
-    WHERE { VALUES ?policy { ${values} }
-      GRAPH ${iri(getShapesGraph(request))} {
-        ?curator a <${MUI}CurationProvider> ; <${MUI}widget> ?list .
-        ?list <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>*/<http://www.w3.org/1999/02/22-rdf-syntax-ns#first> ?policy .
-      }
-      GRAPH ${personalStatus} { ?curator <${MUI}status> <${MUI}Approved> }
-      FILTER NOT EXISTS { GRAPH ${personalStatus} { ?policy <${MUI}status> <${MUI}Approved> } }
-    }`, 20000, request);
-  // Only resources without a status (and not listed by an approved curator)
-  // enter Pending. Existing Approved resources remain unchanged.
-  await updatePersonalSparql(`INSERT { GRAPH ${iri(statusGraph(request))} { ?policy <${MUI}status> <${MUI}Pending> } GRAPH ${graph} { ?policy <${MUI}triggeredBy> ${match} } }
-    WHERE { VALUES ?policy { ${values} } FILTER NOT EXISTS { GRAPH ${iri(statusGraph(request))} { ?policy <${MUI}status> ?existing .
-        VALUES ?existing { <${MUI}Pending> <${MUI}Approved> } } } }`, 20000, request);
+  // Discovery records provenance only. Pending is the machine's effective
+  // initial state; curated approval is evaluated from the live RDF list and
+  // the curator's versioned grant, never copied to provider status triples.
+
 }
 
 /** A provider cannot execute merely because it was discovered or selected. */
 export async function isApprovedPolicy(policy: string, request: Request): Promise<boolean> {
-  return validPolicyIri(policy) && askPersonalSparql(`ASK WHERE { GRAPH ${iri(statusGraph(request))} { ${iri(policy)} <${MUI}status> <${MUI}Approved> } }`, 15000, request);
+  if (!validPolicyIri(policy)) return false;
+  return (await readPolicyApprovals([policy], request))[0]?.status === "Approved";
 }

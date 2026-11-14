@@ -85,7 +85,12 @@ SELECT DISTINCT ?policy ?class ?label ?template ?stylesheet WHERE {
     ?template (rdf:value|mui:templateContent) ?stylesheet .
     FILTER(CONTAINS(STR(?stylesheet), 'xsl:stylesheet') || CONTAINS(STR(?stylesheet), 'xsl:transform'))
   }
-  GRAPH <${status}> { ?policy mui:status mui:Approved . ?provider mui:status mui:Approved }
+  GRAPH <${status}> { ?policy mui:status mui:Approved }
+  GRAPH <${shapes}> { ?curator a mui:CurationProvider ; mui:widget/rdf:rest*/rdf:first ?provider .
+    ?provider mui:implementationDigest ?version }
+  GRAPH <${status}> { ?curator mui:status mui:Approved ; mui:approvedDigest ?grant .
+    ?grant mui:forProvider ?provider ; mui:implementationDigest ?version }
+
 } ORDER BY ?label LIMIT 50`, signal);
   return rows.map(row => ({uri:get(row,"policy"),matchedClass:get(row,"class"),
     label:get(row,"label") || get(row,"policy") || "View",template:get(row,"template"),

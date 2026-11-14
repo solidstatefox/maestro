@@ -2,7 +2,7 @@
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { useEffect, useMemo, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
-import { Server, Database, Globe, LayoutGrid, Network, ShieldCheck, FileCode2, ArrowLeftRight, Landmark, Blocks, Bookmark, History } from "lucide-react";
+import { Server, Database, Globe, LayoutGrid, Filter, Network, ShieldCheck, FileCode2, ArrowLeftRight, Landmark, Blocks, Bookmark, History, Route } from "lucide-react";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import { useMapProviderDefinition } from "@/lib/map-provider-discovery";
 import type { FeatureKind } from "@/lib/feature-view-xslt";
@@ -80,7 +80,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
   // A saved Map selection must survive initial Configure discovery. An empty
   // geospatial property list during startup is not a deliberate user pivot.
   return <MaestroHoverExpand active={viewPanel} onChange={onRibbonPanelChange} panels={[
-          { id: "trail", label: "Trail", content: <nav aria-label="Navigation breadcrumbs" className="flex w-max flex-nowrap items-start gap-2">
+          { id: "trail", label: "Trail", content: <nav aria-label="Navigation breadcrumbs" className="flex w-max min-w-full flex-nowrap items-start gap-2">
             {breadcrumbs}
           </nav> },
           { id: "perspectives", label: "Perspectives", content: <div className="flex h-full flex-wrap items-center gap-1" role="toolbar" aria-label="View perspectives">
@@ -121,9 +121,10 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
             {([
               { id: "policies", label: "Policies", Icon: ShieldCheck },
               { id: "formats", label: "Formats", Icon: FileCode2 },
-              { id: "facet-widgets", label: "Facets", Icon: LayoutGrid },
+              { id: "facet-widgets", label: "Facets", Icon: Filter },
               { id: "transcoders", label: "Transcoders", Icon: ArrowLeftRight },
               { id: "curators", label: "Curators", Icon: Landmark },
+              { id: "fsm-providers", label: "FSM Providers", Icon: Route },
             ] as const).map(({ id, label, Icon }) => {
               const active = viewFeature === id;
               return <button type="button" key={id}

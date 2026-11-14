@@ -1,5 +1,9 @@
 "use client";
 import { ErrorDetails } from "@/components/ui/error-details";
+import { cachedFetchFct } from "@/lib/client-query-cache";
+import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
+import { createProviderXsltContext } from "@/lib/maestro-provider-xslt";
+import { parseFctResponse } from "@/canvas/utils/fct-response";
 
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -17,7 +21,7 @@ const periodFor = (hour: number) => hour >= 5 && hour < 7 || hour >= 18 && hour 
   ? "Twilight" : hour >= 7 && hour < 12 ? "Morning" : hour >= 12 && hour < 18
   ? "Afternoon" : "Evening";
 
-export function BookmarkCharts({ queryXml, providerUri }: { queryXml: string; providerUri: string }) {
+export function BookmarkCharts({ queryXml, providerUri, stylesheet }: { queryXml: string; providerUri: string; stylesheet: string }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -27,20 +31,52 @@ export function BookmarkCharts({ queryXml, providerUri }: { queryXml: string; pr
     setRows([]); setError(""); setLoading(true);
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=bookmark-analysis", {
-          method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind, queryXml }),
-        });
-        const payload = await response.json() as { rows?: Row[]; error?: string };
-        if (!response.ok) throw new Error(payload.error ?? `Bookmark analysis returned HTTP ${response.status}`);
-        if (!controller.signal.aborted) setRows(payload.rows ?? []);
+        if (!stylesheet) throw new Error("The Bookmark Analysis mui:Provider has no query XSLT stylesheet.");
+        // The provider XSLT receives the live FCT DOM. It produces a NEW FCT
+        // groups query without inspecting generated SPARQL or mutating Browse.
+        const plan = await transformWithMaestroSaxon(stylesheet,
+          createProviderXsltContext({ queryXml }), { signal: controller.signal });
+        const planDoc = new DOMParser().parseFromString(plan, "application/xml");
+        if (planDoc.querySelector("parsererror") || planDoc.documentElement.localName !== "analysis-query")
+          throw new Error("Bookmark Analysis provider returned invalid FCT query XML.");
+        const root = Array.from(planDoc.documentElement.children).find(el => el.localName === "query");
+        const view = root && Array.from(root.getElementsByTagName("*")).find(el => el.localName === "view");
+        if (!root || !view || view.getAttribute("type") !== "groups")
+          throw new Error("Bookmark Analysis provider did not generate a groups FCT view.");
+        const pageLimit = 500;
+        const allRows: Row[] = [];
+        for (let offset = 0; offset <= 100000; offset += pageLimit) {
+          if (controller.signal.aborted) return;
+          view.setAttribute("offset", String(offset));
+          view.setAttribute("limit", String(pageLimit));
+          const response = await cachedFetchFct("/proxy/api/fct", {
+            method: "POST", cache: "no-store", signal: controller.signal,
+            headers: { "Content-Type": "text/xml; charset=utf-8" },
+            body: new XMLSerializer().serializeToString(root),
+          });
+          const xml = await response.text();
+          if (!response.ok) throw new Error(`Bookmark groups FCT returned HTTP ${response.status}: ${xml.slice(0, 250)}`);
+          const parsed = parseFctResponse(xml);
+          if (parsed.incomplete) throw new Error("Bookmark groups FCT was incomplete; refusing to display partial analysis.");
+          const items = parsed.results;
+          for (const item of items) {
+            const cells = item.columns ?? [];
+            const number = Number(cells[kind === "activity" ? 2 : 1]?.value ?? NaN);
+            if (!Number.isFinite(number) || number <= 0) continue;
+            allRows.push(kind === "activity"
+              ? { label: "", weekday: cells[0]?.value ?? "", hour: cells[1]?.value ?? "", count: number }
+              : { label: cells[0]?.value ?? "", weekday: "", hour: "", count: number });
+          }
+          if (items.length < pageLimit) break;
+          if (offset === 100000) throw new Error("Bookmark analysis exceeds the bounded 100,500-group projection.");
+        }
+        if (!controller.signal.aborted) setRows(allRows);
       } catch (cause) {
         if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Bookmark analysis failed.");
       } finally { if (!controller.signal.aborted) setLoading(false); }
     })();
     return () => controller.abort();
-  }, [kind, queryXml]);
+  }, [kind, queryXml, stylesheet]);
   const days = useMemo(() => DAYS.map(day => ({
     label: day.slice(0, 3), count: rows.filter(r => r.weekday.toLowerCase() === day.toLowerCase()).reduce((a,r)=>a+r.count,0),
   })), [rows]);

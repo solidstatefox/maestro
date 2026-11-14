@@ -12,6 +12,7 @@
  */
 import type { RecordGraphDiscoveryLimits } from "@/lib/record-graph-limits";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
+import { snapshotFctQueryXml } from "@/lib/fct-query-clone";
 
 const FCT_NS = "http://openlinksw.com/services/facets/1.0";
 const safeIri = (s: string): boolean => /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|^`\\\u0000-\u001f]+$/u.test(s);
@@ -26,7 +27,7 @@ export function recordGraphFctQuery(args: {
     throw new Error("Invalid Record graph limits.");
   }
   if (blankQueryXml) {
-    const doc = new DOMParser().parseFromString(blankQueryXml, "application/xml");
+    const doc = new DOMParser().parseFromString(snapshotFctQueryXml(blankQueryXml, "data"), "application/xml");
     if (doc.getElementsByTagName("parsererror").length) throw new Error("Invalid blank-node FCT selection.");
     const views = Array.from(doc.getElementsByTagName("*")).filter(node => node.localName === "view");
     if (views.length !== 1) throw new Error("Expected one FCT view.");

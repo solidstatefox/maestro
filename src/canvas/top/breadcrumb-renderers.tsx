@@ -121,7 +121,7 @@ function renderScopeValueBadge(scope: ScopeValue, term: ScopeValue["values"][num
 
 function renderRootBreadcrumb(tableHeader = false, presentationStyle?: CSSProperties, showMetadata = true) {
     return (<span
-          className="relative flex min-w-0 items-center gap-1"
+          className="relative flex min-w-0 shrink-0 items-center gap-1"
           style={{ zIndex: hoveredBreadcrumbBadgeId === "query-root" ? tutorialBreadcrumbPath.length + 100 : 1 }}
           onMouseEnter={() => setHoveredBreadcrumbBadgeId("query-root")}
           onMouseLeave={() => {
@@ -131,7 +131,7 @@ function renderRootBreadcrumb(tableHeader = false, presentationStyle?: CSSProper
         >
           <ButtonGroup aria-label="Root query controls" className={`min-w-0 max-w-full ${tableHeader ? "border-0 shadow-none" : rootSearchExpanded ? "border border-input" : "border border-border"} ${facetHoverPreview?.kind === "record" ? "rounded-md !border-purple-500/80 text-purple-800 dark:text-purple-200" : ""}`}>
             {rootSearchExpanded ? (
-              <div className="min-w-0 max-w-[min(42rem,70vw)] flex-1">
+              <div className="min-w-0 max-w-[min(90rem,calc(100vw-12rem))] flex-1">
                 {searchInputGroup}
               </div>
             ) : (

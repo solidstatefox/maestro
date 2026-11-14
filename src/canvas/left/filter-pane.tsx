@@ -15,6 +15,7 @@ import { fctTermKey } from "@/canvas/utils/fct-response";
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
 
+import { TransportedPersonalFacets } from "@/canvas/left/transported-facet";
 import { personalFacetInspectorQueries, PersonalRoleWidget } from "@/canvas/left/filter";
 import { RDF_TYPE_URI, GROUP_BY_FACET_HIGHLIGHT_CLASSES } from "@/canvas/utils/query-controller";
 
@@ -187,6 +188,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       toggle={workspace.toggleLiveStatusFilter} revision={workspace.policyApprovalRevision}
                       onNavigate={() => workspace.navigateFacetHeaderToProperty("gttp://ggg.maestro.ecosys/ns/ui#status")}
                       queryXml={workspace.queryXml} />}
+                    <TransportedPersonalFacets navigate={navigateToPropertyPath} endpointReady={endpointReadyForQuery} />
                     {propertyUsageScope(queryTree) && <>
                       <PropertyUsageWidget tree={queryTree} direction="subject" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
                       <PropertyUsageWidget tree={queryTree} direction="object" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
@@ -373,6 +375,12 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       const excluded = roleNode.attributes.exclude?.trim().toLowerCase() === "yes";
                       const label = `${roleLabel} `;
                       const isGroupByRole = groupByPropertyUri === `reverse:${uri}`;
+                      const roleInspectorXml = isGroupByRole
+                        ? serializeFctQuery(queryTree)
+                        : serializeFctQuery(setQueryViewAttributes(
+                            createPersonalRoleValuesQuery(queryTree, roleNode),
+                            { limit: String(leftWidgetLimits.roles) },
+                          ));
                       return (
                         <article key={roleNode.id} ref={(element) => { if (element) roleWidgetCardRefs.current.set(uri, element); else roleWidgetCardRefs.current.delete(uri); }} className={`flex min-w-0 flex-col ${isGroupByRole ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`} style={facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === uri && facetHoverPreview.direction === "reverse" ? { borderColor: "rgb(168 85 247)" } : undefined}>
                           <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByRole ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
@@ -395,22 +403,17 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                 )}
                                 <div className="flex shrink-0 items-center gap-1">
                                   <QueryInspectorButton
-                                    query={serializeFctQuery(setQueryViewAttributes(
-                                      createPersonalRoleValuesQuery(queryTree, roleNode),
-                                      { ...(isGroupByRole ? { sort: "count" } : {}), limit: String(leftWidgetLimits.roles) },
-                                    ))}
+                                    query={roleInspectorXml}
                                     filename="personal-role-values-fct-query.xml"
                                     label="View Personal role values query"
                                     primaryTabLabel="XML"
                                     extraQueries={personalFacetInspectorQueries(
                                       queryTree,
-                                      serializeFctQuery(setQueryViewAttributes(
-                                        createPersonalRoleValuesQuery(queryTree, roleNode),
-                                        { ...(isGroupByRole ? { sort: "count" } : {}), limit: String(leftWidgetLimits.roles) },
-                                      )),
+                                      roleInspectorXml,
                                       uri,
                                       roleWidgetStatuses[roleNode.id]?.sampleValue,
                                       { direction: "reverse", nodeId: roleNode.id },
+                                      isGroupByRole,
                                     )}
                                   />
                                   {workspaceTab === "browse" && !excluded && (

@@ -360,3 +360,45 @@ mui:CurationProvider a owl:Class ;
     rdfs:subClassOf mui:Provider ;
     rdfs:label "Curation provider"@en ;
     rdfs:comment "A curator whose mui:widget is an rdf:List of mui:Provider resources."@en .
+
+
+# Declarative status machines; initial states are effective defaults, never
+# materialized as triples merely because a resource appears in Results.
+mui:StateMachineProvider a owl:Class ; rdfs:subClassOf mui:Provider ; rdfs:label "State machine provider"@en .
+mui:StatusDimension a owl:Class ; rdfs:label "Status dimension"@en .
+mui:Transition a owl:Class ; rdfs:label "Status transition"@en .
+mui:StatusTrigger a owl:Class ; rdfs:label "Status trigger"@en .
+mui:initialState a owl:ObjectProperty ; rdfs:domain mui:StatusTrack ; rdfs:range rdfs:Resource .
+mui:transition a owl:ObjectProperty ; rdfs:domain mui:StatusTrack ; rdfs:range mui:Transition .
+mui:fromState a owl:ObjectProperty ; rdfs:domain mui:Transition .
+mui:toState a owl:ObjectProperty ; rdfs:domain mui:Transition .
+mui:trigger a owl:ObjectProperty ; rdfs:domain mui:Transition ; rdfs:range mui:StatusTrigger .
+# Whether a transition explicitly asserts its destination. False restores the
+# effective (virtual) initial state without writing a mui:status triple.
+mui:assertState a owl:DatatypeProperty ; rdfs:domain mui:Transition ; rdfs:range xsd:boolean .
+mui:ReadStatus a mui:StatusDimension .
+mui:VisibilityStatus a mui:StatusDimension .
+mui:StarStatus a mui:StatusDimension .
+mui:ApprovalStatus a mui:StatusDimension .
+mui:ViewRecord a mui:StatusTrigger .
+mui:MarkUnread a mui:StatusTrigger .
+mui:Star a mui:StatusTrigger .
+mui:Unstar a mui:StatusTrigger .
+mui:Hide a mui:StatusTrigger .
+mui:Unhide a mui:StatusTrigger .
+mui:Approve a mui:StatusTrigger .
+mui:RevokeApproval a mui:StatusTrigger .
+mui:Visible a owl:NamedIndividual ; rdfs:label "Visible"@en .
+mui:Unstarred a owl:NamedIndividual ; rdfs:label "Unstarred"@en .
+# For executable providers, clients compare the current implementation digest
+# against the digest approved by the curator, not just a mutable provider URI.
+mui:implementationDigest a owl:DatatypeProperty ; rdfs:range xsd:string .
+mui:approvedDigest a owl:ObjectProperty ; rdfs:range mui:ImplementationApproval .
+mui:ImplementationApproval a owl:Class ; rdfs:label "Approved provider implementation"@en .
+
+
+# A machine may manage multiple independent dimensions under mui:status.
+mui:StatusTrack a owl:Class ; rdfs:label "Status track"@en .
+mui:statusTrack a owl:ObjectProperty ; rdfs:domain mui:StateMachineProvider ; rdfs:range mui:StatusTrack .
+mui:trackDimension a owl:ObjectProperty ; rdfs:domain mui:StatusTrack ; rdfs:range mui:StatusDimension .
+mui:forProvider a owl:ObjectProperty ; rdfs:range mui:Provider .

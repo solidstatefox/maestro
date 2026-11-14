@@ -28,6 +28,8 @@ export function featureFctQuery(tree: FctQueryTree, feature: FeatureKind, graph:
     // Record formatters only: a provider must supply a RecordViewerWidget.
     children = [node("feature-provider", "class", `${MUI}Provider`),
       node("feature-record-widget", "property", `${MUI}widget`, [node("feature-record-type", "class", `${MUI}RecordViewerWidget`)]), view];
+  } else if (feature === "fsm-providers") {
+    children = [node("feature-fsm-provider", "class", `${MUI}StateMachineProvider`), view];
   } else if (feature === "curators") {
     children = [node("feature-curator", "class", `${MUI}CurationProvider`), view];
   } else if (feature === "facet-widgets") {
@@ -87,6 +89,7 @@ export function hasFeatureFctFilters(tree: FctQueryTree, feature: FeatureKind, g
     const widget = relation(children, "property", `${MUI}widget`);
     return hasClass(children, `${MUI}Provider`) && Boolean(widget && hasClass(widget.children, `${MUI}RecordViewerWidget`));
   }
+  if (feature === "fsm-providers") return hasClass(children, `${MUI}StateMachineProvider`);
   if (feature === "curators") return hasClass(children, `${MUI}CurationProvider`);
   if (feature === "facet-widgets") {
     const widget = relation(children, "property", `${MUI}widget`);

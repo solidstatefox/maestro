@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { DisableNativeTooltips } from "@/components/ui/disable-native-tooltips";
 import { ThemeProvider } from "@/components/theme-provider";
 
 const geistSans = Geist({
@@ -29,6 +30,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col font-sans">
         <Script src="/vendor/saxon-js/SaxonJS2.js" strategy="beforeInteractive" />
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <DisableNativeTooltips />
           {children}
         </ThemeProvider>
       </body>

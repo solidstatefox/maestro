@@ -122,6 +122,39 @@ const literalTerm = (value: string, language?: string, datatype?: SparqlTerm): S
 const termExpr = (term: SparqlTerm): SparqlExpression => ({ kind: "term", term });
 const binary = (operator: string, left: SparqlExpression, right: SparqlExpression): SparqlExpression => ({ kind: "binary", operator, left, right });
 
+/** FCT <view kind="…"> constrains RDF triple OBJECT terms, never predicate labels.
+ * Construct a SPARQL expression from the validated FCT attribute before
+ * serialization; consumers never inspect the resulting SPARQL text. */
+function recordObjectKindFilter(raw: string | undefined, term: SparqlTerm): SparqlPattern[] {
+  const kind = (raw || "").trim();
+  if (!kind || kind === "all") return [];
+  const known = new Set(["web-url", "string", "numeric", "date", "email", "phone"]);
+  if (!known.has(kind)) throw new Error(`Malformed FCT Query: unsupported view kind "${kind}".`);
+  const value = termExpr(term);
+  const str: SparqlExpression = {kind:"function",name:"STR",args:[value]};
+  const regex = (pattern: string): SparqlExpression => ({kind:"function",name:"REGEX",args:[str,termExpr(literalTerm(pattern)),termExpr(literalTerm("i"))]});
+  const isLiteral: SparqlExpression = {kind:"function",name:"isLiteral",args:[value]};
+  const isIri: SparqlExpression = {kind:"function",name:"isIRI",args:[value]};
+  const datatype: SparqlExpression = {kind:"function",name:"DATATYPE",args:[value]};
+  const isDatatype = (types: string[]): SparqlExpression => ({kind:"in",value:datatype,options:types.map(name => iriTerm(`http://www.w3.org/2001/XMLSchema#${name}`))});
+  const numeric = binary("&&",isLiteral,binary("||",
+    isDatatype(["integer","decimal","float","double","int","long","short","byte","nonNegativeInteger","positiveInteger","unsignedInt","unsignedLong","unsignedShort","unsignedByte"]),
+    regex("^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+)?$")));
+  const date = binary("&&",isLiteral,binary("||",isDatatype(["date","dateTime","time","gYear","gYearMonth"]),regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}")));
+  const email = regex("^(mailto:)?[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+  const phone = regex("^(tel:)?\\+?[0-9()+ .-]{7,}$");
+  const web = binary("&&",binary("||",isIri,isLiteral),regex("^https?://"));
+  const selected: SparqlExpression = kind === "numeric" ? numeric : kind === "date" ? date
+    : kind === "email" ? email : kind === "phone" ? phone : kind === "web-url" ? web
+    : binary("&&",isLiteral,binary("&&",binary("&&",binary("&&",binary("&&",
+      binary("=",numeric,termExpr({kind:"raw-term",value:"false"})),
+      binary("=",date,termExpr({kind:"raw-term",value:"false"}))),
+      binary("=",email,termExpr({kind:"raw-term",value:"false"}))),
+      binary("=",phone,termExpr({kind:"raw-term",value:"false"}))),
+      binary("=",web,termExpr({kind:"raw-term",value:"false"}))));
+  return [{kind:"filter",expression:selected}];
+}
+
 function serializeTerm(term: SparqlTerm): string {
   switch (term.kind) {
     case "variable": return `?${term.name}`;
@@ -300,7 +333,7 @@ function compileConstraints(
   subject: SparqlTerm,
   patterns: SparqlPattern[],
   errors: string[],
-  state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null; focusParent?: { term: SparqlTerm; predicate: string; direction: "forward" | "reverse" }; focusAncestors?: SparqlTerm[]; statusBindings: Array<{ variable: string; uri: string; addr?: string }>; badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }> },
+  state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null; focusParent?: { term: SparqlTerm; predicate: string; direction: "forward" | "reverse" }; focusAncestors?: SparqlTerm[]; statusBindings: Array<{ variable: string; uri: string; addr?: string }>; badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }>; grouping: Array<{ subject: SparqlTerm; predicate: SparqlTerm; direction: "forward" | "reverse" }> },
   isViewScope = true,
   ancestors: SparqlTerm[] = [variable("s1")],
 ): void {
@@ -318,6 +351,19 @@ function compileConstraints(
         errors.push(`The FCT <${node.name}> node has a missing or invalid IRI.`);
         continue;
       }
+      // Group markers are resolved in the same compilation walk as the normal
+      // relationship. Immediate siblings of <view>, or its carrier, are the
+      // only legal grouping scope. Do not perform a separate XML validation pass.
+      const grouped = (node.attributes.group ?? "").trim().toLowerCase() === "true";
+      if (grouped) {
+        const viewNearby = nodes.some((sibling) => sibling.name === "view" ||
+          ((sibling.name === "property" || sibling.name === "property-of") && sibling.children.some((child) => child.name === "view")));
+        if (!viewNearby) {
+          throw new Error(`Malformed FCT Query: group="true" on <${node.name} iri="${node.attributes.iri ?? ""}">` +
+            ` id="${node.attributes.id ?? ""}" has no <view> in its immediate scope.`);
+        }
+        state.grouping.push({ subject, predicate, direction: node.name === "property" ? "forward" : "reverse" });
+      }
       const related = variable(`s${state.next++}`);
       const options: SparqlDirective[] = [];
       const inference = node.attributes.inference?.trim();
@@ -329,6 +375,9 @@ function compileConstraints(
         ? { kind: "triple", subject, predicate, object: related, ...(options.length ? { options } : {}) }
         : { kind: "triple", subject: related, predicate, object: subject, ...(options.length ? { options } : {}) };
       const isExcluded = ["yes", "true", "1"].includes((node.attributes.exclude ?? "").trim().toLowerCase());
+      // An unbound grouping dimension is NOT an ordinary required filter.
+      // Its triple is added only by the grouped LIST compilation below.
+      if (grouped && node.children.length === 0 && !isExcluded) continue;
       // Every bound value is an independent existential match of the same
       // predicate. Two values on one relationship mean A AND B, not that one
       // ?value variable must simultaneously equal two different terms.
@@ -386,6 +435,9 @@ function compileConstraints(
           node.children.some((child) => child.name === "view"), [...ancestors, related]);
         appendOtherValueMatches(patterns, state);
       }
+    } else if (node.name === "a") {
+      // Viewer-plane Personal facet alias; no selection semantics.
+      continue;
     } else if (node.name === "subject" || node.name === "object") {
       // Property-usage bindings are projected by list-subjects/list-objects.
       // Do not confuse them with normal <property>/<property-of> relationships.
@@ -570,6 +622,10 @@ export type FctFederationContext = {
   executionEndpoint: string;
   /** Default personal status graph@server for legacy unqualified <status>. */
   defaultStatusAddr: string;
+  /** Named graph containing W3C SHACL shapes on the execution endpoint. */
+  validateShapesGraph?: string;
+  /** OTC transcoders may be seeded into a distinct personal named graph. */
+  providerOtcGraph?: string;
 };
 
 export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false, discoverGraph = false, countFreeFacet = false, federation?: FctFederationContext): CompiledFctQuery {
@@ -647,11 +703,13 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     focusAncestors?: SparqlTerm[];
     statusBindings: Array<{ variable: string; uri: string; addr?: string }>;
     badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }>;
+  grouping: Array<{ subject: SparqlTerm; predicate: SparqlTerm; direction: "forward" | "reverse" }>;
   } = {
     next: 2,
     target: null,
     targetParent: null,
     statusBindings: [],
+    grouping: [],
     badgeColumns: badgesEnabled ? [] : undefined,
   };
   compileConstraints(root.children, variable("s1"), constraints, errors, state);
@@ -678,7 +736,9 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   const rootLiteralNode = root.children.find((node) => node.name === "value" &&
     node.attributes.datatype !== "uri" && !isBlankNodeTerm(node.attributes.datatype));
   const describeBounds = view === FCT_VIEW_TYPES.DESCRIBE ? bnodeDescribeBounds(viewNode?.attributes ?? {}) : null;
-  const describeExpanded = describeBounds !== null;
+  const viewObjectKind = viewNode?.attributes.kind?.trim();
+  const kindFilteredDescribe = view === FCT_VIEW_TYPES.DESCRIBE && Boolean(viewObjectKind && viewObjectKind !== "all");
+  const describeExpanded = describeBounds !== null || kindFilteredDescribe;
   const describeLiteral = view === FCT_VIEW_TYPES.DESCRIBE && Boolean(rootLiteralNode) &&
     !root.children.some((node) => node.name === "property" || node.name === "property-of");
   const textNodeProperty = textNode?.attributes.property;
@@ -758,6 +818,9 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     new URL(endpoint);
     return { graph, endpoint };
   };
+  // The Status facet is strictly an RDF assertion projection. Effective
+  // initial states and curator-derived authority are evaluated separately by
+  // the RDF/XState policy runtime; they do not manufacture mui:status triples.
   const statusScope = (patterns: SparqlPattern[], forStatusList = false): SparqlPattern[] => {
     if (!federation) return patterns;
     const remote = canonical(federation.liveEndpoint) === canonical(federation.executionEndpoint)
@@ -778,8 +841,13 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     let ordinal = 0;
     for (const { variable: focus, address, uris } of groups.values()) {
       const predicate = iriTerm("gttp://ggg.maestro.ecosys/ns/ui#status");
-      const branches: SparqlPattern[][] = uris.map(uri => [{kind:"graph", graph: iriTerm(address.graph),
-        patterns:[{kind:"triple",subject:focus,predicate,object:uri ? iriTerm(uri === "gttp://ggg.maestro.ecosys/ns/ui#New" ? "gttp://ggg.maestro.ecosys/ns/ui#Unseen" : uri) : variable(`status${ordinal++}`)}]}]);
+      const mui = "gttp://ggg.maestro.ecosys/ns/ui#";
+      const branches: SparqlPattern[][] = uris.map(uri => [
+        {kind:"graph",graph:iriTerm(address.graph),patterns:[{
+          kind:"triple",subject:focus,predicate,
+          object:uri ? iriTerm(uri === `${mui}New` ? `${mui}Unseen` : uri) : variable(`status${ordinal++}`),
+        }]},
+      ]);
       const inside = branches.length === 1 ? branches[0] : [{kind:"union" as const,branches}];
       statusPatterns.push(...(canonical(address.endpoint) === canonical(federation.executionEndpoint)
         ? inside : [{kind:"service",endpoint:iriTerm(address.endpoint),patterns:inside} as SparqlPattern]));
@@ -926,6 +994,98 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       limit: 1,
       offset: 0,
     });
+  } else if (view === FCT_VIEW_TYPES.VALIDATE && !graphOnly && !countOnly) {
+    // A standards-oriented SHACL *target-discovery* view, not SHACL validation.
+    // The four W3C SHACL Core targets are joined against the exact selected
+    // FCT focus, properties, and (inferred) classes. Missing properties must
+    // NOT suppress the node's property shapes (e.g. sh:minCount).
+    // This is built entirely in the compiler AST; generated SPARQL is opaque.
+    const SH = "http://www.w3.org/ns/shacl#";
+    const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    const shapeGraph = federation?.validateShapesGraph ?? "urn:maestro:validate:context-required";
+    if (!iri(shapeGraph)) throw new Error("The SHACL graph for validate must be an IRI.");
+    const graphShape = iriTerm(shapeGraph);
+    const shape = variable("maestroShape");
+    const cls = variable("maestroTargetClass");
+    const observed = variable("maestroObservedClass");
+    const predicate = variable("maestroPredicate");
+    const value = variable("maestroValue");
+    const subject = variable("maestroSubject");
+    const propShape = variable("maestroPropertyShape");
+    const rawPath = variable("maestroRawPath");
+    const path = variable("maestroResolvedPath");
+    const direction = variable("maestroDirection");
+    const alternative = variable("maestroAlternativePath");
+    const rdfSubject = (p: SparqlPattern[]): SparqlPattern[] => graphTerm
+      ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...p] }]
+      : [...where, ...p];
+    // Scope stays on the live graph server. Every branch is compiled from
+    // original FCT constraints and contributes bindings to the local SHACL
+    // GRAPH join on the authenticated personal graph server.
+    const data = (patterns: SparqlPattern[]): SparqlPattern[] =>
+      statusScope(rdfSubject(patterns));
+    const target = (predicateIri: string, object: SparqlTerm): SparqlPattern => ({
+      kind: "graph", graph: graphShape, patterns: [
+        { kind: "triple", subject: shape, predicate: iriTerm(`${SH}${predicateIri}`), object },
+      ],
+    });
+    const branchList: SparqlPattern[][] = [
+      [...data([]), target("targetNode", state.target ?? variable("s1"))],
+      // The W3C RDFS universal class applies even when the source endpoint
+      // does not expose a materialized rdf:type rdfs:Resource assertion.
+      // This is essential for generic StateMachineProvider policies and
+      // is independent of whether Virtuoso has a configured inference set.
+      [...data([]), target("targetClass", iriTerm("http://www.w3.org/2000/01/rdf-schema#Resource"))],
+      [...data([
+        { kind: "triple", subject: state.target ?? variable("s1"), predicate: iriTerm(RDF_TYPE), object: observed },
+        { kind: "path", subject: observed, predicate: iriTerm(RDFS_SUBCLASS_OF), modifier: "*", object: cls },
+      ]), target("targetClass", cls)],
+      [...data([{ kind: "triple", subject: state.target ?? variable("s1"), predicate, object: value }]),
+        target("targetSubjectsOf", predicate)],
+      [...data([{ kind: "triple", subject, predicate, object: state.target ?? variable("s1") }]),
+        target("targetObjectsOf", predicate)],
+    ];
+    // SHACL property paths are RDF terms, not necessarily predicate IRIs.
+    // Expand simple, inverse and alternative paths for the Personal facet UI,
+    // retaining the node shape even when no path can be represented as a
+    // single FCT property or property-of filter.
+    const pathChoices: SparqlPattern = { kind: "union", branches: [
+      [
+        { kind: "filter", expression: { kind: "function", name: "isIRI", args: [termExpr(rawPath)] } },
+        { kind: "bind", expression: termExpr(rawPath), as: path },
+        { kind: "bind", expression: termExpr(literalTerm("forward")), as: direction },
+      ],
+      [
+        { kind: "triple", subject: rawPath, predicate: iriTerm(`${SH}inversePath`), object: path },
+        { kind: "filter", expression: { kind: "function", name: "isIRI", args: [termExpr(path)] } },
+        { kind: "bind", expression: termExpr(literalTerm("reverse")), as: direction },
+      ],
+      [
+        { kind: "triple", subject: rawPath, predicate: iriTerm(`${SH}alternativePath`), object: alternative },
+        { kind: "path", subject: alternative, predicate: iriTerm(`${RDF}rest`), modifier: "*", object: variable("maestroListNode") },
+        { kind: "triple", subject: variable("maestroListNode"), predicate: iriTerm(`${RDF}first`), object: path },
+        { kind: "filter", expression: { kind: "function", name: "isIRI", args: [termExpr(path)] } },
+        { kind: "bind", expression: termExpr(literalTerm("forward")), as: direction },
+      ],
+    ] };
+    query = buildSelectQuery({
+      directives, distinct: true,
+      projections: [
+        { expression: termExpr(shape), as: variable("c1") },
+        { expression: termExpr(propShape), as: variable("c2") },
+        { expression: termExpr(path), as: variable("c3") },
+        { expression: termExpr(direction), as: variable("c4") },
+      ],
+      where: [
+        { kind: "union", branches: branchList },
+        { kind: "optional", patterns: [{ kind: "graph", graph: graphShape, patterns: [
+          { kind: "triple", subject: shape, predicate: iriTerm(`${SH}property`), object: propShape },
+          { kind: "triple", subject: propShape, predicate: iriTerm(`${SH}path`), object: rawPath },
+          { kind: "optional", patterns: [pathChoices] },
+        ] }] },
+      ],
+      limit: Math.min(limit, 1000), offset,
+    });
   } else if (view === FCT_VIEW_TYPES.ASK && !graphOnly && !countOnly) {
     // The ASK query uses the cloned FCT scope unchanged. Clients can add
     // a label relationship as an ordinary <property> condition in that clone.
@@ -1009,13 +1169,15 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       counted = variable("p");
       countWhere = scopeWith([{ kind: "triple", subject: target, predicate: variable("p"), object: variable("o") },
         { kind: "filter", expression: binary("!=", termExpr(variable("p")), termExpr(iriTerm(RDF_TYPE))) },
-        ...preferredValueLanguageFilter(variable("o"), viewNode, viewParent)]);
+        ...preferredValueLanguageFilter(variable("o"), viewNode, viewParent),
+        ...recordObjectKindFilter(viewNode?.attributes.kind, variable("o"))]);
     } else if (view === FCT_VIEW_TYPES.CLASSES) {
       counted = variable("c");
       countWhere = scopeWith([{ kind: "triple", subject: target, predicate: iriTerm(RDF_TYPE), object: variable("c") }]);
     } else if (view === FCT_VIEW_TYPES.PROPERTIES_IN) {
       counted = variable("p");
-      countWhere = scopeWith([{ kind: "triple", subject: variable("related"), predicate: variable("p"), object: target }]);
+      countWhere = scopeWith([{ kind: "triple", subject: variable("related"), predicate: variable("p"), object: target },
+        ...recordObjectKindFilter(viewNode?.attributes.kind, target)]);
     } else {
       counted = target;
       countWhere = view === FCT_VIEW_TYPES.COUNT_DISTINCT && viewNode?.attributes.index
@@ -1057,7 +1219,9 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
             ...(view === FCT_VIEW_TYPES.PROPERTIES ? [
               { kind: "filter", expression: binary("!=", termExpr(facet), termExpr(iriTerm(RDF_TYPE))) } satisfies SparqlPattern,
               ...preferredValueLanguageFilter(variable("o"), viewNode, viewParent),
+              ...recordObjectKindFilter(viewNode?.attributes.kind, variable("o")),
             ] : []),
+            ...(view === FCT_VIEW_TYPES.PROPERTIES_IN ? recordObjectKindFilter(viewNode?.attributes.kind, target) : []),
           ]),
         ];
     const projections: SparqlProjection[] = [
@@ -1183,7 +1347,20 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       { expression: termExpr(target), as: variable("c3") },
     ], where: geoWhere, orderBy: shouldOrder ? [entityRankOrder(target)] : undefined, limit, offset });
   } else if (view === FCT_VIEW_TYPES.DESCRIBE) {
-    if (describeExpanded && describeBounds) {
+    if (kindFilteredDescribe && !describeBounds) {
+      const seed: SparqlTerm = target;
+      const s = variable("s"), p = variable("p"), o = variable("o");
+      const selected: SparqlSelectQuery = {kind:"select",directives:[],distinct:true,
+        projections:[{expression:termExpr(seed)}],where:scopedWhere,limit:1};
+      const triples: SparqlPattern[] = [{kind:"union",branches:[
+        [{kind:"triple",subject:seed,predicate:p,object:o},{kind:"bind",expression:termExpr(seed),as:s}],
+        [{kind:"triple",subject:s,predicate:p,object:seed},{kind:"bind",expression:termExpr(seed),as:o}],
+      ]}];
+      const typed = [...triples,...recordObjectKindFilter(viewObjectKind,o)];
+      query = buildStatusSelect({directives,distinct:true,
+        projections:[{expression:termExpr(s)},{expression:termExpr(p)},{expression:termExpr(o)}],
+        where:[{kind:"subquery",query:selected},...(graphTerm ? [{kind:"graph" as const,graph:graphTerm,patterns:typed}] : typed)],limit,offset});
+    } else if (describeExpanded && describeBounds) {
       if (describeLiteral || target.kind !== "variable" ||
           !root.children.some((child) => child.name === "value" && child.attributes.datatype === "uri"))
         throw new Error('Expanded FCT describe requires an explicit root <value datatype="uri">.');
@@ -1290,11 +1467,16 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       const source = canonical(federation.liveEndpoint) === canonical(federation.executionEndpoint)
         ? focusWhere : [{kind:"service" as const,endpoint:iriTerm(federation.liveEndpoint),patterns:focusWhere}];
       const address = parseStatusAddress(federation.defaultStatusAddr);
-      const statusTriples: SparqlPattern[] = [{kind:"graph",graph:iriTerm(address.graph),patterns:[{
-        kind:"triple",subject:target,predicate:iriTerm("gttp://ggg.maestro.ecosys/ns/ui#status"),object:statusVariable,
-      }]}];
-      const statusPatterns = canonical(address.endpoint) === canonical(federation.executionEndpoint)
-        ? statusTriples : [{kind:"service" as const,endpoint:iriTerm(address.endpoint),patterns:statusTriples}];
+      const mui = "gttp://ggg.maestro.ecosys/ns/ui#";
+      const statusGraphUri = address.graph;
+      const statusPredicate = iriTerm(`${mui}status`);
+      // No virtual Pending/Unseen/Approved branches: the widget reports only
+      // assertions actually present in the user's status graph.
+      const statusPatterns: SparqlPattern[] = [
+        {kind:"graph",graph:iriTerm(statusGraphUri),patterns:[
+          {kind:"triple",subject:target,predicate:statusPredicate,object:statusVariable},
+        ]},
+      ];
       query = buildSelectQuery({directives, projections:[
         {expression:termExpr(statusVariable),as:variable("status")},
         {expression:{kind:"aggregate",name:"COUNT",distinct:true,expression:termExpr(target)},as:variable("count")},
@@ -1338,6 +1520,54 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
         ...(countSorted ? [{ expression: countExpression, as: variable("ct") }] : [])],
       where: usageWhere, ...(countSorted ? { groupBy: [termExpr(projected)] } : {}),
       orderBy: sorted, limit, offset });
+  } else if (view === FCT_VIEW_TYPES.LIST && state.grouping.length > 0) {
+    // FCT <view type="list"> remains on the focus. Its immediate-scope
+    // <property group="true"> or <property-of group="true"> supplies the
+    // grouping predicate and direction. SPARQL is only emitted, never parsed.
+    const groupedTerm = variable("groupValue");
+    const edges: SparqlPattern[][] = state.grouping.map(({ subject, predicate, direction }) => [
+      { kind: "triple", subject: direction === "reverse" ? groupedTerm : subject,
+        predicate, object: direction === "reverse" ? subject : groupedTerm },
+    ]);
+    const groupEdge: SparqlPattern = edges.length === 1 ? edges[0][0] : { kind: "union", branches: edges };
+    const groupWhere: SparqlPattern[] = graphTerm
+      ? [{ kind: "graph", graph: graphTerm,
+          patterns: [...where, groupEdge, ...preferredValueLanguageFilter(groupedTerm, viewNode, viewParent)] }]
+      : [...where, groupEdge, ...preferredValueLanguageFilter(groupedTerm, viewNode, viewParent)];
+    const groupCount: SparqlExpression = { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(target) };
+    const bucket = (viewNode?.attributes.bucket ?? "").trim();
+    const lexical = (viewNode?.attributes.lexical ?? "").trim() === "yes";
+    if (bucket && bucket !== "weekday-hour") throw new Error(`Unsupported grouping bucket: ${bucket}`);
+    if (bucket && lexical) throw new Error("A list view cannot combine lexical and calendar bucketing.");
+    if (bucket === "weekday-hour" && edges.length !== 1)
+      throw new Error("A weekday-hour grouping requires one date/time property.");
+    if (lexical) groupWhere.push({ kind: "bind",
+      expression: { kind: "function", name: "STR", args: [termExpr(groupedTerm)] }, as: variable("groupLabel") });
+    const groupKey = lexical ? variable("groupLabel") : groupedTerm;
+    if (bucket === "weekday-hour") {
+      const datatype: SparqlExpression = { kind: "function", name: "DATATYPE", args: [termExpr(groupedTerm)] };
+      groupWhere.push({ kind: "filter", expression: binary("||",
+        binary("=", datatype, termExpr(iriTerm("http://www.w3.org/2001/XMLSchema#dateTime"))),
+        binary("=", datatype, termExpr(iriTerm("http://www.w3.org/2001/XMLSchema#date"))),
+      ) });
+      groupWhere.push({ kind: "bind", expression: { kind: "function", name: "bif:dayname", args: [termExpr(groupedTerm)] }, as: variable("weekday") });
+      groupWhere.push({ kind: "bind", expression: { kind: "function", name: "bif:hour", args: [termExpr(groupedTerm)] }, as: variable("hour") });
+    }
+    const projections: SparqlProjection[] = bucket === "weekday-hour" ? [
+      { expression: termExpr(variable("weekday")), as: variable("c1") },
+      { expression: termExpr(variable("hour")), as: variable("c2") },
+      { expression: groupCount, as: variable("ct") },
+    ] : [
+      { expression: termExpr(groupKey), as: variable("c1") },
+      { expression: groupCount, as: variable("ct") },
+    ];
+    const orderBy: SparqlOrder[] = bucket === "weekday-hour"
+      ? [{ expression: termExpr(variable("weekday")), direction: "ASC" }, { expression: termExpr(variable("hour")), direction: "ASC" }]
+      : [{ expression: groupCount, direction: "DESC" },
+        { expression: { kind: "function", name: "STR", args: [termExpr(groupKey)] }, direction: "ASC" }];
+    query = buildStatusSelect({ directives, projections, where: groupWhere,
+      groupBy: bucket === "weekday-hour" ? [termExpr(variable("weekday")), termExpr(variable("hour"))] : [termExpr(groupKey)],
+      orderBy, limit, offset });
   } else if (view === FCT_VIEW_TYPES.LIST || view === FCT_VIEW_TYPES.LIST_VALUES) {
     const valueLanguageWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)] } satisfies SparqlPattern] : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)];
     // Virtuoso FCT list view selects the RDF term. Its SQL/XML response
@@ -1390,7 +1620,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     datatypeEvidenceQuery,
     describeLiteral,
     describeExpanded,
-    ...(describeBounds ? { describeMaxTriples: describeBounds.maxTriples } : {}),
+    ...(describeBounds ? { describeMaxTriples: describeBounds.maxTriples } : kindFilteredDescribe ? { describeMaxTriples: limit } : {}),
     badgeColumns: state.badgeColumns?.map(({ colName, property, direction }) => ({ colName, property, direction })),
     ...(recordParent ? { recordParent: { colName: "recordParent", predicate: recordParent.predicate, direction: recordParent.direction } } : {}),
     ...(recordAncestors.length ? { recordAncestors: recordAncestors.map(({ colName, depth, predicate, direction }) => ({ colName, depth, predicate, direction })) } : {}),

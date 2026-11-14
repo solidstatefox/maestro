@@ -19,6 +19,9 @@ import { selectedFacetCount, selectedFacetLabel } from "@/lib/selected-facet-pre
 
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 
+import { useEffect, useState } from "react";
+import { maestroQueryFetch } from "@/lib/client-query-cache";
+import { serializeFctQuery } from "@/lib/fct-query-api";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { Bot, SquarePlus, SquareX, SquareCheck } from "lucide-react";
@@ -32,6 +35,7 @@ import type { ConfigurePaneWorkspace } from "@/canvas/controllers/workspace-inte
 export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigurePaneWorkspace }) {
   const {
     FACET_PAGE_SIZE,
+    configurePropertyKind, setConfigurePropertyKind, configureRoleKind, setConfigureRoleKind,
     activeLeafId,
     activePropertyFilters,
     activeRoleFilters,
@@ -70,8 +74,8 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
     roleFacets,
     rolesPage,
     selectedClasses,
-    selectedProperties,
-    selectedRoles,
+    configureSelectedProperties: selectedProperties,
+    configureSelectedRoles: selectedRoles,
     setClassesPage,
     setGraphsPage,
     setHoveredFacetKey,
@@ -82,6 +86,42 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
     showClassResults,
     toggleClass,
   } = workspace;
+  const [kindAvailability, setKindAvailability] = useState<Record<string, string[]> | null>(null);
+  const [checkingKinds, setCheckingKinds] = useState(false);
+  const kindScopeXml = serializeFctQuery(queryTree);
+  useEffect(() => {
+    if (defaultLeftTab !== "facets") return;
+    const controller = new AbortController();
+    setCheckingKinds(true);
+    void (async () => {
+      const next: Record<string, string[]> = {};
+      try {
+        await Promise.all((["property", "role"] as const).map(async direction => {
+          const response = await maestroQueryFetch("/proxy/api/sparql", {
+            method: "POST", signal: controller.signal, cache: "no-store",
+            headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": `Configure:Kinds:${direction}` },
+            body: JSON.stringify({ kindAvailability: { tree: JSON.parse(JSON.stringify(queryTree)), direction,
+              addr: queryTree.attributes.addr } }),
+          });
+          const data = await response.json() as { kinds?: string[]; error?: string };
+          if (!response.ok || !Array.isArray(data.kinds)) throw new Error(data.error || `Kind discovery HTTP ${response.status}`);
+          next[direction] = data.kinds;
+        }));
+        if (!controller.signal.aborted) setKindAvailability(next);
+      } catch (error) {
+        if (!controller.signal.aborted) { setKindAvailability(null); console.warn("Kind discovery unavailable; displaying all kinds", error); }
+      } finally {
+        if (!controller.signal.aborted) setCheckingKinds(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [kindScopeXml, defaultLeftTab, queryTree.attributes.addr]);
+  const availableKinds = (direction: "property" | "role", selected: string) => {
+    const known = ["web-url", "string", "numeric", "date", "email", "phone"];
+    const found = kindAvailability?.[direction];
+    // Keep any selected kind visible until the user changes it.
+    return known.filter(kind => !found || found.includes(kind) || kind === selected);
+  };
   return <>
 {defaultLeftTab === "facets" && (
                   <>
@@ -248,6 +288,15 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                                 <h2 className="truncate text-sm font-semibold">{group}</h2>
                               </button>
                             </div>
+                            {(group === "Properties" || group === "Roles") && <select
+                              aria-label={`${group} object kind`}
+                              aria-busy={checkingKinds}
+                              value={group === "Properties" ? configurePropertyKind : configureRoleKind}
+                              onChange={event => group === "Properties" ? setConfigurePropertyKind(event.target.value) : setConfigureRoleKind(event.target.value)}
+                              className="max-w-32 rounded border border-white/40 bg-transparent px-1 py-1 text-xs text-white"
+                            >
+                              {["all", ...availableKinds(group === "Properties" ? "property" : "role", group === "Properties" ? configurePropertyKind : configureRoleKind)].map(kind => <option key={kind} className="bg-background text-foreground" value={kind}>{kind === "all" ? "All kinds" : kind}</option>)}
+                            </select>}
                             {group === "Properties" && (
                               <QueryInspectorButton
                                 query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES)}\n<!-- FCT API option: view=properties -->`}

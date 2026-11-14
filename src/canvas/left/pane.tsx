@@ -107,6 +107,7 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
     classFacets,
     classesPage,
     clearGraph,
+    commitConfigureFacetChanges,
     clearTutorialPreview,
     defaultLeftTab,
     deleteNode,
@@ -200,7 +201,7 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
                     <ButtonGroup aria-label="Return to facets">
                       <button
   type="button"
-  onClick={() => setDefaultLeftTab("personal")}
+  onClick={commitConfigureFacetChanges}
   className="inline-flex items-center gap-2 px-2 text-xs font-medium hover:bg-accent"
 >
   <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -209,7 +210,7 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
                       <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
                       <Tooltip><TooltipTrigger render={<button
                         type="button"
-                        onClick={() => setDefaultLeftTab("personal")}
+                        onClick={commitConfigureFacetChanges}
                         className="cursor-pointer px-3 py-1.5 text-sm hover:bg-accent"
                         aria-label={`Show Filters, ${personalWidgets.length + activeRoleFilters.length + (classFacets.length > 0 && !isLoadingClasses ? 1 : 0) + (graphFacets.length > 0 ? 1 : 0)} facets`}
                       >

@@ -21,5 +21,6 @@
   "numeric/provider.ttl": "/shacl/policies",
   "rdfs/maestro-node-shape-hierarchy.ttl": "/ontology-cache",
   "maestro-curation-providers.ttl": "/shacl/policies",
-  "labels.ttl": "/graph"
+  "labels.ttl": "/graph",
+  "maestro-status-machines.ttl": "/shacl/policies"
 }

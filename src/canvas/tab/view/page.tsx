@@ -1,6 +1,6 @@
 "use client";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
-import { Ban } from "lucide-react";
+import { Ban, Telescope } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { matchesAlphabetSelection, parseAlphabetSelections, toggleAlphabetSelection } from "@/lib/alphabet-selections";
 import { RESULTS_PAGE_SIZE_STORAGE_KEY } from "@/canvas/sheet/settings";
@@ -134,14 +134,27 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                   {!viewFeature && selectedView && <span className="text-xs text-muted-foreground">{selectedView.label} · {visibleResultsPage.length} results on this page</span>}
                 </div>
                 {viewFeature && <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2 text-xs" role="toolbar" aria-label={`${viewFeature} actions`}>
-                  <button type="button" disabled={viewFeatureLoading || selectAllPending || !visibleFeatureCards.some(card => card.hasStatus && !card.approved)}
+                  {viewFeature && <button type="button" disabled={viewFeatureLoading || selectAllPending || !visibleFeatureCards.some(card => card.hasStatus && !card.approved)}
                     className="rounded-md border px-3 py-1.5 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
                     onClick={() => void selectAllFeatures()}>
                     {selectAllPending ? "Selecting…" : "Approve All"}
-                  </button>
+                  </button>}
                   <span className="text-muted-foreground">{selectedVisibleCount} / {visibleFeatureCount} approved</span>
+                  {viewFeature === "formats" && <button type="button"
+                    className="ml-auto inline-flex items-center gap-2 rounded-md border px-3 py-1.5 hover:bg-accent"
+                    onClick={() => { workspace.setViewPanel("perspectives"); workspace.setViewFeature(null); workspace.setSelectedViewUri(""); }}
+                    title="Show available mui:Providers for Perspectives">
+                    <Telescope className="size-4" aria-hidden="true" />Perspectives
+                  </button>}
                 </div>}
-                <ViewPage queryXml={workspace.queryXml} requiresBookmark={policyBookmarkNeeded} viewFeature={viewFeature} viewFeatureLoading={viewFeatureLoading} viewFeatureError={viewFeatureError} viewFeatureCount={visibleFeatureCount} viewFeatureHtml={visibleFeatureHtml} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} selectedView={selectedView} viewRenderError={viewRenderError} viewHtml={viewHtml} onSelectEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id); }} onRefreshEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (!endpoint || checkingEndpointIds[id]) return; void checkSelectedGraphServer(endpoint).catch((error) => { toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" }); }); }} onOpenResource={workspace.openRecordPropertyUri} onPolicyAction={(uri, action, checked) => {
+                <ViewPage queryXml={workspace.queryXml} requiresBookmark={policyBookmarkNeeded} viewFeature={viewFeature} viewFeatureLoading={viewFeatureLoading} viewFeatureError={viewFeatureError} viewFeatureCount={visibleFeatureCount} viewFeatureHtml={visibleFeatureHtml} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} selectedView={selectedView} viewRenderError={viewRenderError} viewHtml={viewHtml} onSelectEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id); }} onRefreshEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (!endpoint || checkingEndpointIds[id]) return; void checkSelectedGraphServer(endpoint).catch((error) => { toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" }); }); }} onOpenResource={(uri) => {
+                    // Feature cards are FCT result items. Selecting their Record
+                    // must preserve the bookmarked live Features query, rather
+                    // than replacing it with an unbookmarked URI-root query.
+                    if (workspaceTab === "view" && workspace.viewPanel === "features" && viewFeature) {
+                      workspace.setSelectedUri(uri);
+                    } else workspace.openRecordPropertyUri(uri);
+                  }} onPolicyAction={(uri, action, checked) => {
                     if (action === "bookmark" || !approvalReady) {
                       window.dispatchEvent(new Event("maestro:bookmark-query-request"));
                       return;

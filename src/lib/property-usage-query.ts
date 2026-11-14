@@ -1,4 +1,5 @@
 import { FCT_VIEW_TYPES } from "./fct-view-types";
+import { fctQueryTreeApi, cloneFctQueryNode } from "./fct-query-api";
 import { setQueryViewAttributes } from "./fct-query-derived";
 import type { FctQueryTree, FctQueryNode, FctValue } from "./fct-query";
 
@@ -28,13 +29,11 @@ function fixedPropertyUri(scope: ReturnType<typeof propertyUsageScope>): string 
   return /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(text) ? text : null;
 }
 
-function cloneNode(node: FctQueryNode): FctQueryNode {
-  return { ...node, attributes: { ...node.attributes }, children: node.children.map(cloneNode) };
-}
+const cloneNode = (node: FctQueryNode): FctQueryNode => cloneFctQueryNode(node, "data");
 
 /** A native property-usage view is a variable-predicate traversal, never an XSLT provider. */
 export function propertyUsageFacetQuery(tree: FctQueryTree, direction: PropertyUsageDirection, limit: number, offset = 0): FctQueryTree {
-  return setQueryViewAttributes({ ...tree, attributes: { ...tree.attributes }, children: tree.children.map(cloneNode) }, {
+  return setQueryViewAttributes(fctQueryTreeApi.getDataTree(tree), {
     type: direction === "subject" ? FCT_VIEW_TYPES.LIST_SUBJECTS : FCT_VIEW_TYPES.LIST_OBJECTS,
     limit: String(limit), offset: String(offset), sort: "count",
   });
@@ -57,6 +56,7 @@ export function propertyUsageNavigation(
   selection?: { value: FctValue; checked: boolean },
   selectedPredicateUri?: string,
 ): FctQueryTree {
+  tree = fctQueryTreeApi.getDataTree(tree);
   const scope = propertyUsageScope(tree);
   if (!scope) return tree;
   // Results selection is authoritative for the predicate pivot. A URI

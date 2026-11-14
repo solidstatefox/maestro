@@ -43,7 +43,7 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                 {analysisValuesError && <ErrorDetails prefix="Analysis facet values" error={analysisValuesError} className="m-3" />}
                 {analysisLoading && !analysisTable && !isBookmarkAnalysis(selectedAnalysisUri) && <p className="p-3 text-xs text-muted-foreground"><ElapsedStatus label="Building analysis" category="other" clockScope="analysis" /></p>}
                 <div className="min-h-0 flex-1 overflow-auto">
-                  {isBookmarkAnalysis(selectedAnalysisUri) && <BookmarkCharts queryXml={workspace.queryXml} providerUri={selectedAnalysisUri} />}
+                  {isBookmarkAnalysis(selectedAnalysisUri) && <BookmarkCharts queryXml={workspace.queryXml} providerUri={selectedAnalysisUri} stylesheet={workspace.analysisDefinitions.find((definition) => definition.uri === selectedAnalysisUri)?.stylesheet ?? ""} />}
                   {analysisTable && isCompareAnalysis && analyzeHistogram && <AnalyzeHistogram histogramColumns={histogramColumns} visibleCount={analysisTable.rows.length} />}
                   {analysisTable && !(isCompareAnalysis && analyzeHistogram) && <MaestroAnalysisDataTable
                     label={isCompareAnalysis ? "Compare Table" : "Table"}

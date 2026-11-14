@@ -87,7 +87,44 @@
   ma:stylesheet <gttp://ggg.maestro.ecosys/analyze/bookmark-tags#xslt> .
 <gttp://ggg.maestro.ecosys/analyze/bookmark-input> a sh:NodeShape, mui:InputShape ;
   sh:class b:Bookmark .
-# Renderers use React/Recharts for interactive charts; the stylesheets supply
-# the declarative presentation identity in the established Analyze policy graph.
-<gttp://ggg.maestro.ecosys/analyze/bookmark-activity#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template match="/"><analysis kind="bookmark-activity"/></xsl:template></xsl:stylesheet>""" .
-<gttp://ggg.maestro.ecosys/analyze/bookmark-tags#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template match="/"><analysis kind="bookmark-tags"/></xsl:template></xsl:stylesheet>""" .
+# Each provider transforms the authoritative FCT XML into a derived groups
+# query. The compiled SPARQL is never inspected or patched. The client executes
+# the derived query via the ordinary /fct pipeline, with server-side DISTINCT.
+<gttp://ggg.maestro.ecosys/analyze/bookmark-activity#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:mctx="gttp://ggg.maestro.ui/context" xmlns:fct="http://openlinksw.com/services/facets/1.0" exclude-result-prefixes="mctx fct">
+  <xsl:output method="xml" omit-xml-declaration="yes"/>
+  <xsl:mode name="query" on-no-match="shallow-copy"/>
+  <xsl:template match="/mctx:context">
+    <analysis-query><xsl:apply-templates select="mctx:query/fct:query" mode="query"/></analysis-query>
+  </xsl:template>
+  <xsl:template match="fct:view" mode="query">
+    <!-- The view remains at its original focus; the sibling property groups it. -->
+    <fct:property iri="http://purl.org/dc/terms/created" group="true"/>
+    <xsl:copy>
+      <xsl:copy-of select="@* except (@type, @by, @bucket, @lexical, @limit, @offset, @previousType, @previousLimit, @previousOffset)"/>
+      <xsl:attribute name="type">list</xsl:attribute>
+      <xsl:attribute name="bucket">weekday-hour</xsl:attribute>
+      <xsl:attribute name="limit">500</xsl:attribute>
+      <xsl:attribute name="offset">0</xsl:attribute>
+    </xsl:copy>
+  </xsl:template>
+</xsl:stylesheet>""" .
+<gttp://ggg.maestro.ecosys/analyze/bookmark-tags#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:mctx="gttp://ggg.maestro.ui/context" xmlns:fct="http://openlinksw.com/services/facets/1.0" exclude-result-prefixes="mctx fct">
+  <xsl:output method="xml" omit-xml-declaration="yes"/>
+  <xsl:mode name="query" on-no-match="shallow-copy"/>
+  <xsl:template match="/mctx:context">
+    <analysis-query><xsl:apply-templates select="mctx:query/fct:query" mode="query"/></analysis-query>
+  </xsl:template>
+  <xsl:template match="fct:view" mode="query">
+    <!-- A union of three grouping predicates; distinct bookmark count per lexical tag. -->
+    <fct:property iri="http://www.w3.org/2004/02/skos/core#prefLabel" group="true"/>
+    <fct:property iri="http://purl.org/dc/terms/subject" group="true"/>
+    <fct:property iri="http://rdfs.org/scot/ns#has_tag" group="true"/>
+    <xsl:copy>
+      <xsl:copy-of select="@* except (@type, @by, @bucket, @lexical, @limit, @offset, @previousType, @previousLimit, @previousOffset)"/>
+      <xsl:attribute name="type">list</xsl:attribute>
+      <xsl:attribute name="lexical">yes</xsl:attribute>
+      <xsl:attribute name="limit">500</xsl:attribute>
+      <xsl:attribute name="offset">0</xsl:attribute>
+    </xsl:copy>
+  </xsl:template>
+</xsl:stylesheet>""" .

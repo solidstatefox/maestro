@@ -10,7 +10,7 @@ import type { FeatureKind } from "@/lib/feature-view-xslt";
 type ViewChoice = { uri: string };
 const BOOKMARK_APPROVAL_MESSAGE = "Bookmark this query to manage {kind} approvals. Use the highlighted Bookmark button in the appbar.";
 const FEATURE_APPROVAL_LABEL: Record<FeatureKind, string> = {
-  policies: "policy", formats: "format", "facet-widgets": "facet", transcoders: "transcoder", curators: "curator",
+  policies: "policy", formats: "format", "facet-widgets": "facet", transcoders: "transcoder", curators: "curator", "fsm-providers": "FSM provider",
 };
 export interface ViewPageProps {
   viewFeature: FeatureKind | null;

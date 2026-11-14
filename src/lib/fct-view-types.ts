@@ -10,6 +10,7 @@ export const FCT_VIEW_TYPES = {
   LIST_SUBJECTS: "list-subjects",
   LIST_OBJECTS: "list-objects",
   LIST_VALUES: "list-values",
+  VALIDATE: "validate",
   LIST_STATUS: "list-status",
   ASK: "ask",
   COUNT_DISTINCT: "count-distinct",

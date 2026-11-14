@@ -1,7 +1,8 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { ensureFctQueryIds } from "./fct-node-identity";
+import { cloneFctQueryTree } from "./fct-query-clone";
 export { serializeFctQuery } from "./fct-query-serialize";
 
 export type FctNodeName = string;
@@ -199,22 +200,7 @@ export function attachViewToPropertyInQueryTree(
 }
 
 function cloneQueryTree(tree: FctQueryTree): FctQueryTree {
-  const cloneNode = (node: FctQueryNode): FctQueryNode => {
-    const queryNode = { ...node };
-    delete queryNode.uiResultSummary;
-    return {
-      ...queryNode,
-      attributes: { ...node.attributes },
-      children: node.name === "view" ? [] : node.children.map(cloneNode),
-    };
-  };
-  const queryTree = { ...tree };
-  delete queryTree.uiResultSummary;
-  return {
-    ...queryTree,
-    attributes: { ...tree.attributes },
-    children: tree.children.map(cloneNode),
-  };
+  return cloneFctQueryTree(tree, "exact");
 }
 
 function isValidQueryTree(tree: unknown): tree is FctQueryTree {
@@ -230,17 +216,6 @@ function createQueryStore(initialTree?: FctQueryTree) {
     ? { tree: ensureFctQueryIds(cloneQueryTree(initialTree)), revision: 0 }
     : createInitialState();
   const listeners = new Set<Listener>();
-  function cloneNodes(nodes: FctQueryNode[]): FctQueryNode[] {
-    return nodes.map((node) => {
-      const queryNode = { ...node };
-      delete queryNode.uiResultSummary;
-      return {
-        ...queryNode,
-        attributes: { ...node.attributes },
-        children: node.name === "view" ? [] : cloneNodes(node.children),
-      };
-    });
-  }
 
 
   function notify() {
@@ -1285,6 +1260,11 @@ export const fctQueryTreeApi = {
     }
     return cloneQueryTree(fctQueryStore.getSnapshot().tree);
   },
+  /** Detached selection for any derived query; all viewer Group-by markers are stripped. */
+  getDataTree(tree?: FctQueryTree): FctQueryTree {
+    if (tree !== undefined && !isValidQueryTree(tree)) throw new TypeError("Invalid FCT query tree");
+    return cloneFctQueryTree(tree ?? fctQueryStore.getSnapshot().tree, "data");
+  },
 
   setSearchText(tree: FctQueryTree | undefined, text: string): FctQueryTree {
     return applyTreeOperation(tree, (store) => store.setSearchText(text));
@@ -1383,8 +1363,12 @@ export function useFctQuery() {
     fctQueryStore.getSnapshot,
   );
 
+  // Never return the store-owned tree to UI components. Memoize by real store
+  // revision so UI-derived metadata can be attached without triggering fetch loops.
+  const tree = useMemo(() => cloneQueryTree(state.tree), [state.tree]);
   return {
     ...state,
+    tree,
     replaceTree: fctQueryStore.replaceTree,
     setSearchText: fctQueryStore.setSearchText,
     resetQuery: fctQueryStore.resetQuery,

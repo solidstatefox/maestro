@@ -23,7 +23,7 @@ function serializeNode(node: FctQueryNode): string {
     .map(([name, value]) => ` ${name}="${escapeXml(value)}"`)
     .join("");
 
-  if (node.name === "view") return `<view${attributes}/>`;
+  if (node.name === "view" || node.name === "a") return `<${node.name}${attributes}/>`;
 
   // Serialize the value text as supplied by the query tree. XML escaping
   // protects the document syntax; it must not add SPARQL IRI delimiters.

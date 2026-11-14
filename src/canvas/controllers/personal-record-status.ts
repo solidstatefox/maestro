@@ -101,12 +101,8 @@ export function usePersonalRecordStatus({ enabled, results, selectedUri, results
           return merged;
         });
         setHidden(new Set(response.hidden ?? []));
-        // Newly discovered entries become Unseen, but an existing Seen/Starred entry is not reset.
-        setStatuses((old) => {
-          const next = { ...old };
-          for (const uri of uris) if (!(next[uri] ?? []).includes("Seen")) next[uri] = [...new Set([...(next[uri] ?? []), "Unseen" as const])];
-          return next;
-        });
+        // The server's RDF/XState evaluator supplies effective page states.
+        // Do not independently infer Unseen in a second React state machine.
         try {
           const facet = await requestStatus<FacetResult>({ action: "facets", queryHash: hash, queryXml }, controller.signal);
           if (!controller.signal.aborted) { setFederatedCounts(facet.counts); setFederatedQuery(facet.sparql); }

@@ -29,8 +29,12 @@ export function ErrorDetails({ error, prefix, className }: { error: string; pref
   useEffect(() => { setCopied(false); }, [error]);
   if (!error) return null;
   const summary = shortErrorName(error);
+  // The prefix is part of the diagnostic context; do not discard it in the
+  // details pane or clipboard (previously "Graph server" was lost on Copy).
+  const fullDiagnostic = prefix && !error.trimStart().startsWith(`${prefix}:`)
+    ? `${prefix}: ${error}` : error;
   const copy = async () => {
-    try { await navigator.clipboard.writeText(error); setCopied(true); }
+    try { await navigator.clipboard.writeText(fullDiagnostic); setCopied(true); }
     catch { setCopied(false); }
   };
   return <Popover.Root>
@@ -43,7 +47,7 @@ export function ErrorDetails({ error, prefix, className }: { error: string; pref
       <Popover.Positioner side="top" align="start" sideOffset={6} className="z-[220]">
         <Popover.Popup className="w-[min(36rem,calc(100vw-2rem))] rounded-lg border bg-popover p-3 text-popover-foreground shadow-xl outline-none">
           <div className="mb-2 flex items-start justify-between gap-2">
-            <strong className="min-w-0 text-sm">{prefix || "Error details"}</strong>
+            <strong className="min-w-0 text-sm">{prefix ? `${prefix}: ${summary}` : summary}</strong>
             <button type="button" onClick={() => void copy()} title={copied ? "Copied" : "Copy full error"}
               aria-label={copied ? "Error copied" : "Copy full error"}
               className="inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-accent">
@@ -51,7 +55,7 @@ export function ErrorDetails({ error, prefix, className }: { error: string; pref
               {copied ? "Copied" : "Copy"}
             </button>
           </div>
-          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 font-mono text-xs select-text">{error}</pre>
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 font-mono text-xs select-text">{fullDiagnostic}</pre>
         </Popover.Popup>
       </Popover.Positioner>
     </Popover.Portal>

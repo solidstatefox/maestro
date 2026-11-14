@@ -32,3 +32,7 @@ export {
   createRecordDescriptionQuery,
 } from "./fct-query-derived";
 export type { DistinctCountKind } from "./fct-query-derived";
+
+/** The sole supported cloning interface for FCT clients and XSLT hosts. */
+export { cloneFctQueryTree, cloneFctQueryNode, snapshotFctQueryXml } from "./fct-query-clone";
+export type { FctClonePlane } from "./fct-query-clone";

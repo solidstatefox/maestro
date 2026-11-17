@@ -2,6 +2,33 @@
 
 import { useMemo, useState } from "react";
 import hljs from "highlight.js/lib/core";
+import xml from "highlight.js/lib/languages/xml";
+import sql from "highlight.js/lib/languages/sql";
+// The CodeBlock is self-contained; other widgets must not have to register
+// these languages before View opens its Turtle source.
+if (!hljs.getLanguage("xml")) hljs.registerLanguage("xml", xml);
+if (!hljs.getLanguage("sparql")) hljs.registerLanguage("sparql", sql);
+// highlight.js does not ship a bundled Turtle grammar. Register only the
+// constructs needed by this source viewer, without an extra dependency.
+if (!hljs.getLanguage("turtle")) {
+  hljs.registerLanguage("turtle", (hl) => ({
+    name: "Turtle",
+    aliases: ["ttl"],
+    contains: [
+      { scope: "string", begin: /"""/, end: /"""/, contains: [hl.BACKSLASH_ESCAPE] },
+      { scope: "string", begin: /'''/, end: /'''/, contains: [hl.BACKSLASH_ESCAPE] },
+      hl.QUOTE_STRING_MODE,
+      hl.APOS_STRING_MODE,
+      { scope: "link", begin: /</, end: />/ },
+      hl.COMMENT("#", "$"),
+      { scope: "keyword", match: /(?:@prefix|@base|PREFIX|BASE)\b/i },
+      { scope: "keyword", match: /\ba\b/ },
+      { scope: "symbol", match: /(?:[A-Za-z][\w.-]*)?:[A-Za-z0-9_~.%-]*/ },
+      { scope: "meta", match: /@[A-Za-z]+(?:-[A-Za-z0-9]+)*/ },
+      hl.C_NUMBER_MODE,
+    ],
+  }));
+}
 import { Check, Copy, Download, WrapText, Play } from "lucide-react";
 import { useFctQuery } from "@/lib/fct-query";
 import type { HTMLAttributes } from "react";
@@ -40,16 +67,15 @@ export function CodeBlock({
   const [wrap, setWrap] = useState(false);
   const lines = useMemo(() => {
     const sourceLines = code.replace(/\r\n?/g, "\n").split("\n");
+    const languageName = language.trim().toLowerCase();
+    const supported = Boolean(hljs.getLanguage(languageName));
+    const escapeText = (text:string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     return sourceLines.map((line) => {
       if (!line) return "&nbsp;";
+      if (!supported) return escapeText(line);
       try {
-        return hljs.highlight(line, { language, ignoreIllegals: true }).value;
-      } catch {
-        return line
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
-      }
+        return hljs.highlight(line, { language: languageName, ignoreIllegals: true }).value;
+      } catch { return escapeText(line); }
     });
   }, [code, language]);
 

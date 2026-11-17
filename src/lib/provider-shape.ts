@@ -1,7 +1,7 @@
 "use client";
 
 import { loadPersonalAuthSession } from "@/lib/personal-auth";
-import { featuresGraph } from "@/lib/graph-context";
+import { providerCatalogGraph } from "@/lib/graph-context";
 import { fctRead } from "@/lib/fct-client";
 import { sparqlBindingsToXml } from "@/lib/sparql-results-xml";
 
@@ -17,7 +17,7 @@ export async function readProviderShapeXml(shape: string, signal?: AbortSignal):
   if (!validIri(shape)) throw new Error("Invalid SHACL shape IRI.");
   const session = await loadPersonalAuthSession();
   if (!session) throw new Error("Log in to read a personal SHACL shape.");
-  const { graph, personalEndpointUrl } = featuresGraph(session, "policies");
+  const { graph, personalEndpointUrl } = providerCatalogGraph(session, "policies");
   const query = `<query xmlns="http://openlinksw.com/services/facets/1.0" addr="${escapeXml(`${graph}@${personalEndpointUrl}`)}"><value datatype="uri">${escapeXml(shape)}</value><view type="describe" expand="bnodes" depth="5" incoming="yes" limit="5000" offset="0"/></query>`;
   const result = await fctRead(query, signal);
   if (result.incomplete) throw new Error("Incomplete SHACL shape graph; cannot run its provider XSLT.");

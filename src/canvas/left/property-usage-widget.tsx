@@ -1,5 +1,7 @@
 "use client";
 import { ErrorDetails } from "@/components/ui/error-details";
+import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
+import { Code2 } from "lucide-react";
 
 import { useEffect, useMemo, useState } from "react";
 import { cachedFetchFct, maestroQueryFetch } from "@/lib/client-query-cache";
@@ -126,8 +128,11 @@ export function PropertyUsageWidget({ tree, direction, limit, endpointReady, onN
       <div className="flex min-w-0 items-center gap-1">
         <button type="button" className="cursor-pointer text-sm font-semibold hover:underline underline-offset-2"
           onClick={() => onNavigate(direction)} title={`Show ${title.toLowerCase()} in Results`}>{title}</button>
-        <QueryInspectorButton query={queryXml} filename={`${direction}s-fct-query.xml`}
-          extraQueries={sparql ? [{ id: "sparql", label: "SPARQL", query: sparql, filename: `${direction}s.sparql`, language: "sparql" }] : undefined} />
+        <LeftWidgetButtonTray threshold={3} actions={[{
+          id: "inspector", label: `Inspect ${title} facet query`, icon: <Code2 className="size-4" />,
+          render: <QueryInspectorButton query={queryXml} filename={`${direction}s-fct-query.xml`}
+            extraQueries={sparql ? [{ id: "sparql", label: "SPARQL", query: sparql, filename: `${direction}s.sparql`, language: "sparql" }] : undefined} />,
+        }]} />
       </div>
       <span className="text-xs text-muted-foreground tabular-nums">{!endpointReady || loading ? <ElapsedStatus label={`Fetching ${title.toLowerCase()}`} category="personal" clockScope="personal" /> : incomplete && !items.length ? "Incomplete" : knownTotal === null ? "—" : shortenCount(knownTotal)}</span>
     </header>

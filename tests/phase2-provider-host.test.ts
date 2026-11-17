@@ -6,9 +6,10 @@ import { sparqlBindingsToXml } from "../src/lib/maestro-provider-query-executor"
 test("static furniture uses stable URNs, dynamic facets use the serialized FCT ID", () => {
   assert.equal(UI_COMPONENT.appbar, "urn:maestro:component:appbar");
   assert.equal(dynamicUiComponentUrn("property", "a"), "urn:maestro:component:facet:property:a");
-  assert.equal(dynamicUiComponentUrn("role", "query-view"), "urn:maestro:component:facet:role:query-view");
-  assert.equal(dynamicUiComponentUrn("property", "property-path-http%3A%2F%2Fexample.org-0"),
-    "urn:maestro:component:facet:property:property-path-http%3A%2F%2Fexample.org-0");
+  assert.equal(dynamicUiComponentUrn("role", "a0"), "urn:maestro:component:facet:role:a0");
+  assert.throws(() => dynamicUiComponentUrn("role", "query-view"));
+  assert.throws(() => dynamicUiComponentUrn("property", "10"));
+  assert.throws(() => dynamicUiComponentUrn("property", "1a"));
   assert.throws(() => dynamicUiComponentUrn("property", "bad id"));
 });
 

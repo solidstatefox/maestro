@@ -1,0 +1,51 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix ma: <gttp://ggg.maestro.ecosys/ns/analyze#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# A page-scoped Analyze provider. Axes are derived from all outgoing/incoming
+# relationship children of the current view carrier; no vocabulary IRIs are coded.
+<gttp://ggg.maestro.ecosys/analyze/spider> a mui:Provider, ma:Analysis, sh:NodeShape ;
+  rdfs:label "Spider"@en ; ma:lucideIcon "chart-radar" ; ma:order 4 ;
+  mui:accepts <gttp://ggg.maestro.ecosys/analyze/spider/input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/analyze/spider/widget> ;
+  ma:stylesheet <gttp://ggg.maestro.ecosys/analyze/spider#xslt> .
+
+<gttp://ggg.maestro.ecosys/analyze/spider/input> a mui:InputShape, sh:NodeShape ;
+  # Must carry precisely one live FCT view. The stylesheet derives the
+  # projected relationships from the view carrier, not RDFS/OWL declarations.
+  sh:property [ sh:path mui:query ; sh:minCount 1 ; sh:maxCount 1 ] ;
+  sh:property [ sh:path mui:focus ; sh:minCount 1 ; sh:maxCount 1 ] .
+
+<gttp://ggg.maestro.ecosys/analyze/spider/widget> a mui:AnalysisWidget ;
+  rdfs:label "Numeric spider polygons"@en ;
+  mui:numericCoercion "finite-lexical-v1" ;
+  mui:numericPattern "^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$" .
+
+# SHACL numeric query-validation policy. Every materialized axis cell must be
+# a finite numeric literal under the SAME lexical coercion as Numeric Range.
+# Dynamic axis paths are the immediate fct:property/fct:property-of children;
+# the host supplies those as list-values projections for each visible resource.
+<gttp://ggg.maestro.ecosys/analyze/spider/numeric-query-validator> a mui:ClassPolicy, sh:NodeShape ;
+  rdfs:label "Spider numeric-axis query validator"@en ;
+  mui:accepts <gttp://ggg.maestro.ecosys/analyze/spider/input> ;
+  mui:numericCoercion "finite-lexical-v1" ;
+  mui:numericPattern "^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$" ;
+  sh:property [ sh:path mui:axisValue ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:Literal ;
+    sh:pattern "^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$" ] .
+
+# The provider's FCT transformation is deliberately structural: copy the
+# authoritative live query, move the view to list-values, and report the
+# outgoing/incoming projections present in that same view's parent scope.
+<gttp://ggg.maestro.ecosys/analyze/spider#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/context#" exclude-result-prefixes="fct m">
+  <xsl:output method="xml" omit-xml-declaration="yes"/>
+  <xsl:mode name="query" on-no-match="shallow-copy"/>
+  <xsl:template match="/m:context"><analysis kind="spider"><axes>
+    <xsl:for-each select="m:query/fct:query//fct:view/../*[self::fct:property or self::fct:property-of]">
+      <axis iri="{@iri}" direction="{if (self::fct:property-of) then 'reverse' else 'forward'}"/>
+    </xsl:for-each>
+  </axes><fct-query><xsl:apply-templates select="m:query/fct:query" mode="query"/></fct-query></analysis></xsl:template>
+  <xsl:template match="fct:view" mode="query"><xsl:copy><xsl:copy-of select="@* except (@type)"/><xsl:attribute name="type">list-values</xsl:attribute></xsl:copy></xsl:template>
+</xsl:stylesheet>""" .

@@ -1,3 +1,4 @@
+import { resolveOpenApiOperation } from "@/lib/openapi-registry";
 import { qwenThinkingOptions, type QwenThinkingBudget } from "@/lib/qwen-thinking";
 /** OpenLink Transcoder: Liquid templates and bounded, synchronous SHACL-gated successor discovery. */
 import { randomUUID } from "node:crypto";
@@ -226,8 +227,11 @@ async function sourceSparql(request: Request, query: string, source: string, sou
 }
 
 async function survey(request: Request, rule: OtcRule, row: Row, activity: OtcLlmActivity[], transcoder: string, userRequest?: string, report?: OtcProgressReporter, thinkingBudget: QwenThinkingBudget = 0, cancellationSignal?: AbortSignal): Promise<Row> {
-  const key = process.env.ITERACOMPUTE_API_KEY?.trim();
-  if (!key) throw new Error("ITERACOMPUTE_API_KEY is required for OTC surveys.");
+  const suppliedKey = request.headers.get("x-maestro-iteracompute-key")?.trim() ?? "";
+  if (suppliedKey && (suppliedKey.length > 512 || /[\x00-\x1f\x7f]/.test(suppliedKey)))
+    throw new Error("Invalid IteraCompute credential.");
+  const key = suppliedKey;
+  if (!key) throw new Error("Configure an IteraCompute API key in Sheet → Maestro controls before running OTC surveys.");
   // The resource description is supplied as Turtle data, never as executable instructions.
   // Do not send Liquid templates to the model; bindings alone are the model's task.
   const rdfLiteral = (value: string) => JSON.stringify(value);
@@ -266,7 +270,9 @@ async function survey(request: Request, rule: OtcRule, row: Row, activity: OtcLl
   activity.push(log);
   let response: Response;
   try {
-    response = await fetch("https://api.iteracompute.com/v1/chat/completions", {
+    const operation = resolveOpenApiOperation("iteracompute", "createChatCompletion");
+    if (!operation || operation.method !== "POST") throw new Error("IteraCompute OpenAPI operation is not registered.");
+    response = await fetch(new URL(operation.path, operation.base), {
       method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: "qwen/qwen3.8-27b", ...qwenThinkingOptions(thinkingBudget, 1400), stream: true, stream_options: { include_usage: true }, temperature: 0, messages: [{ role: "system", content: skill }, { role: "user", content: prompt }] }),
       cache: "no-store", signal: AbortSignal.any([request.signal, ...(cancellationSignal ? [cancellationSignal] : []), AbortSignal.timeout(120000)]),

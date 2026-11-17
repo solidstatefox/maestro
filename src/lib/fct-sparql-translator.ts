@@ -1,3 +1,4 @@
+import { maestroKindSparql, normalizeMaestroKind } from "./maestro-kinds";
 import { FCT_VIEW_TYPES, isFctViewType, type FctViewType } from "./fct-view-types";
 import { isBlankNodeTerm, bnodeDescribeBounds, RDF_REST_IRI } from "./bnode";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
@@ -23,6 +24,8 @@ export type CompiledFctQuery = {
   target: string;
   graphOnly: boolean;
   countOnly: boolean;
+  /** A discovery GRAPH ?g query has a data-binding pattern, not an empty body. */
+  graphDiscoveryHasSourcePattern?: boolean;
   /** Scoped personal-status constraints, resolved against session graphs on the server. */
   statusBindings: Array<{ variable: string; uri: string; addr?: string }>;
   /** Unpaginated datatype distribution over exactly the same facet-value scope.
@@ -126,33 +129,12 @@ const binary = (operator: string, left: SparqlExpression, right: SparqlExpressio
  * Construct a SPARQL expression from the validated FCT attribute before
  * serialization; consumers never inspect the resulting SPARQL text. */
 function recordObjectKindFilter(raw: string | undefined, term: SparqlTerm): SparqlPattern[] {
-  const kind = (raw || "").trim();
-  if (!kind || kind === "all") return [];
-  const known = new Set(["web-url", "string", "numeric", "date", "email", "phone"]);
-  if (!known.has(kind)) throw new Error(`Malformed FCT Query: unsupported view kind "${kind}".`);
-  const value = termExpr(term);
-  const str: SparqlExpression = {kind:"function",name:"STR",args:[value]};
-  const regex = (pattern: string): SparqlExpression => ({kind:"function",name:"REGEX",args:[str,termExpr(literalTerm(pattern)),termExpr(literalTerm("i"))]});
-  const isLiteral: SparqlExpression = {kind:"function",name:"isLiteral",args:[value]};
-  const isIri: SparqlExpression = {kind:"function",name:"isIRI",args:[value]};
-  const datatype: SparqlExpression = {kind:"function",name:"DATATYPE",args:[value]};
-  const isDatatype = (types: string[]): SparqlExpression => ({kind:"in",value:datatype,options:types.map(name => iriTerm(`http://www.w3.org/2001/XMLSchema#${name}`))});
-  const numeric = binary("&&",isLiteral,binary("||",
-    isDatatype(["integer","decimal","float","double","int","long","short","byte","nonNegativeInteger","positiveInteger","unsignedInt","unsignedLong","unsignedShort","unsignedByte"]),
-    regex("^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+)?$")));
-  const date = binary("&&",isLiteral,binary("||",isDatatype(["date","dateTime","time","gYear","gYearMonth"]),regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}")));
-  const email = regex("^(mailto:)?[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
-  const phone = regex("^(tel:)?\\+?[0-9()+ .-]{7,}$");
-  const web = binary("&&",binary("||",isIri,isLiteral),regex("^https?://"));
-  const selected: SparqlExpression = kind === "numeric" ? numeric : kind === "date" ? date
-    : kind === "email" ? email : kind === "phone" ? phone : kind === "web-url" ? web
-    : binary("&&",isLiteral,binary("&&",binary("&&",binary("&&",binary("&&",
-      binary("=",numeric,termExpr({kind:"raw-term",value:"false"})),
-      binary("=",date,termExpr({kind:"raw-term",value:"false"}))),
-      binary("=",email,termExpr({kind:"raw-term",value:"false"}))),
-      binary("=",phone,termExpr({kind:"raw-term",value:"false"}))),
-      binary("=",web,termExpr({kind:"raw-term",value:"false"}))));
-  return [{kind:"filter",expression:selected}];
+  const rawKind=(raw || "").trim();
+  if(!rawKind || rawKind==="all")return [];
+  const kind=normalizeMaestroKind(rawKind);
+  if(!kind)throw new Error(`Malformed FCT Query: unsupported view kind "${rawKind}".`);
+  const filter=maestroKindSparql(kind,serializeTerm(term));
+  return filter ? [{kind:"filter",expression:termExpr({kind:"raw-term",value:filter})}] : [];
 }
 
 function serializeTerm(term: SparqlTerm): string {
@@ -337,7 +319,46 @@ function compileConstraints(
   isViewScope = true,
   ancestors: SparqlTerm[] = [variable("s1")],
 ): void {
+  // A @uid groups sibling relationships into one logical OR. Preserve one
+  // common related variable across alternatives: the view carrier may be in
+  // one branch while another branch supplies the same focus binding.
+  const orGroups = new Map<string, XmlNode[]>();
+  for (const item of nodes) {
+    if ((item.name !== "property" && item.name !== "property-of") || !item.attributes.uid) continue;
+    const uid = item.attributes.uid;
+    if (!/^[a-z0-9]+$/.test(uid)) { errors.push(`Invalid FCT OR identifier: ${uid}`); continue; }
+    orGroups.set(uid, [...(orGroups.get(uid) ?? []), item]);
+  }
+  const handledOr = new Set<string>();
   for (const node of nodes) {
+    const uid = (node.name === "property" || node.name === "property-of") ? node.attributes.uid : undefined;
+    const alternatives = uid ? orGroups.get(uid) : undefined;
+    if (uid && alternatives && alternatives.length > 1) {
+      if (handledOr.has(uid)) continue;
+      handledOr.add(uid);
+      const branches: SparqlPattern[][] = [];
+      const next = state.next;
+      let largestNext = next;
+      for (const alternative of alternatives) {
+        const branch: SparqlPattern[] = [];
+        const branchState = { ...state, next,
+          statusBindings: [...state.statusBindings],
+          grouping: [...state.grouping],
+          ...(state.badgeColumns ? { badgeColumns: [...state.badgeColumns] } : {}) };
+        compileConstraints([{ ...alternative, attributes: Object.fromEntries(Object.entries(alternative.attributes).filter(([key]) => key !== "uid")) }],
+          subject, branch, errors, branchState, isViewScope, ancestors);
+        largestNext = Math.max(largestNext, branchState.next);
+        if (branchState.target) state.target = branchState.target;
+        if (branchState.targetParent) state.targetParent = branchState.targetParent;
+        if (branchState.focusParent) state.focusParent = branchState.focusParent;
+        if (branchState.focusAncestors) state.focusAncestors = branchState.focusAncestors;
+        state.statusBindings.push(...branchState.statusBindings.slice(state.statusBindings.length));
+        branches.push(branch);
+      }
+      state.next = largestNext;
+      patterns.push({ kind: "union", branches });
+      continue;
+    }
     if (node.name === "view") {
       state.target = subject;
       state.focusAncestors = ancestors;
@@ -628,7 +649,7 @@ export type FctFederationContext = {
   providerOtcGraph?: string;
 };
 
-export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false, discoverGraph = false, countFreeFacet = false, federation?: FctFederationContext): CompiledFctQuery {
+export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false, discoverGraph: boolean | "first" = false, countFreeFacet = false, federation?: FctFederationContext): CompiledFctQuery {
   if (!xml.trim()) throw new Error("The FCT query XML is empty.");
   const validation = XMLValidator.validate(xml);
   if (validation !== true) {
@@ -712,7 +733,17 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     grouping: [],
     badgeColumns: badgesEnabled ? [] : undefined,
   };
-  compileConstraints(root.children, variable("s1"), constraints, errors, state);
+  // A generated FCT resource-set query may carry several root URI values.
+  // They are alternatives (OR); relationship-local multiple values remain AND.
+  const rootUriMembers = root.children.filter(node => node.name === "value" && node.attributes.datatype === "uri");
+  const multipleRootMembers = rootUriMembers.length > 1;
+  if (multipleRootMembers && (rootUriMembers.length > 120 || root.children.some(node => node.name === "value" && node.attributes.datatype !== "uri")))
+    throw new Error("FCT resource sets require 2–120 root URI values only.");
+  const rootMemberTerms = multipleRootMembers ? rootUriMembers.map(valueTerm) : [];
+  if (rootMemberTerms.some(term => !term || term.kind !== "iri")) throw new Error("FCT resource set contains an invalid URI.");
+  if (multipleRootMembers) constraints.push({kind:"union",branches:rootMemberTerms.map(term=>[{kind:"bind",expression:termExpr(term!),as:variable("s1")}])});
+  compileConstraints(multipleRootMembers ? root.children.filter(node=>node.name!=="value") : root.children,
+    variable("s1"), constraints, errors, state);
   if (errors.length) throw new Error(errors.join(" "));
   const target = state.target ?? variable("s1");
   // A blank node returned from <property><view/> needs its structural URI
@@ -963,6 +994,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
         { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: termExpr({ kind: "raw-term", value: "*" }) }, as: variable("ct") },
       ], where: scopedValues, groupBy: [inferred, original] });
   }
+  let graphDiscoveryHasSourcePattern: boolean | undefined;
   if (discoverGraph) {
     // Rank the *actual focus results* of the live view, then project the named
     // graph that supplies each result. Never rank graph IRIs or preselect an
@@ -977,6 +1009,32 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     } else if (view === FCT_VIEW_TYPES.CLASSES) {
       discoveryWhere.push({ kind: "triple", subject: target, predicate: iriTerm(RDF_TYPE), object: variable("c") });
     }
+    // Empty root queries (and FILTER-only scopes) have no data-bearing pattern
+    // from which to select a matching named graph. GRAPH ?g {} may enumerate
+    // the server's entire graph catalog and time out while the server is green.
+    // The route skips this probe and lets the live default-dataset query run.
+    const hasSourcePattern = (patterns: SparqlPattern[]): boolean => patterns.some(pattern => {
+      if (pattern.kind === "triple" || pattern.kind === "path" || pattern.kind === "full-text") return true;
+      if (pattern.kind === "union") return pattern.branches.some(hasSourcePattern);
+      if (pattern.kind === "subquery") return hasSourcePattern(pattern.query.where);
+      if (pattern.kind === "group" || pattern.kind === "graph" || pattern.kind === "service" ||
+          pattern.kind === "optional" || pattern.kind === "quad-map") return hasSourcePattern(pattern.patterns);
+      return false; // FILTER, BIND and NOT EXISTS alone cannot select a named graph.
+    });
+    graphDiscoveryHasSourcePattern = hasSourcePattern(discoveryWhere);
+    // A full-graph GROUP BY and MAX(IRI_RANK) can take minutes on large
+    // endpoints (and LONG::IRI_RANK is Virtuoso-specific). The service first
+    // attempts the original ranked discovery, then can retry this same FCT
+    // scope without aggregation as a bounded first-match fallback.
+    if (discoverGraph === "first") {
+      query = buildStatusSelect({
+        directives,
+        projections: [{ expression: termExpr(variable("g")), as: variable("c1") }],
+        where: [{ kind: "graph", graph: variable("g"), patterns: discoveryWhere }],
+        limit: 1,
+        offset: 0,
+      });
+    } else {
     query = buildStatusSelect({
       directives,
       projections: [
@@ -994,6 +1052,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       limit: 1,
       offset: 0,
     });
+    }
   } else if (view === FCT_VIEW_TYPES.VALIDATE && !graphOnly && !countOnly) {
     // A standards-oriented SHACL *target-discovery* view, not SHACL validation.
     // The four W3C SHACL Core targets are joined against the exact selected
@@ -1437,6 +1496,9 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       projections.push({ expression: textNode?.attributes.exact === "true"
         ? { kind: "function", name: "STR", args: [termExpr(variable("txt1"))] }
         : { kind: "function", name: "bif:search_excerpt", args: [vector, termExpr(variable("txt1"))] }, as: variable("c2") });
+      // ?txtp1 is already bound by the indexed text pattern; carry its URI
+      // through the existing FCT TEXT row without an extra query.
+      projections.push({ expression: termExpr(variable("txtp1")), as: variable("matchPredicate") });
     }
     // The parent is identity metadata, not a Results badge. SAMPLE keeps
     // one row per focus without multiplying paginated blank-node results.
@@ -1453,7 +1515,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       : undefined;
     query = buildStatusSelect({ directives, distinct: true, projections, where: indexedWhere, orderBy: orderByList,
       ...((recordParent || (badgesEnabled && state.badgeColumns?.length)) ? { groupBy: [termExpr(target),
-        ...(searchText && textPatterns ? [termExpr(variable("txt1"))] : [])] } : {}),
+        ...(searchText && textPatterns ? [termExpr(variable("txt1")),termExpr(variable("txtp1"))] : [])] } : {}),
       limit, offset });
   } else if (view === FCT_VIEW_TYPES.LIST_STATUS) {
     const focusWhere = graphTerm
@@ -1616,6 +1678,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     target: serializeTerm(target),
     graphOnly,
     countOnly,
+    ...(discoverGraph ? { graphDiscoveryHasSourcePattern } : {}),
     statusBindings: state.statusBindings,
     datatypeEvidenceQuery,
     describeLiteral,

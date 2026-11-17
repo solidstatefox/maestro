@@ -33,7 +33,7 @@ export function BookmarkCharts({ queryXml, providerUri, stylesheet }: { queryXml
       try {
         if (!stylesheet) throw new Error("The Bookmark Analysis mui:Provider has no query XSLT stylesheet.");
         // The provider XSLT receives the live FCT DOM. It produces a NEW FCT
-        // groups query without inspecting generated SPARQL or mutating Browse.
+        // grouped list query without inspecting generated SPARQL or mutating Browse.
         const plan = await transformWithMaestroSaxon(stylesheet,
           createProviderXsltContext({ queryXml }), { signal: controller.signal });
         const planDoc = new DOMParser().parseFromString(plan, "application/xml");
@@ -41,8 +41,8 @@ export function BookmarkCharts({ queryXml, providerUri, stylesheet }: { queryXml
           throw new Error("Bookmark Analysis provider returned invalid FCT query XML.");
         const root = Array.from(planDoc.documentElement.children).find(el => el.localName === "query");
         const view = root && Array.from(root.getElementsByTagName("*")).find(el => el.localName === "view");
-        if (!root || !view || view.getAttribute("type") !== "groups")
-          throw new Error("Bookmark Analysis provider did not generate a groups FCT view.");
+        if (!root || !view || view.getAttribute("type") !== "list" || !Array.from(root.getElementsByTagName("*")).some(el => (el.localName === "property" || el.localName === "property-of") && el.getAttribute("group") === "true"))
+          throw new Error("Bookmark Analysis provider did not generate a grouped list FCT view.");
         const pageLimit = 500;
         const allRows: Row[] = [];
         for (let offset = 0; offset <= 100000; offset += pageLimit) {

@@ -8,25 +8,26 @@ export const MAESTRO_TIMEOUT_CATEGORIES = [
   { key: "categories", label: "Categories" },
   { key: "properties", label: "Properties" },
   { key: "roles", label: "Roles" },
+  { key: "kinds", label: "Configure Kinds" },
   { key: "personal", label: "Personal facets" },
   { key: "graphs", label: "Graphs" },
   { key: "groups", label: "Groups" },
   { key: "record", label: "Record DESCRIBE and enrichment" },
   { key: "policies", label: "Record policy queries" },
-  { key: "featurePolicies", label: "View > Features > Policies" },
-  { key: "featureFormats", label: "View > Features > Formats" },
-  { key: "featureFacets", label: "View > Features > Facets" },
-  { key: "featureTranscoders", label: "View > Features > Transcoders" },
-  { key: "featureCurators", label: "View > Features > Curators" },
+  { key: "providerPolicies", label: "View > Providers > Policies" },
+  { key: "providerFormats", label: "View > Providers > Formats" },
+  { key: "providerFacets", label: "View > Providers > Facets" },
+  { key: "providerTranscoders", label: "View > Providers > Transcoders" },
+  { key: "providerCurators", label: "View > Providers > Curators" },
   { key: "other", label: "Breadcrumb previews and other queries" },
 ] as const;
 export type MaestroTimeoutCategory = (typeof MAESTRO_TIMEOUT_CATEGORIES)[number]["key"];
 export type MaestroWidgetTimeouts = Record<MaestroTimeoutCategory, number>;
-const KEY = "maestro-widget-query-timeouts-v1";
+const KEY = "maestro-widget-query-timeouts-v2";
 const EMPTY: MaestroWidgetTimeouts = {
   results: 0, counts: 0, alphabet: 0, categories: 0, properties: 0,
-  roles: 0, personal: 0, graphs: 0, groups: 0, record: 0,
-  policies: 0, featurePolicies: 0, featureFormats: 0, featureFacets: 0, featureTranscoders: 0, featureCurators: 0, other: 0,
+  roles: 0, kinds: 0, personal: 0, graphs: 0, groups: 0, record: 0,
+  policies: 0, providerPolicies: 0, providerFormats: 0, providerFacets: 0, providerTranscoders: 0, providerCurators: 0, other: 0,
 };
 let active: MaestroWidgetTimeouts = { ...EMPTY };
 export function readMaestroWidgetTimeouts(): MaestroWidgetTimeouts {
@@ -46,12 +47,13 @@ export function writeMaestroWidgetTimeouts(values: MaestroWidgetTimeouts): void 
 }
 export function timeoutCategoryForSource(source: string): MaestroTimeoutCategory {
   const s = source.toLowerCase();
-  if (s.includes("feature-policies")) return "featurePolicies";
-  if (s.includes("feature-formats")) return "featureFormats";
-  if (s.includes("feature-facet-widgets")) return "featureFacets";
-  if (s.includes("feature-transcoders")) return "featureTranscoders";
-  if (s.includes("feature-curators")) return "featureCurators";
+  if (s.includes("provider-policies")) return "providerPolicies";
+  if (s.includes("provider-formats")) return "providerFormats";
+  if (s.includes("provider-facet-widgets")) return "providerFacets";
+  if (s.includes("provider-transcoders")) return "providerTranscoders";
+  if (s.includes("provider-curators")) return "providerCurators";
   if (s.includes("alphabet")) return "alphabet";
+  if (s.includes("configure:kinds") || s.includes("kindavailability")) return "kinds";
   if (s.includes("count") || s.includes("distinct")) return "counts";
   if (s.includes("record-") || s.includes("recorddescription") || s.includes("results-enrichment")) {
     return /policy|template|shacl|xslt/.test(s) ? "policies" : "record";

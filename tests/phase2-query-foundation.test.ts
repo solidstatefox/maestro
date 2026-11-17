@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ensureFctQueryIds } from "../src/lib/fct-node-identity";
 import { serializeFctQuery, type FctQueryTree } from "../src/lib/fct-query";
 import { canonicalQueryIdentityXml } from "../src/lib/query-identity";
-import { featureFctQuery } from "../src/lib/feature-fct-query";
+import { providerFctQuery } from "../src/lib/provider-fct-query";
 
 const ns = "http://openlinksw.com/services/facets/1.0";
 
@@ -41,9 +41,9 @@ test("canonical identity ignores IDs, counter, and sibling constraint order", ()
   assert.notEqual(canonicalQueryIdentityXml(one), canonicalQueryIdentityXml(two.replace('iri="urn:a"', 'iri="urn:b"')));
 });
 
-test("Features policies use first-class FCT Status filters, never a regex value", () => {
+test("Providers policies use first-class FCT Status filters, never a regex value", () => {
   const base = { name: "query" as const, attributes: { xmlns: ns }, children: [] };
-  const policies = featureFctQuery(base, "policies", "urn:policy-graph", "https://example.org/sparql", 30);
+  const policies = providerFctQuery(base, "policies", "urn:policy-graph", "https://example.org/sparql", 30);
   assert.deepEqual(policies.children.filter(node => node.name === "status").map(node => node.text), [
     "gttp://ggg.maestro.ecosys/ns/ui#Pending", "gttp://ggg.maestro.ecosys/ns/ui#Approved",
   ]);

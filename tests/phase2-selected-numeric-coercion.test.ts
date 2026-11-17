@@ -32,7 +32,8 @@ test("Selected Categories preserve query-selected classes but no longer forge co
   const ui = read("src/canvas/left/filter-pane.tsx");
   assert.match(ui, /selectedFacetCount\(classFacets\.find/);
   assert.match(ui, /count === null \? "—"/);
-  assert.match(ui, /selectedFacetLabel\(item\.uri, "Class", item\.label\)/);
+  assert.match(ui, /const label = toLabel\(item\.uri, "Class"\)/);
+  assert.doesNotMatch(ui, /selectedFacetLabel\(item\.uri, "Class"/);
 });
 
 test("Coercible numeric mode recognizes finite signed decimal and scientific values only", () => {

@@ -1,10 +1,11 @@
+import { MAESTRO_KIND_IDS, normalizeMaestroKind } from "@/lib/maestro-kinds";
 import { buildFctKindAvailabilitySparql } from "@/lib/fct-count-sparql";
 import { getUserGraph, updatePersonalSparql } from "@/lib/personal-sparql";
 import { buildBlankNodeRecordSparql } from "@/lib/bnode";
 import { requirePersonalLogin } from "@/lib/personal-guard";
 import { verifyApprovalBookmark } from "@/lib/policy-approval-store";
 import { currentProxyClient, withProxyClient } from "@/lib/maestro-proxy-client-preferences";
-import { weightMaestroQuery } from "@/lib/graph-server-query-scheduler";
+import { weightMaestroQuery, type QueryPriority } from "@/lib/graph-server-query-scheduler";
 import { streamProxyQuery, MAESTRO_EVENT_HEADER } from "@/lib/proxy-query-stream";
 import { traceVirtuosoDispatch } from "@/lib/proxy-query-events";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
@@ -17,6 +18,7 @@ import { getConfiguredFctEndpoints, normalizeGraphServerUri, resolveConfiguredFc
 import { describeUpstreamError } from "@/lib/upstream-error";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
 import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
+import { isBoundedReadOnlySparql } from "@/lib/sparql-read-guard";
 
 function isSafeIri(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 &&
@@ -100,7 +102,7 @@ function decodeSparqlHtmlEntities(sourceQuery: string): string {
     .replace(/&amp;/gi, "&");
 }
 
-function validateFacetValueCountQuery(query: string, numericDomain = false): string | null {
+function validateFacetValueCountQuery(query: string, numericDomain = false, temporalDomain = false): string | null {
   const sparseQuery = query.trim();
   if (!sparseQuery || sparseQuery.length > 100_000) return null;
 
@@ -124,7 +126,10 @@ function validateFacetValueCountQuery(query: string, numericDomain = false): str
   const countPrefix = selectQuery.match(scalarCount);
   if (!countPrefix) return null;
   const remainder = selectQuery.slice(countPrefix[0].length);
-  if (numericDomain) {
+  if (temporalDomain) {
+    // Only the exact two ISO-day aggregates emitted by FCT's temporal builder.
+    if (!/^\s*\(\s*MIN\s*\(\s*\?facetLex\s*\)\s+AS\s+\?min\s*\)\s*\(\s*MAX\s*\(\s*\?facetLex\s*\)\s+AS\s+\?max\s*\)\s+WHERE\s*\{/i.test(remainder)) return null;
+  } else if (numericDomain) {
     // Only the two fixed projections emitted by the approved numeric provider.
     // Reject other expressions rather than accepting arbitrary aggregate SPARQL.
     // SPARQL does not guarantee ordering of RDF multi-valued projection
@@ -221,7 +226,7 @@ function unorderedIriRankFallback(query: string, error: string): string | null {
   return fallback === query ? null : fallback;
 }
 
-async function querySparql(endpoint: string, query: string, configuredTimeoutMs?: number, requestSignal?: AbortSignal): Promise<SparqlQueryResult> {
+async function querySparql(endpoint: string, query: string, configuredTimeoutMs?: number, requestSignal?: AbortSignal, priorityOverride?: QueryPriority): Promise<SparqlQueryResult> {
   const timeoutMs = configuredTimeoutMs ?? 20000;
   const sparqlUrl = endpoint;
   const key = queryCacheKey("sparql", sparqlUrl.toString(), query);
@@ -245,7 +250,7 @@ async function querySparql(endpoint: string, query: string, configuredTimeoutMs?
 
   const requestPromise = (async () => {
     const response = await withGraphServerSlot(
-      endpoint, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive", requestSignal,
+      endpoint, priorityOverride ?? (/\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive"), requestSignal,
       () => traceVirtuosoDispatch(() => fetch(sparqlUrl, {
       method: "POST",
       headers: {
@@ -255,7 +260,7 @@ async function querySparql(endpoint: string, query: string, configuredTimeoutMs?
       body: new URLSearchParams({ query, ...(configuredTimeoutMs ? { timeout: String(configuredTimeoutMs) } : {}) }).toString(),
       cache: "no-store",
       signal: requestSignal ? AbortSignal.any([requestSignal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
-    })), weightMaestroQuery(query, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive"));
+    })), weightMaestroQuery(query, priorityOverride ?? (/\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive")));
     return { responseText: await response.text(), response, key };
   })();
   if (!requestSignal) inFlightSparqlRequests.set(pendingKey, requestPromise);
@@ -343,15 +348,24 @@ async function handlePost(request: Request) {
         return new Response(null, {status:204, headers:{"Cache-Control":"no-store"}});
       }
 
-      if (!update || update.length > 100000 || graphs.length === 0 ||
+      // Only a bounded, pure INSERT DATA can exceed the standard 100 KB update
+      // limit. Large RDF archive imports must remain a single operation so that
+      // blank-node labels refer to the same resources across triples.
+      const maxUpdateLength = /^INSERT\s+DATA\s*\{/i.test(update) ? 2_000_000 : 100_000;
+      if (!update || update.length > maxUpdateLength || graphs.length === 0 ||
           !graphs.every(uri => uri.startsWith(`${base}/`) || uri.startsWith(`${base}#`)) ||
           /\b(?:SERVICE|LOAD|CREATE|DROP|MOVE|COPY|ADD|WITH|USING|FROM)\b/i.test(clean) ||
           !/^(?:INSERT|DELETE|CLEAR)\b/i.test(update)) {
         return NextResponse.json({ error: "SPARQL Update may affect only explicit named graphs in the authenticated personal namespace." }, { status: 400 });
       }
-      if (update.includes("gttp://ggg.maestro.ecosys/ns/ui#status") &&
+      // Bookmark authorization applies to writes to the actual personal Status
+      // graph, never to declarations of the RDF vocabulary in /shacl/policies.
+      // A substring check on "...#status" also matched "...#statusTrack", and
+      // prevented normal login seeding of the RDF state-machine definitions.
+      // Protected Status writes (including CLEAR) remain bookmark-gated.
+      if (graphs.includes(`${base}/status`) &&
           (typeof body.bookmarkQueryXml !== "string" || !(await verifyApprovalBookmark(body.bookmarkQueryXml, request))))
-        return NextResponse.json({ error: "Bookmark the live FCT query before modifying provider Status." }, { status: 409 });
+        return NextResponse.json({ error: "Bookmark the live FCT query before modifying Status." }, { status: 409 });
       await updatePersonalSparql(update, queryTimeoutMs ?? 20000, request);
       return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
     }
@@ -374,14 +388,26 @@ async function handlePost(request: Request) {
     if (typeof body?.query === "string") {
       const query = body.query.trim();
       const maximumQueryLength = requirePersonalLogin(request) ? 10000 : 100000;
-      if (query.length > maximumQueryLength || !/^(?:PREFIX\s+[^\n]+\s*)*(?:SELECT|ASK)\b/i.test(query) ||
-          /\b(?:INSERT|DELETE|LOAD|CLEAR|CREATE|DROP|MOVE|COPY|ADD|SERVICE)\b/i.test(
-            query.replace(/<[^>]*>|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " "))) {
+      if (query.length > maximumQueryLength) {
+        return NextResponse.json({ error: `Read-only SPARQL query exceeds the ${maximumQueryLength}-character gateway limit (${query.length} characters).` }, { status: 413 });
+      }
+      if (!isBoundedReadOnlySparql(query, maximumQueryLength)) {
         return NextResponse.json({ error: "Expected a bounded read-only SELECT/ASK query" }, { status: 400 });
       }
-      diagnosticOperation = "generic read-only SPARQL";
+      // Scheduler-only priority hint, not a Maestro domain query operation.
+      // An untrusted client cannot mark an arbitrary expensive SELECT as urgent.
+      const autocomplete = body?.requestClass === "autocomplete";
+      if (autocomplete && (query.length > 1600 ||
+          !/^SELECT DISTINCT \?uri \?label WHERE \{[\s\S]*\} (?:ORDER BY DESC \(\<LONG::IRI_RANK\> \(\?uri\)\)|ORDER BY LCASE\(STR\(\?label\)\)) LIMIT (?:[1-9]|10)$/i.test(query) ||
+          !/\bCONTAINS\s*\(/i.test(query) ||
+          /\b(?:SERVICE|GROUP\s+BY|COUNT\s*\(|OPTION|UNION|VALUES|CONSTRUCT|DESCRIBE)\b/i.test(query))) {
+        return NextResponse.json({error:"Autocomplete priority is restricted to bounded rdfs:label lookups."},{status:400});
+      }
+      diagnosticOperation = autocomplete ? "priority URI autocomplete" : "generic read-only SPARQL";
       diagnosticQuery = query;
-      const { responseText, response, key } = await querySparql(fctEndpoint, query, queryTimeoutMs, request.signal);
+      const { responseText, response, key } = await querySparql(fctEndpoint, query, autocomplete ? Math.min(120000, Math.max(1000, queryTimeoutMs || 5000)) : queryTimeoutMs, request.signal, autocomplete ? "autocomplete" : undefined);
+      if (autocomplete && (response.status === 206 || isVirtuosoAnytime(response,responseText)))
+        return NextResponse.json({error:"Autocomplete lookup returned incomplete results."},{status:502});
       if (!response.ok) return NextResponse.json({ error: `SPARQL HTTP ${response.status}` }, { status: response.status });
       const parsed = parseSparqlResults(responseText);
       if (!parsed) return NextResponse.json({ error: "Invalid SPARQL results" }, { status: 502 });
@@ -671,14 +697,17 @@ async function handlePost(request: Request) {
       }
       const query = buildFctKindAvailabilitySparql(tree, direction);
       if (!query) return NextResponse.json({error: "Cannot compile the FCT kind scope."}, {status: 400});
-      const allKinds = ["web-url", "string", "numeric", "date", "email", "phone"];
+      const allKinds = MAESTRO_KIND_IDS;
       diagnosticOperation = "FCT kind availability batched SELECT";
       diagnosticQuery = query;
       const batch = await querySparql(fctEndpoint, query, queryTimeoutMs, request.signal);
       const batchParsed = batch.response.ok ? parseSparqlResults(batch.responseText) : null;
       const partial = batch.response.status === 206 || isVirtuosoAnytime(batch.response, batch.responseText);
       if (batch.response.ok && !partial && batchParsed && batchParsed.head.vars.includes("maestroKind")) {
-        const kinds = [...new Set(batchParsed.results.bindings.map(row => row.maestroKind?.value).filter((kind): kind is string => !!kind && allKinds.includes(kind)))];
+        const kinds = [...new Set(batchParsed.results.bindings.flatMap(row => {
+          const kind = normalizeMaestroKind(row.maestroKind?.value ?? "");
+          return kind === null ? [] : [kind];
+        }))];
         return NextResponse.json({ kinds, query, method: "batch" });
       }
       // Compatibility fallback: six independent ASK statements derived from
@@ -693,7 +722,7 @@ async function handlePost(request: Request) {
         if (typeof json.boolean !== "boolean") throw new Error(`Invalid ASK result for ${kind}`);
         return json.boolean ? kind : null;
       }));
-      return NextResponse.json({ kinds: individual.filter((kind): kind is string => kind !== null), query, method: "asks" });
+      return NextResponse.json({ kinds: individual.filter((kind) => kind !== null), query, method: "asks" });
     }
 
     if (body?.facetValueCount && typeof body.facetValueCount === "object") {
@@ -702,10 +731,13 @@ async function handlePost(request: Request) {
         return NextResponse.json({ error: "The client-generated scalar count SPARQL query is required." }, { status: 400 });
       }
       const numericDomain = body.facetValueCount.numericDomain === true;
-      const countQuery = validateFacetValueCountQuery(sourceQuery, numericDomain);
+      const temporalDomain = body.facetValueCount.temporalDomain === true;
+      if (numericDomain && temporalDomain) return NextResponse.json({ error: "Conflicting facet domain types." }, { status: 400 });
+      const countQuery = validateFacetValueCountQuery(sourceQuery, numericDomain, temporalDomain);
       if (!countQuery) {
         return NextResponse.json({ error: numericDomain
           ? "Numeric facet requires COUNT(?ct), MIN(?facetNumber) and MAX(?facetNumber) projections."
+          : temporalDomain ? "Temporal facet requires COUNT(?ct), MIN(?facetLex) and MAX(?facetLex) projections."
           : "The client must provide a scalar COUNT(...) AS ?ct SPARQL query." }, { status: 400 });
       }
 
@@ -750,12 +782,12 @@ async function handlePost(request: Request) {
         return NextResponse.json({ error: "Virtuoso returned an invalid SPARQL count result." }, { status: 502, headers: upstreamDiagnosticHeaders(response) });
       }
       if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
-      if (numericDomain) {
+      if (numericDomain || temporalDomain) {
         const row = parsed.results.bindings[0];
         const min = row?.min?.value ?? null;
         const max = row?.max?.value ?? null;
         if (!parsed.head.vars.includes("min") || !parsed.head.vars.includes("max"))
-          return NextResponse.json({ error: "Virtuoso omitted numeric facet domain projections." }, { status: 502 });
+          return NextResponse.json({ error: "Virtuoso omitted facet domain projections." }, { status: 502 });
         return NextResponse.json({ count, min, max, query: countQuery, incomplete }, { headers: sparqlResponseHeaders(response, incomplete) });
       }
       return NextResponse.json({ count, query: countQuery, incomplete }, { headers: sparqlResponseHeaders(response, incomplete) });

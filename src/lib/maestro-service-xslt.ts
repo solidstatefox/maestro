@@ -1,12 +1,12 @@
 /** Sandboxed XSLT 3.0 for SHACL-discovered service request/response transforms. */
-import SaxonJS from "saxon-js";
+import { saxonJsonToXml, transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
 const forbiddenFunctions = /\b(?:doc|doc-available|document|collection|uri-collection|unparsed-text(?:-lines|-available)?|json-doc|environment-variable|available-environment-variables|function-lookup|load-xquery-module|transform|resolve-uri|static-base-uri)\s*\(/i;
 const forbiddenInstructions = new Set(["include", "import", "import-schema", "use-package", "result-document", "evaluate", "fork", "source-document", "stream", "package"]);
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", preserveOrder: true, processEntities: false });
 
-export function executeServiceXslt(stylesheet: string, inputXml: string, recordUri: string): string {
+export async function executeServiceXslt(stylesheet: string, inputXml: string, recordUri: string): Promise<string> {
   if (stylesheet.length > 250000 || inputXml.length > 850000 || XMLValidator.validate(stylesheet) !== true || XMLValidator.validate(inputXml) !== true) {
     throw new Error("Invalid or oversized service XSLT input.");
   }
@@ -27,12 +27,7 @@ export function executeServiceXslt(stylesheet: string, inputXml: string, recordU
     }
   };
   walk(parser.parse(stylesheet));
-  const result = SaxonJS.XPath.evaluate(`transform(map {
-    'stylesheet-text': $stylesheet,
-    'source-node': parse-xml($source),
-    'stylesheet-params': map { QName('', 'recordUri'): $recordUri },
-    'delivery-format': 'serialized'
-  })?output`, null, { params: { stylesheet, source: inputXml, recordUri } });
+  const result = await transformWithMaestroSaxon(stylesheet, inputXml, { recordUri, outputLimit: 750000 });
   if (typeof result !== "string" || result.length > 750000) throw new Error("Invalid or oversized service transform result.");
   return result;
 }
@@ -41,13 +36,9 @@ export function executeServiceXslt(stylesheet: string, inputXml: string, recordU
  *  Service-authored output templates receive fn:map/fn:array as XML nodes,
  *  not a JSON string or a proprietary JSON-to-RDF conversion.
  */
-export function serviceJsonToXml(json: string): string {
+export async function serviceJsonToXml(json: string): Promise<string> {
   if (json.length > 400000) throw new Error("Service JSON response exceeds the size limit.");
-  const xml = SaxonJS.XPath.evaluate(
-    "serialize(json-to-xml($json), map { 'method': 'xml', 'omit-xml-declaration': true() })",
-    null,
-    { params: { json } },
-  );
+  const xml = await saxonJsonToXml(json);
   if (typeof xml !== "string" || xml.length > 1500000 || XMLValidator.validate(xml) !== true) {
     throw new Error("Service JSON could not be converted to XML.");
   }

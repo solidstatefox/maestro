@@ -1,4 +1,9 @@
 "use client";
+import { clientListChatSurveys } from "@/lib/client-otc-discovery";
+import { callOpenAiChatCompletions } from "@/lib/service-client";
+import { runClientTranscoder } from "@/lib/client-otc-runner";
+import { importOtcTurtle } from "@/lib/client-otc-import";
+import { personalContext, updatePersonal } from "@/lib/client-personal-sparql";
 import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -253,7 +258,6 @@ export function BasicAssistantChat({
   useEffect(() => { if (initialDraft) setDraft(initialDraft); }, [initialDraft]);
   const [loading, setLoading] = useState(false);
   const currentFetchRef = useRef<AbortController | null>(null);
-  const currentOtcRef = useRef<XMLHttpRequest | null>(null);
   const cancelledRef = useRef(false);
   const activeRequestStartedAtRef = useRef<number | null>(null);
   const [clockNow, setClockNow] = useState(() => Date.now());
@@ -266,10 +270,9 @@ export function BasicAssistantChat({
   const stopGeneration = () => {
     cancelledRef.current = true;
     currentFetchRef.current?.abort();
-    currentOtcRef.current?.abort();
     setError("");
   };
-  useEffect(() => () => { currentFetchRef.current?.abort(); currentOtcRef.current?.abort(); }, []);
+  useEffect(() => () => { currentFetchRef.current?.abort(); }, []);
   const [storageReady, setStorageReady] = useState(false);
   const [error, setError] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -347,12 +350,7 @@ export function BasicAssistantChat({
         // Fetch the menu first. This endpoint performs no LLM requests.
         const controller = new AbortController();
         currentFetchRef.current = controller;
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=otc-chat", { cache: "no-store", signal: controller.signal });
-        const data = await response.json().catch(() => ({})) as {
-          error?: string; rulesGraph?: string;
-          surveys?: Array<{ uri: string; title: string; description: string }>;
-        };
-        if (!response.ok) throw new Error(data.error || `Could not load surveys (HTTP ${response.status}).`);
+        const data = await clientListChatSurveys(controller.signal);
         if (!data.surveys?.length) throw new Error("No OTC surveys are installed in the Personal rules graph.");
         pendingTranscode.current = { messageId: userMessage.id, prompt: text, file: sentAttachment! };
         setSelectingSurvey(true);
@@ -372,16 +370,13 @@ export function BasicAssistantChat({
       } else {
         const controller = new AbortController();
         currentFetchRef.current = controller;
-        // OpenAPI chat-completions operation through Maestro's one /service
-        // transport; the IteraCompute credential remains server-side.
-        const response = await fetch("/proxy/api/service", {
-          signal: controller.signal, method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ service: "iteracompute", operationId: "createChatCompletion", payload: {
-            model: "qwen/qwen3.8-27b",
-            messages: nextMessages.map(({ role, content }) => ({ role, content })),
-            ...qwenThinkingOptions(thinkingBudget, 2048),
-          } }),
-        });
+        // The SPA resolves and validates its OpenAPI call; the host only
+        // forwards bytes to IteraCompute (including the browser-owned key).
+        const response = await callOpenAiChatCompletions({
+          model: "qwen/qwen3.8-27b",
+          messages: nextMessages.map(({ role, content }) => ({ role, content })),
+          ...qwenThinkingOptions(thinkingBudget, 2048),
+        }, controller.signal);
         const payload = await response.json().catch(() => ({})) as {
           error?: string | {message?: string}; choices?: Array<{ message?: {content?: string} }>;
           usage?: {prompt_tokens?: number; completion_tokens?: number; total_tokens?: number};
@@ -451,95 +446,48 @@ export function BasicAssistantChat({
       messagesRef.current = updated;
       setMessages(updated);
     };
+    const controller = new AbortController();
+    currentFetchRef.current = controller;
+    let inputGraph: string | undefined;
+    let rulesGraph: string | undefined;
     try {
-      const form = new FormData();
-      form.set("prompt", pending.prompt);
-      form.set("file", pending.file);
-      form.set("transcoder", option.uri);
-      form.set("thinkingBudget", String(thinkingBudget));
-      const streamState: { complete?: { status: number; result: unknown } } = {};
-      const handleLine = (line: string) => {
-        if (!line.trim()) return;
-        const packet = JSON.parse(line) as
-          | { kind: "progress"; event: OtcProgressEvent }
-          | { kind: "complete"; status: number; result: unknown };
-        if (packet.kind === "progress") {
-          const updated = messagesRef.current.map(message => message.id === menuId ? (
-            packet.event.live
-              ? { ...message, otcLive: packet.event.live }
-              : { ...message, otcProgress: [...(message.otcProgress ?? []), { ...packet.event, receivedAt: Date.now() }] }
-          ) : message);
-          messagesRef.current = updated;
-          setMessages(updated);
-        } else streamState.complete = packet;
+      if (!/\.ttl$/i.test(pending.file.name) || !pending.file.size || pending.file.size > 700_000)
+        throw new Error("Attach a Turtle (.ttl) input between 1 byte and 700 KB.");
+      const context = await personalContext();
+      const available = await clientListChatSurveys(controller.signal);
+      rulesGraph = available.rulesGraph;
+      if (!available.surveys.some(survey => survey.uri === option.uri))
+        throw new Error("The selected survey is no longer available in the personal rules graph.");
+      inputGraph = `${context.base}#otc-input-${crypto.randomUUID()}`;
+      const notify = (event: OtcProgressEvent) => {
+        if (controller.signal.aborted) return;
+        const updated = messagesRef.current.map(message => message.id === menuId ? (
+          event.live
+            ? { ...message, otcLive: event.live }
+            : { ...message, otcProgress: [...(message.otcProgress ?? []), { ...event, receivedAt: Date.now() }] }
+        ) : message);
+        messagesRef.current = updated;
+        setMessages(updated);
       };
-      // XMLHttpRequest exposes real upload progress while preserving incremental NDJSON activity.
-      // A streaming fetch response alone cannot report upload bytes in the browser.
       updateAttachmentStatus("uploading", 0);
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        currentOtcRef.current = xhr;
-        let processed = 0;
-        let buffer = "";
-        let rejected = false;
-        const consume = (flush = false) => {
-          buffer += xhr.responseText.slice(processed);
-          processed = xhr.responseText.length;
-          let index: number;
-          while ((index = buffer.indexOf("\n")) >= 0) {
-            const line = buffer.slice(0, index);
-            buffer = buffer.slice(index + 1);
-            if (line.trim()) handleLine(line);
-          }
-          if (flush && buffer.trim()) { handleLine(buffer); buffer = ""; }
-        };
-        xhr.open("POST", "/proxy/api/service?service=maestro&operationId=otc-chat");
-        xhr.setRequestHeader("Accept", "application/x-ndjson");
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable && event.total > 0) updateAttachmentStatus("uploading", Math.min(100, Math.round(100 * event.loaded / event.total)));
-        };
-        xhr.upload.onload = () => updateAttachmentStatus("processing", 100);
-        xhr.onprogress = () => { try { consume(); } catch (err) { rejected = true; xhr.abort(); reject(err); } };
-        xhr.onload = () => {
-          if (rejected) return;
-          try {
-            consume(true);
-            if (xhr.status < 200 || xhr.status >= 300) throw new Error(`Could not start OTC stream (HTTP ${xhr.status}).`);
-            resolve();
-          } catch (err) { reject(err); }
-        };
-        xhr.onerror = () => reject(new Error("Could not connect to the OTC service."));
-        xhr.onabort = () => { if (!rejected) reject(new Error("OTC upload was cancelled.")); };
-        xhr.send(form);
+      notify({step:"select",status:"running",detail:`Parsing uploaded Turtle: ${pending.file.name}`});
+      const count = await importOtcTurtle(inputGraph, await pending.file.text(), controller.signal);
+      updateAttachmentStatus("processing", 100);
+      notify({step:"select",status:"success",detail:`Imported ${count} RDF triples through SPARQL Update`});
+      const data = await runClientTranscoder({
+        rulesGraph, transcoder:option.uri, namespace:context.base, source:"personal",
+        sourceGraph:inputGraph, dryRun:true, followSuccessors:false,
+        instruction:pending.prompt, thinkingBudget, signal:controller.signal,
+        onProgress:notify,
       });
-      const completion = streamState.complete;
-      if (!completion) throw new Error("OTC progress stream ended before the result arrived.");
-      const data = completion.result as {
-        error?: string; activity?: AssistantActivity[]; turtle?: string;
-        tripleCount?: number; inputGraph?: string; rulesGraph?: string; reason?: string;
-      };
-      if (Array.isArray(data.activity) && data.activity.length) await appendAssistantActivity(data.activity);
-      if (completion.status >= 400) {
-        if (data.inputGraph) {
-          const updated = messagesRef.current.map(message => message.id === pending.messageId ? {
-            ...message, transcode: { ...message.transcode!, inputGraph: data.inputGraph,
-              rulesGraph: data.rulesGraph || message.transcode?.rulesGraph },
-          } : message);
-          messagesRef.current = updated;
-          setMessages(updated);
-        }
-        throw new Error(completion.status === 401
-          ? "Please log in to Maestro before transcoding."
-          : data.error || `Transcoding failed (HTTP ${completion.status}).`);
-      }
       // Mark the audit entry as settled even when the final event has no matching end event.
       const settled = messagesRef.current.map(message => message.id === menuId
         ? { ...message, otcFinished: "success" as const, runEndedAt: Date.now() } : message);
       messagesRef.current = settled;
       setMessages(settled);
       const completed = messagesRef.current.map(message => message.id === pending.messageId ? {
-        ...message, transcode: { ...message.transcode!, inputGraph: data.inputGraph,
-          rulesGraph: data.rulesGraph || message.transcode?.rulesGraph },
+        ...message, transcode: { ...message.transcode!, inputGraph,
+          rulesGraph: rulesGraph || message.transcode?.rulesGraph },
       } : message);
       completed.push({ id: crypto.randomUUID(), role: "assistant", createdAt: new Date().toISOString(),
         content: data.turtle?.trim()
@@ -573,7 +521,31 @@ export function BasicAssistantChat({
       messagesRef.current = failed;
       setMessages(failed);
     } finally {
-      currentOtcRef.current = null;
+      // The temporary graph belongs to the personal graph server, not Maestro's host.
+      // Remove it on success, failure and cancellation (without the cancelled signal).
+      if (inputGraph) {
+        try {
+          await updatePersonal(`CLEAR GRAPH <${inputGraph}>`);
+          const cleaned = messagesRef.current.map(message => message.id === menuId ? {
+            ...message, otcProgress: [...(message.otcProgress ?? []), {
+              step: "cleanup" as const, status: "success" as const,
+              detail: "Temporary input graph removed", receivedAt: Date.now(),
+            }],
+          } : message);
+          messagesRef.current = cleaned;
+          setMessages(cleaned);
+        } catch {
+          const failed = messagesRef.current.map(message => message.id === menuId ? {
+            ...message, otcProgress: [...(message.otcProgress ?? []), {
+              step: "cleanup" as const, status: "error" as const,
+              detail: "Could not remove temporary input graph; remove it from the personal graph server", receivedAt: Date.now(),
+            }],
+          } : message);
+          messagesRef.current = failed;
+          setMessages(failed);
+        }
+      }
+      currentFetchRef.current = null;
       activeRequestStartedAtRef.current = null;
       setLoading(false);
     }

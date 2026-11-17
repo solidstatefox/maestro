@@ -1,4 +1,6 @@
 "use client";
+import { browserLog } from "@/lib/maestro-client-logging";
+
 
 import { useRef, useState } from "react";
 import type { AuthType, PersonalAuthSession } from "@/lib/personal-auth";
@@ -75,6 +77,9 @@ import { buildAuthHeader, graphForPrefix, savePersonalAuthSession } from "@/lib/
 import { toast } from "@/components/ui/toast";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
 import { clearClientQueryCache } from "@/lib/client-query-cache";
+import { testPersonalGraph, fetchWebIdProfile } from "@/lib/client-auth-probe";
+import { seedPersonalGraphs } from "@/lib/client-graph-seed";
+import { loadMaestroKinds, resetMaestroKinds } from "@/lib/client-kinds";
 
 type AuthenticationActionDependencies = Pick<ReturnType<typeof useAuthenticationState>,
   "loginTab" |
@@ -116,13 +121,7 @@ export function createAuthenticationActions(deps: AuthenticationActionDependenci
       if (!targetUrl) return;
       setIsFetchingAvatar(true);
       try {
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=auth", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "profile", profileUrl: targetUrl }),
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Failed to fetch profile");
+        const data = await fetchWebIdProfile(targetUrl);
         if (data.avatarUrl) {
           setFetchedAvatarUrl(data.avatarUrl);
           toast.add({ title: "Avatar detected", description: "Successfully retrieved avatar image from profile.", type: "success" });
@@ -198,19 +197,8 @@ export function createAuthenticationActions(deps: AuthenticationActionDependenci
       setLoginTesting(true);
       setLoginError("");
       try {
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=auth", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "test",
-            authType: session.authType,
-            graphStore: session.graphStore,
-            authHeader: session.authHeader,
-            graphPrefix: session.graphPrefix,
-          }),
-        });
-        const data = await response.json();
-        if (!response.ok || !data.connected) {
+        const data = await testPersonalGraph(session);
+        if (!data.connected) {
           throw new Error(data.error || "Connection test failed");
         }
         toast.add({
@@ -239,19 +227,8 @@ export function createAuthenticationActions(deps: AuthenticationActionDependenci
       setLoginTesting(true);
       setLoginError("");
       try {
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=auth", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "test",
-            authType: session.authType,
-            graphStore: session.graphStore,
-            authHeader: session.authHeader,
-            graphPrefix: session.graphPrefix,
-          }),
-        });
-        const data = await response.json();
-        if (!response.ok || !data.connected) {
+        const data = await testPersonalGraph(session);
+        if (!data.connected) {
           throw new Error(data.error || (data.status === 401 ? "Authentication failed: Invalid credentials or unauthorized." : "Could not connect to the personal graph server."));
         }
         // Block Record policy discovery before publishing the new login session.
@@ -271,16 +248,20 @@ export function createAuthenticationActions(deps: AuthenticationActionDependenci
   
         // As soon as login succeeds, load every ./graph document into <graph>/query + manifest fragment.
         try {
-          const seedResponse = await fetch("/proxy/api/service?service=maestro&operationId=graph-seed", { method: "POST", cache: "no-store", headers: proxyDebugHeaders("login-graph-seed", "Login") });
-          const seedData = await seedResponse.json().catch(() => ({}));
-          if (!seedResponse.ok || !seedData.ok) throw new Error(seedData.error || `Graph load failed (HTTP ${seedResponse.status})`);
+          const loaded = await seedPersonalGraphs();
           setPersonalPoliciesSeedError("");
           setPersonalPoliciesReady(true);
           toast.add({
             title: "Graphs loaded",
-            description: `Loaded ${Array.isArray(seedData.loaded) ? seedData.loaded.length : 0} RDF documents into ${graphForPrefix(session.graphPrefix)}.`,
+            description: `Loaded ${loaded.length} RDF documents into ${graphForPrefix(session.graphPrefix)}.`,
             type: "success",
           });
+          // Kinds is a regular, one-time RDF → TS projection. A provider read
+          // failure must not invalidate unrelated personal policy availability.
+          try { resetMaestroKinds(); await loadMaestroKinds(); }
+          catch (kindsError) {
+            toast.add({ title: "Kinds patterns unavailable", description: kindsError instanceof Error ? kindsError.message : "Could not read Kinds RDF.", type: "warning" });
+          }
         } catch (seedError) {
           setPersonalPoliciesReady(false);
           setPersonalPoliciesSeedError(seedError instanceof Error ? seedError.message : "Personal graph seeding failed.");
@@ -332,6 +313,7 @@ export function useAuthenticationSessionLifecycle(deps: AuthenticationLifecycleD
           if (session) {
             setAuthSession(session);
             setAuthRestoreIssue(false);
+            void loadMaestroKinds().catch(error => browserLog.warn("kinds.personal-rdf.restore-failed", error));
             if (session.graphStore) {
               setLoginGraphStore(session.graphStore);
               setPersonalSparqlEndpoint(session.graphStore);
@@ -360,7 +342,7 @@ export function useAuthenticationSessionLifecycle(deps: AuthenticationLifecycleD
           }
           // Not logged in: the page loads as usual, with no personal graph server logic (no History, Bookmarks, or store access).
         } catch (err) {
-          console.warn("Could not load personal graph auth session", err);
+          browserLog.warn("auth.personal-session.restore-failed", err);
           if (window.localStorage.getItem(AUTH_EXPECTED_KEY) === "1") setAuthRestoreIssue(true);
         } finally {
           // Only now may the registry be read. The session cookie has either

@@ -77,7 +77,10 @@ export function compileStatusMachines(rows: readonly StatusMachineRow[]): Compil
     const group = grouped.get(row.machine) ?? [];
     group.push(row); grouped.set(row.machine, group);
   }
-  if (!grouped.size) throw new Error("No mui:StateMachineProvider definitions were returned by the SHACL graph.");
+  // Absence of Status providers is a valid (unseeded/optional) provider catalog.
+  // Only an operation that actually REQUIRES a machine should fail at
+  // machineForTarget(). Other Providers must never inherit this error.
+  if (!grouped.size) return [];
   const compiled = [...grouped].map(([uri, definitions]) => {
     const targets = new Set(definitions.map(row=>row.target));
     const digests = new Set(definitions.map(row=>row.digest ?? ""));
@@ -172,4 +175,26 @@ export function machineForTarget(machines:readonly CompiledStatusMachine[],targe
   const matched=machines.filter(machine=>machine.targetClasses.has(target));
   if (matched.length!==1) throw new Error(`Expected exactly one RDF state machine targeting ${target}; found ${matched.length}.`);
   return matched[0];
+}
+
+/** Plan a user-visible target state using the RDF transition graph, not
+ * hard-coded JavaScript trigger names. Null is an idempotent no-op. The RDF
+ * definition must identify one track and one edge for the requested target;
+ * XState still validates the actual transition in transitionStatus(). */
+export function transitionStatusTo(
+  machine: CompiledStatusMachine, assertions: readonly string[], target: string,
+): StatusTransition | null {
+  const owners = [...machine.tracks].filter(([, track]) => track.states.has(target));
+  if (owners.length !== 1) throw new Error(`Expected one RDF status track for ${target}; found ${owners.length}.`);
+  const [dimension, track] = owners[0];
+  const current = effectiveStatus(machine, assertions)[dimension];
+  if (current === target) return null;
+  const triggers = [...(track.events.get(current) ?? [])]
+    .filter(([, edge]) => edge.to === target).map(([trigger]) => trigger);
+  if (triggers.length !== 1)
+    throw new Error(`Expected one RDF transition from ${current} to ${target}; found ${triggers.length}.`);
+  const planned = transitionStatus(machine, assertions, triggers[0]);
+  if (planned.dimension !== dimension || planned.to !== target)
+    throw new Error("RDF/XState target selection mismatch.");
+  return planned;
 }

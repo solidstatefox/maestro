@@ -1,5 +1,7 @@
 "use client";
 import { ErrorDetails } from "@/components/ui/error-details";
+import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
+import { Code2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
@@ -21,9 +23,12 @@ export function StatusFacetWidget<T extends string>({ names, selected, counts, t
   return <article className="flex min-w-0 flex-col" aria-label="Status">
     <header className="group/header flex items-start justify-between gap-2 border-b px-2 py-2">
       <div className="flex min-w-0 items-center gap-1">{onNavigate ? <button type="button" className="cursor-pointer text-sm font-semibold hover:underline underline-offset-2" title="Navigate to mui:status of the current focus" onClick={onNavigate}>Status</button> : <h2 className="text-sm font-semibold">Status</h2>}
-        {(fctQuery || query) && <QueryInspectorButton query={fctQuery || query || ""} language={fctQuery ? "xml" : "sparql"}
-          filename={fctQuery ? "status-list-status.xml" : filename ?? "statuses-query.sparql"}
-          countQuery={countQuery} countFilename="status-count.sparql" primaryTabLabel={fctQuery ? "FCT list-status" : "Status SPARQL"} />}
+        {(fctQuery || query) && <LeftWidgetButtonTray threshold={3} actions={[{
+          id: "inspector", label: "Inspect Status facet query", icon: <Code2 className="size-4" />,
+          render: <QueryInspectorButton query={fctQuery || query || ""} language={fctQuery ? "xml" : "sparql"}
+            filename={fctQuery ? "status-list-status.xml" : filename ?? "statuses-query.sparql"}
+            countQuery={countQuery} countFilename="status-count.sparql" primaryTabLabel={fctQuery ? "FCT list-status" : "Status SPARQL"} />,
+        }]} />}
       </div>
       <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
         {loading && <ElapsedStatus label="" category="personal" clockScope="statuses" />}
@@ -52,7 +57,7 @@ export function PersonalStatusWidget({ statuses }: { statuses: PersonalStatusPag
 
 /** A single bookmarked-query Status facet: the FCT list-status projection
  * determines the matching records, and their personal mui:status triples
- * determine the displayed choices. No feature- or tab-specific switch. */
+ * determine the displayed choices. No provider- or tab-specific switch. */
 export function LiveQueryStatusWidget({ tree, toggle, revision, queryXml, onNavigate }: {
   tree: FctQueryTree; toggle: (uri: string) => void; revision: number; queryXml: string; onNavigate?: () => void;
 }) {

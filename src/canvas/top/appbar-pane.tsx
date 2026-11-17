@@ -1,5 +1,8 @@
 "use client";
+import { clientQueryFavorites } from "@/lib/client-query-favorites";
+import { manageAppbarButtons } from "@/lib/client-appbar-buttons";
 import { ErrorDetails } from "@/components/ui/error-details";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { UI_COMPONENT } from "@/lib/maestro-ui-component-ids";
 
@@ -7,14 +10,15 @@ import { EndpointStatusIcon } from "@/canvas/top/appbar";
 
 import maestroLanguages from "@/data/maestro-languages.json";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { subscribePendingMaestroQueries, subscribePendingMaestroQueryDetails, cancelIndividualMaestroQuery, type PendingMaestroQuery } from "@/lib/client-query-cache";
 
 import { rememberNamespaceMetadata, toLabel } from "@/lib/uri-labels";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
 
 import { ButtonGroup } from "@/components/ui/button-group";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { ViewDiagnosticsHover } from "@/canvas/top/view-diagnostics-hover";
+import { pendingApprovalController, selectPendingApprovalBadge } from "@/lib/app-lifecycle/pending-approvals";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -34,6 +38,7 @@ import { AuthType, clearPersonalAuthSession, graphForPrefix } from "@/lib/person
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
 
 import { Button } from "@/components/ui/button";
+import { noteMaestroClipboardCopy } from "@/lib/recent-clipboard";
 
 import { serializeFctQuery } from "@/lib/fct-query-api";
 
@@ -110,9 +115,58 @@ import type { AppBarWorkspace } from "@/canvas/controllers/workspace-interfaces"
 
 /** UI owned by AppBarSection. State and commands come from the shared workspace controller. */
 export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
-  const [graphAddressEditing, setGraphAddressEditing] = useState(false);
+  const pendingApprovalSnapshot=useSyncExternalStore(pendingApprovalController.subscribe,
+    pendingApprovalController.getSnapshot,pendingApprovalController.getSnapshot);
+  const pendingBadge=selectPendingApprovalBadge(pendingApprovalSnapshot);
+  const matchedContextProviders=workspace.queryMatchedProviders.join("\u0000");
+  useEffect(()=>{
+    if(!workspace.accessCapabilities.canUsePersonalStore){pendingApprovalController.clear();return;}
+    pendingApprovalController.activate(workspace.queryXml,workspace.selectedUri??"");
+  },[workspace.accessCapabilities.canUsePersonalStore,workspace.queryXml,workspace.selectedUri]);
+  useEffect(()=>{
+    if(workspace.accessCapabilities.canUsePersonalStore&&workspace.queryMatchedProviders.length)
+      pendingApprovalController.match(workspace.queryXml,workspace.queryMatchedProviders);
+  },[workspace.accessCapabilities.canUsePersonalStore,workspace.queryXml,matchedContextProviders]);
+  useEffect(()=>{
+    if(workspace.accessCapabilities.canUsePersonalStore)pendingApprovalController.refresh();
+  },[workspace.policyApprovalRevision]);
+  const viewBadge=pendingBadge.total>0?<span aria-label={`${pendingBadge.total} matched providers awaiting approval: ${pendingBadge.policies} policies, ${pendingBadge.providers} other providers`}
+      title={`Sum of pending approvals on View > Providers ribbons`}
+      className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full bg-destructive px-1.5 text-[10px] font-semibold leading-5 text-destructive-foreground tabular-nums">{pendingBadge.total}</span>:null;
+  // One edit state for BOTH the address input and the discovery preflight.
+  // A local-only flag previously let graph discovery run while the user typed.
+  const { graphFieldEditing: graphAddressEditing, setGraphFieldEditing: setGraphAddressEditing } = workspace;
+  const headerLayoutRef = useRef<HTMLElement>(null);
+  const graphAddressLayoutRef = useRef<HTMLDivElement>(null);
+  const [compactRibbonTabs, setCompactRibbonTabs] = useState(false);
+  useEffect(() => {
+    const header = headerLayoutRef.current;
+    const graph = graphAddressLayoutRef.current;
+    if (!header || !graph) return;
+    const measure = () => {
+      // Reserve room for graph navigation, the full tab row, and the appbar
+      // actions. Use actual graph width rather than a viewport breakpoint.
+      const graphWidth = graph.getBoundingClientRect().width;
+      const available = header.getBoundingClientRect().width;
+      const nav = header.querySelector('[aria-label="Graph navigation"]');
+      const navigationWidth = nav?.getBoundingClientRect().width ?? 180;
+      setCompactRibbonTabs(available < graphWidth + navigationWidth + 450);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    observer.observe(graph);
+    measure();
+    return () => observer.disconnect();
+  }, []);
   const graphAddressInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (graphAddressEditing) graphAddressInputRef.current?.focus(); }, [graphAddressEditing]);
+  useEffect(() => {
+    if (!graphAddressEditing) return;
+    const input = graphAddressInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.setSelectionRange(0, 0);
+    input.scrollLeft = 0;
+  }, [graphAddressEditing]);
   const [pendingQueryCount, setPendingQueryCount] = useState(0);
   const [pendingQueryDetails, setPendingQueryDetails] = useState<PendingMaestroQuery[]>([]);
   const [appbarButtons, setAppbarButtons] = useState<{uri:string;action:string;icon:string;tooltip:string;url:string}[]>([]);
@@ -131,23 +185,17 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     let mounted = true;
     const refresh = async () => {
       try {
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=appbar-buttons", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list"}),cache:"no-store"});
-        if (!response.ok) return;
-        const payload = await response.json() as {buttons?:typeof appbarButtons};
+        const payload = await manageAppbarButtons({action:"list"});
         if (mounted) setAppbarButtons(payload.buttons ?? []);
       } catch { /* Loading optional appbar providers must not block the appbar. */ }
     };
-    void fetch("/proxy/api/service?service=maestro&operationId=appbar-buttons", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"ensure-features"}),cache:"no-store"})
-      .then(async response => {
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({})) as { error?: string };
-          throw new Error(payload.error || `Could not initialize Features bookmarks (${response.status}).`);
-        }
+    void manageAppbarButtons({action:"ensure-providers"})
+      .then(async () => {
         if (mounted) workspace.setBookmarkCheckRevision((revision) => revision + 1);
         return refresh();
       })
       .catch(error => {
-        if (mounted) toast.add({ title: "Automatic Features bookmarks failed", description: error instanceof Error ? error.message : "The personal graph update failed.", type: "error" });
+        if (mounted) toast.add({ title: "Automatic Providers bookmarks failed", description: error instanceof Error ? error.message : "The personal graph update failed.", type: "error" });
         void refresh();
       });
     window.addEventListener("maestro:appbar-buttons-updated", refresh);
@@ -157,7 +205,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     try {
       const destination = new URL(url, window.location.origin);
       if (destination.origin === window.location.origin && /^https?:$/.test(destination.protocol) && destination.searchParams.has("q"))
-        window.location.assign(destination.href);
+        { if (!workspace.openPinnedShareUrl(destination.href)) toast.add({ title: "Could not restore bookmark", type: "error" }); }
       else toast.add({ title: "Invalid bookmark share URL", type: "error" });
     } catch { toast.add({ title: "Bookmark has no valid share URL", type: "error" }); }
   };
@@ -219,6 +267,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     deleteCurrentQueryHistory,
     endpointChecksCompleted,
     endpointChecksTotal,
+    endpointMenuError,
     endpointStatuses,
     exitEverywhere,
     exportBookmarks,
@@ -233,6 +282,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     graphProbe,
     graphProbeIdentity,
     graphText,
+    graphRegistryReady,
     groupBatchSize,
     handleFetchProfile,
     handleLoginSubmit,
@@ -295,7 +345,6 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     refreshMaestroPage,
     cancelMaestroPage,
     queryActivityPending,
-    refreshQuery,
     resetQuery,
     setSearch,
     setGroupByPropertyUri,
@@ -329,7 +378,8 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     setGraphInfoOpen,
     setGraphText,
     setHistoryBookmarkId,
-    setIsQueryBookmarked,
+    confirmQueryBookmark,
+    revokeQueryBookmark,
     setIsRdfLoaderOpen,
     setLocalStorageUsageBytes,
     setLoginDialogOpen,
@@ -343,7 +393,6 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     setLoginTab,
     setLoginUsername,
     setLoginWebIdUri,
-    setMatchingBookmarkId,
     setOrderResults,
     setPanelLimitsOpen,
     setPendingCenterBatchLimit,
@@ -370,37 +419,64 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     widgetTimeouts,
     workspaceTab,
   } = workspace;
-  const showCancel = pendingQueryCount > 0 || queryActivityPending;
-  return (
-<header id={UI_COMPONENT.appbar} className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-2">
-          <ButtonGroup aria-label="Graph navigation" className="shrink-0 border-0 shadow-none">
-            {returnShareUrl && <Tooltip><TooltipTrigger render={<button type="button"
-              aria-label="Return to preceding query" onClick={() => window.location.assign(returnShareUrl)}
-              className="inline-flex size-9 items-center justify-center rounded-none border-0 bg-sky-100 px-2 text-sky-700 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-300 dark:hover:bg-sky-900">
-              <CornerDownLeft className="size-4" aria-hidden="true" />
-            </button>} /><TooltipContent>Return to preceding History query</TooltipContent></Tooltip>}
+  // Graph auto-fill is not the graph-server health probe. A healthy (green)
+  // endpoint can still exceed the separate named-graph discovery deadline.
+  // Notify outside the crowded address/navigation row and only on transitions
+  // into a new discovery error, never on every render.
+  const lastGraphProbeToastRef = useRef("");
+  useEffect(() => {
+    if (graphProbe.identity !== graphProbeIdentity || graphProbe.state !== "error" || graphAlreadySelected || !graphAutoFill) {
+      if (graphProbe.state !== "error") lastGraphProbeToastRef.current = "";
+      return;
+    }
+    const key = `${graphProbeIdentity}\u0000${graphProbe.error ?? ""}`;
+    if (lastGraphProbeToastRef.current === key) return;
+    lastGraphProbeToastRef.current = key;
+    const timeout = /timed? out|timeout|signal timed out/i.test(graphProbe.error ?? "");
+    toast.add({
+      title: timeout ? "Graph auto-fill timed out" : "Graph auto-fill unavailable",
+      description: timeout
+        ? "Automatic graph selection timed out. Browsing continues using the server's default dataset. Refresh to retry, or select a graph."
+        : "Automatic graph selection is unavailable. Browsing continues using the server's default dataset. Refresh to retry, or select a graph.",
+      type: "warning",
+    });
+  }, [graphProbe.identity, graphProbe.state, graphProbe.error, graphProbeIdentity, graphAlreadySelected, graphAutoFill]);
 
-            {authSession && (<>
-            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("backward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></button>} /><TooltipContent className={historyActionMenu === "backward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "backward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Earlier in History</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "backward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
-            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onMouseEnter={() => startHistoryActionHover("forward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25 disabled:cursor-not-allowed disabled:opacity-40 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</button>} /><TooltipContent className={historyActionMenu === "forward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "forward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Later in History</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "forward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
+  const showCancel = pendingQueryCount > 0 || queryActivityPending;
+  const liveServer = (queryTree.attributes.addr ?? "").split("@").slice(1).join("@");
+  const activeGraphServer = fctEndpoints.find(endpoint =>
+    endpoint.url === liveServer || endpoint.id === liveServer ||
+    (endpoint.schemeInferred && endpoint.url.replace(/^https?:\/\//, "") === liveServer.replace(/^https?:\/\//, "")));
+  const displayedEndpointId = activeGraphServer?.id ?? selectedEndpointId;
+  const displayedEndpointStatus = activeGraphServer ? endpointStatuses[activeGraphServer.id] : selectedEndpointStatus;
+  return (
+<header ref={headerLayoutRef} id={UI_COMPONENT.appbar} className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
+        <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-2">
+          <ButtonGroup aria-label="Graph navigation" className="shrink-0">
+            {returnShareUrl && <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon"
+              aria-label="Return to Browse query" onClick={() => { if (!workspace.returnToPreviousContext()) toast.add({ title: "Could not restore the Browse query", type: "error" }); }}
+              className="h-9 w-auto gap-1.5 border-blue-500/60 bg-blue-600 px-3 text-white hover:bg-blue-700 hover:text-white focus-visible:ring-blue-500">
+              <CornerDownLeft className="size-4" aria-hidden="true" />Return
+            </Button>} /><TooltipContent>Return to Browse query</TooltipContent></Tooltip>}
+
+            {workspace.accessCapabilities.canUsePersonalStore && (<>
+            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onMouseEnter={() => startHistoryActionHover("backward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`size-9 text-muted-foreground hover:text-foreground active:bg-accent/80 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></Button>} /><TooltipContent className={historyActionMenu === "backward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "backward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Earlier in History</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "backward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
+            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onMouseEnter={() => startHistoryActionHover("forward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("forward")} aria-label="Next query in history" aria-busy={historyNavigationPending === "forward"} disabled={!historyHasNewer || historyNavigationPending !== null} className={`size-9 text-muted-foreground hover:text-foreground active:bg-accent/80 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}>{historyNavigationPending === "forward" ? <ClockArrowRight className="size-4" aria-hidden="true" /> : <ArrowRight className="size-4" aria-hidden="true" />}</Button>} /><TooltipContent className={historyActionMenu === "forward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "forward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Later in History</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "forward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "forward" ? "Loading next query…" : "Next query in History"}</TooltipContent></Tooltip>
             </>)}
-            <Tooltip><TooltipTrigger render={<button type="button" onClick={() => {
+            <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onClick={() => {
               resetQuery();
               setSearch("");
               if (centralTab === "groups") setCentralTab("results");
               setSearchPipelineRun((current) => current + 1);
-            }} aria-label="Reset query to home" className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25"><Home className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Reset query</TooltipContent></Tooltip>
-            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<button type="button" onClick={() => { if (showCancel) cancelMaestroPage(); else void refreshMaestroPage(); }} aria-label={showCancel ? "Cancel pending queries" : "Refresh current query"} className="inline-flex size-9 items-center justify-center rounded-none border-0 px-2 hover:bg-accent active:bg-black/25">{showCancel ? <X className="size-4" aria-hidden="true" /> : <RotateCw className="size-4" aria-hidden="true" />}</button>} /><TooltipContent className={showCancel ? "!max-w-none max-w-[min(32rem,calc(100vw-1rem))] p-2" : ""}>{showCancel ? <div className="w-[min(29rem,calc(100vw-2rem))]"><div className="px-1 pb-2 text-xs font-semibold">Pending queries</div><div className="max-h-64 overflow-y-auto">{pendingQueryDetails.length ? pendingQueryDetails.map((query) => <div key={query.id} className="flex items-center gap-2 border-t border-border/40 px-1 py-1.5"><span className="min-w-0 flex-1 truncate text-xs" title={query.label}>{query.label}</span><button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded hover:bg-accent" aria-label={`Cancel ${query.label}`} title={`Cancel ${query.label}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); cancelIndividualMaestroQuery(query.id); }}><X className="size-3.5" aria-hidden="true" /></button></div>) : <span className="px-1 text-xs text-muted-foreground">Loading before dispatch</span>}</div></div> : "Refresh query (check selected graph server only if not green)"}</TooltipContent></Tooltip>
+            }} aria-label="Reset query to home" className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground"><Home className="size-4" aria-hidden="true" /></Button>} /><TooltipContent>Reset query</TooltipContent></Tooltip>
+            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onClick={() => { if (showCancel) cancelMaestroPage(); else void refreshMaestroPage(); }} aria-label={showCancel ? "Cancel pending queries" : "Refresh current query"} className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground">{showCancel ? <X className="size-4" aria-hidden="true" /> : <RotateCw className="size-4" aria-hidden="true" />}</Button>} /><TooltipContent className={showCancel ? "!max-w-none max-w-[min(32rem,calc(100vw-1rem))] p-2" : ""}>{showCancel ? <div className="w-[min(29rem,calc(100vw-2rem))]"><div className="px-1 pb-2 text-xs font-semibold">Pending queries</div><div className="max-h-64 overflow-y-auto">{pendingQueryDetails.length ? pendingQueryDetails.map((query) => <div key={query.id} className="flex items-center gap-2 border-t border-border/40 px-1 py-1.5"><span className="min-w-0 flex-1 truncate text-xs" title={query.label}>{query.label}</span><button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded hover:bg-accent" aria-label={`Cancel ${query.label}`} title={`Cancel ${query.label}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); cancelIndividualMaestroQuery(query.id); }}><X className="size-3.5" aria-hidden="true" /></button></div>) : <span className="px-1 text-xs text-muted-foreground">Loading before dispatch</span>}</div></div> : "Refresh query (check selected graph server only if not green)"}</TooltipContent></Tooltip>
           </ButtonGroup>
 
-          {graphProbe.identity === graphProbeIdentity && graphProbe.state === "error" && !graphAlreadySelected &&
-            <ErrorDetails prefix="Graph discovery" error={graphProbe.error ?? "Graph discovery failed"} />}
           {/* One address: [graph]@[graph server], with no gap around the at-sign. */}
-          <div className="relative z-20 w-fit min-w-[38rem] max-w-[calc(100vw-12rem)] shrink-0 self-stretch">
+          <div ref={graphAddressLayoutRef} className="relative z-20 min-w-0 flex-[1_1_auto] self-stretch">
           <div role="group" aria-label="Graph address: graph at graph server"
             onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setGraphAddressEditing(false); }}
-            className={`flex min-w-0 items-stretch rounded-md border border-input bg-background focus-within:ring-1 focus-within:ring-ring ${graphAddressEditing ? "absolute inset-y-0 left-0 z-50 w-[min(48rem,calc(100vw-2rem))] shadow-lg" : "relative h-full w-full"}`}>
+            className={`relative flex h-full w-full min-w-0 items-stretch rounded-md border border-input bg-background focus-within:ring-1 focus-within:ring-ring ${graphAddressEditing ? "z-50 shadow-lg" : ""}`}>
 
             <Tooltip><TooltipTrigger render={<button
               type="button"
@@ -415,7 +491,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               <WandSparkles aria-hidden="true" className="size-4" />
               
             </button>} /><TooltipContent>{graphAutoFill ? "Auto-fill enabled: empty graph addresses are discovered; X switches to Everywhere" : "Auto-fill off: X clears the graph without selecting Everywhere. Click to enable."}</TooltipContent></Tooltip>
-            <div className="group/graph-input flex min-w-[min(22rem,42vw)] flex-[1_1_32rem] items-stretch overflow-hidden bg-transparent">
+            <div className="group/graph-input flex min-w-0 flex-1 items-stretch overflow-hidden bg-transparent">
               <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={() => void openGraphInfo()}
@@ -438,25 +514,27 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                 onKeyDown={(event) => { if (event.key === "Enter") applyGraphText(); }}
                 placeholder="Enter graph URI"
                 aria-label="Site URI"
-                className="min-w-[min(20rem,40vw)] flex-1 bg-transparent px-3 py-2 text-sm outline-none"
-              /> : <button type="button" title={queryTree.attributes.graph || "Enter graph URI"}
-                aria-label={`Edit graph: ${queryTree.attributes.graph ? toLabel(queryTree.attributes.graph) : "No graph selected"}`}
+                className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
+              /> : <button type="button"
+                aria-label={`Edit graph: ${queryTree.attributes.graph ? toLabel(queryTree.attributes.graph) : "Everywhere"}`}
                 onClick={() => setGraphAddressEditing(true)}
-                className="min-w-[min(20rem,40vw)] flex-1 truncate px-3 py-2 text-left text-sm hover:bg-accent/40">
-                {queryTree.attributes.graph ? toLabel(queryTree.attributes.graph) : "Graph"}
+                className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm hover:bg-accent/40">
+                {queryTree.attributes.graph
+                  ? toLabel(queryTree.attributes.graph)
+                  : <span className="text-muted-foreground">Everywhere</span>}
               </button>
               )}
               {queryTree.attributes.graph !== ALL_GRAPHS && <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={clearGraph}
                 aria-label={graphAutoFill ? "Everywhere (all graphs)" : "Clear graph"}
-                className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-hover/graph-input:max-w-10 group-hover/graph-input:px-2.5 group-hover/graph-input:opacity-100 group-focus-within/graph-input:max-w-10 group-focus-within/graph-input:px-2.5 group-focus-within/graph-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
+                className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-focus-within/graph-input:max-w-10 group-focus-within/graph-input:px-2.5 group-focus-within/graph-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
               ><X aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{graphAutoFill ? "Everywhere (all graphs)" : "Clear graph (leave address graphless)"}</TooltipContent></Tooltip>}
               {queryTree.attributes.graph !== ALL_GRAPHS && <Tooltip><TooltipTrigger render={<button
                 type="button"
                 onClick={applyGraphText}
                 aria-label="Go"
-                className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-hover/graph-input:max-w-10 group-hover/graph-input:px-2.5 group-hover/graph-input:opacity-100 group-focus-within/graph-input:max-w-10 group-focus-within/graph-input:px-2.5 group-focus-within/graph-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
+                className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 opacity-0 transition-all duration-200 group-focus-within/graph-input:max-w-10 group-focus-within/graph-input:px-2.5 group-focus-within/graph-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 hover:bg-accent hover:text-accent-foreground"
               ><CirclePlay aria-hidden="true" className="size-4" /></button>} /><TooltipContent>{"Go"}</TooltipContent></Tooltip>}
             </div>
             <Dialog open={graphInfoOpen} onOpenChange={setGraphInfoOpen}>
@@ -494,18 +572,23 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
             <Label htmlFor="fct-endpoint" aria-label="Graph server" className="flex shrink-0 items-center border-x border-border/60 px-2 text-muted-foreground">
               <AtSign aria-hidden="true" className="size-4" />
             </Label>
-            <div className="flex w-fit min-w-0 shrink-0 items-stretch">
-              <ButtonGroup aria-label="Graph server selection, discovery, and refresh" className="group/graph-server-input w-fit min-w-0 flex-none border-0 shadow-none [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
-                    <DropdownMenu>
+            <div className="flex min-w-0 basis-[30ch] max-w-[min(54%,34rem)] shrink items-stretch">
+              <ButtonGroup aria-label="Graph server selection, discovery, and refresh" className="group/graph-server-input min-w-0 flex-1 border-0 shadow-none [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
+                    {!graphRegistryReady ? (
+                      endpointMenuError ? <button type="button" className="px-2 text-xs text-destructive hover:underline" onClick={() => setEndpointReloadRevision((revision) => revision + 1)}>Retry graph servers</button>
+                      : <div role="status" aria-busy="true" aria-label="Loading graph servers" className="flex h-9 min-w-32 items-center gap-2 px-2">
+                          <Skeleton className="size-4 rounded-full" /><Skeleton className="h-4 w-24" />
+                        </div>
+                    ) : <DropdownMenu>
                       <Tooltip><TooltipTrigger render={<DropdownMenuTrigger asChild><button
                         id="fct-endpoint"
                         type="button"
                         disabled={isCheckingEndpoints || fctEndpoints.length === 0}
                         aria-label="Choose graph server"
-                        className="flex w-fit min-w-0 shrink-0 items-center gap-1 whitespace-nowrap rounded-none bg-transparent px-2 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex w-full min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap rounded-none bg-transparent px-2 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <EndpointStatusIcon status={selectedEndpointStatus} />
-                        <span className="min-w-0 whitespace-nowrap">{fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
+                        <EndpointStatusIcon status={displayedEndpointStatus} />
+                        <span className="min-w-0 truncate whitespace-nowrap">{fctEndpoints.find((endpoint) => endpoint.id === displayedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
                         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                       </button></DropdownMenuTrigger>} /><TooltipContent>{"Choose which FCT endpoint receives queries"}</TooltipContent></Tooltip>
                       <DropdownMenuContent align="start" className="z-50 w-max min-w-max max-w-[calc(100vw-2rem)]">
@@ -519,13 +602,13 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                                 <EndpointStatusIcon status={status} />
                                 <span className="min-w-0 flex-1 whitespace-nowrap">{endpoint.label}</span>
                                 <span className="shrink-0 text-xs text-muted-foreground">{statusText}</span>
-                                {endpoint.id === selectedEndpointId ? <Check className="size-3.5 shrink-0" aria-label="Selected" /> : null}
+                                {endpoint.id === displayedEndpointId ? <Check className="size-3.5 shrink-0" aria-label="Selected" /> : null}
                               </DropdownMenuItem>;
                             })}
                           </Fragment>
                         ))}
                       </DropdownMenuContent>
-                    </DropdownMenu>
+                    </DropdownMenu>}
                 <Tooltip>
                   <TooltipTrigger render={
                     <Toggle
@@ -540,7 +623,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                 </Tooltip>
                 <Tooltip><TooltipTrigger render={<button
                   type="button"
-                  onClick={() => void refreshQuery()}
+                  onClick={() => void refreshMaestroPage()}
                   disabled={isCheckingEndpoints || fctEndpoints.length === 0}
                   aria-label={isCheckingEndpoints ? "Checking server" : "Refresh query"}
                   className="inline-flex max-w-0 shrink-0 items-center justify-center overflow-hidden px-0 py-2 text-sm opacity-0 transition-all duration-200 hover:bg-accent group-hover/graph-server-input:max-w-10 group-hover/graph-server-input:px-2.5 group-hover/graph-server-input:opacity-100 focus-visible:max-w-10 focus-visible:px-2.5 focus-visible:opacity-100 disabled:opacity-50"
@@ -556,44 +639,52 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
           </div>
           </div>
           <div className="ml-auto shrink-0">
-        <Tabs value={workspaceTab} onValueChange={(tab) => { if (tab === "browse" || ((tab === "view" || tab === "analyze") && authSession)) { setWorkspaceTab(tab); if (tab !== "browse") setCentralTab("results");
-              // An explicit View-tab click opens Perspectives immediately.
-              // Leave the selection empty until the ribbon's first available
-              // provider is discovered; do not reactivate a previous Feature.
-              if (tab === "view") {
-                workspace.setViewPanel("perspectives");
-                workspace.setSelectedViewUri("");
-                workspace.setViewFeature(null);
-              } } }} className="shrink-0" aria-label="Maestro ribbon">
-          <TabsList aria-label="Maestro ribbon tabs">
-            <TabsTrigger value="browse" className="cursor-pointer">Browse</TabsTrigger>
-            <TabsTrigger value="view" disabled={!authSession} className="cursor-pointer">View</TabsTrigger>
-            <TabsTrigger value="analyze" disabled={!authSession} className="cursor-pointer">Analyze</TabsTrigger>
-            <Tooltip><TooltipTrigger render={<TabsTrigger value="publish" disabled className="cursor-pointer">Publish</TabsTrigger>} /><TooltipContent>{"Coming soon"}</TooltipContent></Tooltip>
-          </TabsList>
-        </Tabs>
+            {compactRibbonTabs ? <div className="inline-flex items-center rounded-md border bg-muted p-0.5" aria-label="Maestro ribbon tabs">
+              <Button variant={workspaceTab === "browse" ? "secondary" : "ghost"} size="sm" onClick={() => workspace.navigateWorkspaceTab("browse")}>Browse</Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="More Maestro tabs"><span className="text-lg leading-none" aria-hidden="true">…</span></Button></DropdownMenuTrigger>
+                <DropdownMenuContent align="start" side="bottom" sideOffset={6} collisionPadding={12} avoidCollisions className="max-w-[calc(100vw-1.5rem)]">
+                  <DropdownMenuItem disabled={!workspace.accessCapabilities.canUsePersonalStore} onSelect={() => {
+                    workspace.navigateWorkspaceTab("view"); setCentralTab("results");
+                  }}>View{workspaceTab === "view" ? " ✓" : ""}{viewBadge}</DropdownMenuItem>
+                  <DropdownMenuItem disabled={!workspace.accessCapabilities.canUsePersonalStore} onSelect={() => { workspace.navigateWorkspaceTab("analyze"); setCentralTab("results"); }}>Analyze{workspaceTab === "analyze" ? " ✓" : ""}</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem disabled>Publish (coming soon)</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div> : <Tabs value={workspaceTab} onValueChange={(tab) => { if (tab === "browse" || ((tab === "view" || tab === "analyze") && workspace.accessCapabilities.canUsePersonalStore)) { workspace.navigateWorkspaceTab(tab); if (tab !== "browse") setCentralTab("results");
+               } }} className="shrink-0" aria-label="Maestro ribbon">
+              <TabsList aria-label="Maestro ribbon tabs">
+                <TabsTrigger value="browse" className="cursor-pointer">Browse</TabsTrigger>
+                <ViewDiagnosticsHover enabled={workspace.accessCapabilities.canUsePersonalStore}>
+                  <TabsTrigger value="view" disabled={!workspace.accessCapabilities.canUsePersonalStore} className="cursor-pointer">View{viewBadge}</TabsTrigger>
+                </ViewDiagnosticsHover>
+                <TabsTrigger value="analyze" disabled={!workspace.accessCapabilities.canUsePersonalStore} className="cursor-pointer">Analyze</TabsTrigger>
+                <Tooltip><TooltipTrigger render={<TabsTrigger value="publish" disabled className="cursor-pointer">Publish</TabsTrigger>} /><TooltipContent>Coming soon</TooltipContent></Tooltip>
+              </TabsList>
+            </Tabs>}
           </div>
         </div>
-        {authSession && (
+        {workspace.accessCapabilities.canUsePersonalStore && (
         <div className="flex shrink-0 items-center gap-1">
         {/* The native bookmark toggle represents the live query's saved state.
             Custom providers are navigation shortcuts, not bookmark state. */}
-        <ToggleGroup type="single" value={isQueryBookmarked ? "bookmark" : ""} aria-label="Current query bookmark" className={`shrink-0 rounded-md border ${bookmarkBounce && policyBookmarkVisible && !isQueryBookmarked ? "animate-bounce border-amber-500 ring-2 ring-amber-400/70" : ""}`}>
+        <ButtonGroup aria-label="Current query bookmark" className="shrink-0">
         <Tooltip>
           <TooltipTrigger render={
-            <ToggleGroupItem
-              value="bookmark"
-              type="button"
+            <Button
+              type="button" variant="outline" size="icon"
+              aria-pressed={isQueryBookmarked}
               id="maestro-bookmark-button"
               disabled={bookmarkOpening}
               aria-label={bookmarkOpening ? "Opening bookmark dialog" : isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}
-              className={`${bookmarkOpening ? "h-9 w-auto min-w-20 px-2.5" : "size-9"} data-[state=on]:text-amber-500 ${bookmarkBounce && policyBookmarkVisible && !isQueryBookmarked ? "text-amber-500" : ""}`}
+              className={`${bookmarkOpening ? "h-9 w-auto min-w-20 px-2.5" : "size-9"} text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:text-amber-500 ${bookmarkBounce && policyBookmarkVisible && !isQueryBookmarked ? "animate-bounce !border-amber-400 text-amber-500" : ""}`}
               onClick={async () => {
                 setBookmarkAttention(false);
                 setBookmarkBounce(false);
                 if (isQueryBookmarked) {
                   try {
-                    const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+                    const response = await clientQueryFavorites( {
                       method: "POST",
                       headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-bookmark", "RemoveBookmarkHash") },
                       body: JSON.stringify({ action: "unbookmark", queryXml, historyId: matchingBookmarkId || historyBookmarkId || undefined }),
@@ -601,8 +692,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                     });
                     const payload = await response.json() as { removed?: boolean; error?: string };
                     if (!response.ok || !payload.removed) throw new Error(payload.error ?? `HTTP ${response.status}`);
-                    setIsQueryBookmarked(false);
-                    setMatchingBookmarkId("");
+                    revokeQueryBookmark();
                     setBookmarkCheckRevision((revision) => revision + 1);
                     toast.add({ title: "Bookmark removed", description: "The query hash was removed from the bookmark in your personal RDF store.", type: "success" });
                   } catch (error) {
@@ -625,7 +715,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                 setBookmarkTagVocabulary("skos");
                 if (metadataId) {
                   try {
-                    const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "read", historyId: metadataId }), cache: "no-store" });
+                    const response = await clientQueryFavorites( { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "read", historyId: metadataId }), cache: "no-store" });
                     const payload = await response.json() as { found?: boolean; title?: string; description?: string; tags?: string[]; tagVocabulary?: "skos" | "dcterms" | "scot"; error?: string };
                     if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
                     if (payload.found) {
@@ -648,19 +738,19 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               onAnimationIteration={() => {
                 const visible = Boolean(document.querySelector('[data-policy-bookmark-banner="true"]'));
                 if (!visible || !policyBookmarkVisible || isQueryBookmarked) setBookmarkBounce(false);
-              }} />}</ToggleGroupItem>
+              }} />}</Button>
           } />
           <TooltipContent>{bookmarkAttention && !isQueryBookmarked ? "Bookmark this query to continue" : isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}</TooltipContent>
         </Tooltip>
-        </ToggleGroup>
+        </ButtonGroup>
         {appbarButtons.length > 0 && (
-        <div className="inline-flex shrink-0 items-center rounded-md border" aria-label="Pinned bookmark shortcuts">
+        <ButtonGroup className="shrink-0" aria-label="Pinned bookmark shortcuts">
           {appbarButtons.slice(0, 2).map(item => {
             const iconName = availableAppbarIconNames.has(item.icon) ? item.icon as IconName : null;
-            return <Tooltip key={item.uri}><TooltipTrigger render={<Button type="button" size="icon" variant="ghost" aria-label={item.tooltip} title={item.tooltip} className={`rounded-none border-r ${matchedAppbarButton?.uri === item.uri ? "text-amber-500" : ""}`} onClick={() => openPinnedBookmark(item.url)}>{iconName ? <DynamicIcon name={iconName} className="size-4" aria-hidden="true" fallback={() => <Bookmark className="size-4" aria-hidden="true" />} /> : <Bookmark className="size-4" aria-hidden="true" />}</Button>} /><TooltipContent>{item.tooltip}</TooltipContent></Tooltip>;
+            return <Tooltip key={item.uri}><TooltipTrigger render={<Button type="button" size="icon" variant="outline" aria-label={item.tooltip} title={item.tooltip} aria-current={matchedAppbarButton?.uri === item.uri ? "page" : undefined} className={matchedAppbarButton?.uri === item.uri ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"} onClick={() => openPinnedBookmark(item.url)}>{iconName ? <DynamicIcon name={iconName} className="size-4" aria-hidden="true" fallback={() => <Bookmark className="size-4" aria-hidden="true" />} /> : <Bookmark className="size-4" aria-hidden="true" />}</Button>} /><TooltipContent>{item.tooltip}</TooltipContent></Tooltip>;
           })}
           {appbarButtons.length > 2 && <DropdownMenu>
-            <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" className="rounded-none" aria-label="More pinned bookmarks" title="More pinned bookmarks"><span className="text-lg leading-none" aria-hidden="true">…</span></Button></DropdownMenuTrigger>
+            <DropdownMenuTrigger asChild><Button type="button" variant="outline" size="icon" aria-label="More pinned bookmarks" title="More pinned bookmarks" className="text-muted-foreground hover:text-foreground"><span className="text-lg leading-none" aria-hidden="true">…</span></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               {appbarButtons.slice(2).map(item => {
                 const iconName = availableAppbarIconNames.has(item.icon) ? item.icon as IconName : null;
@@ -672,11 +762,11 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               })}
             </DropdownMenuContent>
           </DropdownMenu>}
-        </div>
+        </ButtonGroup>
         )}
         </div>
         )}
-        <Dialog open={bookmarkDialogOpen} onOpenChange={(open) => { if (!bookmarkSaving) setBookmarkDialogOpen(open); }}>
+        <Dialog open={workspace.accessCapabilities.canUsePersonalStore && bookmarkDialogOpen} onOpenChange={(open) => { if (!bookmarkSaving) setBookmarkDialogOpen(open); }}>
             <DialogContent className="max-w-lg p-5" showCloseButton={false}>
               <div className="mb-4 flex items-start justify-between gap-4">
                 <DialogHeader>
@@ -697,7 +787,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   const targetHistoryId = currentHistoryId || matchingBookmarkId;
                   if (!targetHistoryId) throw new Error("The current query's History item could not be resolved. Please wait for History to synchronize and retry.");
                   const tags = bookmarkTags.split(/[,;\n]/u).map((tag) => tag.trim()).filter(Boolean);
-                  const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+                  const response = await clientQueryFavorites( {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ action: "update", historyId: targetHistoryId, title: bookmarkTitle.trim() || targetHistoryId.slice(targetHistoryId.lastIndexOf("#") + 1), description: bookmarkDescription.trim(), tags, tagVocabulary: bookmarkTagVocabulary, queryXml: serializeFctQuery(queryTree), stateUrl: workspace.buildCurrentShareUrl(),
@@ -707,8 +797,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   const payload = await response.json() as { error?: string; namespaces?: unknown; historyId?: string; shareUrl?: string };
                   if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
                   if (payload.namespaces) rememberNamespaceMetadata(payload.namespaces);
-                  setIsQueryBookmarked(true);
-                  setMatchingBookmarkId(payload.historyId || matchingBookmarkId || historyBookmarkId);
+                  confirmQueryBookmark(payload.historyId || matchingBookmarkId || historyBookmarkId);
                   setBookmarkCheckRevision((revision) => revision + 1);
                   const shareUrl = payload.shareUrl;
                   const savedAt = new Date().toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -716,11 +805,11 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   toast.add({
                     title: "Bookmark saved",
                     description: (
-                      <div className="flex min-w-0 flex-col gap-1">
-                        <div><span className="font-medium">Name:</span> {savedName}</div>
-                        <div><span className="font-medium">Date:</span> {savedAt}</div>
-                        {shareUrl && <div className="min-w-0"><span className="font-medium">Link:</span> <a href={shareUrl} target="_blank" rel="noreferrer" className="break-all text-primary underline underline-offset-2">Open bookmark</a></div>}
-                      </div>
+                      <span className="flex min-w-0 flex-col gap-1">
+                        <span className="block"><span className="font-medium">Name:</span> {savedName}</span>
+                        <span className="block"><span className="font-medium">Date:</span> {savedAt}</span>
+                        {shareUrl && <span className="block min-w-0"><span className="font-medium">Link:</span> <a href={shareUrl} target="_blank" rel="noreferrer" className="break-all text-primary underline underline-offset-2">Open bookmark</a></span>}
+                      </span>
                     ),
                     type: "success",
                   });
@@ -767,9 +856,11 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               variant="outline"
               size="icon"
               aria-label="Copy share link"
+              className="text-muted-foreground hover:text-foreground"
               onClick={async () => {
                 try {
                   await navigator.clipboard.writeText(window.location.href);
+                  noteMaestroClipboardCopy(window.location.href);
                   setShareLinkCopied(true);
                   toast.add({ title: "Share link copied", description: "The query URL is on your clipboard.", type: "success" });
                   window.setTimeout(() => setShareLinkCopied(false), 2500);
@@ -782,7 +873,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
           } />
           <TooltipContent>{shareLinkCopied ? "Share link copied" : "Copy share link"}</TooltipContent>
         </Tooltip>
-        {authSession ? (
+        {workspace.accessCapabilities.canUsePersonalStore && authSession ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button

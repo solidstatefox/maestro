@@ -9,7 +9,6 @@ export function useHistoryState() {
   const [isLoadingHistoryQuery, setIsLoadingHistoryQuery] = useState(false);
   const [historyHasOlder, setHistoryHasOlder] = useState(false);
   const [historyHasNewer, setHistoryHasNewer] = useState(false);
-  const [historyNavigationPending, setHistoryNavigationPending] = useState<"backward" | "forward" | null>(null);
   const [historyActionItems, setHistoryActionItems] = useState<Array<{ historyId: string; created: string; action: { operator: "+" | "-"; xpath: string; value?: string } | null }>>([]);
   const [historyActionMenu, setHistoryActionMenu] = useState<"backward" | "forward" | null>(null);
   const historyHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -31,8 +30,6 @@ export function useHistoryState() {
     setHistoryHasOlder,
     historyHasNewer,
     setHistoryHasNewer,
-    historyNavigationPending,
-    setHistoryNavigationPending,
     historyActionItems,
     setHistoryActionItems,
     historyActionMenu,

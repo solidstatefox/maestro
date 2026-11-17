@@ -1,0 +1,34 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/kinds> a mui:Provider, mui:KindProvider ;
+  rdfs:label "Kinds" ;
+  dct:description "Typed RDF object classification, shared by Configure, FCT kind filters and Record."@en ;
+  mui:widget <gttp://ggg.maestro.ecosys/shacl/provider/kinds/web-url>, <gttp://ggg.maestro.ecosys/shacl/provider/kinds/text>, <gttp://ggg.maestro.ecosys/shacl/provider/kinds/numeric>, <gttp://ggg.maestro.ecosys/shacl/provider/kinds/date>, <gttp://ggg.maestro.ecosys/shacl/provider/kinds/email>, <gttp://ggg.maestro.ecosys/shacl/provider/kinds/phone>, <gttp://ggg.maestro.ecosys/shacl/provider/kinds/anynomous> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/kinds/web-url> a mui:Kind ;
+  rdfs:label "web-url"@en ;
+  mui:pattern "^https?://" .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/kinds/text> a mui:Kind ;
+  rdfs:label "text"@en .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/kinds/numeric> a mui:Kind ;
+  rdfs:label "numeric"@en ;
+  mui:pattern "^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+)?$" .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/kinds/date> a mui:Kind ;
+  rdfs:label "date"@en ;
+  mui:pattern "^[0-9]{4}-[0-9]{2}-[0-9]{2}" .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/kinds/email> a mui:Kind ;
+  rdfs:label "email"@en ;
+  mui:pattern "^(mailto:)?[^@\\s]+@[^@\\s]+\\.[^@\\s]+$" .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/kinds/phone> a mui:Kind ;
+  rdfs:label "phone"@en ;
+  mui:pattern "^(tel:)?\\+?[0-9()+ .-]{7,}$" .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/kinds/anynomous> a mui:Kind ;
+  rdfs:label "anynomous"@en .

@@ -97,7 +97,7 @@ mui:matchedRecord a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ; rdfs
 <gttp://ggg.maestro.ui/component/components-ui-toggle-group> a mui:UIComponent ; rdfs:label "components ui toggle group" .
 <gttp://ggg.maestro.ui/component/components-ui-tooltip> a mui:UIComponent ; rdfs:label "components ui tooltip" .
 <gttp://ggg.maestro.ui/component/components-ui-trace> a mui:UIComponent ; rdfs:label "components ui trace" .
-<gttp://ggg.maestro.ui/component/policies-feature> a mui:UIComponent ; rdfs:label "policies feature" .
+<gttp://ggg.maestro.ui/component/policies-provider> a mui:UIComponent ; rdfs:label "policies provider" .
 <gttp://ggg.maestro.ui/component/record-policy-discovery> a mui:UIComponent ; rdfs:label "record policy discovery" .
 <gttp://ggg.maestro.ui/component/view-ribbon> a mui:UIComponent ; rdfs:label "view ribbon" .
 

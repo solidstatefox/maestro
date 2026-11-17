@@ -4,7 +4,8 @@ import { getOntologyGraph, personalSparqlUrl, queryPersonalSparql, updatePersona
 import { getPersonalStatusGraph, getQueryObservationGraph } from "@/lib/personal-status-graph";
 import { MUI_NS, MUI_STATUS, MUI_HIDDEN, MUI_LAST_LOCATED_AT, RECORD_STATUSES, type RecordStatusName } from "@/lib/personal-status-vocabulary";
 import { loadServerStatusMachines } from "@/lib/status-machine-server";
-import { STATUS_MUI, STATUS_RDFS, effectiveStatus, machineForTarget, transitionStatus } from "@/lib/status-machine-runtime";
+import { STATUS_MUI, STATUS_RDFS, machineForTarget, transitionStatusTo } from "@/lib/status-machine-runtime";
+import { statusTransitionUpdate } from "@/lib/status-machine-sparql";
 
 /** No status object or subject can be an RDF literal or blank node. */
 function iri(value: string): string {
@@ -47,68 +48,35 @@ export async function ensurePersonalStatusSchema(request: Request): Promise<void
 
 /** Apply a machine trigger, not a hard-coded status toggle. Persist only the
  * track's assertion delta. Parallel read, visibility, and star tracks survive. */
-async function executeResourceTrigger(request: Request, resource: string, trigger: string, intended: string): Promise<void> {
+async function executeResourceTarget(request: Request, resource: string, intended: string): Promise<void> {
   const subject = iri(resource), g = statusGraph(request);
   const machines = await loadServerStatusMachines(request);
   const machine = machineForTarget(machines, `${STATUS_RDFS}Resource`);
   const existing = await queryPersonalSparql(`SELECT DISTINCT ?status WHERE { GRAPH ${g} { ${subject} ${predicate} ?status } }`, 20000, request);
   const assertions = (existing.results?.bindings ?? []).map(row => row.status?.value ?? "").filter(Boolean);
-  const values = effectiveStatus(machine, assertions);
-  const current = Object.values(values);
-  if (current.includes(intended)) return; // Idempotent re-display/toggle.
-  const transition = transitionStatus(machine, assertions, trigger);
-  if (transition.to !== intended) throw new Error(`FSM ${machine.uri} rejected ${trigger} -> ${intended}`);
-  const track = machine.tracks.get(transition.dimension);
-  if (!track) throw new Error("Missing RDF status track.");
-  const members = [...track.states].map(iri).join(", ");
-  const insert = transition.add ? `GRAPH ${g} { ${subject} ${predicate} ${iri(transition.add)} }` : "";
-  await updatePersonalSparql(`DELETE { GRAPH ${g} { ${subject} ${predicate} ?old } }
-    INSERT { ${insert} } WHERE { OPTIONAL { GRAPH ${g} { ${subject} ${predicate} ?old . FILTER(?old IN (${members})) } } }`, 30000, request);
+  const transition = transitionStatusTo(machine, assertions, intended);
+  if (!transition) return; // Idempotent: the requested state is already effective.
+  await updatePersonalSparql(statusTransitionUpdate({
+    machine, transition, assertions, graph: getPersonalStatusGraph(request),
+    resource, predicate: MUI_STATUS,
+  }), 30000, request);
 }
 
 export async function updateRecordStatus(request: Request, queryHash: string, uri: string, status: RecordStatusName, enabled: boolean): Promise<void> {
   validatedHash(queryHash);
-  const trigger = status === "Starred" ? (enabled ? "Star" : "Unstar") :
-    (status === "Seen" ? enabled : !enabled) ? "ViewRecord" : "MarkUnread";
-  const destination = status === "Starred" ? (enabled ? "Starred" : "Unstarred") :
-    trigger === "ViewRecord" ? "Seen" : "Unseen";
-  await executeResourceTrigger(request, uri, `${STATUS_MUI}${trigger}`, `${STATUS_MUI}${destination}`);
+  // Display intent selects a destination; RDF owns the trigger and the edge.
+  const target = status === "Starred" ? (enabled ? "Starred" : "Unstarred")
+    : (status === "Seen" ? (enabled ? "Seen" : "Unseen") : "Unseen");
+  await executeResourceTarget(request, uri, `${STATUS_MUI}${target}`);
 }
 
 export async function updateHiddenRecord(request: Request, uri: string, hidden: boolean): Promise<void> {
-  await executeResourceTrigger(request, uri, `${STATUS_MUI}${hidden ? "Hide" : "Unhide"}`,
-    `${STATUS_MUI}${hidden ? "Hidden" : "Visible"}`);
+  await executeResourceTarget(request, uri, `${STATUS_MUI}${hidden ? "Hidden" : "Visible"}`);
 }
 
 export async function listHiddenRecords(request: Request): Promise<string[]> {
   const response = await queryPersonalSparql(`SELECT DISTINCT ?s WHERE { GRAPH ${statusGraph(request)} { ?s ${predicate} ${hiddenObject} } FILTER(isIRI(?s)) } ORDER BY STR(?s) LIMIT 500`, 20000, request);
   return (response.results?.bindings ?? []).map((row) => row.s?.value ?? "").filter(Boolean);
-}
-
-export async function recordPageStatus(request: Request, queryHash: string, uris: string[]): Promise<{ statuses: Record<string, RecordStatusName[]>; hidden: string[] }> {
-  const items = [...new Set(uris)].slice(0, 150);
-  if (!items.length) return { statuses: {}, hidden: [] };
-  const values = items.map(iri).join(" ");
-  const g = statusGraph(request);
-  const response = await queryPersonalSparql(`SELECT ?s ?status ?hidden WHERE { VALUES ?s { ${values} } OPTIONAL { GRAPH ${g} { ?s ${predicate} ?status } } OPTIONAL { GRAPH ${g} { ?s ${predicate} ${hiddenObject} } BIND(true AS ?hidden) } }`, 20000, request);
-  const statuses: Record<string, RecordStatusName[]> = {}, hidden = new Set<string>();
-  const reverse = Object.fromEntries(Object.entries(RECORD_STATUSES).map(([key, value]) => [value, key])) as Record<string, RecordStatusName>;
-  for (const row of response.results?.bindings ?? []) {
-    const uri = row.s?.value, name = reverse[row.status?.value ?? ""];
-    if (!uri) continue;
-    if (name) { const item = statuses[uri] ?? (statuses[uri] = []); if (!item.includes(name)) item.push(name); }
-    if (row.hidden?.value === "true" || row.hidden?.value === "1") hidden.add(uri);
-  }
-  // These page-local values feed Record buttons, NOT the Status facet.
-  // Resolve only the RDF-defined initial read state, without persisting it.
-  const machine = machineForTarget(await loadServerStatusMachines(request), `${STATUS_RDFS}Resource`);
-  for (const uri of items) {
-    const recorded = statuses[uri] ?? [];
-    const effective = effectiveStatus(machine, recorded.map(name => `${MUI_NS}${name}`));
-    const read = effective[`${MUI_NS}ReadStatus`];
-    if (read === `${MUI_NS}Unseen` && !recorded.includes("Unseen")) (statuses[uri] ??= []).push("Unseen");
-  }
-  return { statuses, hidden: [...hidden] };
 }
 
 /** Every page of one query execution uses the SAME timestamp. Paging cannot change it.
@@ -200,37 +168,6 @@ export async function buildFederatedStatusAsk(request: Request, liveQueryXml: st
   const service = federatedFocusSource(focusSelection, endpoint.url, personalEndpoint);
   const statusSource = `GRAPH ${statusGraph(request)} { ?c1 ${predicate} ?status }`;
   return { askQuery, base, service, statusSource, endpointUrl: endpoint.url };
-}
-
-/** Counts come from the accumulated query-hash graph, never from just the
- * current page and never from a remote SERVICE join. The asserted-only New facet includes only resources with an explicit
- * mui:Unseen triple, not effective virtual Unseen. */
-export async function queryFederatedStatusCounts(request: Request, _liveQueryXml: string, queryHash: string): Promise<{
-  hasStatuses: boolean; counts: Record<RecordStatusName | "New" | "Hidden", number>; sparql: string;
-}> {
-  const g = statusGraph(request);
-  const observation = observationGraph(request, queryHash);
-  const h = g;
-  const located = `GRAPH ${observation} { ?c1 ${locatedPredicate} ?located }`;
-  const base = `PREFIX mui: <${MUI_NS}>\n`;
-  const definitions = {
-    New: `${located} GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Unseen)} }`,
-    Seen: `${located} GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Seen)} }`,
-    Starred: `${located} GRAPH ${g} { ?c1 ${predicate} ${iri(RECORD_STATUSES.Starred)} }`,
-    Hidden: `${located} GRAPH ${g} { ?c1 ${predicate} ${hiddenObject} }`,
-  } as const;
-  const query = (where: string) => `${base}SELECT (COUNT(DISTINCT ?c1) AS ?ct) WHERE { ${where} }`;
-  const entries = await Promise.all(Object.entries(definitions).map(async ([name, where]) => {
-    const response = await queryPersonalSparql(query(where), 30000, request);
-    const value = Number(response.results?.bindings?.[0]?.ct?.value ?? NaN);
-    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Invalid personal ${name} count.`);
-    return [name, value] as const;
-  }));
-  const counts: Record<RecordStatusName | "New" | "Hidden", number> = { New: 0, Unseen: 0, Seen: 0, Starred: 0, Hidden: 0 };
-  for (const [name, value] of entries) counts[name as keyof typeof counts] = value;
-  counts.Unseen = counts.New; // New is the UI label for asserted Unseen.
-  const sparql = query(definitions.New);
-  return { hasStatuses: counts.New + counts.Seen + counts.Starred + counts.Hidden > 0, counts, sparql };
 }
 
 /** The paged Results view and facet counts share the same unpaginated FCT focus

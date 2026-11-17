@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RECORD_STATUS_NAMES, type RecordStatusName, type StatusFacetName } from "@/lib/personal-status-vocabulary";
 import type { FctResult } from "@/canvas/utils/fct-response";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
+import { readClientRecordPage, readClientStatusFacetCounts } from "@/lib/client-status-reads";
+import { setClientRecordStatus, setClientHidden, recordClientLocatedPage } from "@/lib/client-status-writes";
 
 export type PersonalStatusPage = {
   enabled: boolean;
@@ -25,14 +27,6 @@ export type PersonalStatusPage = {
   toggleHidden: (hidden: boolean) => Promise<void>;
 };
 
-type PageResult = { statuses: Record<string, RecordStatusName[]>; hidden: string[] };
-type FacetResult = { hasStatuses: boolean; counts: Record<StatusFacetName, number>; sparql: string };
-async function requestStatus<T = {ok: boolean}>(body: object, signal?: AbortSignal): Promise<T> {
-  const response = await fetch("/proxy/api/service?service=maestro&operationId=record-status", { method: "POST", credentials: "same-origin", cache: "no-store", signal,
-    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!response.ok) { const detail = await response.json().catch(() => null); throw new Error(detail?.error || `Personal status operation failed (HTTP ${response.status}).`); }
-  return response.json() as Promise<T>;
-}
 
 export async function queryDigest(xml: string): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalQueryIdentityXml(xml));
@@ -72,7 +66,7 @@ export function usePersonalRecordStatus({ enabled, results, selectedUri, results
   useEffect(() => {
     if (!enabled || !hash || !resultsReady || pageKey) return;
     const controller = new AbortController();
-    void requestStatus<FacetResult>({ action: "facets", queryHash: hash, queryXml }, controller.signal)
+    void readClientStatusFacetCounts(hash, controller.signal)
       .then((facet) => { if (!controller.signal.aborted) { setFederatedCounts(facet.counts); setFederatedQuery(facet.sparql); } })
       .catch((error) => { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "Federated status count failed."); });
     return () => controller.abort();
@@ -90,21 +84,21 @@ export function usePersonalRecordStatus({ enabled, results, selectedUri, results
         const executionTime = new Date().toISOString();
         const batches = Array.from({ length: Math.ceil(uris.length / 150) }, (_, index) => uris.slice(index * 150, (index + 1) * 150));
         // All batches must finish writing even when a user immediately pages on.
-        await Promise.all(batches.map((batch) => requestStatus({ action: "located", queryHash: hash, uris: batch, executionTime })));
+        await Promise.all(batches.map((batch) => recordClientLocatedPage(hash, batch, executionTime)));
         if (controller.signal.aborted) return;
-        const pages = await Promise.all(batches.map((batch) => requestStatus<PageResult>({ action: "page", queryHash: hash, uris: batch }, controller.signal)));
+        const pages = await Promise.all(batches.map((batch) => readClientRecordPage(batch, controller.signal)));
         if (controller.signal.aborted) return;
-        const response: PageResult = { statuses: Object.assign({}, ...pages.map((page) => page.statuses)), hidden: pages.flatMap((page) => page.hidden) };
+        const response = { statuses: Object.assign({}, ...pages.map((page) => page.statuses)) as Record<string, RecordStatusName[]>, hidden: pages.flatMap((page) => page.hidden) };
         setStatuses((old) => {
           const merged = { ...old, ...(response.statuses ?? {}) };
           for (const uri of uris) if ((old[uri] ?? []).includes("Seen")) merged[uri] = [...new Set([...(merged[uri] ?? []).filter((item) => item !== "Unseen"), "Seen" as const])];
           return merged;
         });
         setHidden(new Set(response.hidden ?? []));
-        // The server's RDF/XState evaluator supplies effective page states.
+        // The browser's shared RDF/XState evaluator supplies effective page states.
         // Do not independently infer Unseen in a second React state machine.
         try {
-          const facet = await requestStatus<FacetResult>({ action: "facets", queryHash: hash, queryXml }, controller.signal);
+          const facet = await readClientStatusFacetCounts(hash, controller.signal);
           if (!controller.signal.aborted) { setFederatedCounts(facet.counts); setFederatedQuery(facet.sparql); }
         } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Authoritative Status count failed."); }
       } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Could not load Status."); }
@@ -113,13 +107,26 @@ export function usePersonalRecordStatus({ enabled, results, selectedUri, results
     return () => controller.abort();
   }, [enabled, hash, resultsReady, pageKey, pageIdentity, queryXml]);
 
+  // The RDF/XState evaluator, not React event handlers, determines the next
+  // effective Record state. Re-read after mutation instead of hand-writing a
+  // second Seen/Unseen/Starred transition table in component state.
+  const refreshEffectiveRecord = useCallback(async (uri: string) => {
+    const page = await readClientRecordPage([uri]);
+    setStatuses((old) => ({ ...old, [uri]: page.statuses[uri] ?? [] }));
+    setHidden((old) => {
+      const next = new Set(old);
+      if (page.hidden.includes(uri)) next.add(uri); else next.delete(uri);
+      return next;
+    });
+  }, []);
+
   // The query-hash graph is the bus. A Record view/toggle writes Seen/Starred
   // there, then re-reads authoritative federated facet counts without waiting
   // for the Results page to change.
   useEffect(() => {
     if (!enabled || !hash || !resultsReady || !pageKey || !statusRevision) return;
     const controller = new AbortController();
-    void requestStatus<FacetResult>({ action: "facets", queryHash: hash, queryXml }, controller.signal)
+    void readClientStatusFacetCounts(hash, controller.signal)
       .then((facet) => {
         if (!controller.signal.aborted) { setFederatedCounts(facet.counts); setFederatedQuery(facet.sparql); }
       })
@@ -137,40 +144,37 @@ export function usePersonalRecordStatus({ enabled, results, selectedUri, results
     if (viewedRef.current.has(key)) return;
     viewedRef.current.add(key);
     let active = true;
-    void requestStatus({ action: "set", queryHash: hash, uri: selectedUri, status: "Seen", enabled: true }).then(() => {
-      if (active) {
-        setStatuses((old) => ({ ...old, [selectedUri]: [...(old[selectedUri] ?? []).filter((name) => name !== "Unseen" && name !== "Seen"), "Seen"] }));
-        setStatusRevision((revision) => revision + 1);
-      }
+    void setClientRecordStatus(hash, selectedUri, "Seen", true, undefined, queryXml).then(async () => {
+      if (!active) return;
+      await refreshEffectiveRecord(selectedUri);
+      if (active) setStatusRevision((revision) => revision + 1);
     }).catch((e) => { if (active) { viewedRef.current.delete(key); setError(e instanceof Error ? e.message : "Could not mark Record Seen."); } });
     return () => { active = false; };
-  }, [enabled, hash, selectedUri]);
+  }, [enabled, hash, selectedUri, queryXml, refreshEffectiveRecord]);
 
   const toggleRecordStatus = useCallback(async (status: "Starred" | "Seen", next: boolean) => {
     if (!enabled || !hash || !selectedUri || recordBusy) return;
     setRecordBusy(true); setError("");
     try {
-      await requestStatus({ action: "set", queryHash: hash, uri: selectedUri, status, enabled: next });
+      await setClientRecordStatus(hash, selectedUri, status, next, undefined, queryXml);
       viewedRef.current.add(`${hash}|${selectedUri}`);
+      await refreshEffectiveRecord(selectedUri);
       setStatusRevision((revision) => revision + 1);
-      setStatuses((old) => ({ ...old, [selectedUri]: status === "Seen"
-        ? [...(old[selectedUri] ?? []).filter((item) => item !== "Seen" && item !== "Unseen"), next ? "Seen" : "Unseen"]
-        : next ? [...new Set([...(old[selectedUri] ?? []), "Starred" as const])] : (old[selectedUri] ?? []).filter((item) => item !== "Starred") }));
     } catch (e) { setError(e instanceof Error ? e.message : "Could not update Record status."); }
     finally { setRecordBusy(false); }
-  }, [enabled, hash, selectedUri, recordBusy]);
+  }, [enabled, hash, selectedUri, queryXml, recordBusy, refreshEffectiveRecord]);
 
   const toggleHidden = useCallback(async (next: boolean) => {
     if (!enabled || !hash || !selectedUri || recordBusy) return;
     setRecordBusy(true); setError("");
     try {
-      await requestStatus({ action: "hide", queryHash: hash, uri: selectedUri, enabled: next });
+      await setClientHidden(selectedUri, next, undefined, queryXml);
       setHidden((old) => { const updated = new Set(old); if (next) updated.add(selectedUri); else updated.delete(selectedUri); return updated; });
       // Apply the visible status immediately and restart Results through the existing query refresh.
       onHiddenChanged?.();
     } catch (e) { setError(e instanceof Error ? e.message : "Could not change Hidden status."); }
     finally { setRecordBusy(false); }
-  }, [enabled, hash, selectedUri, recordBusy, onHiddenChanged]);
+  }, [enabled, hash, selectedUri, queryXml, recordBusy, onHiddenChanged]);
 
   // Never manufacture counts from the currently displayed Results page.
   const shownCounts: Record<StatusFacetName, number> = federatedCounts ?? { New: 0, Unseen: 0, Seen: 0, Starred: 0, Hidden: 0 };

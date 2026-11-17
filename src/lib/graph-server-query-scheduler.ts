@@ -3,7 +3,7 @@
  * Server-wide ceiling protects multi-client traffic in this Node process.
  */
 import { currentProxyClient, getProxyClientPreferences } from "./maestro-proxy-client-preferences";
-export type QueryPriority = "interactive" | "facet" | "count";
+export type QueryPriority = "autocomplete" | "interactive" | "facet" | "count";
 export type QueryWeight = "light" | "heavy";
 type Task = { priority: QueryPriority; weight: QueryWeight; client: string; order: number; start: () => void; cancel: () => void };
 type ClientUsage = { total: number; heavy: number };
@@ -18,7 +18,7 @@ type ServerQueue = {
 const queues = new Map<string, ServerQueue>();
 let sequence = 0;
 const SERVER_SAFETY_CEILING = 24;
-const ranks: Record<QueryPriority, number> = { interactive: 0, facet: 1, count: 2 };
+const ranks: Record<QueryPriority, number> = { autocomplete: -1, interactive: 0, facet: 1, count: 2 };
 function canDispatch(queue: ServerQueue, task: Task): boolean {
   const preference = getProxyClientPreferences(task.client);
   const usage = queue.clients.get(task.client) ?? { total: 0, heavy: 0 };
@@ -63,6 +63,7 @@ function drain(server: string, queue: ServerQueue): void {
 }
 export function classifyMaestroRequest(url: string, headers: Headers, body: string): QueryPriority | null {
   if (!/\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) return null;
+  if (body.includes('"requestClass":"autocomplete"')) return "autocomplete";
   if (body.includes('"selectEndpointUrl"') || body.includes('"selectEndpointId"') || body.includes('"health"') || url.includes("health=1")) return null;
   const source = `${headers.get("x-maestro-debug-source") ?? ""} ${headers.get("x-maestro-debug-component") ?? ""}`.toLowerCase();
   if (/alphabet-letter-count|distinct-count|count-sparql|results-total-count|facet-value-count|query-count|subject-count|history-query-count|bookmark-history-query-count/.test(source) ||
@@ -72,6 +73,9 @@ export function classifyMaestroRequest(url: string, headers: Headers, body: stri
 }
 /** Conservative query-cost heuristic: counts, aggregation, sorting, and regex are heavy. */
 export function weightMaestroQuery(query: string, priority: QueryPriority): QueryWeight {
+  // Bounded autocomplete lookups are always light, including SELECT DISTINCT.
+  // A saturated heavy lane must not block the highest-priority request.
+  if (priority === "autocomplete") return "light";
   return priority === "count" || /\b(?:GROUP\s+BY|ORDER\s+BY|COUNT\s*\(|REGEX\s*\(|SAMPLE\s*\(|DISTINCT\b|SERVICE\b)/i.test(query)
     ? "heavy" : "light";
 }

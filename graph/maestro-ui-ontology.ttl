@@ -174,6 +174,10 @@ mui:enrichmentTemplate a owl:ObjectProperty ;
     rdfs:comment "Optional XSLT query-pivot implementation used to retrieve linked RDF data for a Record formatter."@en .
 
 mui:Provider a owl:Class ; rdfs:label "widget provider"@en .
+# Specialized provider catalog and numeric comparison components.
+mui:KindProvider a owl:Class ; rdfs:subClassOf mui:Provider ; rdfs:label "Kinds provider"@en .
+mui:AnalysisWidget a owl:Class ; rdfs:label "Analysis widget"@en .
+mui:axisValue a owl:DatatypeProperty ; rdfs:label "Spider axis numeric value"@en .
 mui:InputShape a owl:Class ; rdfs:subClassOf sh:NodeShape ;
     rdfs:label "provider input shape"@en .
 mui:accepts a owl:ObjectProperty ; rdfs:domain mui:Provider ;
@@ -310,6 +314,8 @@ mui:lastNewCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ; rd
 mui:FacetWidget a owl:Class ; rdfs:label "Facet widget"@en .
 mui:PersonalFacetWidget a owl:Class ; rdfs:subClassOf mui:FacetWidget ; rdfs:label "Personal facet widget"@en .
 mui:DateRangeFacetWidget a owl:Class ; rdfs:subClassOf mui:PersonalFacetWidget ; rdfs:label "Date/time range facet"@en .
+mui:TagCloudFacetWidget a owl:Class ; rdfs:subClassOf mui:PersonalFacetWidget ; rdfs:label "Weighted tag cloud facet"@en .
+mui:tagProperty a owl:ObjectProperty ; rdfs:domain mui:Provider ; rdfs:label "Tag property"@en .
 
 # Authenticated personal appbar shortcuts. Instances live under the user's
 # /query/appbar named graph; the appbar may query these definitions but must

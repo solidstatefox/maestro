@@ -5,7 +5,7 @@ import { fctQueryTreeApi, serializeFctQuery } from "../src/lib/fct-query";
 
 const visit = (nodes: { id: string; children: any[] }[]): string[] =>
   nodes.flatMap((node) => [node.id, ...visit(node.children)]);
-const compact = (id: string) => /^[0-9a-z]+$/.test(id) && parseInt(id, 36) >= 10;
+const compact = (id: string) => /^[a-z][0-9a-z]*$/.test(id) && parseInt(id, 36) >= 10;
 
 test("legacy FCT XML IDs become compact base36 IDs, preserving the counter high-water mark", () => {
   const old = ensureFctQueryIds({

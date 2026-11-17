@@ -100,6 +100,23 @@ Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@av
 </xsl:template>
 </xsl:stylesheet>""" .
 
+# Generic temporal facet policy: SHACL, not hard-coded property names,
+# determines eligibility from the current FCT facet's observed RDF datatypes.
+# This complements the two explicitly path-bound temporal policies below.
+# Provider acceptance remains an independent user/curator decision.
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-inferred> a mui:Provider ;
+  rdfs:label "Calendar (typed date/time)"@en ;
+  mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/temporal-inferred-input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> .
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-inferred-input> a mui:InputShape, sh:NodeShape ;
+  sh:property [
+    sh:path mui:inferredDatatype ;
+    sh:qualifiedValueShape [ sh:in (
+      xsd:date xsd:dateTime xsd:dateTimeStamp xsd:gYear xsd:gYearMonth
+    ) ] ;
+    sh:qualifiedMinCount 1
+  ] .
+
 # Reusable temporal Personal-facet formatter. Provider discovery is property-scoped;
 # SHACL accepts XML Schema temporal literals, from year-only to full dateTime.
 # For unknown rdfs:range metadata the provider can still inspect actual values.

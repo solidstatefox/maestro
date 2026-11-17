@@ -11,8 +11,6 @@ export function useBookmarksState() {
   const [bookmarkTags, setBookmarkTags] = useState("");
   const [bookmarkTagVocabulary, setBookmarkTagVocabulary] = useState<"skos" | "dcterms" | "scot">("skos");
   const [bookmarkSaving, setBookmarkSaving] = useState(false);
-  const [isQueryBookmarked, setIsQueryBookmarked] = useState(false);
-  const [matchingBookmarkId, setMatchingBookmarkId] = useState("");
   const [bookmarkCheckRevision, setBookmarkCheckRevision] = useState(0);
   const [historyBookmarkId, setHistoryBookmarkId] = useState("");
   const bookmarkTitleInputRef = useRef<HTMLInputElement>(null);
@@ -35,10 +33,6 @@ export function useBookmarksState() {
     setBookmarkTagVocabulary,
     bookmarkSaving,
     setBookmarkSaving,
-    isQueryBookmarked,
-    setIsQueryBookmarked,
-    matchingBookmarkId,
-    setMatchingBookmarkId,
     bookmarkCheckRevision,
     setBookmarkCheckRevision,
     historyBookmarkId,

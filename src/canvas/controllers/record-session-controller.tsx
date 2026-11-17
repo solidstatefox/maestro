@@ -1,6 +1,10 @@
 "use client";
+import { clientRecordPolicyResponse } from "@/lib/client-record-policies";
+import { setClientRecordStatus } from "@/lib/client-status-writes";
+import { browserLog } from "@/lib/maestro-client-logging";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRecordSessionState } from "@/canvas/controllers/record-session-state";
 import { useRecordValidationState, validateRecordSnapshot } from "@/canvas/right/validator";
 import { loadRecordDescription } from "@/canvas/controllers/record-description-loader";
@@ -35,7 +39,7 @@ export function useRecordPivotWorkspace(
   // Fullscreen pivot controls are initially collapsed independently of
   // policy discovery and automated validation. User expansion is preserved.
   useEffect(() => { own.setRecordControlsOpen(false); }, []); // mount only
-  const validation = useRecordValidationState();
+  const validation = useRecordValidationState(own.recordLifecycle);
   const [formatEnabled, setFormatEnabled] = useState(browse.recordFormatEnabled);
   const { identity } = session;
   const selectedUri = identity.value;
@@ -50,18 +54,17 @@ export function useRecordPivotWorkspace(
     const release = controller.registerRequest(session.id, request);
     void queryDigest(identity.queryXml).then(queryHash => {
       if (request.signal.aborted) return;
-      return fetch("/proxy/api/service?service=maestro&operationId=record-status", {
-        method: "POST", credentials: "same-origin", cache: "no-store", signal: request.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "set", queryHash, uri: selectedUri, status: "Seen", enabled: true }),
-      }).then(async response => { if (!response.ok) throw new Error(`Record Seen transition failed (HTTP ${response.status})`); });
-    }).catch(error => { if (!request.signal.aborted) console.warn("Maestro Record Seen transition", error); });
+      return setClientRecordStatus(queryHash, selectedUri, "Seen", true, request.signal, identity.queryXml);
+    }).catch(error => { if (!request.signal.aborted) browserLog.warn("record.seen-transition.failed", error); });
     return () => { request.abort(); release(); };
   }, [session.id, identity.queryXml, selectedUri, recordTermType, browse.recordStatus.enabled, browse.authSession, controller]);
   const currentRecordDescriptionKey = [session.id, selectedUri, recordTermType,
     identity.datatype ?? "", identity.lang ?? "", identity.bnodeQueryXml ?? "",
     own.selectedRecordGraph, own.selectedRecordAuthor,
     browse.recordDescriptionQueryLimit, browse.preferredAlphabetLanguage].join("\u0000");
+  useLayoutEffect(() => {
+    own.recordLifecycle.selectRecord(currentRecordDescriptionKey);
+  }, [own.recordLifecycle, currentRecordDescriptionKey]);
   const requestKeyRef = useRef(currentRecordDescriptionKey);
   requestKeyRef.current = currentRecordDescriptionKey;
   const { describedRecord, describedRecordUri, recordDescriptionSnapshot, selectedRecordGraph,
@@ -227,7 +230,7 @@ export function useRecordPivotWorkspace(
     own.setIsLoadingRecordPolicy(true);
     void (async () => {
       try {
-        const response = await maestroQueryFetch("/proxy/api/service?service=maestro&operationId=policies", {
+        const response = await clientRecordPolicyResponse({
           method: "POST", cache: "no-store", signal: request.signal,
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-discover", "RecordPolicyDiscovery") },
           body: JSON.stringify({ action: "discover", recordTypes, recordUri: selectedUri,
@@ -260,16 +263,31 @@ export function useRecordPivotWorkspace(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, selectedUri, identity.queryXml, recordTermType, describedRecord, describedRecordUri, own.isDescribing, browse.authSession]);
 
+  const validationRequestRef = useRef<AbortController | null>(null);
+  useEffect(() => () => validationRequestRef.current?.abort(), []);
   async function validateSelectedRecord(policyOverride: RecordPolicyOption | null = recordPolicy) {
     if (!recordDescriptionSnapshot || !policyOverride) return;
+    validationRequestRef.current?.abort();
+    const request = new AbortController();
+    validationRequestRef.current = request;
+    const release = controller.registerRequest(session.id, request);
+    const snapshot = recordDescriptionSnapshot;
     validation.setIsValidatingRecord(true);
     validation.setRecordValidation(null);
     try {
-      const result = await validateRecordSnapshot(policyOverride, recordDescriptionSnapshot);
-      if (requestKeyRef.current === recordDescriptionSnapshot.key) validation.setRecordValidation(result);
+      const result = await validateRecordSnapshot(policyOverride, snapshot, request.signal);
+      if (!request.signal.aborted && requestKeyRef.current === snapshot.key) validation.setRecordValidation(result);
     } catch (error) {
-      own.setRecordPolicyError(error instanceof Error ? error.message : String(error));
-    } finally { validation.setIsValidatingRecord(false); }
+      if (!request.signal.aborted) {
+        const message = error instanceof Error ? error.message : String(error);
+        own.setRecordPolicyError(message);
+        own.recordLifecycle.send({ type: "OP_FAILED", key: snapshot.key, operation: "validation", error: message });
+      }
+    } finally {
+      if (!request.signal.aborted) validation.setIsValidatingRecord(false);
+      if (validationRequestRef.current === request) validationRequestRef.current = null;
+      release();
+    }
   }
 
   // Same graph-stored template + SaxonJS adapter as Browse; the controller
@@ -283,13 +301,15 @@ export function useRecordPivotWorkspace(
     const snapshot = recordDescriptionSnapshot;
     const request = new AbortController();
     const release = controller.registerRequest(session.id, request);
+    const formatRequestKey = `${currentRecordDescriptionKey}|${selectedRecordTemplateUri}`;
+    own.recordLifecycle.operation("format", "OP_STARTED", currentRecordDescriptionKey, formatRequestKey);
     void (async () => {
       try {
-        const report = await validateRecordSnapshot(recordPolicy, snapshot);
+        const report = await validateRecordSnapshot(recordPolicy, snapshot, request.signal);
         if (request.signal.aborted) return;
         validation.setRecordValidation(report);
         if (!report.complete || !report.conforms) throw new Error("Record format requires a complete, conforming SHACL description.");
-        const response = await maestroQueryFetch("/proxy/api/service?service=maestro&operationId=policies", {
+        const response = await clientRecordPolicyResponse({
           method: "POST", cache: "no-store", signal: request.signal,
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-template", "RecordPolicyTemplate") },
           body: JSON.stringify({ action: "template", template: selectedRecordTemplateUri }),
@@ -313,7 +333,11 @@ export function useRecordPivotWorkspace(
         if (!request.signal.aborted) own.setRecordFormatError(error instanceof Error ? error.message : String(error));
       } finally { release(); }
     })();
-    return () => { request.abort(); release(); };
+    return () => {
+      request.abort();
+      own.recordLifecycle.operation("format", "OP_CANCELLED", currentRecordDescriptionKey, formatRequestKey);
+      release();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, formatEnabled, recordPolicy?.uri, selectedRecordTemplateUri,
       recordDescriptionSnapshot, currentRecordDescriptionKey, selectedUri, recordTermType,

@@ -47,18 +47,23 @@ async function personalSelect(makeQuery: (graphs: { shapes: string; ontology: st
 
 export type AnalysisProvider = {uri: string; label: string; icon: string; stylesheet: string; order: number};
 /** Preserve the original cross-graph subclass acceptance test in one SELECT. */
-export async function discoverAnalyses(classes: string[], signal?: AbortSignal): Promise<AnalysisProvider[]> {
+export async function discoverAnalyses(classes: string[], signal?: AbortSignal, queryProviders: string[] = []): Promise<AnalysisProvider[]> {
   const requested = classes.filter(safeIri).slice(0, 60);
+  const queryTargets = [...new Set(queryProviders.filter(safeIri))].slice(0,100);
   const rows = await personalSelect(({shapes, ontology}) => {
     const classConstraint = requested.length ? requested.map(uri =>
       `(?target = <${uri}> || EXISTS { GRAPH <${ontology}> { <${uri}> <${RDFS}subClassOf>+ ?target } })`).join(" || ") : "false";
+    // A provider can match EITHER the FCT result population (legacy class
+    // target) OR the validated structured RDF of the current History query.
+    const queryConstraint = queryTargets.length ? `?uri IN (${queryTargets.map(uri=>`<${uri}>`).join(",")})` : "false";
     return `PREFIX ma: <${MA}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
       SELECT ?uri ?label ?icon ?stylesheet ?order WHERE {
         GRAPH <${shapes}> {
           ?uri a ma:Analysis ; rdfs:label ?label ; ma:lucideIcon ?icon ; ma:stylesheet/rdf:value ?stylesheet .
           OPTIONAL { ?uri ma:order ?order }
           OPTIONAL { ?uri <${MUI}accepts> / <${SH}class> ?target }
-          FILTER(!BOUND(?target) || (${classConstraint}))
+          FILTER((BOUND(?target) && (${classConstraint})) || (${queryConstraint}) ||
+            (!BOUND(?target) && NOT EXISTS { ?uri <${MUI}accepts> ?queryShape . ?queryShape <${SH}class> <https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#query> }))
         }
       } ORDER BY ?order ?label LIMIT 50`;
   }, signal);
@@ -69,10 +74,11 @@ export async function discoverAnalyses(classes: string[], signal?: AbortSignal):
 
 export type DiscoveredViewProvider = {uri: string; label: string; icon?: string; template: string; matchedClass: string; stylesheet: string};
 /** Preserve the existing SHACL class-join and dual Approved requirement. */
-export async function discoverViews(classes: string[], signal?: AbortSignal): Promise<DiscoveredViewProvider[]> {
+export async function discoverViews(classes: string[], signal?: AbortSignal, queryProviders: string[] = []): Promise<DiscoveredViewProvider[]> {
   const requested = [...new Set(classes.filter(safeIri))].slice(0, 50);
-  if (!requested.length) return [];
-  const rows = await personalSelect(({shapes, status}) => `PREFIX sh: <${SH}>
+  const extra = [...new Set(queryProviders.filter(safeIri))].slice(0,100);
+  if (!requested.length && !extra.length) return [];
+  const rows = requested.length ? await personalSelect(({shapes, status}) => `PREFIX sh: <${SH}>
 PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
 SELECT DISTINCT ?policy ?class ?label ?template ?stylesheet WHERE {
   GRAPH <${shapes}> {
@@ -91,9 +97,27 @@ SELECT DISTINCT ?policy ?class ?label ?template ?stylesheet WHERE {
   GRAPH <${status}> { ?curator mui:status mui:Approved ; mui:approvedDigest ?grant .
     ?grant mui:forProvider ?provider ; mui:implementationDigest ?version }
 
-} ORDER BY ?label LIMIT 50`, signal);
-  return rows.map(row => ({uri:get(row,"policy"),matchedClass:get(row,"class"),
+} ORDER BY ?label LIMIT 50`, signal) : [];
+  const resultViews = rows.map(row => ({uri:get(row,"policy"),matchedClass:get(row,"class"),
     label:get(row,"label") || get(row,"policy") || "View",template:get(row,"template"),
     stylesheet:get(row,"stylesheet")}))
     .filter(row => row.uri && row.template && row.stylesheet && row.stylesheet.length <= 250000);
+  if (!extra.length) return resultViews;
+  const queryViews = await personalSelect(({shapes}) => `PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
+SELECT DISTINCT ?provider ?label ?template ?stylesheet WHERE { GRAPH <${shapes}> {
+  VALUES ?provider { ${extra.map(uri=>`<${uri}>`).join(" ")} }
+  ?provider a mui:Provider ; mui:widget ?template .
+  ?template a mui:PerspectiveWidget ; (rdf:value|mui:templateContent) ?stylesheet .
+  OPTIONAL { ?provider rdfs:label ?label }
+} } LIMIT 100`, signal);
+  // Query-target providers have already passed SHACL Core. Effective approval
+  // is still checked independently against the user's RDF approval status.
+  const { readClientPolicyApprovals } = await import("@/lib/client-policy-approvals");
+  const decisions=await readClientPolicyApprovals(queryViews.map(row=>get(row,"provider")),signal);
+  const approved=new Set(decisions.filter(d=>d.status==="Approved").map(d=>d.uri));
+  const extraViews=queryViews.filter(row=>approved.has(get(row,"provider"))).map(row=>({
+    uri:get(row,"provider"),matchedClass:"",label:get(row,"label")||get(row,"provider"),
+    template:get(row,"template"),stylesheet:get(row,"stylesheet")
+  })).filter(row=>row.uri&&row.template&&row.stylesheet&&row.stylesheet.length<=250000);
+  return [...new Map([...resultViews,...extraViews].map(view=>[view.uri,view])).values()];
 }

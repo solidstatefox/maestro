@@ -2,7 +2,8 @@
 
 import { loadPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
 import { loadClientStatusMachines } from "@/lib/status-machine-client";
-import { machineForTarget, effectiveStatus, transitionStatus, STATUS_MUI } from "@/lib/status-machine-runtime";
+import { machineForTarget, transitionStatusTo, STATUS_MUI } from "@/lib/status-machine-runtime";
+import { statusTransitionUpdate } from "@/lib/status-machine-sparql";
 
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const validIri = (value: string) => /^[a-z][a-z\d+.-]*:[^\s<>"{}|^`\\]+$/i.test(value);
@@ -65,25 +66,13 @@ export async function changeApprovals(uris: string[], status: "Approved" | "Pend
     const isCurator=kinds.has("curator");
     const machine=machineForTarget(machines, `${STATUS_MUI}${isCurator?"CurationProvider":kinds.has("provider")?"Provider":"ClassPolicy"}`);
     const asserted=[...new Set(matched.map(row=>row.current?.value).filter((x):x is string=>!!x))];
-    const approvalDimension=`${STATUS_MUI}ApprovalStatus`;
-    const current=effectiveStatus(machine,asserted)[approvalDimension];
     const desired=status=== "Approved"?`${STATUS_MUI}Approved`:`${STATUS_MUI}Pending`;
-    if (current!==desired) {
-      const outcome=transitionStatus(machine,asserted,
-        `${STATUS_MUI}${status==="Approved"?"Approve":"RevokeApproval"}`);
-      if(outcome.to!==desired)throw new Error("RDF approval transition returned an unexpected state.");
-    }
-    const track=machine.tracks.get(approvalDimension);
-    if(!track)throw new Error("RDF approval machine has no approval track.");
-    const members=[...track.states].map(iri).join(", ");
+    const outcome=transitionStatusTo(machine,asserted,desired);
+    // The transition's RDF mui:assertState determines which triple (if any)
+    // is persisted. No hard-coded Approved/Pending INSERT branches.
+    if (outcome) updates.push(statusTransitionUpdate({ machine, transition:outcome,
+      assertions:asserted, graph, resource:uri, predicate:`${STATUS_MUI}status` }));
     const subject=iri(uri);
-    // Revocation/Forget restores virtual Pending: no Pending assertion is
-    // created. The machine is still responsible for validating the transition.
-    const insert=status==="Approved"
-      ? `GRAPH <${graph}> { ${subject} <${STATUS_MUI}status> <${STATUS_MUI}Approved> }` : "";
-    updates.push(`DELETE { GRAPH <${graph}> { ${subject} <${STATUS_MUI}status> ?old } }
-      INSERT { ${insert} }
-      WHERE { OPTIONAL { GRAPH <${graph}> { ${subject} <${STATUS_MUI}status> ?old . FILTER(?old IN (${members})) } } }`);
     if(isCurator){
       // A revoked curator loses all grants immediately, but another approved
       // curator may continue to authorize the same member independently.

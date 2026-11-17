@@ -2,7 +2,7 @@ import { isBlankNodeTerm } from "@/lib/bnode";
 import { normalizeMaestroConcurrency } from "@/lib/maestro-concurrency";
 import { clientFromRequest, newProxyClientId, MAESTRO_CLIENT_COOKIE, saveProxyClientPreferences } from "@/lib/maestro-proxy-client-preferences";
 import { rescheduleMaestroQueries } from "@/lib/graph-server-query-scheduler";
-import { getUserGraph, getShapesGraph, graphForFile, waitForPersonalGraphSeed, queryPersonalSparql } from "@/lib/personal-sparql";
+import { getUserGraph, getShapesGraph, graphForFile, queryPersonalSparql } from "@/lib/personal-sparql";
 import { currentProxyClient, withProxyClient } from "@/lib/maestro-proxy-client-preferences";
 import { weightMaestroQuery } from "@/lib/graph-server-query-scheduler";
 import { streamProxyQuery, MAESTRO_EVENT_HEADER } from "@/lib/proxy-query-stream";
@@ -709,23 +709,72 @@ async function handlePost(request: Request) {
         return fctError(`The graph server in status addr is not configured: ${server}`, 400);
     }
 
-    // Discovery is the only intentionally unscoped data query: its purpose
-    // is to discover a matching named graph before normal query processing.
+    // Discovery is deliberately separate from graph-server health. Green only
+    // proves that the endpoint answers a cheap probe; ranking all matching
+    // GRAPH ?g bindings is an expensive, possibly unsupported aggregation.
     if (body?.discoverGraph === true) {
       const addressGraph = address?.slice(0, delimiter).trim() ?? "";
-      if (addressGraph && addressGraph !== ALL_GRAPHS) return NextResponse.json({ graph: addressGraph, found: true });
-      const probe = compileFctXmlToSparql(queryXml, undefined, false, false, true);
-      stage = "execute";
-      const result = await executeSparql(endpoint.url, probe.query, undefined, Math.min(probe.timeoutMs || 20000, 20000), request.signal);
-      if (!result.response.ok || isVirtuosoAnytime(result.response, result.text) || result.response.status === 206) {
-        return NextResponse.json({ error: "Graph discovery did not complete; normal queries remain blocked.", query: probe.query }, { status: 503 });
+      if (addressGraph === ALL_GRAPHS) return NextResponse.json({ graph: null, found: false, selection: "everywhere" });
+      if (addressGraph) return NextResponse.json({ graph: addressGraph, found: true, selection: "explicit" });
+      const rankedDiscovery = compileFctXmlToSparql(queryXml, undefined, false, false, true);
+      if (!rankedDiscovery.graphDiscoveryHasSourcePattern) {
+        // Do not run GRAPH ?g { } for an unbound root query. Nothing in that
+        // scope can identify which named graph is relevant to this live view.
+        return NextResponse.json({ graph: null, found: false, selection: "unscoped" });
       }
-      const parsed = parseResults(result.text);
-      if (!parsed) return NextResponse.json({ error: "Could not parse graph-discovery response.", query: probe.query }, { status: 502 });
-      const binding = parsed.results?.bindings?.[0]?.c1;
-      if (!binding) return NextResponse.json({ graph: null, found: false, query: probe.query });
-      if (binding.type !== "uri" || !binding.value) return NextResponse.json({ error: "Graph discovery returned a non-IRI graph." }, { status: 502 });
-      return NextResponse.json({ graph: binding.value, found: true, query: probe.query });
+
+      // Preserve the ranked selection when affordable, but do not let a single
+      // global MAX(IRI_RANK)/GROUP BY query monopolize the selected server.
+      // The fallback uses the IDENTICAL FCT focus and filters, selecting a
+      // first matching named graph without the rank aggregate.
+      type DiscoveryAttempt = { ok: true; graph: string | null } |
+        { ok: false; timeout: boolean; status: number };
+      const tryDiscovery = async (mode: "ranked" | "first-match"): Promise<DiscoveryAttempt> => {
+        const timeoutMs = mode === "ranked" ? 5500 : 10000;
+        const attemptSignal = AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs + 1500)]);
+        const compiled = mode === "ranked" ? rankedDiscovery : compileFctXmlToSparql(queryXml, undefined, false, false, "first");
+        try {
+          stage = "execute";
+          const result = await executeSparql(endpoint.url, compiled.query, undefined, timeoutMs, attemptSignal);
+          const timeout = result.response.status === 504 || result.response.status === 206 ||
+            isVirtuosoAnytime(result.response, result.text);
+          if (!result.response.ok || timeout)
+            return { ok: false, timeout, status: result.response.status };
+          const parsed = parseResults(result.text);
+          if (!parsed) return { ok: false, timeout: false, status: 502 };
+          const binding = parsed.results?.bindings?.[0]?.c1;
+          if (!binding) return { ok: true, graph: null };
+          if (binding.type !== "uri" || !binding.value)
+            return { ok: false, timeout: false, status: 502 };
+          return { ok: true, graph: binding.value };
+        } catch (error) {
+          if (request.signal.aborted) throw error;
+          const timedOut = attemptSignal.aborted || /timed? out|timeout|signal timed out/i.test(
+            error instanceof Error ? error.message : String(error));
+          return { ok: false, timeout: timedOut, status: timedOut ? 504 : 502 };
+        }
+      };
+      const ranked = await tryDiscovery("ranked");
+      if (ranked.ok) {
+        proxyLog("debug", "fct.graph-discovery.ranked", { found: Boolean(ranked.graph), status: 200 });
+        return NextResponse.json({ graph: ranked.graph, found: Boolean(ranked.graph), selection: "ranked" });
+      }
+      const first = await tryDiscovery("first-match");
+      if (first.ok) {
+        proxyLog("info", "fct.graph-discovery.fallback", { found: Boolean(first.graph), status: 200 });
+        return NextResponse.json({ graph: first.graph, found: Boolean(first.graph), selection: "first-match" });
+      }
+      const timedOut = ranked.timeout || first.timeout;
+      // Never return the SPARQL source to the browser on a failure. It can
+      // contain user-supplied literal searches or personal status filters.
+      proxyLog("warn", "fct.graph-discovery.unavailable", {
+        status: timedOut ? 504 : 502, rankedStatus: ranked.status, fallbackStatus: first.status,
+      });
+      return NextResponse.json({
+        error: timedOut ? "Graph discovery timed out; the graph server health check is independent."
+          : "Graph discovery failed; the graph server may still be healthy.",
+        code: timedOut ? "GRAPH_DISCOVERY_TIMEOUT" : "GRAPH_DISCOVERY_UNAVAILABLE",
+      }, { status: timedOut ? 504 : 502 });
     }
     const view = typeof body?.view === "string" ? body.view : undefined;
     const graphOnly = body?.graphOnly === true;
@@ -752,10 +801,9 @@ async function handlePost(request: Request) {
     // FCT status filter. This must not depend on having a <status> node: an
     // ordinary, bookmarked Features query also needs its Status facet counts.
     const bookmarkQueryXml = typeof body?.bookmarkQueryXml === "string" ? body.bookmarkQueryXml : queryXml;
-    const isFeatureQuery = /\bsrc\s*=\s*["']urn:maestro:features:(?:policies|formats|facet-widgets|transcoders|curators|fsm-providers)["']/.test(rootTag);
-    const featureKind = rootTag.match(/\bsrc\s*=\s*["']urn:maestro:features:([^"']+)["']/)?.[1] ?? "";
-    const hasSavedFeatureQuery = isFeatureQuery && compiled.view !== FCT_VIEW_TYPES.LIST_STATUS &&
-      await verifyApprovalBookmark(bookmarkQueryXml, request);
+    // Read-only Feature catalogs are ordinary FCT queries. Never verify a
+    // bookmark merely to fetch a list of provider resources: approval metadata
+    // is discovered independently by the browser's SPARQL policy reader.
 
     // list-status is an FCT view, not a policy-approvals JSON API.  Its focus
     // is the (unpaginated) cloned live query; the personal Status graph supplies
@@ -793,10 +841,8 @@ async function handlePost(request: Request) {
         timeoutMs: compiled.timeoutMs }), { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
     const isValidate = compiled.view === FCT_VIEW_TYPES.VALIDATE && !graphOnly && !countOnly;
-    if (isValidate) {
-      if (!getPersonalSession(request)) return fctError("Log in before discovering SHACL shapes.", 401);
-      await waitForPersonalGraphSeed(request);
-    }
+    if (isValidate && !getPersonalSession(request))
+      return fctError("Log in before discovering SHACL shapes.", 401);
     const executionEndpoint = (hasStatusConstraints || isValidate) ? personalSparqlUrl(request).toString() : endpoint.url;
     if (hasStatusConstraints || isValidate) {
       // Compile all status constraints directly from the FCT XML. No SPARQL
@@ -887,7 +933,7 @@ async function handlePost(request: Request) {
     }
     // Personal-status selections can change without changing the live FCT XML.
     // Never serve an old state-constrained response from the proxy cache.
-    const cachedResponse = (hasStatusConstraints || hasSavedFeatureQuery || isValidate) ? null : getQueryCache<{ body: string; contentType: string; status: number }>(responseCacheKey);
+    const cachedResponse = (hasStatusConstraints || isValidate) ? null : getQueryCache<{ body: string; contentType: string; status: number }>(responseCacheKey);
     if (cachedResponse) {
       return new Response(cachedResponse.body, {
         status: cachedResponse.status,
@@ -897,7 +943,7 @@ async function handlePost(request: Request) {
     stage = "execute";
     const startedAt = Date.now();
     let activeQuery = compiled.query;
-    let queryResult = await executeSparql(executionEndpoint, activeQuery, isDescribe && !compiled.describeLiteral && !compiled.describeExpanded ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || hasSavedFeatureQuery || isValidate);
+    let queryResult = await executeSparql(executionEndpoint, activeQuery, isDescribe && !compiled.describeLiteral && !compiled.describeExpanded ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || isValidate);
     let countFreeFallback = false;
     let unorderedFallback = false;
     // A failed IRI_RANK sort should not make the primary Results pane unusable.
@@ -914,7 +960,7 @@ async function handlePost(request: Request) {
           defaultStatusAddr:`${getPersonalStatusGraph(request)}@${executionEndpoint}`} : undefined).query;
       if (unorderedQuery !== activeQuery) {
         activeQuery = unorderedQuery;
-        queryResult = await executeSparql(executionEndpoint, activeQuery, undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || hasSavedFeatureQuery);
+        queryResult = await executeSparql(executionEndpoint, activeQuery, undefined, compiled.timeoutMs, request.signal, hasStatusConstraints);
         unorderedFallback = true;
       }
     }
@@ -925,7 +971,7 @@ async function handlePost(request: Request) {
         hasStatusConstraints ? {liveEndpoint:endpoint.url,executionEndpoint,
           defaultStatusAddr:`${getPersonalStatusGraph(request)}@${executionEndpoint}`} : undefined).query;
       activeQuery = fallbackQuery;
-      queryResult = await executeSparql(executionEndpoint, fallbackQuery, undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || hasSavedFeatureQuery);
+      queryResult = await executeSparql(executionEndpoint, fallbackQuery, undefined, compiled.timeoutMs, request.signal, hasStatusConstraints);
       countFreeFallback = true;
     }
     const { response, text, key } = queryResult;
@@ -967,7 +1013,7 @@ async function handlePost(request: Request) {
       // No partial answer or cache entry is allowed to masquerade as source.
       if (compiled.describeExpanded && (partial || bindings.length > (compiled.describeMaxTriples ?? 0)))
         return fctError(`Expanded RDF subgraph is incomplete; increase the limit (maximum 5000 triples), reduce the FCT scope, or simplify the shape.`, 422);
-      if (!hasStatusConstraints && !hasSavedFeatureQuery && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
+      if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
       // A literal Record can be returned promptly without a second network
       // query merely to decorate the subjects of its incoming Roles.
       const labels = compiled.describeLiteral || compiled.describeExpanded ? new Map<string, string>()
@@ -982,7 +1028,7 @@ async function handlePost(request: Request) {
         ...fctUpstreamMetadata(response, text),
       });
       const xml = `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.DESCRIBE}">${describeRows}</fct:result></fct:facets>`;
-      if (!hasStatusConstraints && !hasSavedFeatureQuery && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+      if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...incompleteHeaders } });
     }
 
@@ -998,7 +1044,7 @@ async function handlePost(request: Request) {
         ...fctUpstreamMetadata(response, text),
       });
       const xml = `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.ASK}"><fct:boolean>${askBoolean ? "true" : "false"}</fct:boolean></fct:result></fct:facets>`;
-      if (!hasStatusConstraints && !hasSavedFeatureQuery && !isValidate && response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+      if (!hasStatusConstraints && !isValidate && response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
     const parsed = parseResults(text);
@@ -1008,7 +1054,7 @@ async function handlePost(request: Request) {
     if (!parsed && anytime) proxyLog("warn", "fct.anytime-no-rows", { view: compiled.view, status: response.status });
     let bindings = parsed?.results?.bindings ?? [];
     let vars = parsed?.head?.vars ?? [];
-    if (!hasStatusConstraints && !hasSavedFeatureQuery && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
+    if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
     const labels = countOnly || compiled.view === FCT_VIEW_TYPES.VALIDATE || compiled.view === FCT_VIEW_TYPES.LIST_VALUES ||
       (compiled.graphOnly && compiled.view === FCT_VIEW_TYPES.GRAPHS && /<view\b[^>]*\brecord=["']yes["']/i.test(queryXml))
       ? new Map<string, string>()
@@ -1045,7 +1091,7 @@ async function handlePost(request: Request) {
         timeoutMs: compiled.timeoutMs, upstream: partial ? fctUpstreamMetadata(response, text) : expansion.upstream,
       });
       if (response.status === 200 && !partial && expansion.complete)
-        if (!hasStatusConstraints && !hasSavedFeatureQuery) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+        if (!hasStatusConstraints) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
     if ((compiled.view === FCT_VIEW_TYPES.LIST || compiled.view === FCT_VIEW_TYPES.LIST_SUBJECTS || compiled.view === FCT_VIEW_TYPES.LIST_OBJECTS) && !countOnly && !graphOnly) {
@@ -1091,7 +1137,7 @@ async function handlePost(request: Request) {
       execMilliseconds,
       execDbActivity,
     });
-    if (!hasStatusConstraints && !hasSavedFeatureQuery && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+    if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...(unorderedFallback ? { "X-Maestro-Ordering-Fallback": "true" } : {}),
       ...(countFreeFallback ? { "X-Maestro-Count-Fallback": "unavailable" } : {}), ...incompleteHeaders } });
   } catch (error) {

@@ -1,14 +1,23 @@
 "use client";
+import { discoverClientFacetProviders } from "@/lib/client-facet-providers";
 import { ErrorDetails } from "@/components/ui/error-details";
-import { useEffect, useMemo, useState } from "react";
+import { useProviderWidgetLifecycle } from "@/canvas/diagnostics/use-provider-widget-lifecycle";
+import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { snapshotFctQueryXml, type FctQueryNode } from "@/lib/fct-query-api";
 import { readMaestroWidgetTimeouts } from "@/lib/maestro-query-timeouts";
-import { cachedFetchFct } from "@/lib/client-query-cache";
+import { cachedFetchFct, maestroQueryFetch } from "@/lib/client-query-cache";
+import { buildFctTemporalDomainSparql } from "@/lib/fct-count-sparql";
+import { parseFctQueryXml } from "@/canvas/utils/query-controller";
 import { readFctResponse } from "@/canvas/utils/fct-response";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { DateTimePicker } from "@/components/ui/date-time-picker";
+import { temporalDayDomain, temporalPageOverlapsDomain } from "@/lib/temporal-domain-bounds";
+import {
+  createMaestroProviderDiscoveryController, selectProviderMatches, facetProviderApplicabilityKey,
+  type DateProviderMatch, type NumericProviderMatch, type TagProviderMatch,
+} from "@/lib/app-lifecycle/providers";
 
 export type TemporalFacetProvider = { uri: string; property: string; label: string };
 type Provider = TemporalFacetProvider;
@@ -57,6 +66,27 @@ function calendarQuery(queryXml: string, property: string, resolution: Resolutio
   view.setAttribute("offset", "0");
   return new XMLSerializer().serializeToString(doc);
 }
+/** Preserve the live query's focus, removing only this facet's own range. */
+function temporalDomainQuery(queryXml: string, property: string): { query: string; addr: string } | null {
+  // A temporal domain is a domain of *facet values*, not the parent focus.
+  // Move the view to the exact same date-property carrier as calendarQuery.
+  // In particular, don't join the date predicate a second time to an already
+  // bound date literal (a common source of empty MIN/MAX projections).
+  const doc = new DOMParser().parseFromString(snapshotFctQueryXml(queryXml, "data"), "application/xml");
+  if (doc.querySelector("parsererror")) return null;
+  const view = Array.from(doc.getElementsByTagName("*")).find(el => el.localName === "view");
+  if (!view?.parentElement) return null;
+  const facet = Array.from(view.parentElement.children).find(el => el.localName === "property" && el.getAttribute("iri") === property);
+  if (!facet) return null;
+  Array.from(facet.children).filter(el => el.localName === "value" &&
+    (el.hasAttribute("rangeStart") || el.hasAttribute("rangeEnd"))).forEach(el => el.remove());
+  view.remove();
+  facet.appendChild(view);
+  const tree = parseFctQueryXml(new XMLSerializer().serializeToString(doc));
+  if (!tree) return null;
+  const query = buildFctTemporalDomainSparql(tree, property);
+  return query ? { query, addr: tree.attributes.addr } : null;
+}
 function selectionBounds(start: Date, endExclusive: Date): [string, string] {
   return [start.toISOString().replace(/\.\d{3}Z$/, "Z"), new Date(endExclusive.getTime() - 1000).toISOString().replace(/\.\d{3}Z$/, "Z")];
 }
@@ -73,18 +103,62 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
   const [month, setMonth] = useState(() => new Date().getUTCMonth());
   const [weekStart, setWeekStart] = useState(() => dateAt(new Date().getUTCFullYear(),new Date().getUTCMonth(),1));
   const [counts, setCounts] = useState<Map<string, number>>(new Map());
+  const [domain, setDomain] = useState<{ min: string; max: string } | null>(null);
+  const [domainLoading, setDomainLoading] = useState(true);
+  const [domainError, setDomainError] = useState("");
   const [fetching, setFetching] = useState(false);
   const [countsLoaded, setCountsLoaded] = useState(false);
   const [error, setError] = useState("");
+  const widgetPhase = useProviderWidgetLifecycle(`${provider.uri}|${provider.property}`, {
+    loading: fetching || domainLoading, ready: Boolean(domain) || countsLoaded,
+    error: error || domainError,
+  });
   const existing = scopeNodes.find(node => node.name === "property" && node.attributes.iri === provider.property);
   const range = existing?.children.find(node => node.name === "value" &&
     (node.attributes.rangeStart !== undefined || node.attributes.rangeEnd !== undefined));
   const savedStart = range?.attributes.rangeStart ?? "";
   const savedEnd = range?.attributes.rangeEnd ?? "";
   useEffect(() => { setFrom(localDate(savedStart)); setTo(localDate(savedEnd)); }, [savedStart, savedEnd]);
+  const domainRequest = useMemo(() => temporalDomainQuery(queryXml, provider.property), [queryXml, provider.property]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setDomainLoading(true); setDomainError("");
+    if (!domainRequest) { setDomain(null); setDomainError("Temporal domain query is unavailable."); setDomainLoading(false); return () => controller.abort(); }
+    void (async () => {
+      try {
+        const response = await maestroQueryFetch("/proxy/api/sparql", {
+          method: "POST", cache: "no-store", signal: controller.signal,
+          headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": `TemporalFacet:domain:${provider.property}` },
+          body: JSON.stringify({ facetValueCount: { ...domainRequest, sparql: domainRequest.query, temporalDomain: true } }),
+        });
+        const data = await response.json() as { error?: string; incomplete?: boolean; min?: string | null; max?: string | null };
+        if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+        if (data.incomplete) throw new Error("Date domain query timed out before completing.");
+        const min = temporalDayDomain(data.min, "min"), max = temporalDayDomain(data.max, "max");
+        if (!min || !max || min > max)
+          throw new Error("No valid date domain returned for this property.");
+        if (!controller.signal.aborted) { setDomain({ min, max });
+          const first = new Date(`${min}T00:00:00Z`);
+          // Keep the visible page if it is in range; otherwise start at the
+          // earliest available month, so navigation is never stranded.
+          setYear(current => current < first.getUTCFullYear() || current > Number(max.slice(0, 4)) ? first.getUTCFullYear() : current);
+          setMonth(current => {
+            const month = String(current+1).padStart(2, "0");
+            const candidate = `${year}-${month}`;
+            return candidate < min.slice(0,7) || candidate > max.slice(0,7)
+              ? first.getUTCMonth() : current;
+          });
+          setWeekStart(current => iso(current) < min || iso(current) > max
+            ? first : current); }
+      } catch (cause) {
+        if (!controller.signal.aborted) { setDomainError(cause instanceof Error ? cause.message : "Date domain unavailable"); setDomain(null); }
+      } finally { if (!controller.signal.aborted) setDomainLoading(false); }
+    })();
+    return () => controller.abort();
+  }, [domainRequest, provider.property]);
   // Year zoom shows month counts; month zoom shows week counts; week and day
   // zoom show individual day counts. These are bucket views on one property.
-  const bucketView: Resolution = resolution === "years" ? "months" : "days";
+  const bucketView: Resolution = "days";
   const query = useMemo(() => calendarQuery(queryXml, provider.property, bucketView), [queryXml, provider.property, bucketView]);
   useEffect(() => {
     const controller = new AbortController();
@@ -114,18 +188,35 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
     })();
     return () => controller.abort();
   }, [query, bucketView, provider.property]);
+  // The day buckets originate from the same date facet as the visible calendar.
+  // A domain aggregate must not reject dates for which the facet returned data.
+  // Conservative reconciliation also prevents mismatched zoom levels.
+  const observedDates = Array.from(counts.entries()).filter(([key, n]) => n > 0 && /^\d{4}-\d{2}-\d{2}$/.test(key)).map(([key]) => key).sort();
+  const observedMin = observedDates[0];
+  const observedMax = observedDates[observedDates.length - 1];
+  const effectiveDomain = domain ? {
+    min: observedMin && observedMin < domain.min ? observedMin : domain.min,
+    max: observedMax && observedMax > domain.max ? observedMax : domain.max,
+  } : observedMin && observedMax ? { min: observedMin, max: observedMax } : null;
   // Apply only complete, ordered ranges. Individual picker edits are immediate;
   // no Apply button or blur event is necessary.
   const updateRange = (nextFrom: string, nextTo: string) => {
     // An explicit From/To edit tears down any prior calendar-cell selection.
     setSelectedCalendarCell("");
     setFrom(nextFrom); setTo(nextTo);
-    if (nextFrom && nextTo && nextFrom <= nextTo) onRangeChange(provider.property, utcDate(nextFrom), utcDate(nextTo));
+    const fits = (value: string) => !value || !effectiveDomain || (value.slice(0,10) >= effectiveDomain.min && value.slice(0,10) <= effectiveDomain.max);
+    if (nextFrom && nextTo && nextFrom <= nextTo && fits(nextFrom) && fits(nextTo)) onRangeChange(provider.property, utcDate(nextFrom), utcDate(nextTo));
   };
   const invalid = Boolean(from && to && from > to);
+  const outside = (date: string) => Boolean(effectiveDomain && (date < effectiveDomain.min || date > effectiveDomain.max));
+  const intersects = (start: Date, endExclusive: Date) => !effectiveDomain ||
+    (iso(start) <= effectiveDomain.max && iso(new Date(endExclusive.getTime() - DAY_MS)) >= effectiveDomain.min);
+  const clampStart = (start: Date) => effectiveDomain && iso(start) < effectiveDomain.min ? new Date(`${effectiveDomain.min}T00:00:00Z`) : start;
+  const clampEnd = (end: Date) => effectiveDomain && iso(new Date(end.getTime()-DAY_MS)) > effectiveDomain.max ? new Date(Date.parse(`${effectiveDomain.max}T00:00:00Z`) + DAY_MS) : end;
   const choose = (start: Date, end: Date, cellKey: string) => {
     setSelectedCalendarCell(cellKey);
-    const [a,b] = selectionBounds(start,end);
+    if (!intersects(start, end)) return;
+    const [a,b] = selectionBounds(clampStart(start),clampEnd(end));
     setFrom(localDate(a)); setTo(localDate(b));
     onRangeChange(provider.property,a,b);
   };
@@ -150,6 +241,17 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
     const next = dateAt(year, month+direction);
     setYear(next.getUTCFullYear()); setMonth(next.getUTCMonth());
   };
+  const previousPage = resolution === "years" ? dateAt(year-1,0) : resolution === "weeks"
+    ? new Date(weekStart.getTime()-7*DAY_MS) : dateAt(year,month-1);
+  const nextPage = resolution === "years" ? dateAt(year+1,0) : resolution === "weeks"
+    ? new Date(weekStart.getTime()+7*DAY_MS) : dateAt(year,month+1);
+  const pageInterval = (start: Date): {start: string; end: string} => {
+    if (resolution === "years") return { start: iso(dateAt(start.getUTCFullYear(), 0)), end: iso(dateAt(start.getUTCFullYear()+1, 0)) };
+    if (resolution === "weeks") return { start: iso(start), end: iso(new Date(start.getTime() + 7*DAY_MS)) };
+    return { start: iso(dateAt(start.getUTCFullYear(), start.getUTCMonth())), end: iso(dateAt(start.getUTCFullYear(), start.getUTCMonth()+1)) };
+  };
+  const previousDisabled = !temporalPageOverlapsDomain(pageInterval(previousPage), effectiveDomain);
+  const nextDisabled = !temporalPageOverlapsDomain(pageInterval(nextPage), effectiveDomain);
   const weeks = Array.from({length:6}, (_,i)=> {
     const first = dateAt(year,month,1);
     return new Date(first.getTime() - ((first.getUTCDay()+6)%7)*DAY_MS + i*7*DAY_MS);
@@ -157,10 +259,12 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
   const days = resolution === "weeks"
     ? Array.from({length:7},(_,i)=>new Date(weekStart.getTime()+i*DAY_MS))
     : Array.from({length:new Date(Date.UTC(year,month+1,0)).getUTCDate()},(_,i)=>dateAt(year,month,i+1));
-  return <div className="flex min-w-0 flex-col gap-2" aria-label={`${provider.label} calendar and range`}>
+  return <div data-provider-phase={widgetPhase} className="flex min-w-0 flex-col gap-2" aria-label={`${provider.label} calendar and range`}>
     <div className="flex flex-col gap-2">
-      <DateTimePicker label="From" value={from} onChange={next => updateRange(next, to)} />
-      <DateTimePicker label="To" value={to} onChange={next => updateRange(from, next)} />
+      <DateTimePicker label={`From (min: ${effectiveDomain?.min ?? (domainLoading ? "loading…" : "unknown")})`} value={from} minDate={effectiveDomain?.min} maxDate={effectiveDomain?.max} onChange={next => updateRange(next, to)} />
+      <DateTimePicker label={`To (max: ${effectiveDomain?.max ?? (domainLoading ? "loading…" : "unknown")})`} value={to} minDate={effectiveDomain?.min} maxDate={effectiveDomain?.max} onChange={next => updateRange(from, next)} />
+      {domainError && !effectiveDomain && <ErrorDetails prefix="Date domain (calendar remains available)" error={domainError} />}
+      {(from && outside(from.slice(0,10)) || to && outside(to.slice(0,10))) && <span className="text-xs text-destructive">Date selection is outside the available range.</span>}
       {invalid && <span className="text-xs text-destructive">From must not be after To.</span>}
       <div className="flex gap-2">
         {range && <button type="button" className="rounded-md border px-2 py-1 text-xs hover:bg-accent" onClick={()=>{setSelectedCalendarCell("");setFrom("");setTo("");onRangeChange(provider.property,"","");}}>Clear</button>}
@@ -172,22 +276,23 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
           </ToggleGroup>
         </ButtonGroup>
         <div className="flex items-center justify-between gap-2 text-xs">
-          <button aria-label={`Previous ${resolution === "years" ? "year" : resolution === "weeks" ? "week" : "month"}`} type="button" onClick={()=>shiftCalendar(-1)} className="rounded p-1 hover:bg-accent"><ChevronLeft className="size-4"/></button>
+          <button aria-label={`Previous ${resolution === "years" ? "year" : resolution === "weeks" ? "week" : "month"}`} type="button" disabled={previousDisabled} onClick={()=>shiftCalendar(-1)} className="rounded p-1 hover:bg-accent disabled:opacity-30"><ChevronLeft className="size-4"/></button>
           <span className="font-medium">{resolution === "years" ? year : resolution === "weeks" ? `Week of ${iso(weekStart)}` : `${monthLabel} ${year}`}</span>
-          <button aria-label={`Next ${resolution === "years" ? "year" : resolution === "weeks" ? "week" : "month"}`} type="button" onClick={()=>shiftCalendar(1)} className="rounded p-1 hover:bg-accent"><ChevronRight className="size-4"/></button>
+          <button aria-label={`Next ${resolution === "years" ? "year" : resolution === "weeks" ? "week" : "month"}`} type="button" disabled={nextDisabled} onClick={()=>shiftCalendar(1)} className="rounded p-1 hover:bg-accent disabled:opacity-30"><ChevronRight className="size-4"/></button>
         </div>
         <div className={`grid gap-1 ${resolution === "days" || resolution === "weeks" ? "grid-cols-7" : "grid-cols-3"}`}>
           {resolution === "years" && Array.from({length:12},(_,i)=>i).map(m=>{
-            const count = counts.get(`${year}-${String(m+1).padStart(2,"0")}`) ?? 0;
-            return <button key={m} type="button" onClick={()=>{choose(dateAt(year,m),dateAt(year,m+1), `month:${year}-${m}`);setMonth(m);}} className={`flex flex-col items-center rounded border px-1 py-2 text-xs ${selectedCalendarCell === `month:${year}-${m}` ? selectedCalendarStyle(`month:${year}-${m}`) : mutedIfZero(count)}`}><span>{new Intl.DateTimeFormat(undefined,{month:"short",timeZone:"UTC"}).format(dateAt(year,m))}</span><span className="text-muted-foreground">{count}</span></button>;
+            const monthKey = `${year}-${String(m+1).padStart(2,"0")}`;
+            const count = Array.from(counts, ([key, value]) => key.startsWith(`${monthKey}-`) ? value : 0).reduce((a,b) => a+b,0);
+            return <button key={m} type="button" disabled={!intersects(dateAt(year,m),dateAt(year,m+1))} onClick={()=>{choose(dateAt(year,m),dateAt(year,m+1), `month:${year}-${m}`);setMonth(m);}} className={`flex flex-col items-center rounded border px-1 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-25 ${selectedCalendarCell === `month:${year}-${m}` ? selectedCalendarStyle(`month:${year}-${m}`) : mutedIfZero(count)}`}><span>{new Intl.DateTimeFormat(undefined,{month:"short",timeZone:"UTC"}).format(dateAt(year,m))}</span><span className="text-muted-foreground">{count}</span></button>;
           })}
           {resolution === "months" && weeks.map(start=>{
             const count = weekCount(start);
-            return <button key={iso(start)} type="button" onClick={()=>{choose(start,new Date(start.getTime()+7*DAY_MS), `week:${iso(start)}`);setWeekStart(start);}} className={`flex flex-col items-center rounded border px-1 py-2 text-xs ${selectedCalendarCell === `week:${iso(start)}` ? selectedCalendarStyle(`week:${iso(start)}`) : mutedIfZero(count)}`}><span>{iso(start).slice(5)}</span><span className="text-muted-foreground">{count}</span></button>;
+            return <button key={iso(start)} type="button" disabled={!intersects(start,new Date(start.getTime()+7*DAY_MS))} onClick={()=>{choose(start,new Date(start.getTime()+7*DAY_MS), `week:${iso(start)}`);setWeekStart(start);}} className={`flex flex-col items-center rounded border px-1 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-25 ${selectedCalendarCell === `week:${iso(start)}` ? selectedCalendarStyle(`week:${iso(start)}`) : mutedIfZero(count)}`}><span>{iso(start).slice(5)}</span><span className="text-muted-foreground">{count}</span></button>;
           })}
           {(resolution === "days" || resolution === "weeks") && days.map(day=>{
             const count = countFor(day);
-            return <button key={iso(day)} type="button" onClick={()=>choose(day,new Date(day.getTime()+DAY_MS), `day:${iso(day)}`)} className={`flex flex-col items-center rounded border px-1 py-1 text-xs ${selectedCalendarCell === `day:${iso(day)}` ? selectedCalendarStyle(`day:${iso(day)}`) : mutedIfZero(count)}`}><span>{resolution === "weeks" ? weekdayName(day) : day.getUTCDate()}</span><span className="text-muted-foreground">{count}</span></button>;
+            return <button key={iso(day)} type="button" disabled={outside(iso(day))} onClick={()=>choose(day,new Date(day.getTime()+DAY_MS), `day:${iso(day)}`)} className={`flex flex-col items-center rounded border px-1 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-25 ${selectedCalendarCell === `day:${iso(day)}` ? selectedCalendarStyle(`day:${iso(day)}`) : mutedIfZero(count)}`}><span>{resolution === "weeks" ? weekdayName(day) : day.getUTCDate()}</span><span className="text-muted-foreground">{count}</span></button>;
           })}
         </div>
         {fetching && <span className="text-xs text-muted-foreground">Fetching calendar counts…</span>}
@@ -196,23 +301,47 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
     </div>
   </div>;
 }
-export type NumericFacetProvider = { uri: string; projections: Array<{ aggregate: "MIN" | "MAX" | "AVG" | "SUM"; expression: "xsd:decimal(?facetValue)" | "?facetNumber"; alias: string }> };
-export function usePersonalFacetProviders(properties: string[], queryXml = "", datatypeEvidence: Record<string, string[]> = {}): { temporal: Map<string, TemporalFacetProvider>; numeric: NumericFacetProvider[] } {
-  const [providers,setProviders] = useState<Provider[]>([]);
-  const [numeric,setNumeric] = useState<NumericFacetProvider[]>([]);
-  const key = useMemo(()=>[...new Set(properties)].sort().join("\n"),[properties]);
+export type TagCloudFacetProvider = TagProviderMatch;
+export type NumericFacetProvider = NumericProviderMatch;
+/** SHACL + approval are browser-orchestrated against the personal RDF graph. XState owns scope, invalidation,
+ * lifecycle, and verified UI projection. A fresh login or approval revision
+ * requires a new validation; there is no legacy provider cache. */
+export function usePersonalFacetProviders(
+  properties: string[], queryXml = "", datatypeEvidence: Record<string, string[]> = {},
+  options: { enabled?: boolean; approvalRevision?: number; sessionKey?: string } = {},
+): { temporal: Map<string, TemporalFacetProvider>; numeric: NumericFacetProvider[]; tags: Map<string, TagCloudFacetProvider>; phase: string; error: string } {
+  const key = [...new Set(properties)].sort().join("\n");
   const evidenceKey = JSON.stringify(datatypeEvidence);
-  useEffect(()=>{
-    const controller=new AbortController();
-    // Retain last approved provider metadata during transient facet refreshes.
-    // The displayed widget must not disappear between revalidation requests.
-    if(!key) return ()=>controller.abort();
-    void fetch("/proxy/api/service?service=maestro&operationId=personal-facet-providers",{method:"POST",cache:"no-store",signal:controller.signal,
-      headers:{"Content-Type":"application/json"},body:JSON.stringify({properties:key.split("\n"),queryXml,datatypeEvidence:JSON.parse(evidenceKey),timeoutMs:readMaestroWidgetTimeouts().personal*1000})})
-      .then(async response=>{if(!response.ok)return;const data=await response.json() as {providers?:Provider[];numericProviders?:NumericFacetProvider[]};if(!controller.signal.aborted){setProviders(data.providers??[]);setNumeric(data.numericProviders??[]);}})
-      .catch(()=>{});
-    return ()=>controller.abort();
-  },[key,queryXml,evidenceKey]);
-  const temporal = useMemo(() => new Map(providers.map(provider => [provider.property, provider])), [providers]);
-  return { temporal, numeric };
+  const enabled = options.enabled !== false && Boolean(options.sessionKey ?? "local");
+  const applicabilityKey = enabled && key
+    ? JSON.stringify([options.sessionKey ?? "", options.approvalRevision ?? 0, key, facetProviderApplicabilityKey(queryXml, key.split("\n"))]) : "";
+  const scope = enabled && key
+    ? JSON.stringify([applicabilityKey, queryXml, evidenceKey]) : "";
+  const [registry] = useState(createMaestroProviderDiscoveryController);
+  const snapshot = useSyncExternalStore(registry.subscribe, registry.getSnapshot, registry.getSnapshot);
+  useLayoutEffect(() => { registry.start(); return () => registry.stop(); }, [registry]);
+  useEffect(() => {
+    if (!scope) { registry.send({ type: "DISCOVERY_INACTIVE" }); return; }
+    const controller = new AbortController();
+    registry.send({ type: "DISCOVERY_STARTED", requestKey: scope, applicabilityKey, evidenceKey });
+    void discoverClientFacetProviders({properties:key.split("\n"),queryXml,datatypeEvidence:JSON.parse(evidenceKey)},controller.signal)
+      .then(matches => {
+        if(!controller.signal.aborted)registry.send({type:"DISCOVERY_RESOLVED",requestKey:scope,matches,evidenceKey});
+      }).catch(cause=>{
+        if(!controller.signal.aborted)registry.send({type:"DISCOVERY_FAILED",requestKey:scope,
+          error:cause instanceof Error?cause.message:"Provider discovery failed"});
+      });
+    return () => controller.abort();
+  }, [registry, scope, applicabilityKey, key, queryXml, evidenceKey]);
+  const selected = selectProviderMatches(snapshot, scope, applicabilityKey, evidenceKey);
+  // Preserve the precedence of explicit path-bound Calendar policies over
+  // generic inferred-datatype matches for the same property. Provider discovery
+  // returns the explicit matches first; Map retains the first approved one.
+  const temporal = useMemo(() => {
+    const byProperty = new Map<string, TemporalFacetProvider>();
+    for (const item of selected.temporal) if (!byProperty.has(item.property)) byProperty.set(item.property, item);
+    return byProperty;
+  }, [selected.temporal]);
+  const tags = useMemo(() => new Map(selected.tags.map(item => [item.property, item])), [selected.tags]);
+  return { temporal, numeric: selected.numeric, tags, phase: selected.phase, error: selected.error };
 }

@@ -9,10 +9,12 @@ import { CONFIGURE_LIST_BACKGROUND_COLOR } from "@/canvas/left/configure";
 import maestroLanguages from "@/data/maestro-languages.json";
 
 import { ButtonGroup } from "@/components/ui/button-group";
+import { Button } from "@/components/ui/button";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { MousePointerClick, LoaderCircle, ArrowLeft } from "lucide-react";
+import { MousePointerClick, LoaderCircle } from "lucide-react";
+import { ReturnToFiltersButton } from "@/canvas/left/return-to-filters";
 import { shortenCount } from "@/lib/utils";
 
 import { LeftPaneFrame, LeftPaneBody } from "@/canvas/workspace-pane-shells";
@@ -199,23 +201,16 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
                 {defaultLeftTab === "facets" ? (
                   <>
                     <ButtonGroup aria-label="Return to facets">
-                      <button
-  type="button"
-  onClick={commitConfigureFacetChanges}
-  className="inline-flex items-center gap-2 px-2 text-xs font-medium hover:bg-accent"
->
-  <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden="true" />
-  Return to Filters
-</button>
-                      <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-                      <Tooltip><TooltipTrigger render={<button
+                      <ReturnToFiltersButton onClick={commitConfigureFacetChanges} />
+
+                      <Tooltip><TooltipTrigger render={<Button
                         type="button"
                         onClick={commitConfigureFacetChanges}
-                        className="cursor-pointer px-3 py-1.5 text-sm hover:bg-accent"
+                        variant="outline" size="sm" className="cursor-pointer"
                         aria-label={`Show Filters, ${personalWidgets.length + activeRoleFilters.length + (classFacets.length > 0 && !isLoadingClasses ? 1 : 0) + (graphFacets.length > 0 ? 1 : 0)} facets`}
                       >
                         {personalWidgets.length + activeRoleFilters.length + (classFacets.length > 0 && !isLoadingClasses ? 1 : 0) + (graphFacets.length > 0 ? 1 : 0)}
-                      </button>} /><TooltipContent>{"Show Filters"}</TooltipContent></Tooltip>
+                      </Button>} /><TooltipContent>{"Show Filters"}</TooltipContent></Tooltip>
                     </ButtonGroup>
                   </>
                 ) : (
@@ -241,50 +236,50 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
                     ) : null}
                     {showConfigureProperties && (
                       <ButtonGroup aria-label="Configure properties">
-                        <button type="button" onClick={() => { setFocusListOrder("Properties"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="inline-flex items-center gap-1 px-2 text-xs font-medium hover:bg-accent" title="Configure Properties" aria-label="Configure Properties"><MousePointerClick className="size-3.5" aria-hidden="true" /> Properties</button>
-                        <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-                        <Tooltip><TooltipTrigger render={<button
+                        <Button variant="outline" size="sm" type="button" onClick={() => { setFocusListOrder("Properties"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="cursor-pointer gap-1" title="Configure Properties" aria-label="Configure Properties"><MousePointerClick className="size-3.5" aria-hidden="true" /> Properties</Button>
+
+                        <Tooltip><TooltipTrigger render={<Button variant="outline" size="sm"
                           type="button"
                           onClick={() => {
                             setFocusListOrder("Properties");
                             setResultsPage(resultsBatchSize, 0);
                             setDefaultLeftTab("facets");
                           }}
-                          className="px-3 py-1.5 text-sm hover:bg-accent"
+                          className="cursor-pointer gap-1"
                           aria-label={`Show Focus properties, ${propertyFacets.length} properties`}
-                        >{showPropertiesSpinner ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading properties" role="status" /> : shortenCount(propertyFacets.length)}</button>} /><TooltipContent>{"Show Focus properties first"}</TooltipContent></Tooltip>
+                        >{showPropertiesSpinner ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading properties" role="status" /> : shortenCount(propertyFacets.length)}</Button>} /><TooltipContent>{"Show Focus properties first"}</TooltipContent></Tooltip>
                       </ButtonGroup>
                     )}
                     {showConfigureRoles && (
                       <ButtonGroup aria-label="Configure roles">
-                        <button type="button" onClick={() => { setFocusListOrder("Roles"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="inline-flex items-center gap-1 px-2 text-xs font-medium hover:bg-accent" title="Configure Roles" aria-label="Configure Roles"><MousePointerClick className="size-3.5" aria-hidden="true" /> Roles</button>
-                        <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-                        <Tooltip><TooltipTrigger render={<button
+                        <Button variant="outline" size="sm" type="button" onClick={() => { setFocusListOrder("Roles"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="cursor-pointer gap-1" title="Configure Roles" aria-label="Configure Roles"><MousePointerClick className="size-3.5" aria-hidden="true" /> Roles</Button>
+
+                        <Tooltip><TooltipTrigger render={<Button variant="outline" size="sm"
                           type="button"
                           onClick={() => {
                             setFocusListOrder("Roles");
                             setResultsPage(resultsBatchSize, 0);
                             setDefaultLeftTab("facets");
                           }}
-                          className="px-3 py-1.5 text-sm hover:bg-accent"
+                          className="cursor-pointer gap-1"
                           aria-label={`Show Focus roles, ${roleFacets.length} roles`}
-                        >{showRolesSpinner ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading roles" role="status" /> : shortenCount(roleFacets.length)}</button>} /><TooltipContent>{"Show Focus roles first"}</TooltipContent></Tooltip>
+                        >{showRolesSpinner ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading roles" role="status" /> : shortenCount(roleFacets.length)}</Button>} /><TooltipContent>{"Show Focus roles first"}</TooltipContent></Tooltip>
                       </ButtonGroup>
                     )}
                     {autoConfigureFacetCount > 0 && (
                       <ButtonGroup aria-label="Auto-configure facets">
-                        <Tooltip><TooltipTrigger render={<button
+                        <Tooltip><TooltipTrigger render={<Button variant="outline" size="sm"
                           type="button"
                           onClick={runAutoConfigure}
-                          className="px-2 text-xs font-medium hover:bg-accent"
-                        >Auto-configure</button>} /><TooltipContent>{"Add high-frequency Properties and Roles that apply to the current query scope"}</TooltipContent></Tooltip>
-                        <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-                        <Tooltip><TooltipTrigger render={<button
+                          className="cursor-pointer gap-1"
+                        >Auto-configure</Button>} /><TooltipContent>{"Add high-frequency Properties and Roles that apply to the current query scope"}</TooltipContent></Tooltip>
+
+                        <Tooltip><TooltipTrigger render={<Button variant="outline" size="sm"
                           type="button"
                           onClick={runAutoConfigure}
-                          className="px-3 py-1.5 text-sm hover:bg-accent"
+                          className="cursor-pointer gap-1"
                           aria-label={`Auto-configure ${autoConfigureFacetCount} facets`}
-                        >{shortenCount(autoConfigureFacetCount)}</button>} /><TooltipContent>{`${autoConfigureFacetCount} facets will be added`}</TooltipContent></Tooltip>
+                        >{shortenCount(autoConfigureFacetCount)}</Button>} /><TooltipContent>{`${autoConfigureFacetCount} facets will be added`}</TooltipContent></Tooltip>
                       </ButtonGroup>
                     )}
                   </>

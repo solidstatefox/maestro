@@ -1,7 +1,7 @@
 "use client";
 
 import { loadPersonalAuthSession } from "@/lib/personal-auth";
-import { featuresGraph } from "@/lib/graph-context";
+import { providerCatalogGraph } from "@/lib/graph-context";
 import { fctRead, fctProjectPage, type Projection } from "@/lib/fct-client";
 import type { MapProviderDefinition } from "@/lib/map-provider-discovery";
 
@@ -15,7 +15,7 @@ const safeIri = (value: string) => /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(
 export async function discoverMapProvider(signal?: AbortSignal): Promise<MapProviderDefinition | null> {
   const session = await loadPersonalAuthSession();
   if (!session) return null;
-  const { graph, personalEndpointUrl } = featuresGraph(session, "policies");
+  const { graph, personalEndpointUrl } = providerCatalogGraph(session, "policies");
   const xml = `<query xmlns="http://openlinksw.com/services/facets/1.0" addr="${esc(`${graph}@${personalEndpointUrl}`)}"><class iri="${MUI}Provider"/><property iri="${MUI}widget"><class iri="${MUI}PerspectiveWidget"/></property><view type="list" limit="100" offset="0"/></query>`;
   const found = await fctRead(xml, signal);
   if (found.incomplete) throw new Error("Map provider FCT discovery was incomplete.");

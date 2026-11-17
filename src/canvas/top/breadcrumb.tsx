@@ -1,5 +1,8 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+import { InputGroupButton } from "@/components/ui/input-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ReactNode } from "react";
 import type { FctQueryNode } from "@/lib/fct-query-api";
 import { ChevronsRightLeft, Regex, EqualApproximately, ChevronRight, ChevronLeft, Equal } from "lucide-react";
@@ -25,3 +28,15 @@ export function renderValueOperator(value: FctQueryNode, sizeClass = "size-3.5")
     return <Equal className={iconClass} aria-label="equals" />;
   }
 
+
+/** Shared breadcrumb node pop control. Root specializes the host InputGroup,
+ * but inherits this action presentation/semantics from normal breadcrumbs. */
+export function BreadcrumbNodeMinus({ variant, onPop, ariaLabel, tooltip }: {
+  variant: "button" | "input"; onPop: () => void; ariaLabel: string; tooltip: string;
+}) {
+  const className = "h-9 w-7 shrink-0 self-stretch rounded-none py-0 text-base leading-none text-muted-foreground hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2";
+  return <Tooltip><TooltipTrigger render={variant === "input"
+    ? <InputGroupButton type="button" variant="ghost" size="icon-sm" onClick={onPop} className={className} aria-label={ariaLabel}>−</InputGroupButton>
+    : <Button type="button" variant="outline" size="icon" onClick={onPop} className={`${className} h-auto min-h-10`} aria-label={ariaLabel}>−</Button>}
+  /><TooltipContent>{tooltip}</TooltipContent></Tooltip>;
+}

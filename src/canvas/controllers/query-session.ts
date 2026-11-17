@@ -1,7 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useWorkbenchQueryController } from "@/canvas/utils/query-controller";
+import { createRootBreadcrumbController, rootBreadcrumbEditing, rootBreadcrumbSignalsOpen } from "@/lib/app-lifecycle/root-breadcrumb";
 import type { FctUiResultSummary } from "@/lib/fct-query-api";
 
 /** State owned by the query-session subsystem. Query-tree mutations still use the authoritative FCT store. */
@@ -16,8 +17,15 @@ export function useQuerySessionState() {
   const ancestorGhostRetainedRef = useRef(false);
   const previousActiveGhostPathRef = useRef<string[]>([]);
   const previousScopeRelationshipsRef = useRef<Map<string, string[]>>(new Map());
-  const [signalPickerExpanded, setSignalPickerExpanded] = useState(false);
-  const [rootSearchExpanded, setRootSearchExpanded] = useState(false);
+  const [rootBreadcrumb] = useState(createRootBreadcrumbController);
+  const rootBreadcrumbSnapshot = useSyncExternalStore(rootBreadcrumb.subscribe, rootBreadcrumb.getSnapshot, rootBreadcrumb.getSnapshot);
+  useEffect(() => { rootBreadcrumb.start(); return () => rootBreadcrumb.stop(); }, [rootBreadcrumb]);
+  const rootSearchExpanded = rootBreadcrumbEditing(rootBreadcrumbSnapshot);
+  const signalPickerExpanded = rootBreadcrumbSignalsOpen(rootBreadcrumbSnapshot);
+  // Existing navigation and query actions retain their public setter contract,
+  // but both values now derive exclusively from the root XState actor.
+  const setRootSearchExpanded = (next: boolean) => rootBreadcrumb.send({ type: "SET_EDITOR", open: next });
+  const setSignalPickerExpanded = (next: boolean) => rootBreadcrumb.send({ type: "SET_SIGNAL", open: next });
   const rootUriLabelCacheRef = useRef<Map<string, string>>(new Map());
   const [namePropertyMenuOpen, setNamePropertyMenuOpen] = useState(false);
   const [breadcrumbPreviewSummaries, setBreadcrumbPreviewSummaries] = useState<Record<string, FctUiResultSummary>>({});
@@ -40,6 +48,7 @@ export function useQuerySessionState() {
     ancestorGhostRetainedRef,
     previousActiveGhostPathRef,
     previousScopeRelationshipsRef,
+    rootBreadcrumb,
     signalPickerExpanded,
     setSignalPickerExpanded,
     rootSearchExpanded,

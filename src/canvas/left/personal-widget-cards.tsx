@@ -1,9 +1,12 @@
 "use client";
 import { FacetDecorationControl, FacetItemDecoration } from "@/lib/facet-decoration-contract";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
+import { OrUidLabel } from "@/components/ui/or-uid-label";
+import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
 import { NumericFacetContent } from "@/canvas/left/personal-numeric-facet";
+import { PersonalTagCloud } from "@/canvas/left/personal-tag-cloud";
 import { formatNumericFacetLabels, isNumericFacetLexical } from "@/lib/numeric-facet-format";
-import { TemporalFacetContent, type TemporalFacetProvider, type NumericFacetProvider } from "@/canvas/left/personal-date-facet";
+import { TemporalFacetContent, type TemporalFacetProvider, type NumericFacetProvider, type TagCloudFacetProvider } from "@/canvas/left/personal-date-facet";
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
@@ -21,7 +24,7 @@ import type { ReactNode } from "react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Bot, CircleSlash, Trash2, UsersRound } from "lucide-react";
+import { Bot, CircleSlash, Trash2, UsersRound, Code2, Palette } from "lucide-react";
 
 import hljs from "highlight.js/lib/core";
 import xmlLanguage from "highlight.js/lib/languages/xml";
@@ -96,13 +99,13 @@ const TEXT_SEARCH_NAME_PROPERTIES = [
 ] as const;
 
 import type { PersonalWidgetCardsWorkspace } from "@/canvas/controllers/workspace-interfaces";
-import { isCoercibleNumericLexical } from "@/lib/virtuoso-numeric-coercion";
 export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspace, layout: "column" | "grid", temporal?: {
   providers: Map<string, TemporalFacetProvider>;
   scopeNodes: FctQueryNode[];
   queryXml: string;
   onRangeChange: (property: string, start: string, end: string) => void;
   numericProviders?: NumericFacetProvider[];
+  tagCloudProviders?: Map<string, TagCloudFacetProvider>;
   onNumericRangeChange?: (property: string, start: string, end: string) => void;
 }): ReactNode {
   const { FACET_PAGE_SIZE, activeLeafId, activePropertyFilters, autoConfiguredFacetKeys, beginFacetHoverPreview, clearTutorialPreview, deleteNode, endpointReadyForQuery, facetCandidateCounts, facetHoverPreview, findPropertyPathNode, groupByOptions, groupedPersonalFacetUri, navigateIntoRelationship, navigateToPropertyPath, personalWidgetCardRefs, personalWidgets, queryTree, removeProperty, scrollToGroupForFacetValue, setCentralTab, setFacetCandidateCounts, setGroupByPropertyUri, setPersonalWidgets, setPropertyValue, workspaceTab } = workspace;
@@ -114,7 +117,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
             : "grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
         }
       >
-        {personalWidgets.filter(widget => !(Boolean(workspace.viewFeature) && widget.uri === "gttp://ggg.maestro.ecosys/ns/ui#status")).map((widget) => {
+        {personalWidgets.filter(widget => !(Boolean(workspace.viewProvider) && widget.uri === "gttp://ggg.maestro.ecosys/ns/ui#status")).map((widget) => {
           // A rendered facet in the FCT scope is addressable by the same ID
           // serialized on its <property> node. Unbound discovery suggestions
           // have no query node and must not fabricate one.
@@ -153,13 +156,13 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     <IncompleteWidgetIndicator source={`personal:${widget.uri}`} />
                     {isGroupByFacet && <UsersRound className="inline size-4 shrink-0" aria-label="Group by" />}
                     {widget.excluded && <CircleSlash className="inline size-3.5 shrink-0" aria-label="Excluded" />}
-                    {facetPropertyLabel(widget.uri)}
+                    <OrUidLabel uid={boundNode?.attributes.uid}>{facetPropertyLabel(widget.uri)}</OrUidLabel>
                   </button>} /><TooltipContent>{`Navigate to ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} scope`}</TooltipContent></Tooltip>
                   {autoConfiguredFacetKeys.has(`property::${widget.uri}`) && (
                     <Bot className="size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                   )}
-                  <div className="flex shrink-0 items-center gap-1">
-                    <QueryInspectorButton
+                  <LeftWidgetButtonTray threshold={3} actions={[
+                    { id: "inspector", label: "Inspect facet query", icon: <Code2 className="size-4"/>, render: <QueryInspectorButton
                       query={inspectorXml}
                       filename={`facet-${facetPropertyLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}.xml`}
                       primaryTabLabel="XML"
@@ -171,9 +174,9 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                         { direction: "forward" },
                         isGroupByFacet,
                       )}
-                    />
-                    {workspaceTab === "browse" && !widget.excluded && (
-                      <Tooltip><TooltipTrigger render={<button
+                    /> },
+                    { id: "group", label: isGroupByFacet ? "Stop grouping" : "Group results", icon: <UsersRound className="size-4"/>,
+                      when: workspaceTab === "browse" && !widget.excluded, disabled: !canGroupByFacet, render: <Tooltip><TooltipTrigger render={<button
                         type="button"
                         disabled={!canGroupByFacet}
                         aria-pressed={isGroupByFacet}
@@ -190,10 +193,9 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                         aria-label={isGroupByFacet ? `Stop grouping by ${facetPropertyLabel(widget.uri)}` : `Group results by ${facetPropertyLabel(widget.uri)}`}
                       >
                         <UsersRound className="size-4" aria-hidden="true" />
-                      </button>} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${facetPropertyLabel(widget.uri)}` : canGroupByFacet ? `Group results by ${facetPropertyLabel(widget.uri)}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip>
-                    )}
-                    <FacetDecorationControl direction="forward" iri={widget.uri}/>
-                    <Tooltip><TooltipTrigger render={<button
+                      </button>} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${facetPropertyLabel(widget.uri)}` : canGroupByFacet ? `Group results by ${facetPropertyLabel(widget.uri)}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip> },
+                    { id: "decoration", label: "Provider decoration", icon: <Palette className="size-4"/>, render: <FacetDecorationControl direction="forward" iri={widget.uri}/> },
+                    { id: "remove", label: `Remove ${facetPropertyLabel(widget.uri)} facet`, icon: <Trash2 className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
                       type="button"
                       onClick={() => {
                         const pathNode = findPropertyPathNode(widget.uri);
@@ -205,8 +207,8 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                       aria-label={`Remove ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} widget`}
                     >
                       <Trash2 className="size-4" aria-hidden="true" />
-                    </button>} /><TooltipContent>{`Remove ${facetPropertyLabel(widget.uri)} facet`}</TooltipContent></Tooltip>
-                  </div>
+                    </button>} /><TooltipContent>{`Remove ${facetPropertyLabel(widget.uri)} facet`}</TooltipContent></Tooltip> },
+                  ]}/>
                 </div>
                 <Tooltip><TooltipTrigger render={<p className="mt-1 break-all text-xs text-muted-foreground">{widget.uri}</p>} /><TooltipContent>{widget.uri}</TooltipContent></Tooltip>
               </div>
@@ -218,7 +220,14 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
               </span>} /><TooltipContent>{widget.error || undefined}</TooltipContent></Tooltip>
             </header>
             <div className="min-h-0 flex-1 overflow-auto p-2">
-              {temporal?.providers.get(widget.uri) ? (
+              {temporal?.tagCloudProviders?.has(widget.uri) && widget.values.length > 0 ? (
+                <PersonalTagCloud property={widget.uri} values={widget.values} tree={queryTree}
+                  selected={activePropertyFilters.find(node => node.name === "property" && node.attributes.iri === widget.uri)}
+                  counts={facetCandidateCounts} busy={widget.loading} enabled={endpointReadyForQuery}
+                  onCount={(query, count) => setFacetCandidateCounts(current =>
+                    current[query] === count ? current : { ...current, [query]: count })}
+                  onChange={(binding, enabled) => setPropertyValue(activeLeafId, widget.uri, binding, enabled)} />
+              ) : temporal?.providers.get(widget.uri) ? (
                 <>
                   <TemporalFacetContent
                     key={`${temporal.providers.get(widget.uri)!.uri}:${widget.uri}`}
@@ -251,7 +260,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                   </p>
                 )}
               {!widget.error &&
-                widget.values.length > 0 &&
+                (widget.values.length > 0 || temporal?.numericProviders?.some(provider => provider.eligibleProperties?.includes(widget.uri))) &&
                 (() => {
                   // Query XML is the source of truth for checked values. Read
                   // this property's <value> children from the active view scope
@@ -310,10 +319,14 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     page * FACET_PAGE_SIZE,
                     (page + 1) * FACET_PAGE_SIZE,
                   );
+                  // Provider discovery already validated SHACL per property.
+                  // Do not infer eligibility from the current paged checkbox list
+                  // or from the View/Providers navigation state.
                   const numericProvider = temporal?.numericProviders?.find(provider =>
-                    provider.projections.some(p => p.alias === "min") && provider.projections.some(p => p.alias === "max"));
-                  const hasNumericValues = widget.values.some(value => value.termType === "literal" && isCoercibleNumericLexical(value.uri));
-                  const numericLabels = numericProvider && hasNumericValues
+                    provider.eligibleProperties?.includes(widget.uri) &&
+                    provider.projections.some(p => p.alias === "min") &&
+                    provider.projections.some(p => p.alias === "max"));
+                  const numericLabels = numericProvider
                     ? formatNumericFacetLabels(orderedValues.filter(value => value.termType === "literal" && isNumericFacetLexical(value.uri)).map(value => value.uri),
                         typeof navigator !== "undefined" ? navigator.language : "en-US")
                     : [];
@@ -375,7 +388,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                         </div>
                       )}
                       <div className="flex min-w-0 items-start gap-2">
-                        {numericProvider && (hasNumericValues || widget.loading) && temporal?.onNumericRangeChange && (
+                        {numericProvider && temporal?.onNumericRangeChange && (
                           <NumericFacetContent
                             provider={numericProvider}
                             tree={queryTree} property={widget.uri} selected={queryFilter}

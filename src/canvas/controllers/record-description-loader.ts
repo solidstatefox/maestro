@@ -45,13 +45,29 @@ export async function loadRecordDescription(request: RecordDescriptionRequest): 
     ...(lang ? { lang } : {}), limit, preferredLanguage,
     ...(graphs?.length ? { graphs: [...graphs] } : {}),
   };
-  const response = await cachedFetchFct("/proxy/api/sparql", {
-    method: "POST", cache: "no-store", signal,
-    headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-select-language", "RecordDescription") },
-    body: JSON.stringify({ recordSelect: select }),
-  });
-  const data = await response.json() as Result;
-  if (!response.ok) throw new Error(data.error || "Record SELECT failed.");
+  // A truncated upstream HTTP body or an Undici connect timeout is a transport
+  // failure, not a malformed RDF record. Retry *one* read-only SELECT without
+  // changing its LIMIT, graph, language, or outgoing/incoming semantics.
+  const requestBody = JSON.stringify({ recordSelect: select });
+  const retryable = (message: string) =>
+    /UND_ERR_RES_CONTENT_LENGTH_MISMATCH|Response body length does not match content-length|UND_ERR_CONNECT_TIMEOUT/i.test(message);
+  let data: Result = {};
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (signal.aborted) throw signal.reason;
+    try {
+      const response = await cachedFetchFct("/proxy/api/sparql", {
+        method: "POST", cache: "no-store", signal,
+        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-select-language", "RecordDescription") },
+        body: requestBody,
+      });
+      data = await response.json() as Result;
+      if (!response.ok) throw new Error(data.error || `Record SELECT HTTP ${response.status}`);
+      break;
+    } catch (cause) {
+      if (signal.aborted) throw signal.reason;
+      if (attempt === 1 || !retryable(cause instanceof Error ? cause.message : String(cause))) throw cause;
+    }
+  }
   const triples: Array<{ subject: string; predicate: string; object: string; objectType: RdfTermKind; datatype?: string; lang?: string }> = [];
   const rows: RecordValueTerm[] = [];
   for (const binding of data.results?.bindings ?? []) {

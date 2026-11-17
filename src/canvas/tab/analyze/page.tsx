@@ -12,6 +12,14 @@ import { toLabel } from "@/lib/uri-labels";
 import { MaestroAnalysisDataTable, type MaestroDataColumn, type MaestroDataRow } from "@/components/maestro-analysis-data-table";
 
 import { Check, Download } from "lucide-react";
+import { useEffect, useState } from "react";
+import { readOverviewPopulation, type OverviewPopulation } from "@/lib/overview-population";
+import { OverviewNodeAnalytics } from "@/canvas/tab/view/overview-node-analytics";
+import { NODE_ANALYTICS_ANALYSIS_URI } from "@/lib/overview-analytics-ids";
+import { OVERVIEW_PERSPECTIVE_URI } from "@/lib/overview-metrics";
+import { OverviewPerspective } from "@/canvas/tab/view/overview";
+import { AnalyzeSpider } from "@/canvas/tab/analyze/spider";
+import { SPIDER_ANALYSIS_URI } from "@/lib/spider-numeric-policy";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 import { shortenCount } from "@/lib/utils";
 
@@ -22,14 +30,30 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController }) {
  const { activeBreadcrumbIndex, analysisColumnWidths, analysisError, analysisLoading, analysisRowKeys, analysisSelectedKeys, analysisSelectionPageKey, analysisTable, analysisValuesError, analyzeBreadcrumbTrail, analyzeHistogram, analyzeTableHeaderNodes, availableCompareFacets, changeResultsPage, effectiveCompareFacet, effectivePageSize, effectiveResultsTotalCount, histogramColumns, isCompareAnalysis, isSearching, readyAnalysisValues, results, resultsBatchRequestPending, resultsPageComplete, resultsPageSize, resultsPageSizeOptions, resultsUiPage, selectedAnalysisUri, setAnalysisSelection, setCentralTab, setCompareFacet, setResultsPageSize, setResultsUiPage, setSelectedUri, setWorkspaceTab, toggleAnalysisRow, visibleResultsPage, workspaceTab } = workspace;
  const { renderScopeValueBadge, renderRootBreadcrumb, renderPathBreadcrumb } = createBreadcrumbRenderers(workspace);
+ const nodeAnalyticsSelected = selectedAnalysisUri===NODE_ANALYTICS_ANALYSIS_URI;
+ const overviewSelected = selectedAnalysisUri===OVERVIEW_PERSPECTIVE_URI;
+ const spiderSelected = selectedAnalysisUri===SPIDER_ANALYSIS_URI;
+ const [populationState,setPopulationState]=useState<{key:string;items:OverviewPopulation[];error:string}|null>(null);
+ const populationKey=workspace.queryXml;
+ useEffect(()=>{
+   if(workspaceTab!=="analyze" || !nodeAnalyticsSelected || !workspace.endpointReadyForQuery)return;
+   const controller=new AbortController();
+   void readOverviewPopulation(populationKey,controller.signal)
+      .then(items=>{if(!controller.signal.aborted)setPopulationState({key:populationKey,items,error:""});})
+      .catch(error=>{if(!controller.signal.aborted)setPopulationState({key:populationKey,items:[],error:error instanceof Error?error.message:String(error)});});
+   return ()=>controller.abort();
+ },[workspaceTab,nodeAnalyticsSelected,workspace.endpointReadyForQuery,populationKey]);
+ const populationCurrent=populationState?.key===populationKey?populationState:null;
+ if(workspaceTab === "analyze" && overviewSelected) return <OverviewPerspective workspace={workspace}/>;
+ if(workspaceTab === "analyze" && spiderSelected) return <AnalyzeSpider workspace={workspace}/>;
+ if(workspaceTab === "analyze" && nodeAnalyticsSelected) return <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Analyze Node Analytics canvas">
+   <div className="min-h-0 flex-1 overflow-auto p-4">
+     {populationCurrent?.error && <ErrorDetails prefix="Node analytics population" error={populationCurrent.error}/>}
+     <OverviewNodeAnalytics workspace={workspace} population={populationCurrent?.items ?? []} populationLoading={!populationCurrent || !workspace.endpointReadyForQuery}/>
+   </div>
+ </div>;
  return <>
 {workspaceTab === "analyze" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Analyze canvas">
-                {(
-                  <nav aria-label="Analyze breadcrumbs" className="flex shrink-0 flex-wrap items-start justify-start gap-2 border-b bg-background px-4 py-2">
-                    {renderRootBreadcrumb(false, analysisTable?.trailStyle, false)}
-                    {analyzeBreadcrumbTrail.map((crumb, index) => renderPathBreadcrumb(crumb, index, false, analysisTable?.trailStyle, false))}
-                  </nav>
-                )}
                 {selectedAnalysisUri.includes("compare-table") && <div className="flex items-center gap-2 border-b px-3 py-2 text-sm">
                   <label htmlFor="maestro-compare-facet">Compare facet</label>
                   <select id="maestro-compare-facet" value={effectiveCompareFacet} onChange={(event) => setCompareFacet(event.target.value)} className="min-w-0 max-w-md flex-1 rounded-md border bg-background px-2 py-1">
@@ -44,8 +68,8 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                 {analysisLoading && !analysisTable && !isBookmarkAnalysis(selectedAnalysisUri) && <p className="p-3 text-xs text-muted-foreground"><ElapsedStatus label="Building analysis" category="other" clockScope="analysis" /></p>}
                 <div className="min-h-0 flex-1 overflow-auto">
                   {isBookmarkAnalysis(selectedAnalysisUri) && <BookmarkCharts queryXml={workspace.queryXml} providerUri={selectedAnalysisUri} stylesheet={workspace.analysisDefinitions.find((definition) => definition.uri === selectedAnalysisUri)?.stylesheet ?? ""} />}
-                  {analysisTable && isCompareAnalysis && analyzeHistogram && <AnalyzeHistogram histogramColumns={histogramColumns} visibleCount={analysisTable.rows.length} />}
-                  {analysisTable && !(isCompareAnalysis && analyzeHistogram) && <MaestroAnalysisDataTable
+                  {!nodeAnalyticsSelected && analysisTable && isCompareAnalysis && analyzeHistogram && <AnalyzeHistogram histogramColumns={histogramColumns} visibleCount={analysisTable.rows.length} />}
+                  {!nodeAnalyticsSelected && analysisTable && !(isCompareAnalysis && analyzeHistogram) && <MaestroAnalysisDataTable
                     label={isCompareAnalysis ? "Compare Table" : "Table"}
                     tableStyle={analysisTable.tableStyle} headerStyle={analysisTable.headerStyle} cellStyle={analysisTable.cellStyle}
                     selectedKeys={analysisSelectedKeys}
@@ -65,7 +89,7 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                       key: analysisRowKeys[rowIndex] ?? `${rowIndex}:${row.uri}`,
                       sortValues: [row.label, ...row.cells.map((cell) => cell.values.join(" "))],
                       rowStyle: analysisTable.rowStyle,
-                      cells: [<button key="result" type="button" className="max-w-full break-words text-left text-primary hover:underline" onClick={() => { setSelectedUri(row.uri); setWorkspaceTab("browse"); setCentralTab("results"); }}>{row.label}</button>,
+                      cells: [<button key="result" type="button" className="max-w-full break-words text-left text-primary hover:underline" onClick={() => { setSelectedUri(row.uri); }}>{row.label}</button>,
                         ...row.cells.map((cell, index) => {
                           if (isCompareAnalysis) return cell.checked ? <Check key={index} className="size-4 text-emerald-600" aria-label="Present"/> : null;
                           const column = analysisTable.columns[index + 1];
@@ -81,7 +105,7 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                         })],
                     }))}
                   />}
-                  {!isBookmarkAnalysis(selectedAnalysisUri) && !analysisLoading && !analysisTable && !analysisError && <p className="p-3 text-sm text-muted-foreground">Choose an analysis from the ribbon.</p>}
+                  {!nodeAnalyticsSelected && !isBookmarkAnalysis(selectedAnalysisUri) && !analysisLoading && !analysisTable && !analysisError && <p className="p-3 text-sm text-muted-foreground">Choose an analysis from the ribbon.</p>}
                 </div>
                 <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-3 py-2 text-xs">
                   <span className="text-muted-foreground">{formatPagePosition(resultsUiPage, effectiveResultsTotalCount === null ? null : Math.max(1, Math.ceil(effectiveResultsTotalCount / resultsPageSize)))}{effectiveResultsTotalCount !== null ? ` · ${shortenCount(effectiveResultsTotalCount)} results` : " · many results"}</span>

@@ -1,6 +1,8 @@
 "use client";
 import { ErrorDetails } from "@/components/ui/error-details";
 
+import { manageAppbarButtons } from "@/lib/client-appbar-buttons";
+import { loadPerspectiveCollection } from "@/lib/client-perspective-collections";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, Trash2, RefreshCw } from "lucide-react";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
@@ -129,9 +131,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
   const [appbarIcon, setAppbarIcon] = useState("bookmark");
   const [appbarBusy, setAppbarBusy] = useState(false);
   const loadAppbar = useCallback(async () => {
-    const response = await fetch("/proxy/api/service?service=maestro&operationId=appbar-buttons", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list"}),cache:"no-store"});
-    const result = await response.json() as {buttons?:AppbarButton[];error?:string};
-    if (!response.ok) throw new Error(result.error ?? "Could not load appbar providers");
+    const result = await manageAppbarButtons({ action: "list" });
     setAppbarButtons(result.buttons ?? []);
   }, []);
   useEffect(() => { if (kind === "bookmarks" && active) void loadAppbar().catch(err => setError(err instanceof Error ? err.message : "Could not load appbar")); },[active,kind,loadAppbar]);
@@ -141,9 +141,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
       if (action === "add") {
         if (!validAppbarIcons.has(appbarIcon.trim())) throw new Error("Choose a valid Lucide icon name, e.g. bookmark or map-pin.");
       }
-      const response = await fetch("/proxy/api/service?service=maestro&operationId=appbar-buttons", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,bookmark,provider,tooltip:appbarTooltip,icon:appbarIcon}),cache:"no-store"});
-      const result = await response.json() as {buttons?:AppbarButton[];error?:string};
-      if (!response.ok) throw new Error(result.error ?? "Appbar update failed");
+      const result = await manageAppbarButtons({action,bookmark,provider,tooltip:appbarTooltip,icon:appbarIcon});
       setAppbarButtons(result.buttons ?? []); setAppbarCandidate("");
       window.dispatchEvent(new Event("maestro:appbar-buttons-updated"));
     } catch(err) { setError(err instanceof Error ? err.message : "Appbar update failed"); }
@@ -155,15 +153,15 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
     setLoading(true); setError(""); setNotLoggedIn(false); setCollection(null); setHtml(""); setSelected([]);
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=perspectives", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "list", kind, providerUri }), cache: "no-store", signal: controller.signal });
-        const data = await response.json() as Collection & { error?: string };
-        if (response.status === 401 || response.status === 403) {
-          if (!controller.signal.aborted) setNotLoggedIn(true);
-          return;
-        }
-        if (!response.ok) throw new Error(data.error || "Could not load collection");
+        const data = await loadPerspectiveCollection(kind, providerUri, controller.signal);
         if (!controller.signal.aborted) setCollection(data);
-      } catch (err) { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Loading failed"); }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          const message = err instanceof Error ? err.message : "Loading failed";
+          if (message.startsWith("Log in to use the personal graph server.")) setNotLoggedIn(true);
+          else setError(message);
+        }
+      }
       finally { if (!controller.signal.aborted) setLoading(false); }
     })();
     return () => controller.abort();

@@ -1,6 +1,8 @@
 "use client";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Table2, TableProperties, ChartColumn, ChartPie } from "lucide-react";
+import { Table2, TableProperties, ChartColumn, ChartPie, Network, ChartNoAxesCombined, ChartRadar } from "lucide-react";
+import { NODE_ANALYTICS_ANALYSIS_URI } from "@/lib/overview-analytics-ids";
+import { OVERVIEW_PERSPECTIVE_URI } from "@/lib/overview-metrics";
 type AnalysisDefinition = { uri: string; label: string; icon: string };
 // Only built-in Maestro Analyze resources live before the separator.
 // Every other discovered provider is external, irrespective of URI or label.
@@ -19,7 +21,12 @@ export interface AnalyzeRibbonProps {
   onSelectHistogram: (uri: string) => void;
 }
 export function AnalyzeRibbon({ analysisDefinitions, selectedAnalysisUri, analyzeHistogram, isCompareAnalysis, firstBreadcrumbLabel, firstResultTitle, onSelectAnalysis, onSelectHistogram }: AnalyzeRibbonProps) {
-  return <div className="flex min-h-[78px] flex-wrap items-center gap-3 border-b bg-background px-4 py-2" role="toolbar" aria-label="Analyze presentations">
+  return <div className="flex min-h-[78px] flex-wrap items-center gap-3 bg-background px-4 py-2" role="toolbar" aria-label="Analyze presentations">
+          <button type="button" aria-pressed={selectedAnalysisUri===OVERVIEW_PERSPECTIVE_URI && !analyzeHistogram}
+            onClick={()=>onSelectAnalysis(OVERVIEW_PERSPECTIVE_URI)}
+            className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${selectedAnalysisUri===OVERVIEW_PERSPECTIVE_URI && !analyzeHistogram ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+            <ChartNoAxesCombined className="size-7" strokeWidth={1} aria-hidden="true"/>Overview
+          </button>
           {analysisDefinitions.filter((definition) => NATIVE_ANALYZE_URIS.has(definition.uri)).map((definition) => {
             const active = selectedAnalysisUri === definition.uri && !analyzeHistogram;
             const Icon = definition.icon === "table-properties" ? TableProperties : definition.icon === "chart-column" ? ChartColumn : definition.icon === "chart-pie" ? ChartPie : Table2;
@@ -48,10 +55,15 @@ export function AnalyzeRibbon({ analysisDefinitions, selectedAnalysisUri, analyz
               <TooltipContent side="bottom">Count checked Compare Table cells for each column value.</TooltipContent>
             </Tooltip>
           )}
+          <button type="button" aria-pressed={selectedAnalysisUri===NODE_ANALYTICS_ANALYSIS_URI && !analyzeHistogram}
+            onClick={()=>onSelectAnalysis(NODE_ANALYTICS_ANALYSIS_URI)}
+            className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${selectedAnalysisUri===NODE_ANALYTICS_ANALYSIS_URI && !analyzeHistogram ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+            <Network className="size-7" strokeWidth={1} aria-hidden="true"/>Node Analytics
+          </button>
           {analysisDefinitions.some((definition) => !NATIVE_ANALYZE_URIS.has(definition.uri)) && <div className="mx-1 h-11 self-center border-l border-border" role="separator" aria-orientation="vertical" aria-label="SHACL-provided analyses" />}
           {analysisDefinitions.filter((definition) => !NATIVE_ANALYZE_URIS.has(definition.uri)).map((definition) => {
             const active = selectedAnalysisUri === definition.uri && !analyzeHistogram;
-            const Icon = definition.icon === "chart-pie" ? ChartPie : ChartColumn;
+            const Icon = definition.icon === "chart-radar" ? ChartRadar : definition.icon === "chart-pie" ? ChartPie : ChartColumn;
             return <Tooltip key={definition.uri} disableHoverablePopup={false}>
               <TooltipTrigger render={<button type="button" onClick={() => onSelectAnalysis(definition.uri)} aria-pressed={active}
                 className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${active ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
@@ -60,6 +72,6 @@ export function AnalyzeRibbon({ analysisDefinitions, selectedAnalysisUri, analyz
               <TooltipContent side="bottom">SHACL-provided {definition.label} analysis of the current faceted scope.</TooltipContent>
             </Tooltip>;
           })}
-          {analysisDefinitions.length === 0 && <span className="text-sm text-muted-foreground">No analysis templates discovered. Load the updated SHACL policies into your personal graph server.</span>}
+
         </div>;
 }

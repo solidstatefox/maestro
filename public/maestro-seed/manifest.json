@@ -1,0 +1,137 @@
+[
+  {
+    "file": "dataserver-seed.ttl",
+    "destination": "/graph",
+    "asset": "09d0db2d66573e278871632ef3898ab3b7706510cb79051bfe17084fe2acde83.json"
+  },
+  {
+    "file": "kinds/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "73a9229edfce2c7f948fda61d8fe27eb780c571cfcac289da6feb64fdc2d27f6.json"
+  },
+  {
+    "file": "labels.ttl",
+    "destination": "/graph",
+    "asset": "658feea62144e2baca4c48c457d74d327677a39301b58e9dd5523dfdfa6de698.json"
+  },
+  {
+    "file": "maestro-analyze.ttl",
+    "destination": "/shacl/policies",
+    "asset": "31c542f86c2f54dc852de1c0b85b873977e25624747702c14036609dab533d51.json"
+  },
+  {
+    "file": "maestro-authorship-policies.ttl",
+    "destination": "/shacl/policies",
+    "asset": "ca2a6b31d8fcedc03a4d7935c8a223437f88b4805fbf7a6f9b0b24501ba3ecbe.json"
+  },
+  {
+    "file": "maestro-authorship-transcoders.ttl",
+    "destination": "/otc/transcoders",
+    "asset": "df149f7efab4581d9b5734676d6d544637c3ee6c11a1951194f66a0411f71267.json"
+  },
+  {
+    "file": "maestro-curation-providers.ttl",
+    "destination": "/shacl/policies",
+    "asset": "d0b01b4d67bb136d87c0c6fed3053d32161769d43e9c5000291aafd6025d4c52.json"
+  },
+  {
+    "file": "maestro-dbpedia-policies.ttl",
+    "destination": "/shacl/policies",
+    "asset": "0cb78f97c59e4edcc3a37da4eb376c8501f2b3680ad274837569e7b9fd7762cb.json"
+  },
+  {
+    "file": "maestro-entrypoint-view.ttl",
+    "destination": "/shacl/policies",
+    "asset": "c1e79438418a550a61a4bb5b2794203b7aeb92bfb4cb19de9a985f70b1809d50.json"
+  },
+  {
+    "file": "maestro-personal-perspectives.ttl",
+    "destination": "/shacl/policies",
+    "asset": "a4a3f2d609bc7b52e5056dfd7591ebcbbfd0ab3393cd8e493d9542eafcd1053e.json"
+  },
+  {
+    "file": "maestro-resource-metadata-graph.ttl",
+    "destination": "/graph",
+    "asset": "d9716c5925a891c71ee8e299ee6e4b884c2e9ecc465613f35be355e7cc24dd9b.json"
+  },
+  {
+    "file": "maestro-resource-metadata-otc-transcoders.ttl",
+    "destination": "/otc/transcoders",
+    "asset": "e3cba433215142530d096dcec0461dd49696beb8adae8630cd079597836558d2.json"
+  },
+  {
+    "file": "maestro-resource-metadata-shacl-policies.ttl",
+    "destination": "/shacl/policies",
+    "asset": "f57789e51627fe03fb21096d71edcd75e5502f42da761361e9b43a5549a871eb.json"
+  },
+  {
+    "file": "maestro-services.ttl",
+    "destination": "/shacl/policies",
+    "asset": "82c0187c238d1036f8a09b0084bde9c29bfb8a4ecbda32c0a5aa596c26905a96.json"
+  },
+  {
+    "file": "maestro-shacl-policies.ttl",
+    "destination": "/shacl/policies",
+    "asset": "16e08b6c6c744e1d3857110074e62fe816490739ac2b518aeb42ceb98ebd80dd.json"
+  },
+  {
+    "file": "maestro-status-machines.ttl",
+    "destination": "/shacl/policies",
+    "asset": "69ad9318df0039899b6f8f1fe734f17a7acf00eb345593b18800ec5e8e9f5ffd.json"
+  },
+  {
+    "file": "maestro-widget-providers.ttl",
+    "destination": "/shacl/policies",
+    "asset": "08f81732aa1f6d2c532eddadec90f718630100213f59f06926a33bc7b7554de8.json"
+  },
+  {
+    "file": "map/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "ea4b87b6d17961fdece51b9f636533347c2c2828254791bd814f7ec24eb66676.json"
+  },
+  {
+    "file": "numeric/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "d7bbd4a0153ed7b16b76ddea74d59d4b90519ffa1708be8cbbae33c0af9b2ec2.json"
+  },
+  {
+    "file": "otc-transcoders.rdf",
+    "destination": "/otc/transcoders",
+    "asset": "10c197e5803d1e34d6599678b9db580303c6a48cdba2f91a1bb156c07e577f05.json"
+  },
+  {
+    "file": "rdfs/maestro-history-bookmark-schema.ttl",
+    "destination": "/ontology-cache",
+    "asset": "c7e1922dd40c7ba3b3e9bacb96d4eddcf82d9902fb684cb11b4abe882c1843f0.json"
+  },
+  {
+    "file": "rdfs/maestro-node-shape-hierarchy.ttl",
+    "destination": "/ontology-cache",
+    "asset": "b85b463f89791f61dccffe794d1556b4882502c6e17d6ae9c2c5c6f9a8cbb269.json"
+  },
+  {
+    "file": "rdfs/maestro-resource-metadata-ontology-cache.ttl",
+    "destination": "/ontology-cache",
+    "asset": "6bf29e7bcb1f1ba2d5cc8de3d21fff5b4b4ec640329a4f21253a4e4a062799c3.json"
+  },
+  {
+    "file": "rdfs/maestro-ui-components.ttl",
+    "destination": "/shacl/policies",
+    "asset": "4f069e52d3d420b34e091dd270bcdf47a5dd521c14e89ccc262f0b544cb29ca4.json"
+  },
+  {
+    "file": "rdfs/maestro-ui-ontology.ttl",
+    "destination": "/ontology-cache",
+    "asset": "b6edd7f852f31243388bf7ec69f5c9deef3d19c9d2ad8cc492cc01f09e6f4447.json"
+  },
+  {
+    "file": "spider/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "8f7e38150f3302eb47f50e94e52ed08b2ea1f49bf2c62346635f4d4bb07959fb.json"
+  },
+  {
+    "file": "tag-cloud/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "b30aedc7df7086c1177463724e2d1d1ea86f87f22cc0dbf212cc09abfd260a73.json"
+  }
+]

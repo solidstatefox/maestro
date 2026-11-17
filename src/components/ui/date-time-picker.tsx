@@ -8,8 +8,8 @@ import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
  * Exposes the same local datetime string used by Maestro's UTC conversion.
  * All changes are delivered immediately; callers decide when a range is complete.
  */
-export function DateTimePicker({ label, value, onChange }: {
-  label: string; value: string; onChange: (next: string) => void;
+export function DateTimePicker({ label, value, onChange, minDate, maxDate, disabled = false }: {
+  label: string; value: string; onChange: (next: string) => void; minDate?: string; maxDate?: string; disabled?: boolean;
 }) {
   const today = new Date();
   const selected = /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : "";
@@ -20,32 +20,44 @@ export function DateTimePicker({ label, value, onChange }: {
     if (selected) setShown(selected);
     if (value.length >= 16) { setHours(value.slice(11, 13)); setMinutes(value.slice(14, 16)); }
   }, [selected, value]);
+  useEffect(() => {
+    if (!selected && minDate) setShown(current => current.slice(0,7) < minDate.slice(0,7) ||
+      (maxDate && current.slice(0,7) > maxDate.slice(0,7)) ? minDate : current);
+  }, [selected, minDate, maxDate]);
   const [y, m] = shown.split("-").map(Number);
   const firstWeekday = (new Date(y, m - 1, 1).getDay() + 6) % 7;
   const totalDays = new Date(y, m, 0).getDate();
   const pad = (n: number) => String(n).padStart(2, "0");
-  const emit = (date: string, hour = hours, minute = minutes) => onChange(`${date}T${hour}:${minute}`);
-  const shift = (step: number) => { const d = new Date(y, m - 1 + step, 1); setShown(`${d.getFullYear()}-${pad(d.getMonth()+1)}-01`); };
+  const isAllowed = (date: string) => !disabled && (!minDate || date >= minDate) && (!maxDate || date <= maxDate);
+  const emit = (date: string, hour = hours, minute = minutes) => {
+    if (isAllowed(date)) onChange(`${date}T${hour}:${minute}`);
+  };
+  const firstMonth = minDate?.slice(0, 7);
+  const lastMonth = maxDate?.slice(0, 7);
+  const currentMonth = `${y}-${pad(m)}`;
+  const previousDisabled = !!firstMonth && currentMonth <= firstMonth;
+  const nextDisabled = !!lastMonth && currentMonth >= lastMonth;
+  const shift = (step: number) => { if (step < 0 ? previousDisabled : nextDisabled) return; const d = new Date(y, m - 1 + step, 1); setShown(`${d.getFullYear()}-${pad(d.getMonth()+1)}-01`); };
   return <div className="flex min-w-0 flex-col gap-1">
     <span className="text-xs text-muted-foreground">{label}</span>
     <Popover.Root>
-      <Popover.Trigger aria-label={`Choose ${label.toLowerCase()} date and time`} className="flex h-9 min-w-0 items-center gap-2 rounded-md border bg-background px-2 text-left text-xs hover:bg-accent">
+      <Popover.Trigger disabled={disabled} aria-label={`Choose ${label.toLowerCase()} date and time`} className="flex h-9 min-w-0 items-center gap-2 rounded-md border bg-background px-2 text-left text-xs hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40">
         <CalendarDays className="size-4 shrink-0"/><span className="truncate">{value ? value.replace("T", " · ") : "Select date and time"}</span>
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner sideOffset={6} className="z-50">
           <Popover.Popup className="w-72 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg outline-none">
             <div className="mb-2 flex items-center justify-between text-sm font-medium">
-              <button type="button" className="rounded p-1 hover:bg-accent" onClick={() => shift(-1)} aria-label="Previous month"><ChevronLeft className="size-4"/></button>
+              <button type="button" className="rounded p-1 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-30" disabled={previousDisabled} onClick={() => shift(-1)} aria-label="Previous month"><ChevronLeft className="size-4"/></button>
               {new Intl.DateTimeFormat("en-US",{month:"long",year:"numeric"}).format(new Date(y,m-1,1))}
-              <button type="button" className="rounded p-1 hover:bg-accent" onClick={() => shift(1)} aria-label="Next month"><ChevronRight className="size-4"/></button>
+              <button type="button" className="rounded p-1 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-30" disabled={nextDisabled} onClick={() => shift(1)} aria-label="Next month"><ChevronRight className="size-4"/></button>
             </div>
             <div className="grid grid-cols-7 gap-1 text-center text-xs">
               {["Mo","Tu","We","Th","Fr","Sa","Su"].map(day=><span className="py-1 text-muted-foreground" key={day}>{day}</span>)}
               {Array.from({length:firstWeekday},(_,i)=><span key={`pad-${i}`}/>)}
               {Array.from({length:totalDays},(_,i)=>{
                 const day = `${y}-${pad(m)}-${pad(i+1)}`;
-                return <button key={day} type="button" aria-label={day} aria-pressed={selected===day} onClick={()=>emit(day)} className="size-8 rounded-md hover:bg-accent aria-pressed:bg-primary aria-pressed:text-primary-foreground">{i+1}</button>;
+                return <button key={day} type="button" aria-label={day} aria-pressed={selected===day} disabled={!isAllowed(day)} onClick={()=>emit(day)} className="size-8 rounded-md hover:bg-accent aria-pressed:bg-primary aria-pressed:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-25 disabled:hover:bg-transparent">{i+1}</button>;
               })}
             </div>
             <div className="mt-3 flex items-center gap-2 border-t pt-3 text-xs">

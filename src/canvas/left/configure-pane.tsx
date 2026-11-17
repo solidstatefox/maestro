@@ -1,5 +1,9 @@
 "use client";
+import { MAESTRO_KIND_IDS, getMaestroKindsRevision, subscribeMaestroKinds } from "@/lib/maestro-kinds";
+import { browserLog } from "@/lib/maestro-client-logging";
+
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
+import { readMaestroWidgetTimeouts } from "@/lib/maestro-query-timeouts";
 
 import { FACET_GROUPS as facets, FACET_ITEM_GAP_CLASS, PROPERTY_ROLE_ITEM_GAP_CLASS } from "@/canvas/left/facet-layout";
 
@@ -17,22 +21,138 @@ import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 import { toLabel } from "@/lib/uri-labels";
 import { selectedFacetCount, selectedFacetLabel } from "@/lib/selected-facet-presentation";
 
-import { buildFctCountSparql } from "@/lib/fct-count-sparql";
+import { buildFctCountSparql, buildFctKindAvailabilitySparql } from "@/lib/fct-count-sparql";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { useFctQuery, fctQueryTreeApi } from "@/lib/fct-query-api";
+import { OrUidLabel } from "@/components/ui/or-uid-label";
+import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
 import { maestroQueryFetch } from "@/lib/client-query-cache";
 import { serializeFctQuery } from "@/lib/fct-query-api";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Bot, SquarePlus, SquareX, SquareCheck } from "lucide-react";
+import { Bot, SquarePlus, SquareX, SquareCheck, Split, Code2 } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 
 import { createDistinctCountQuery } from "@/lib/fct-query-api";
 import type { DistinctCountKind } from "@/lib/fct-query-api";
 import type { ConfigurePaneWorkspace } from "@/canvas/controllers/workspace-interfaces";
+import { createMaestroConfigureController, selectConfigure } from "@/lib/app-lifecycle/configure";
+import { createMaestroKindDiscoveryController, selectKinds } from "@/lib/app-lifecycle/kind-discovery";
 
 export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigurePaneWorkspace }) {
+  const { tree: liveQuery, replaceTree: replaceLiveQuery } = useFctQuery();
+  const [configureController] = useState(createMaestroConfigureController);
+  const configureSnapshot = useSyncExternalStore(configureController.subscribe, configureController.getSnapshot, configureController.getSnapshot);
+  const transaction = selectConfigure(configureSnapshot);
+  const orEditing = transaction.group;
+  const draftMembership = transaction.membership;
+  const orPopupFor = transaction.menuFor;
+  const sourceKey = serializeFctQuery(liveQuery);
+  useEffect(() => {
+    workspace.reportConfigureLifecycle(transaction.phase);
+    return () => workspace.reportConfigureLifecycle("idle");
+  }, [workspace.reportConfigureLifecycle, transaction.phase]);
+  useLayoutEffect(() => {
+    configureController.start();
+    return () => configureController.stop();
+  }, [configureController]);
+  // An external breadcrumb, History, or URL restore invalidates the entire draft.
+  useLayoutEffect(() => {
+    configureController.send({ type: "SOURCE_CHANGED", sourceKey });
+  }, [configureController, sourceKey]);
+  const orCounter = liveQuery.attributes.uctr || "a";
+  const orQuotaExceeded = parseInt(orCounter, 36) > 36;
+  // Draft OR selections are intentionally isolated from the authoritative FCT tree.
+  // A single replaceTree on Update preserves one query revision/History entry.
+  const existingOrGroups = [...new Set([...workspace.activePropertyFilters, ...workspace.activeRoleFilters]
+    .map(node => node.attributes.uid).filter((uid): uid is string => Boolean(uid)))].sort();
+  const selectedOrNode = (group: "Properties" | "Roles", iri: string) =>
+    (group === "Properties" ? workspace.activePropertyFilters : workspace.activeRoleFilters)
+      .find(node => node.name === (group === "Properties" ? "property" : "property-of") && node.attributes.iri === iri);
+  const orDraftKey = (group: "Properties" | "Roles", iri: string) =>
+    selectedOrNode(group, iri)?.id ?? `${group === "Properties" ? "property" : "property-of"}:${iri}`;
+  const effectiveOrId = (group: "Properties" | "Roles", iri: string) => {
+    const node = selectedOrNode(group, iri);
+    const key = orDraftKey(group, iri);
+    return Object.prototype.hasOwnProperty.call(draftMembership, key)
+      ? draftMembership[key] : node?.attributes.uid;
+  };
+  const beginOrGroup = (group: "Properties" | "Roles") => {
+    if (orQuotaExceeded) return;
+    configureController.send({ type: "BEGIN", group, sourceKey });
+  };
+  const assignOrNode = (group: "Properties" | "Roles", iri: string, uid: string | null) => {
+    const key = orDraftKey(group, iri);
+    configureController.send({ type: "ASSIGN", key, uid });
+  };
+  const selectOrNode = (group: "Properties" | "Roles", iri: string) => {
+    if (orEditing !== group) return;
+    const key = orDraftKey(group, iri);
+    const uid = effectiveOrId(group, iri);
+    if (uid) { assignOrNode(group, iri, null); return; }
+    if (existingOrGroups.length > 1) { configureController.send({ type: "MENU", key }); return; }
+    assignOrNode(group, iri, existingOrGroups[0] ?? orCounter);
+  };
+  const commitOrGroup = () => {
+    if (!orEditing || orQuotaExceeded || transaction.phase !== "editing") return;
+    if (sourceKey !== transaction.sourceKey) {
+      configureController.send({ type: "SOURCE_CHANGED", sourceKey });
+      return;
+    }
+    const changes = draftMembership;
+    if (Object.keys(changes).length === 0) { configureController.send({ type: "CANCEL" }); return; }
+    configureController.send({ type: "COMMIT", sourceKey });
+    const direction = orEditing === "Properties" ? "property" : "property-of";
+    try {
+    // Configure may contain selected rows which are only staged, not yet
+    // represented by relationship nodes. Materialize them on Update in the
+    // active FCT scope, never during selection clicks.
+    let next = liveQuery;
+    for (const [key, uid] of Object.entries(changes)) {
+      if (!uid || !key.startsWith(`${direction}:`)) continue;
+      const iri = key.slice(direction.length + 1);
+      if (direction === "property") next = fctQueryTreeApi.addProperty(next, iri);
+      else next = fctQueryTreeApi.setRoleFilter(next, iri, true);
+    }
+    const byIri = new Map(Object.entries(changes).filter(([key]) => key.startsWith(`${direction}:`))
+      .map(([key, value]) => [key.slice(direction.length + 1), value]));
+    // Synthetic keys are scoped to the current view siblings. A property with
+    // the same IRI at a different breadcrumb must never inherit this OR UID.
+    const findViewScope = (nodes: typeof next.children): typeof next.children | null => {
+      if (nodes.some(node => node.name === "view")) return nodes;
+      for (const node of nodes) {
+        const nested = findViewScope(node.children);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    const scopeIds = new Set((findViewScope(next.children) ?? []).map(node => node.id));
+    const apply = (nodes: typeof next.children): typeof next.children => nodes.map(node => {
+      const attributes = { ...node.attributes };
+      if (node.name === direction) {
+        const hasNodeChange = Object.prototype.hasOwnProperty.call(changes, node.id);
+        const hasIriChange = scopeIds.has(node.id) && byIri.has(node.attributes.iri ?? "");
+        if (hasNodeChange || hasIriChange) {
+          const uid = hasNodeChange ? changes[node.id] : byIri.get(node.attributes.iri ?? "");
+          if (uid) attributes.uid = uid;
+          else delete attributes.uid;
+        }
+      }
+      return { ...node, attributes, children: apply(node.children) };
+    });
+    const newIdUsed = Object.values(changes).includes(orCounter);
+    replaceLiveQuery({ ...next,
+      attributes: { ...next.attributes, uctr: (parseInt(orCounter, 36) + (newIdUsed ? 1 : 0)).toString(36) },
+      children: apply(next.children),
+    });
+    configureController.send({ type: "COMMITTED" });
+    } catch (error) {
+      configureController.send({ type: "COMMIT_FAILED", error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
   const {
     FACET_PAGE_SIZE,
     configurePropertyKind, setConfigurePropertyKind, configureRoleKind, setConfigureRoleKind,
@@ -86,38 +206,70 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
     showClassResults,
     toggleClass,
   } = workspace;
-  const [kindAvailability, setKindAvailability] = useState<Record<string, string[]> | null>(null);
-  const [checkingKinds, setCheckingKinds] = useState(false);
+  const [kindController] = useState(createMaestroKindDiscoveryController);
+  const [kindRetry, setKindRetry] = useState(0);
+  const kindsRevision = useSyncExternalStore(subscribeMaestroKinds, getMaestroKindsRevision, getMaestroKindsRevision);
+  const kindSnapshot = useSyncExternalStore(kindController.subscribe, kindController.getSnapshot, kindController.getSnapshot);
   const kindScopeXml = serializeFctQuery(queryTree);
+  const kindKey = defaultLeftTab === "facets" ? `${kindScopeXml}::patterns-${kindsRevision}::retry-${kindRetry}` : "";
+  const kindState = selectKinds(kindSnapshot, kindKey);
+  const checkingKinds = kindState.loading;
+  const kindAvailability = kindState.availability;
+  useEffect(() => { kindController.start(); return () => kindController.stop(); }, [kindController]);
   useEffect(() => {
-    if (defaultLeftTab !== "facets") return;
-    const controller = new AbortController();
-    setCheckingKinds(true);
-    void (async () => {
-      const next: Record<string, string[]> = {};
-      try {
-        await Promise.all((["property", "role"] as const).map(async direction => {
+    if (!kindKey) { kindController.clear(); return; }
+    const snapshotTree = JSON.parse(JSON.stringify(queryTree));
+    const address = queryTree.attributes.addr;
+    kindController.execute(kindKey, async signal => {
+      const timeoutMs = readMaestroWidgetTimeouts().kinds * 1000;
+      const timeout = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+      const requestSignal = timeout ? AbortSignal.any([signal, timeout]) : signal;
+      // Client owns Kind SPARQL generation using the in-memory RDF projection
+      // populated once at login. The untouched /sparql route is only the transport.
+      const entries = await Promise.all((["property", "role"] as const).map(async direction => {
+        async function run(query: string): Promise<{ results?: {bindings?: Array<{maestroKind?:{value?:string}}>};boolean?:boolean;error?:string;incomplete?:boolean }> {
           const response = await maestroQueryFetch("/proxy/api/sparql", {
-            method: "POST", signal: controller.signal, cache: "no-store",
-            headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": `Configure:Kinds:${direction}` },
-            body: JSON.stringify({ kindAvailability: { tree: JSON.parse(JSON.stringify(queryTree)), direction,
-              addr: queryTree.attributes.addr } }),
+            method: "POST", signal: requestSignal, cache: "no-store",
+            headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": `Configure:Kinds:${direction}`,
+              ...(timeoutMs ? { "X-Maestro-Query-Timeout-Ms": String(timeoutMs) } : {}) },
+            body: JSON.stringify({ addr: address, query }),
           });
-          const data = await response.json() as { kinds?: string[]; error?: string };
-          if (!response.ok || !Array.isArray(data.kinds)) throw new Error(data.error || `Kind discovery HTTP ${response.status}`);
-          next[direction] = data.kinds;
+          const data = await response.json() as { results?: {bindings?: Array<{maestroKind?:{value?:string}}>};boolean?:boolean;error?:string;incomplete?:boolean };
+          if (!response.ok || data.incomplete) throw new Error(data.error || `Kind discovery HTTP ${response.status}`);
+          return data;
+        }
+        const query = buildFctKindAvailabilitySparql(snapshotTree, direction);
+        if (!query) throw new Error(`Cannot compile ${direction} Kind scope.`);
+        try {
+          const batch = await run(query);
+          if (Array.isArray(batch.results?.bindings)) {
+            const found = new Set(batch.results.bindings.map(row => row.maestroKind?.value).filter((value): value is string => Boolean(value)));
+            return [direction, MAESTRO_KIND_IDS.filter(kind => found.has(kind))] as const;
+          }
+        } catch (error) {
+          if (requestSignal.aborted) throw error;
+          // Older Virtuoso endpoints may reject the VALUES/EXISTS batching
+          // idiom. Fall back to normal client-generated ASK queries.
+          browserLog.warn("configure.kinds.batch-fallback", error);
+        }
+        const checks = await Promise.allSettled(MAESTRO_KIND_IDS.map(async kind => {
+          const ask = buildFctKindAvailabilitySparql(snapshotTree, direction, kind);
+          if (!ask) throw new Error(`Cannot compile ${kind} preflight.`);
+          return (await run(ask)).boolean ? kind : null;
         }));
-        if (!controller.signal.aborted) setKindAvailability(next);
-      } catch (error) {
-        if (!controller.signal.aborted) { setKindAvailability(null); console.warn("Kind discovery unavailable; displaying all kinds", error); }
-      } finally {
-        if (!controller.signal.aborted) setCheckingKinds(false);
-      }
-    })();
-    return () => controller.abort();
-  }, [kindScopeXml, defaultLeftTab, queryTree.attributes.addr]);
+        const success = checks.filter(check => check.status === "fulfilled");
+        if (!success.length) {
+          const first = checks.find(check => check.status === "rejected");
+          throw first && first.status === "rejected" ? first.reason : new Error("Kind availability queries failed.");
+        }
+        const found = success.flatMap(check => check.status === "fulfilled" && check.value ? [check.value] : []);
+        return [direction, found] as const;
+      }));
+      return Object.fromEntries(entries) as { property: string[]; role: string[] };
+    });
+  }, [kindController, kindKey, queryTree.attributes.addr]);
   const availableKinds = (direction: "property" | "role", selected: string) => {
-    const known = ["web-url", "string", "numeric", "date", "email", "phone"];
+    const known = MAESTRO_KIND_IDS;
     const found = kindAvailability?.[direction];
     // Keep any selected kind visible until the user changes it.
     return known.filter(kind => !found || found.includes(kind) || kind === selected);
@@ -288,35 +440,47 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                                 <h2 className="truncate text-sm font-semibold">{group}</h2>
                               </button>
                             </div>
-                            {(group === "Properties" || group === "Roles") && <select
+                            {(group === "Properties" || group === "Roles") && checkingKinds && <span role="status" className="shrink-0 text-xs text-white/90"><ElapsedStatus label="Kinds" category="kinds" /></span>}
+                            {(group === "Properties" || group === "Roles") && kindState.error && !checkingKinds && <button type="button" className="rounded border border-white/50 px-2 py-1 text-xs text-white" title={kindState.error} onClick={() => setKindRetry(value => value + 1)}>Kinds unavailable</button>}
+                            {(group === "Properties" || group === "Roles") && kindState.ready && !checkingKinds && <select
                               aria-label={`${group} object kind`}
-                              aria-busy={checkingKinds}
+                              aria-busy={false}
                               value={group === "Properties" ? configurePropertyKind : configureRoleKind}
                               onChange={event => group === "Properties" ? setConfigurePropertyKind(event.target.value) : setConfigureRoleKind(event.target.value)}
-                              className="max-w-32 rounded border border-white/40 bg-transparent px-1 py-1 text-xs text-white"
+                              className={`max-w-32 rounded border border-white/40 bg-transparent px-1 py-1 text-xs text-white ${((group === "Properties" ? configurePropertyKind : configureRoleKind) === "all") ? "opacity-0 group-hover/header:opacity-100 focus:opacity-100" : ""}`}
                             >
                               {["all", ...availableKinds(group === "Properties" ? "property" : "role", group === "Properties" ? configurePropertyKind : configureRoleKind)].map(kind => <option key={kind} className="bg-background text-foreground" value={kind}>{kind === "all" ? "All kinds" : kind}</option>)}
                             </select>}
-                            {group === "Properties" && (
-                              <QueryInspectorButton
+                            {group === "Properties" && <LeftWidgetButtonTray threshold={3} actions={[{
+                              id: "add-or-properties", label: orQuotaExceeded ? "Disjunction quota exceeded" : "Add OR", icon: <Split className="size-4" />,
+                              when: selectedItems.length > 0 && orEditing !== "Properties", disabled: orQuotaExceeded || facetListStale,
+                              onSelect: () => beginOrGroup("Properties"),
+                            }, {
+                              id: "inspect-properties", label: "Inspect Properties query", icon: <Code2 className="size-4" />,
+                              render: <QueryInspectorButton
                                 query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES)}\n<!-- FCT API option: view=properties -->`}
                                 filename="properties-fct-query.xml"
                                 label="View Properties widget query"
                                 headerTone
                                 countQuery={propertyFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "property", propertyFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.PROPERTIES)) : undefined}
                                 countFilename="properties-first-item-count.sparql"
-                              />
-                            )}
-                            {group === "Roles" && (
-                              <QueryInspectorButton
+                              />,
+                              }]} />}
+                            {group === "Roles" && <LeftWidgetButtonTray threshold={3} actions={[{
+                              id: "add-or-roles", label: orQuotaExceeded ? "Disjunction quota exceeded" : "Add OR", icon: <Split className="size-4" />,
+                              when: selectedItems.length > 0 && orEditing !== "Roles", disabled: orQuotaExceeded || facetListStale,
+                              onSelect: () => beginOrGroup("Roles"),
+                            }, {
+                              id: "inspect-roles", label: "Inspect Roles query", icon: <Code2 className="size-4" />,
+                              render: <QueryInspectorButton
                                 query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES_IN)}\n<!-- FCT API option: view=properties-in -->`}
                                 filename="roles-fct-query.xml"
                                 label="View Roles widget query"
                                 headerTone
                                 countQuery={roleFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "role", roleFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.PROPERTIES_IN)) : undefined}
                                 countFilename="roles-first-item-count.sparql"
-                              />
-                            )}
+                              />,
+                              }]} />}
                             <Tooltip><TooltipTrigger render={<span
                               className={`ml-auto shrink-0 px-2 text-xs font-normal ${(group === "Properties" && propertyFacetError) || (group === "Classes" && classFacetError) || (group === "Roles" && roleFacetError) ? "text-red-100" : "text-white/90"}`}
                               aria-live="polite"
@@ -347,14 +511,33 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                           {(group === "Properties" || group === "Roles") &&
                             selectedItems.length > 0 && (
                               <div className={`mb-2 rounded-md border border-border/70 bg-background/80 p-2 ${facetListStale ? "opacity-45" : ""}`} aria-disabled={facetListStale || undefined}>
-                                <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">Selected</div>
+                                <div className="mb-1 flex items-center justify-between gap-2 px-1">
+                                  <span className={`text-xs font-medium ${orEditing === group ? "text-foreground" : "text-muted-foreground"}`}>
+                                    {orEditing === group ? <>Selected · <span className="rounded bg-accent px-1.5 py-0.5 font-semibold">Add OR</span></> : "Selected"}
+                                  </span>
+
+                                </div>
                                 <div className={PROPERTY_ROLE_ITEM_GAP_CLASS}>
                                   {selectedItems.map((item) => (
                                     <div
                                       key={item.key}
-                                      className={`flex w-full min-w-0 items-start gap-2 py-[1px] ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && ((group === "Properties" && facetHoverPreview.direction === "forward") || (group === "Roles" && facetHoverPreview.direction === "reverse")) ? "!border-purple-500" : "border-transparent"}`}
+                                      onClick={(event) => {
+                                        if (orEditing !== group || facetListStale || (event.target as HTMLElement).closest('[role="menu"]')) return;
+                                        clearTutorialPreview();
+                                        selectOrNode(group, item.key);
+                                      }}
+                                      onKeyDown={(event) => {
+                                        if (orEditing !== group || facetListStale || event.target !== event.currentTarget) return;
+                                        if (event.key === "Enter" || event.key === " ") {
+                                          event.preventDefault(); selectOrNode(group, item.key);
+                                        }
+                                      }}
+                                      role={orEditing === group ? "button" : undefined}
+                                      tabIndex={orEditing === group && !facetListStale ? 0 : undefined}
+                                      aria-label={orEditing === group ? `${effectiveOrId(group, item.key) ? "Remove from" : "Add to"} OR condition: ${item.label}` : undefined}
+                                      className={`relative flex w-full min-w-0 items-start gap-2 rounded px-1.5 py-1 ${orEditing === group ? "cursor-pointer hover:bg-accent/70 focus-within:bg-accent/70" : ""} ${orEditing === group && effectiveOrId(group, item.key) ? "bg-accent/60 ring-1 ring-ring/30" : ""} ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && ((group === "Properties" && facetHoverPreview.direction === "forward") || (group === "Roles" && facetHoverPreview.direction === "reverse")) ? "!border-purple-500" : "border-transparent"}`}
                                     >
-                                      <button
+                                      {orEditing !== group && <button
   type="button"
   disabled={facetListStale}
   data-excluded={isFacetExcluded(group, item.key) ? "true" : undefined}
@@ -364,7 +547,9 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
   onClick={(event) => {
     clearTutorialPreview();
 
-    if (event.shiftKey) {
+    if (orEditing === group) {
+      selectOrNode(group as "Properties" | "Roles", item.key);
+    } else if (event.shiftKey) {
       handleFacetShiftClick(group, item.key, true);
     } else if (group === "Properties") {
       handlePropertyCheckboxChange(item.key, false);
@@ -380,7 +565,7 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
   ) : (
     <SquareCheck className="size-4 rounded-[3px] bg-black text-white overflow-hidden" aria-hidden="true" />
   )}
-</button>
+</button>}
 									  <div className="min-w-0 flex-1 flex flex-col items-start gap-0">
                                       {group === "Properties" ? (
                                         <Tooltip><TooltipTrigger render={<button
@@ -388,35 +573,46 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                                           className={`min-w-0 break-all text-sm text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : item.count === 0 ? "text-destructive" : ""}`}
                                           onMouseEnter={() => beginFacetHoverPreview(item.key, "forward", item.label, "configure")}
                                           onMouseLeave={clearTutorialPreview}
-                                          onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "forward"); }}
+                                          onClick={(event) => { clearTutorialPreview(); if (orEditing === group) return; navigateIntoRelationship(item.key, "forward"); }}
                                         >
-                                          {item.label}
+                                          <OrUidLabel uid={orEditing === group ? effectiveOrId("Properties", item.key) ?? undefined : activePropertyFilters.find(n => n.attributes.iri === item.key)?.attributes.uid}>{item.label}</OrUidLabel>
                                           {autoConfiguredFacetKeys.has(`property::${item.key}`) && (
                                             <Bot className="ml-1 inline size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                                           )}
-                                        </button>} /><TooltipContent>{`Drill down through ${item.label}`}</TooltipContent></Tooltip>
+                                        </button>} /><TooltipContent>{orEditing === group ? (effectiveOrId("Properties", item.key) ? "Remove from OR condition" : "Add to OR condition") : `Drill down through ${item.label}`}</TooltipContent></Tooltip>
                                       ) : (
                                         <Tooltip><TooltipTrigger render={<button
                                           type="button"
                                           className={`min-w-0 break-all text-sm text-left underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === item.key && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : item.count === 0 ? "text-destructive" : ""}`}
                                           onMouseEnter={() => beginFacetHoverPreview(item.key, "reverse", item.label, "configure")}
                                           onMouseLeave={clearTutorialPreview}
-                                          onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "reverse"); }}
+                                          onClick={(event) => { clearTutorialPreview(); if (orEditing === group) return; navigateIntoRelationship(item.key, "reverse"); }}
                                         >
-                                          {item.label}
+                                          <OrUidLabel uid={orEditing === group ? effectiveOrId("Roles", item.key) ?? undefined : activeRoleFilters.find(n => n.attributes.iri === item.key)?.attributes.uid}>{item.label}</OrUidLabel>
                                           {autoConfiguredFacetKeys.has(`property-in::${item.key}`) && (
                                             <Bot className="ml-1 inline size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                                           )}
-                                        </button>} /><TooltipContent>{`Filter by role ${item.label}`}</TooltipContent></Tooltip>
+                                        </button>} /><TooltipContent>{orEditing === group ? (effectiveOrId("Roles", item.key) ? "Remove from OR condition" : "Add to OR condition") : `Filter by role ${item.label}`}</TooltipContent></Tooltip>
                                       )}
-                                      {item.example && !(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) && <button type="button" title={item.example.label} disabled={facetListStale || item.example.termType !== "uri"} onClick={() => showClassResults(item.example!.uri, activeLeafId)} className="block break-words text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>e.g.</em> {ellipsize(item.example.label)}</button>}
+                                      {orEditing !== group && item.example && !(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) && <button type="button" title={item.example.label} disabled={facetListStale || item.example.termType !== "uri"} onClick={() => showClassResults(item.example!.uri, activeLeafId)} className="block break-words text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>e.g.</em> {ellipsize(item.example.label)}</button>}
 									  </div>
-                                      <span className="shrink-0 text-xs text-muted-foreground">{item.count === null
+                                      <span className="shrink-0 px-1 text-xs text-muted-foreground">{item.count === null
                                         ? <DistinctCount tree={queryTree} kind={group === "Properties" ? "property" : "role"} uri={item.key} />
                                         : shortenCount(item.count)}</span>
+                                      {orEditing === group && orPopupFor === orDraftKey(group, item.key) &&
+                                        <div role="menu" aria-label="Select OR condition" className="absolute right-0 top-full z-30 min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+                                          {existingOrGroups.map(uid => <button role="menuitem" key={uid} type="button" className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent" onClick={(event) => { event.stopPropagation(); assignOrNode(group, item.key, uid); }}><OrUidLabel uid={uid}>{`Join OR ${uid.toUpperCase()}`}</OrUidLabel></button>)}
+                                          <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent" onClick={(event) => { event.stopPropagation(); assignOrNode(group, item.key, orCounter); }}>New OR condition</button>
+                                          <button type="button" className="w-full rounded px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent" onClick={(event) => { event.stopPropagation(); configureController.send({ type: "MENU", key: null }); }}>Cancel</button>
+                                        </div>}
                                     </div>
                                   ))}
                                 </div>
+                                {orEditing === group && transaction.error && <p role="alert" className="mt-2 text-xs text-destructive">{transaction.error}</p>}
+                                {orEditing === group && <div className="mt-2 flex justify-end gap-2 border-t pt-2">
+                                  <button type="button" className="rounded border px-2 py-1 text-xs hover:bg-accent" onClick={commitOrGroup}>Update</button>
+                                  <button type="button" className="rounded border px-2 py-1 text-xs hover:bg-accent" onClick={() => configureController.send({ type: "CANCEL" })}>Close</button>
+                                </div>}
                               </div>
                             )}
 
@@ -543,7 +739,7 @@ onMouseLeave={() => {
                                     onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "forward"); }}
                                   >
                                     {item.label}
-                                  </button>} /><TooltipContent>{`Drill down through ${item.label}`}</TooltipContent></Tooltip>
+                                  </button>} /><TooltipContent>{orEditing === group ? (effectiveOrId("Properties", item.key) ? "Remove from OR condition" : "Add to OR condition") : `Drill down through ${item.label}`}</TooltipContent></Tooltip>
                                 ) : group === "Roles" ? (
                                   <Tooltip><TooltipTrigger render={<button
                                     type="button"
@@ -553,7 +749,7 @@ onMouseLeave={() => {
                                     onClick={() => { clearTutorialPreview(); navigateIntoRelationship(item.key, "reverse"); }}
                                   >
                                     {item.label}
-                                  </button>} /><TooltipContent>{`Filter by role ${item.label}`}</TooltipContent></Tooltip>
+                                  </button>} /><TooltipContent>{orEditing === group ? (effectiveOrId("Roles", item.key) ? "Remove from OR condition" : "Add to OR condition") : `Filter by role ${item.label}`}</TooltipContent></Tooltip>
                                 ) : group === "Classes" ? (
                                   <Tooltip><TooltipTrigger render={<button
                                     type="button"

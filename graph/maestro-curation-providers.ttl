@@ -63,4 +63,12 @@ _:curatedProviderList23 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/reso
 _:curatedProviderList24 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/provider-approval-machine> ;
     rdf:rest _:curatedProviderList25 .
 _:curatedProviderList25 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/curator-approval-machine> ;
+    rdf:rest _:curatedProviderList26 .
+_:curatedProviderList26 rdf:first <gttp://ggg.maestro.ui/provider/tag-cloud> ;
+    rdf:rest _:curatedProviderList27 .
+_:curatedProviderList27 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/kinds> ;
+    rdf:rest _:curatedProviderList28 .
+_:curatedProviderList28 rdf:first <gttp://ggg.maestro.ecosys/analyze/spider> ;
+    rdf:rest _:curatedProviderList29 .
+_:curatedProviderList29 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/temporal-inferred> ;
     rdf:rest rdf:nil .

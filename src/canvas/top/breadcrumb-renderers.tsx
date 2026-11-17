@@ -1,6 +1,8 @@
 "use client";
 
 import { Signal } from "lucide-react";
+import { InputGroup, InputGroupAddon, InputGroupButton } from "@/components/ui/input-group";
+import { BreadcrumbNodeMinus } from "@/canvas/top/breadcrumb";
 
 import { type ScopeValue } from "@/canvas/utils/fct-response";
 
@@ -12,8 +14,9 @@ import maestroLanguages from "@/data/maestro-languages.json";
 
 import { toLabel } from "@/lib/uri-labels";
 
-import type { CSSProperties } from "react";
-import { ButtonGroup } from "@/components/ui/button-group";
+import { type CSSProperties } from "react";
+import { Button } from "@/components/ui/button";
+import { OrUidIcon } from "@/components/ui/or-uid-label";
 
 import { Badge } from "@/components/ui/badge";
 
@@ -98,7 +101,7 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 
 /** Breadcrumb/analysis rendering in the presentation layer, not the workspace lifecycle. */
 export function createBreadcrumbRenderers(workspace: WorkspaceController) {
-  const { ActiveSignalIcon, activeBreadcrumbButtonRef, activeBreadcrumbIndex, activeLeafId, boundValueLabel, boundValueNodes, breadcrumbBadgeMode, breadcrumbPreviewPendingIds, breadcrumbPreviewSummaries, classBreadcrumbLabels, clearTutorialPreview, compactIri, deleteNode, facetHoverPreview, getBreadcrumbSiblings, getPropertyPath, handleBreadcrumbClick, handleRootBreadcrumbClick, hoveredBreadcrumbBadgeId, namePropertyMenuOpen, navigateResultBadge, navigateToPropertyPath, openBreadcrumbDropdownId, popBreadcrumbOrBinding, queryTree, renderBreadcrumbMenuHeader, renderBreadcrumbNodeMenuItem, rootBadgePossessive, rootLabelPossessive, rootSearchExpanded, rootSearchText, rootUriLabel, rootUriValues, search, searchInputGroup, setHoveredBreadcrumbBadgeId, setOpenBreadcrumbDropdownId, setRootSearchExpanded, signalOptions, textSearchMode, toggleBreadcrumbBadgeMode, tutorialBreadcrumbPath, tutorialBreadcrumbTargetId } = workspace;
+  const { rootBreadcrumb, ActiveSignalIcon, activeBreadcrumbButtonRef, activeBreadcrumbIndex, activeLeafId, boundValueLabel, boundValueNodes, breadcrumbBadgeMode, breadcrumbPreviewPendingIds, breadcrumbPreviewSummaries, classBreadcrumbLabels, clearTutorialPreview, compactIri, deleteNode, facetHoverPreview, getBreadcrumbSiblings, getPropertyPath, handleBreadcrumbClick, handleRootBreadcrumbClick, pasteRecentRootClipboard, hoveredBreadcrumbBadgeId, namePropertyMenuOpen, navigateResultBadge, navigateToPropertyPath, openBreadcrumbDropdownId, popBreadcrumbOrBinding, queryTree, renderBreadcrumbMenuHeader, renderBreadcrumbNodeMenuItem, rootBadgePossessive, rootLabelPossessive, rootSearchExpanded, rootSearchText, rootUriLabel, rootUriValues, search, searchInputGroup, setHoveredBreadcrumbBadgeId, setOpenBreadcrumbDropdownId, setRootSearchExpanded, setTextSearchMode, signalPickerExpanded, setSignalPickerExpanded, signalOptions, textSearchMode, toggleBreadcrumbBadgeMode, tutorialBreadcrumbPath, tutorialBreadcrumbTargetId } = workspace;
 function renderScopeValueBadge(scope: ScopeValue, term: ScopeValue["values"][number], termIndex: number, options?: {valueOnly?: boolean; style?: CSSProperties}) {
     const propertyLabel = toLabel(scope.property);
     const visiblePropertyLabel = scope.direction === "reverse" ? `${propertyLabel} of` : propertyLabel;
@@ -120,64 +123,81 @@ function renderScopeValueBadge(scope: ScopeValue, term: ScopeValue["values"][num
   }
 
 function renderRootBreadcrumb(tableHeader = false, presentationStyle?: CSSProperties, showMetadata = true) {
-    return (<span
-          className="relative flex min-w-0 shrink-0 items-center gap-1"
-          style={{ zIndex: hoveredBreadcrumbBadgeId === "query-root" ? tutorialBreadcrumbPath.length + 100 : 1 }}
-          onMouseEnter={() => setHoveredBreadcrumbBadgeId("query-root")}
-          onMouseLeave={() => {
-            setHoveredBreadcrumbBadgeId((current) => current === "query-root" ? null : current);
-            if (!namePropertyMenuOpen) setRootSearchExpanded(false);
+    const rootLabel = facetHoverPreview?.kind === "record" ? facetHoverPreview.label
+      : !search.trim() ? "Everything" : textSearchMode === "uri"
+        ? `${rootUriLabel}${rootLabelPossessive}` : `"${search}"${rootLabelPossessive}`;
+    const rootClassLabels = classBreadcrumbLabels(null);
+    const rootConstraints = queryTree.children.filter((node) => node.name === "class" || node.name === "status");
+    // The root is a specialized breadcrumb node, not a separate toolbar:
+    // it keeps the existing navigation, metadata, and minus/stack-pop action.
+    return <span data-maestro-root-editor="true"
+      className="relative flex min-w-0 shrink-0 items-center"
+      style={{ zIndex: hoveredBreadcrumbBadgeId === "query-root" ? tutorialBreadcrumbPath.length + 100 : 1 }}>
+      <InputGroup aria-label="Root breadcrumb" data-maestro-breadcrumb-node="root"
+        className={`h-10 min-w-0 flex-nowrap overflow-visible ${rootSearchExpanded ? "w-[min(34rem,calc(100vw-10rem))]" : "w-max max-w-[min(34rem,calc(100vw-10rem))]"} ${facetHoverPreview?.kind === "record" ? "text-purple-800 dark:text-purple-200" : ""}`}>
+        <span data-maestro-root-label-region="true" className="flex h-full min-w-0 flex-1 items-stretch"
+          onMouseEnter={() => {
+            rootBreadcrumb.send({ type: "LABEL_ENTER" });
+            setHoveredBreadcrumbBadgeId("query-root");
+            void pasteRecentRootClipboard();
           }}
-        >
-          <ButtonGroup aria-label="Root query controls" className={`min-w-0 max-w-full ${tableHeader ? "border-0 shadow-none" : rootSearchExpanded ? "border border-input" : "border border-border"} ${facetHoverPreview?.kind === "record" ? "rounded-md !border-purple-500/80 text-purple-800 dark:text-purple-200" : ""}`}>
-            {rootSearchExpanded ? (
-              <div className="min-w-0 max-w-[min(90rem,calc(100vw-12rem))] flex-1">
-                {searchInputGroup}
-              </div>
-            ) : (
-              <Tooltip><TooltipTrigger render={<button
-                type="button"
-                ref={getPropertyPath().length === 0 ? activeBreadcrumbButtonRef : undefined}
-                onClick={handleRootBreadcrumbClick}
-                style={presentationStyle}
-                className={`relative cursor-pointer rounded-none border-0 px-2.5 pb-1.5 pt-4 text-sm ${facetHoverPreview?.kind === "record" ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200" : getPropertyPath().length === 0 ? "bg-accent font-medium" : "bg-background hover:bg-accent"}`}
-              >
-                {classBreadcrumbLabels(null).length > 0 && (
-                  <span className="absolute left-1 top-0 max-w-[calc(100%-8px)] truncate text-left text-[9px] font-normal leading-3 text-muted-foreground" aria-label={`Classes: ${classBreadcrumbLabels(null).join(", ")}`}>
-                    {classBreadcrumbLabels(null).join(", ")}
-                  </span>
-                )}
-                {facetHoverPreview?.kind === "record"
-                  ? facetHoverPreview.label
-                  : !search.trim()
-                    ? "Everything"
-                    : textSearchMode === "uri"
-                      ? `${rootUriLabel}${rootLabelPossessive}`
-                      : `"${search}"${rootLabelPossessive}`}
-              </button>} /><TooltipContent>{`Return to the top-level query view${textSearchMode === "uri" && rootSearchText ? ` · ${rootSearchText}` : ""}${classBreadcrumbLabels(null).length ? ` · Classes: ${classBreadcrumbLabels(null).join(", ")}` : ""}`}</TooltipContent></Tooltip>
-            )}
-            {!rootSearchExpanded && queryTree.children.some((node) => node.name === "class" || node.name === "status") && (
-              <Tooltip><TooltipTrigger render={<button
-                type="button"
-                onClick={() => {
-                  const rootClasses = queryTree.children.filter((node) => node.name === "class" || node.name === "status");
-                  const lastRootClass = rootClasses[rootClasses.length - 1];
-                  if (lastRootClass) deleteNode(lastRootClass.id);
-                }}
-                className="flex h-auto min-h-10 w-7 shrink-0 items-center justify-center border-l border-input text-muted-foreground hover:bg-accent hover:text-destructive"
-                aria-label="Remove the last root class or state constraint"
-              >−</button>} /><TooltipContent>{"Remove the last root class or state constraint"}</TooltipContent></Tooltip>
-            )}
-            {!rootSearchExpanded && <Tooltip><TooltipTrigger render={<button
-              type="button"
-              onFocus={() => setRootSearchExpanded(true)}
-              onClick={() => setRootSearchExpanded(true)}
-              className="flex h-auto min-h-10 w-7 shrink-0 items-center justify-center rounded border border-input py-0 text-muted-foreground hover:bg-accent hover:text-foreground"
-              aria-label={`Search signal: ${signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}`}
-            >
-              <span className="relative flex size-4 items-center justify-center">{textSearchMode !== "clear" && <Signal strokeWidth={2.5} className="absolute inset-0 size-4 text-muted-foreground/35" aria-hidden="true" />}<ActiveSignalIcon strokeWidth={2.5} className="absolute inset-0 size-4" aria-hidden="true" /></span>
-            </button>} /><TooltipContent>{signalOptions.find(({ mode }) => mode === textSearchMode)?.label ?? "Clear Terms"}</TooltipContent></Tooltip>}
-          </ButtonGroup>
+          onMouseLeave={(event) => {
+            // Portaled combobox or name-property menu is part of the editor.
+            if (event.relatedTarget instanceof Element &&
+              event.relatedTarget.closest('[data-slot="combobox-content"], [data-slot="dropdown-menu-content"]')) return;
+            if (!namePropertyMenuOpen) rootBreadcrumb.send({ type: "LABEL_LEAVE" });
+            setHoveredBreadcrumbBadgeId((current) => current === "query-root" ? null : current);
+          }}
+          onFocusCapture={() => rootBreadcrumb.send({ type: "INPUT_FOCUS" })}
+          onBlurCapture={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null) && !namePropertyMenuOpen)
+              rootBreadcrumb.send({ type: "INPUT_BLUR" });
+          }}>
+          {rootSearchExpanded ? searchInputGroup : (
+            <Tooltip><TooltipTrigger render={<button type="button"
+              data-maestro-root-label="true" ref={getPropertyPath().length === 0 ? activeBreadcrumbButtonRef : undefined}
+              onClick={handleRootBreadcrumbClick} style={presentationStyle}
+              className={`relative flex h-full min-w-0 flex-1 cursor-pointer items-center truncate px-2.5 text-left text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${getPropertyPath().length === 0 ? "font-medium" : ""}`}
+              aria-label={`Return to the top-level query view: ${rootLabel}`}>
+              {rootClassLabels.length > 0 && <span className="absolute left-2 top-0 max-w-[calc(100%-12px)] truncate text-[9px] leading-3 text-muted-foreground" aria-label={`Classes: ${rootClassLabels.join(", ")}`}>
+                {rootClassLabels.join(", ")}
+              </span>}
+              <span className={`truncate ${rootClassLabels.length ? "pt-2" : ""}`}>{rootLabel}</span>
+            </button>} /><TooltipContent>{`Return to the top-level query view${textSearchMode === "uri" && rootSearchText ? ` · ${rootSearchText}` : ""}${rootClassLabels.length ? ` · Classes: ${rootClassLabels.join(", ")}` : ""}`}</TooltipContent></Tooltip>
+          )}
+        </span>
+        {/* Inherited breadcrumb stack-pop action: position and semantics are fixed.
+            It is rendered in BOTH the resting and editable root presentations. */}
+        {rootConstraints.length > 0 && <BreadcrumbNodeMinus
+          variant="input"
+          ariaLabel="Remove the last root class or state constraint"
+          tooltip="Remove the last root class or state constraint"
+          onPop={() => deleteNode(rootConstraints[rootConstraints.length - 1].id)} />}
+        <InputGroupAddon align="inline-end" data-maestro-signal-region="true"
+          className="h-10 gap-0 px-0"
+          aria-label="Root search signals"
+          onMouseEnter={() => rootBreadcrumb.send({ type: "SIGNAL_ENTER" })}
+          onMouseLeave={() => rootBreadcrumb.send({ type: "SIGNAL_LEAVE" })}
+          onFocusCapture={() => rootBreadcrumb.send({ type: "SIGNAL_ENTER" })}
+          onBlurCapture={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+              rootBreadcrumb.send({ type: "SIGNAL_LEAVE" });
+          }}>
+          {(signalPickerExpanded ? signalOptions : signalOptions.filter(option => option.mode === textSearchMode))
+            .map(({ mode, Icon, label }) => (
+              <Tooltip key={mode}><TooltipTrigger render={<InputGroupButton
+                type="button" variant="ghost" size="icon-sm" aria-label={label}
+                aria-pressed={textSearchMode === mode}
+                className="h-9 w-8 rounded-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 aria-pressed:text-foreground"
+                onClick={() => { setTextSearchMode(mode); rootBreadcrumb.send({ type: "SIGNAL_SELECTED" }); }}>
+                <span className="relative flex size-4 items-center justify-center">
+                  <Signal strokeWidth={2.5} className="absolute inset-0 size-4 opacity-30" aria-hidden="true" />
+                  <Icon strokeWidth={2.5} className="absolute inset-0 size-4" aria-hidden="true" />
+                </span>
+              </InputGroupButton>} /><TooltipContent>{label}</TooltipContent></Tooltip>
+            ))}
+        </InputGroupAddon>
+      </InputGroup>
           {showMetadata && (breadcrumbPreviewSummaries["query-root"] || breadcrumbPreviewPendingIds.has("query-root")) && (
             /* 15px centers this compact metadata badge beneath the next slash. */
             <span className="absolute left-[calc(100%+15px)] top-full -translate-x-1/2 pt-1"
@@ -211,7 +231,7 @@ function renderRootBreadcrumb(tableHeader = false, presentationStyle?: CSSProper
               )}
             </span>
           )}
-        </span>);
+    </span>;
   }
 
 function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath"][number], index: number, tableHeader = false, presentationStyle?: CSSProperties, showMetadata = true) {
@@ -283,13 +303,14 @@ function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath
                 ) : null;
               })()}
               {/* w-max lets the crumb stretch to its full "prop = value" statement; max-w-full only wraps it when it exceeds the whole bar. */}
-              <ButtonGroup aria-label={`Controls for ${breadcrumbLabel}`} className={`w-max max-w-full [&>*+*]:!border-l-0 ${tableHeader ? "order-1 border-0 shadow-none [&_button]:!border-0 [&_button]:!rounded-none" : ""} ${tutorialBreadcrumbTargetId === crumb.id ? "rounded-md !border-purple-500/80" : ""}`}>
-                <Tooltip><TooltipTrigger render={<button
-                  type="button"
+              <InputGroup aria-label={`Controls for ${breadcrumbLabel}`} data-maestro-breadcrumb-node={crumb.id} className={`h-10 w-max max-w-full flex-nowrap overflow-hidden ${tableHeader ? "border-0 shadow-none" : ""} ${tutorialBreadcrumbTargetId === crumb.id ? "text-purple-700 dark:text-purple-300" : ""}`}>
+                {breadcrumbNode?.attributes.uid && <InputGroupAddon align="inline-start" className="h-full min-h-0 w-7 justify-center border-r border-border bg-muted/30 px-0"><OrUidIcon uid={breadcrumbNode.attributes.uid} bare /></InputGroupAddon>}
+                <Tooltip><TooltipTrigger render={<InputGroupButton
+                  type="button" variant="ghost"
                   ref={crumb.id === activeLeafId && index === activeBreadcrumbIndex ? activeBreadcrumbButtonRef : undefined}
                   onClick={() => handleBreadcrumbClick(crumb.id)}
                   style={presentationStyle}
-                  className={`relative min-w-0 cursor-pointer break-words rounded-none border-0 px-2.5 pb-1.5 pt-4 text-left text-sm hover:bg-accent ${
+                  className={`relative h-full min-h-0 min-w-0 cursor-pointer break-words rounded-none px-2.5 text-left text-sm hover:bg-accent ${breadcrumbClasses.length ? "pb-1 pt-3" : "py-0"} ${
   tutorialBreadcrumbTargetId === crumb.id
     ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200"
     : index === activeBreadcrumbIndex
@@ -308,7 +329,7 @@ function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath
                     </span>
                   )}
                   {breadcrumbExcluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
-                  {breadcrumbBaseLabel}
+<span className="inline-flex min-w-0 max-w-full items-center whitespace-nowrap"><span className="min-w-0 truncate">{breadcrumbBaseLabel}</span></span>
                   {breadcrumbBoundValues.map((value, index) => (
                     <span key={value.id} className="ml-1 inline-flex items-baseline gap-1">
                       {index > 0 && <span>,</span>}
@@ -317,19 +338,15 @@ function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath
                     </span>
                   ))}
                   {breadcrumbHasSuccessor && !breadcrumbIsRole ? "’s" : ""}
-                </button>} /><TooltipContent>{`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}</TooltipContent></Tooltip>
-                <Tooltip><TooltipTrigger render={<button
-                  type="button"
-                  onClick={() => { clearTutorialPreview(); popBreadcrumbOrBinding(crumb); }}
-                  className="flex h-auto min-h-full w-7 shrink-0 self-stretch items-center justify-center rounded-none border-0 py-0 text-base leading-none text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  aria-label={topBoundValue
+                </InputGroupButton>} /><TooltipContent>{`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""}`}</TooltipContent></Tooltip>
+                <BreadcrumbNodeMinus variant="input"
+                  ariaLabel={topBoundValue
                     ? `Remove value ${boundValueLabel(topBoundValue)} bound to ${breadcrumbLabel}`
                     : `Pop ${breadcrumbLabel} from the breadcrumb stack`}
-                >
-                  −
-                </button>} /><TooltipContent>{topBoundValue
+                  tooltip={topBoundValue
                     ? "Remove the bound value; click again to pop this relationship"
-                    : "Pop this relationship and its descendants; preserve a sibling when available"}</TooltipContent></Tooltip>
+                    : "Pop this relationship and its descendants; preserve a sibling when available"}
+                  onPop={() => { clearTutorialPreview(); popBreadcrumbOrBinding(crumb); }} />
                 {(() => {
 					 const summary = breadcrumbPreviewSummaries[crumb.id] ?? breadcrumbNode?.uiResultSummary;
                   const hasMenu = breadcrumbSiblings.length > 0;
@@ -337,13 +354,13 @@ function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath
                   return (
                     <DropdownMenu open={openBreadcrumbDropdownId === crumb.id} onOpenChange={(open) => setOpenBreadcrumbDropdownId(open ? crumb.id : null)}>
                       <Tooltip>
-                        <TooltipTrigger render={<DropdownMenuTrigger asChild><button
-                          type="button"
+                        <TooltipTrigger render={<DropdownMenuTrigger asChild><InputGroupButton
+                          type="button" variant="ghost" size="icon-sm"
                           aria-label={`Choose a relationship for ${compactIri(crumb.uri)}`}
-                          className={`flex h-auto min-h-10 w-8 shrink-0 self-stretch items-center justify-center rounded-none border-0 p-0 ${tutorialBreadcrumbTargetId === crumb.id ? "bg-transparent text-purple-800 dark:text-purple-200" : `bg-background ${isInactiveSuffix ? "text-muted-foreground" : "text-foreground"}`} outline-none hover:bg-accent focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=open]:bg-accent`}
+                          className={`flex h-full min-h-0 w-8 shrink-0 self-stretch items-center justify-center rounded-none p-0 ${tutorialBreadcrumbTargetId === crumb.id ? "bg-transparent text-purple-800 dark:text-purple-200" : `bg-background ${isInactiveSuffix ? "text-muted-foreground" : "text-foreground"}`} outline-none hover:bg-accent focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=open]:bg-accent`}
                         >
                           <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m4 6 4 4 4-4" /></svg>
-                        </button></DropdownMenuTrigger>} />
+                        </InputGroupButton></DropdownMenuTrigger>} />
                         <TooltipContent>{"Choose a relationship"}</TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="end" className="z-50 w-max min-w-44 max-w-[calc(100vw-2rem)]">
@@ -359,7 +376,8 @@ function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath
                     </DropdownMenu>
                   );
                 })()}
-              </ButtonGroup>
+              </InputGroup>
+
             </span>
           );
   }

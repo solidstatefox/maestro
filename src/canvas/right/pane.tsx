@@ -1,8 +1,12 @@
 "use client";
+
+import { browserLog } from "@/lib/maestro-client-logging";
+
 import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 import { classifyRecordValue, RECORD_VALUE_KINDS, type RecordValueKind } from "@/lib/record-explorer-query";
+import { normalizeMaestroKind } from "@/lib/maestro-kinds";
 import dynamic from "next/dynamic";
 const RecordExplorer = dynamic(() => import("@/canvas/right/record-explorer").then(module => module.RecordExplorer), { ssr: false });
 import { decorateFollowedRecordSource, decorateWandedRecordProperties, resolveRecordInteraction, type RecordStatement } from "@/canvas/controllers/record-rdfa-decoration";
@@ -11,7 +15,7 @@ import { RecordStatusButtons, RecordStarButton } from "@/canvas/right/record-sta
 
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
 
-import { RecordValidationNotice, hasVisibleValidationWarning } from "@/canvas/right/validator";
+import { ValidationNotice, hasVisibleValidationWarning } from "@/components/ui/validation-notice";
 
 import maestroLanguages from "@/data/maestro-languages.json";
 
@@ -120,7 +124,14 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
   onRdfaAction?: (action: RecordRdfaAction) => void;
 }) {
   const [fullscreenRecord, setFullscreenRecord] = useState(false);
-  const [recordKindFilter, setRecordKindFilter] = useState<RecordValueKind | "all">("all");
+  const [recordKindFilter,setRecordKindFilterState]=useState<RecordValueKind|"all">(()=>{
+    if(typeof window==="undefined")return "all";
+    try{const saved=window.localStorage.getItem("maestro:kind:record")||"all";return saved==="all"?"all":normalizeMaestroKind(saved)??"all";}catch{return "all";}
+  });
+  const setRecordKindFilter=(kind:RecordValueKind|"all")=>{
+    setRecordKindFilterState(kind);
+    if(typeof window!=="undefined")try{window.localStorage.setItem("maestro:kind:record",kind);}catch{}
+  };
   const [xsltPortals, setXsltPortals] = useState<ReturnType<typeof getMaestroComponentPortals>>([]);
   const fullscreenFormattedRef = useRef<HTMLDivElement>(null);
   const rdfaHostRef = useRef<HTMLElement>(null);
@@ -201,6 +212,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     selectedRecordTermType,
     selectedResult,
     selectedUri,
+    recordSelectionCleared,
     setActiveBlankNodeTab,
     setDescribedRecord,
     setExplicitBlankNodeAnchor,
@@ -270,12 +282,17 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
         interactionMode === "pointer" && !event.shiftKey) return;
     const binding = resolveRecordInteraction(target, rows, interactionMode === "wand");
     const label = target.closest("button[about][data-maestro-predicate]");
-    if (fullscreenPane && onRdfaAction && binding &&
-        (interactionMode === "wand" || (event.shiftKey && Boolean(binding.value)))) {
+    if (fullscreenPane && onRdfaAction && binding && Boolean(binding.value) &&
+        target.closest("a,button,[role=button],[data-maestro-property-value]") ) {
       event.preventDefault();
       event.stopPropagation();
       onRdfaAction({ sessionIndex, statement: binding,
         intent: interactionMode === "wand" ? "wand" : "pivot" });
+      return;
+    }
+    if (fullscreenPane && target.closest("[data-maestro-property-value], [data-maestro-filter-property], [mui\\:action]")) {
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
     if (sessionIndex > 0 && target.closest("[data-maestro-carousel]")) {
@@ -333,9 +350,10 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
             <RecordPaneShell fullscreen={fullscreenPane}>
             <RightPaneBody paneRef={rdfaHostRef} onClickCapture={onRecordClickCapture}>
               <Collapsible open={recordControlsOpen} onOpenChange={setRecordControlsOpen} className="shrink-0 border-b">
-                <div className="group/record-header flex items-center gap-2 px-4 py-3">
-                  {sessionIndex === 0 && recordStatus.enabled && selectedUri && selectedRecordTermType !== "bnode" && <RecordStarButton statuses={recordStatus} />}
-                  <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
+                <div className="group/record-header px-4 pt-1 pb-0"
+                ><div className="flex min-w-0 items-center gap-2">
+                  {sessionIndex === 0 && workspace.accessCapabilities.canShowRecordStatusActions && recordStatus.enabled && selectedUri && selectedRecordTermType !== "bnode" && <RecordStarButton statuses={recordStatus} />}
+                  <div className="min-w-0 flex-1"><h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
                   {recordFormatEnabled && Boolean(currentFormattedRecordHtml) && formattedRecordButtonsHtml.record_title_icon && (
                     <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_title_icon }} />
                   )}
@@ -348,13 +366,14 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                       onMouseEnter={() => beginRecordHoverPreview(selectedUri, selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri)))}
                       onMouseLeave={clearTutorialPreview}
                     >{selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri))}</button>} /><TooltipContent>{`Set ${selectedUri} as the root record value`}</TooltipContent></Tooltip>
-                  ) : "Record"}
+                  ) : recordSelectionCleared ? "Common values across the result set" : "Record"}
                   </h2>
+                  </div>
                   {!recordControlsOpen && <div className="ml-auto flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                     <Separator orientation="vertical" className="h-4 shrink-0" />
                     <span className="truncate" title={selectedRecordGraph || "All graphs"}>{selectedRecordGraph ? toLabel(selectedRecordGraph) : "All graphs"}</span>
                   </div>}
-                  {selectedUri && <div className="ml-auto inline-flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/record-header:opacity-100 focus-within:opacity-100">
+                  {selectedUri && <div className="inline-flex max-w-0 shrink-0 items-center gap-1 overflow-hidden relative -top-1 p-1 opacity-0 transition-all duration-150 group-hover/record-header:max-w-[22rem] group-hover/record-header:overflow-visible group-hover/record-header:opacity-100 focus-within:max-w-[22rem] focus-within:overflow-visible focus-within:opacity-100">
                     <CollapsibleTrigger aria-label={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} title={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground">
                       {recordControlsOpen ? <ChevronDown className="size-4" aria-hidden="true" /> : <ChevronRight className="size-4" aria-hidden="true" />}
                     </CollapsibleTrigger>
@@ -380,11 +399,10 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                       <TooltipContent>Download DESCRIBE RDF</TooltipContent>
                     </Tooltip>
                   </div>}
+                  </div>
+                  {recordControlsOpen && selectedUri && <p className="min-w-0 w-full break-all text-xs leading-tight text-muted-foreground">{selectedUri}</p>}
                 </div>
-                <CollapsibleContent className="px-4 pb-3">
-                <p className="mt-1 break-all text-xs text-muted-foreground">
-                  {selectedUri}
-                </p>
+                <CollapsibleContent className="px-4 pb-2">
                 {selectedUri && <div className="mt-3 flex flex-wrap items-center gap-2">
                   <div className="inline-flex min-w-0 items-stretch overflow-hidden rounded-md border text-xs">
                     <span className="inline-flex shrink-0 items-center border-r bg-muted/40 px-2 text-muted-foreground">Graphs</span>
@@ -431,7 +449,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  {sessionIndex === 0 && recordStatus.enabled && selectedRecordTermType !== "bnode" && <RecordStatusButtons statuses={recordStatus} />}
+                  {sessionIndex === 0 && workspace.accessCapabilities.canShowRecordStatusActions && recordStatus.enabled && selectedRecordTermType !== "bnode" && <RecordStatusButtons statuses={recordStatus} />}
                   {recordGraphError && endpointReadyForQuery && <ErrorDetails prefix="Graph discovery failed" error={recordGraphError} />}{loadingRecordAuthors && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Loading authors" category="record" clockScope="recordAuthors" /></span>}{recordAuthorError && <ErrorDetails prefix="Author metadata" error={recordAuthorError} />}
                 </div>}
                 {(recordPolicy || isLoadingRecordPolicy || recordPolicyError) && <div id="record_button_bar" className="mt-3 flex flex-wrap items-center gap-2">
@@ -439,7 +457,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild><button type="button" disabled={isValidatingRecord} title="Validate record" aria-label="Validate record" className="inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50">{isValidatingRecord ? <LoaderCircle className="size-4 animate-spin" aria-label="Validating record" /> : <ClipboardCheck className="size-4" aria-hidden="true" />}<span>Validate</span>{recordPolicies.length > 1 && <ChevronDown className="size-3.5" />}</button></DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="w-72">
-                        {recordPolicies.map((policy) => <DropdownMenuItem key={policy.uri} onSelect={() => { const templateUri = policy.templates[0]?.uri ?? ""; manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(templateUri); setRecordValidation(null); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(templateUri, templateKey); } catch (error) { console.warn("Maestro could not persist the selected record policy in IndexedDB", error); } void validateSelectedRecord(policy); }}>{policy.label}</DropdownMenuItem>)}
+                        {recordPolicies.map((policy) => <DropdownMenuItem key={policy.uri} onSelect={() => { const templateUri = policy.templates[0]?.uri ?? ""; manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(templateUri); setRecordValidation(null); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(templateUri, templateKey); } catch (error) { browserLog.warn("record.policy.persist-failed", error); } void validateSelectedRecord(policy); }}>{policy.label}</DropdownMenuItem>)}
                       </DropdownMenuContent>
                     </DropdownMenu>
                     <DropdownMenu open={recordFormatMenuOpen} onOpenChange={setRecordFormatMenuOpen}>
@@ -451,7 +469,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                           setFormattedRecordHtml("");
                           setFormattedRecordButtonsHtml({});
                           setRecordFormatError("");
-                          try { const key = recordFormatPreferenceKey("template"); if (key) queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences").put("", key); } catch (error) { console.warn("Maestro could not persist the default record format", error); }
+                          try { const key = recordFormatPreferenceKey("template"); if (key) queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences").put("", key); } catch (error) { browserLog.warn("record.default-format.persist-failed", error); }
                         }} className="flex items-start gap-3 py-3">
                           <span className="flex h-24 w-24 shrink-0 flex-col gap-1 overflow-hidden rounded border bg-background p-2" aria-hidden="true">
                             <span className="border-b pb-1 text-[9px] font-semibold">Name　 Value</span>
@@ -459,7 +477,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                           </span>
                           <span className="min-w-0 flex-1"><span className="flex items-center gap-2 font-medium">Default{!recordFormatEnabled && <Check className="size-4 text-primary" aria-label="Selected format" />}</span><span className="block text-xs text-muted-foreground">Property/value table and roles</span></span>
                         </DropdownMenuItem>
-                        {recordPolicies.flatMap((policy) => policy.templates.map((template) => ({ policy, template }))).map(({ policy, template }) => <DropdownMenuItem key={`${policy.uri}:${template.uri}`} onSelect={() => { manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri: template.uri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(template.uri); setRecordValidation(null); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setRecordFormatError(""); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(template.uri, templateKey); } catch (error) { console.warn("Maestro could not persist the selected record format in IndexedDB", error); } if (!recordFormatEnabled) setRecordFormatEnabled(true); }} className="flex items-start gap-3 py-3">
+                        {recordPolicies.flatMap((policy) => policy.templates.map((template) => ({ policy, template }))).map(({ policy, template }) => <DropdownMenuItem key={`${policy.uri}:${template.uri}`} onSelect={() => { manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri: template.uri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(template.uri); setRecordValidation(null); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setRecordFormatError(""); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(template.uri, templateKey); } catch (error) { browserLog.warn("record.format.persist-failed", error); } if (!recordFormatEnabled) setRecordFormatEnabled(true); }} className="flex items-start gap-3 py-3">
                           <span className="mt-0.5 block h-24 w-24 shrink-0 overflow-hidden rounded border bg-background"><span className="pointer-events-none block h-24 w-44 origin-top-left scale-[0.5] overflow-hidden" dangerouslySetInnerHTML={{ __html: (policy.uri === recordPolicy.uri ? recordFormatPreviews[template.uri] : undefined) ?? "<div class=\"p-2 text-xs text-muted-foreground\">Preview available after selection</div>" }} /></span>
                           <span className="min-w-0 flex-1"><span className="flex items-center gap-2 font-medium">{template.label}{recordFormatEnabled && recordPolicy.uri === policy.uri && selectedRecordTemplateUri === template.uri && <Check className="size-4 shrink-0 text-primary" aria-label="Selected format" />}</span><span className="block break-all text-xs text-muted-foreground">{template.uri}</span></span>
                         </DropdownMenuItem>)}
@@ -470,7 +488,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                   {recordPolicyError && <ErrorDetails prefix="Record policy" error={recordPolicyError} />}
                   {formattedRecordButtonsHtml.record_button_bar && <div className="contents" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_button_bar }} />}
                 </div>}
-                <RecordValidationNotice report={recordValidation} onDismiss={() => setRecordValidation(null)} />
+                <ValidationNotice report={recordValidation} onDismiss={() => setRecordValidation(null)} />
                 {recordDescriptionError && endpointReadyForQuery && <ErrorDetails prefix="Record SELECT" error={recordDescriptionError} className="mt-2" />}
                 {recordFormatError && recordFormatError !== recordDescriptionError && !hasVisibleValidationWarning(recordValidation) && <ErrorDetails prefix="Record formatter" error={recordFormatError} className="mt-2" />}
                 {!isDescribing && describedRecordUri === selectedUri &&
@@ -554,7 +572,8 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                   }), recordServiceDom.host)}
                 </>
               ) : (
-              <section id="maestro-record-viewer" about={selectedRecordTermType === "uri" ? selectedUri : undefined} className="min-h-0 flex-1 overflow-auto p-4">
+              <section id="maestro-record-viewer" about={selectedUri && selectedRecordTermType === "uri" ? selectedUri : undefined} className="min-h-0 flex-1 overflow-auto p-4">
+                {sessionIndex === 0 && recordSelectionCleared && !selectedUri && <p className="mb-3 text-xs text-muted-foreground">Virtual Record · properties and RDF values shared by every matching member of the active FCT result set.</p>}
                 {selectedRecordTermType === "bnode" && blankNodeRecords.length > 0 && (
                   <div className="mb-4" aria-label="Sibling blank-node records">
                     <Tabs value={String(activeBlankNodeTab)} onValueChange={(value) => {
@@ -706,7 +725,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                   <p className="mt-4 text-sm text-muted-foreground">
                     {describedRecord.length > 0
                       ? "No values match the preferred language in this Record view. Change Preferred language in the Sheet to see other language-tagged literals."
-                      : recordDescriptionError || (isDescribing ? <ElapsedStatus label="Loading record" category="record" clockScope="record" /> : selectedUri ? "No description data returned." : "Select a result to describe it.")}
+                      : recordDescriptionError || (isDescribing ? <ElapsedStatus label="Loading record" category="record" clockScope="record" /> : recordSelectionCleared ? "No common property/value pairs were found across the result set. Try narrowing the query by applying more filters." : selectedUri ? "No description data returned." : "Select a result to describe it.")}
                   </p>
                 )}
               </section>

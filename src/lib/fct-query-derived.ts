@@ -93,6 +93,31 @@ export function createPersonalRoleValuesQuery(tree: FctQueryTree, roleNode: FctQ
   return createPropertyWidgetQuery(snapshot, roleNode.attributes.iri ?? "", "reverse", roleNode.id, true);
 }
 
+/** Project co-occurring values of a selected tag without dropping the selected-tag
+ * constraint from the resource scope. A distinct sibling property carries the
+ * derived view, so the binding and projection have independent RDF variables. */
+export function createCooccurringPropertyWidgetQuery(tree: FctQueryTree, propertyUri: string, selectedId: string): FctQueryTree {
+  const data = fctQueryTreeApi.getDataTree(tree);
+  const view = findQueryView(data.children);
+  if (!view) return createPropertyWidgetQuery(data, propertyUri, "forward", undefined, true);
+  const stripView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes
+    .filter(node => node.name !== "view")
+    .map(node => ({ ...node, attributes: { ...node.attributes }, children: stripView(node.children) }));
+  // Locate the exact selected relationship, including when it carries the view.
+  let inserted = false;
+  const withProjection = (nodes: FctQueryNode[]): FctQueryNode[] => {
+    const children = nodes.map(node => ({ ...node, attributes: { ...node.attributes }, children: withProjection(node.children) }));
+    if (!inserted && nodes.some(node => node.id === selectedId && node.name === "property" && node.attributes.iri === propertyUri)) {
+      inserted = true;
+      children.push({ id: `tag-cloud-projection-${encodeURIComponent(propertyUri)}`, name: "property",
+        attributes: { iri: propertyUri }, children: [{ ...view, attributes: { ...view.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0", limit: "300" }, children: [] }] });
+    }
+    return children;
+  };
+  const projected = withProjection(stripView(data.children));
+  return inserted ? { ...data, children: projected } : createPropertyWidgetQuery(data, propertyUri, "forward", undefined, true);
+}
+
 export function createPropertyWidgetQuery(
   tree: FctQueryTree,
   propertyUri: string,

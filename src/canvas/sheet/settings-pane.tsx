@@ -19,8 +19,11 @@ import { Label } from "@/components/ui/label";
 import { ChevronsDownUp, ChevronsUpDown, Settings, Download, Upload } from "lucide-react";
 
 import { MAESTRO_TIMEOUT_CATEGORIES, writeMaestroWidgetTimeouts } from "@/lib/maestro-query-timeouts";
+import { readUriAutocompleteSettings, writeUriAutocompleteSettings } from "@/lib/uri-autocomplete-settings";
+import { readRootHoverDelayMs, writeRootHoverDelayMs } from "@/lib/root-breadcrumb-settings";
 
 import { initializeMaestroStorage, maestroStorageSet } from "@/lib/maestro-storage";
+import { readIteraComputeKey, writeIteraComputeKey } from "@/lib/iteracompute-credential";
 import { readRecordGraphDiscoveryLimits, writeRecordGraphDiscoveryLimits, RECORD_GRAPH_CANDIDATE_OPTIONS, RECORD_GRAPH_RESULT_OPTIONS } from "@/lib/record-graph-limits";
 
 import { Slider } from "@/components/ui/slider";
@@ -167,6 +170,28 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     tutorialMode,
     widgetTimeouts,
   } = workspace;
+  const [iteraComputeKey, setIteraComputeKey] = useState("");
+  const [iteraComputeKeyLoaded, setIteraComputeKeyLoaded] = useState(false);
+  const [showIteraComputeKey, setShowIteraComputeKey] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void readIteraComputeKey().then((key) => {
+      if (live) { setIteraComputeKey(key); setIteraComputeKeyLoaded(true); }
+    }).catch(() => { if (live) setIteraComputeKeyLoaded(true); });
+    return () => { live = false; };
+  }, []);
+  const [autocompleteSettings, setAutocompleteSettings] = useState(readUriAutocompleteSettings);
+  const [rootHoverDelayMs, setRootHoverDelayMs] = useState(readRootHoverDelayMs);
+  useEffect(() => {
+    let live = true;
+    void initializeMaestroStorage().then(() => { if (live) { setAutocompleteSettings(readUriAutocompleteSettings()); setRootHoverDelayMs(readRootHoverDelayMs()); } });
+    return () => { live = false; };
+  }, []);
+  const updateAutocompleteSettings = (key: "limit" | "timeoutSeconds", value: number) => {
+    const next = { ...autocompleteSettings, [key]: value };
+    setAutocompleteSettings(next);
+    writeUriAutocompleteSettings(next);
+  };
   const [masterTimeoutEnabled, setMasterTimeoutEnabled] = useState(false);
   const [masterTimeout, setMasterTimeout] = useState(0);
   const [masterLimit, setMasterLimit] = useState("none");
@@ -188,6 +213,14 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     const next = Object.fromEntries(MAESTRO_TIMEOUT_CATEGORIES.map(({ key }) => [key, value])) as typeof widgetTimeouts;
     setWidgetTimeouts(next);
     writeMaestroWidgetTimeouts(next);
+    // Autocomplete participates in the same master timeout operation as all
+    // other query categories, with one persisted, observable source of truth.
+    const effectiveAutocompleteTimeout = value > 0 ? value : 5;
+    setAutocompleteSettings(previous => {
+      const updated = { ...previous, timeoutSeconds: effectiveAutocompleteTimeout };
+      writeUriAutocompleteSettings(updated);
+      return updated;
+    });
   };
   const applyMasterLimit = (value: string) => {
     setMasterLimit(value);
@@ -213,7 +246,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
         }}>
           <SheetTrigger
             render={
-              <Button variant="outline" className="inline-flex shrink-0 items-center gap-2" aria-label="Open controls">
+              <Button variant="outline" className="inline-flex shrink-0 items-center gap-2 text-muted-foreground hover:text-foreground" aria-label="Open controls">
                 <Settings className="size-4" aria-hidden="true" />
               </Button>
             }
@@ -222,11 +255,11 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
             <SheetHeader>
               <SheetTitle>Maestro controls</SheetTitle>
               <SheetDescription>Query behavior, appearance, and graph server settings.</SheetDescription>
-              {authSession && <p className="mt-1 break-all text-xs text-muted-foreground">Using personal: <span className="font-medium text-foreground">{personalSparqlEndpoint || "Not configured"}</span></p>}
+              {workspace.accessCapabilities.canUsePersonalStore && authSession && <p className="mt-1 break-all text-xs text-muted-foreground">Using personal: <span className="font-medium text-foreground">{personalSparqlEndpoint || "Not configured"}</span></p>}
             </SheetHeader>
             <div className="flex flex-col gap-4 px-4 pb-4">
 
-              {authSession && (
+              {workspace.accessCapabilities.canUsePersonalStore && authSession && (
               <div className="flex flex-col gap-3 rounded-md border p-3">
                 <Label>History</Label>
                 <div className="flex flex-wrap items-center gap-2">
@@ -248,6 +281,21 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
               </div>
               )}
 
+              <div className="flex flex-col gap-2 rounded-md border p-3">
+                <Label htmlFor="maestro-iteracompute-key">IteraCompute API key</Label>
+                <div className="flex gap-2">
+                  <input id="maestro-iteracompute-key" type={showIteraComputeKey ? "text" : "password"} autoComplete="off" spellCheck={false}
+                    value={iteraComputeKey} disabled={!iteraComputeKeyLoaded} placeholder="Enter IteraCompute API key"
+                    onChange={(event) => setIteraComputeKey(event.target.value)}
+                    onBlur={() => { if (iteraComputeKeyLoaded) { try { writeIteraComputeKey(iteraComputeKey); } catch { toast.add({ title: "Invalid IteraCompute API key", type: "error" }); } } }}
+                    className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm" />
+                  <Button type="button" variant="outline" onClick={() => setShowIteraComputeKey((v) => !v)}>{showIteraComputeKey ? "Hide" : "Show"}</Button>
+                  <Button type="button" variant="outline" disabled={!iteraComputeKeyLoaded} onClick={() => {
+                    setIteraComputeKey(""); writeIteraComputeKey("");
+                  }}>Clear</Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Saved in this browser’s IndexedDB. Used for chat and OTC surveys; not included in share links. Browser storage is not encrypted and can be read by scripts running on this origin. Changes save when you leave the field.</p>
+              </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <Label htmlFor="maestro-tutorial-mode">Tutorial mode</Label>
@@ -399,6 +447,30 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                         value={[masterTimeout]} onValueChange={(values) => applyMasterTimeout(values[0] ?? 0)} />
                     </div>}
                   </InputGroup>
+                  <div className="space-y-2 border-t pt-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor="maestro-uri-complete-timeout" className="text-xs">Root URI autocomplete timeout</Label>
+                      <output htmlFor="maestro-uri-complete-timeout" className="text-xs tabular-nums text-muted-foreground">{autocompleteSettings.timeoutSeconds}s</output>
+                    </div>
+                    <Slider id="maestro-uri-complete-timeout" aria-label="Root URI autocomplete timeout in seconds"
+                      min={1} max={120} step={1} disabled={masterTimeoutEnabled}
+                      value={[autocompleteSettings.timeoutSeconds]}
+                      onValueChange={(values) => updateAutocompleteSettings("timeoutSeconds", values[0] ?? 5)} />
+                    <p className="text-xs text-muted-foreground">Follows Set all while master timeout is enabled; default 5s.</p>
+                  </div>
+                  <div className="space-y-2 border-t pt-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor="maestro-root-hover-delay" className="text-xs">Root breadcrumb editor hover</Label>
+                      <output htmlFor="maestro-root-hover-delay" className="text-xs tabular-nums text-muted-foreground">{(rootHoverDelayMs / 1000).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}s</output>
+                    </div>
+                    <Slider id="maestro-root-hover-delay" aria-label="Root breadcrumb editor hover delay in seconds"
+                      min={250} max={3000} step={250} value={[rootHoverDelayMs]}
+                      onValueChange={(values) => {
+                        const value = values[0] ?? 1000;
+                        setRootHoverDelayMs(value);
+                        writeRootHoverDelayMs(value);
+                      }} />
+                  </div>
                   {MAESTRO_TIMEOUT_CATEGORIES.map(({ key, label }) => (
                     <div key={key} className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
@@ -426,6 +498,14 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                       className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       <option value="none">none</option>
                       {[100, 500, 1000].map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 border-t pt-3">
+                    <Label htmlFor="maestro-uri-complete-limit" className="text-xs">Root URI autocomplete LIMIT</Label>
+                    <select id="maestro-uri-complete-limit" value={autocompleteSettings.limit}
+                      onChange={(event) => updateAutocompleteSettings("limit", Number(event.target.value))}
+                      className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+                      {[5, 10].map(limit => <option key={limit} value={limit}>{limit} suggestions</option>)}
                     </select>
                   </div>
                   <section className="space-y-3">
@@ -555,7 +635,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                   aria-label="Order results"
                 />
               </div>
-              {authSession && (
+              {workspace.accessCapabilities.canUsePersonalStore && authSession && (
               <button
                 type="button"
                 onClick={() => {

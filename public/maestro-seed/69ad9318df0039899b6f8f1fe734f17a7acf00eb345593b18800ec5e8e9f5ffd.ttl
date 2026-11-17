@@ -1,0 +1,51 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+
+# Initial states are effective state for absent per-track assertions. No
+# application writes a default triple when merely locating a result resource.
+<gttp://ggg.maestro.ecosys/shacl/provider/resource-status-machine>
+    a mui:Provider, mui:StateMachineProvider ;
+    rdfs:label "Resource read and visibility status machine"@en ;
+    dct:description "Independent epistemic and visibility tracks sharing mui:status."@en ;
+    sh:targetClass rdfs:Resource ;
+    mui:statusTrack [ a mui:StatusTrack ; mui:trackDimension mui:ReadStatus ;
+        mui:initialState mui:Unseen ;
+        mui:transition [ a mui:Transition ; mui:fromState mui:Unseen ; mui:trigger mui:ViewRecord ; mui:toState mui:Seen ],
+            [ a mui:Transition ; mui:fromState mui:Seen ; mui:trigger mui:MarkUnread ; mui:toState mui:Unseen ]
+    ], [ a mui:StatusTrack ; mui:trackDimension mui:VisibilityStatus ;
+        mui:initialState mui:Visible ;
+        mui:transition [ a mui:Transition ; mui:fromState mui:Visible ; mui:trigger mui:Hide ; mui:toState mui:Hidden ],
+            [ a mui:Transition ; mui:fromState mui:Hidden ; mui:trigger mui:Unhide ; mui:toState mui:Visible ; mui:assertState false ]
+    ], [ a mui:StatusTrack ; mui:trackDimension mui:StarStatus ;
+        mui:initialState mui:Unstarred ;
+        mui:transition [ a mui:Transition ; mui:fromState mui:Unstarred ; mui:trigger mui:Star ; mui:toState mui:Starred ],
+            [ a mui:Transition ; mui:fromState mui:Starred ; mui:trigger mui:Unstar ; mui:toState mui:Unstarred ; mui:assertState false ]
+    ] .
+
+# This machine supplies policy, not an independent self-approval authority.
+<gttp://ggg.maestro.ecosys/shacl/provider/provider-approval-machine>
+    a mui:Provider, mui:StateMachineProvider ;
+    rdfs:label "Provider approval state machine"@en ;
+    # ClassPolicy is not a mui:Provider. Its separate Record-formatting gate
+    # remains directly approvable, but the same RDF/XState approval rules apply.
+    sh:targetClass mui:Provider, mui:ClassPolicy ;
+    mui:statusTrack [ a mui:StatusTrack ; mui:trackDimension mui:ApprovalStatus ;
+        mui:initialState mui:Pending ;
+        mui:transition [ a mui:Transition ; mui:fromState mui:Pending ; mui:trigger mui:Approve ; mui:toState mui:Approved ],
+            [ a mui:Transition ; mui:fromState mui:Approved ; mui:trigger mui:RevokeApproval ; mui:toState mui:Pending ; mui:assertState false ]
+    ] .
+
+# A curator requires a direct user grant; its listed members inherit effective
+# approval via ontological membership only while that curator remains Approved.
+<gttp://ggg.maestro.ecosys/shacl/provider/curator-approval-machine>
+    a mui:Provider, mui:StateMachineProvider ;
+    rdfs:label "Curator approval state machine"@en ;
+    sh:targetClass mui:CurationProvider ;
+    mui:statusTrack [ a mui:StatusTrack ; mui:trackDimension mui:ApprovalStatus ;
+        mui:initialState mui:Pending ;
+        mui:transition [ a mui:Transition ; mui:fromState mui:Pending ; mui:trigger mui:Approve ; mui:toState mui:Approved ],
+            [ a mui:Transition ; mui:fromState mui:Approved ; mui:trigger mui:RevokeApproval ; mui:toState mui:Pending ; mui:assertState false ]
+    ] .

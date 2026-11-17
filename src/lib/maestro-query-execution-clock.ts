@@ -18,7 +18,7 @@ export function maestroQueryClockScope(headers?: Headers): MaestroQueryClockScop
   if (label.includes("personal-widget-values") || label.includes("personal-role-widget-values")) return "personal";
   if (label.includes("status-facet") || label.includes("statuses-facet")) return "statuses";
   if (label.includes("analyze-values")) return "analysis";
-  if (label.includes("view-discover") || label.includes("view-feature") || label.includes("view-policy")) return "views";
+  if (label.includes("view-discover") || label.includes("view-provider") || label.includes("view-policy")) return "views";
   if (label.includes("alphabet")) return "alphabet";
   if (label.includes("classes-hierarchy")) return "categoryTree";
   if (label.includes("facetloader:properties")) return "properties";

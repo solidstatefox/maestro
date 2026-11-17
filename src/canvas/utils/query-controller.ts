@@ -1,5 +1,6 @@
 "use client";
 
+import type { ProviderKind } from "@/lib/provider-catalog-xslt";
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 import { ensureFctQueryIds } from "@/lib/fct-node-identity";
 import { useFctQuery, fctQueryTreeApi } from "@/lib/fct-query-api";
@@ -54,9 +55,9 @@ export type ShareableUiState = {
   findEndpointsEnabled?: boolean;
   centralTab?: "results" | "groups" | "query-tree" | "view-query" | "chat";
   workspaceTab?: "browse" | "view" | "analyze";
-  viewPanel?: "trail" | "perspectives" | "features";
+  viewPanel?: "trail" | "perspectives" | "providers";
   selectedViewUri?: string;
-  viewFeature?: "policies" | "formats" | "transcoders" | "facet-widgets" | "curators" | "fsm-providers" | null;
+  viewProvider?: ProviderKind | null;
   selectedAnalysisUri?: string;
   analyzeHistogram?: boolean;
   /** Explicit state for the Results/Query toolbar toggle. */
@@ -94,7 +95,7 @@ export type ShareableUiState = {
 
 /** Compact URL indices for the appbar and View accordion. Publish is reserved. */
 export const APPBAR_TAB_NUMBER = { browse: 0, view: 1, analyze: 2, publish: 3 } as const;
-export const VIEW_RIBBON_TAB_NUMBER = { trail: 0, perspectives: 1, features: 2 } as const;
+export const VIEW_RIBBON_TAB_NUMBER = { trail: 0, perspectives: 1, providers: 2 } as const;
 
 export function decodeAppbarTab(value: string | null): "browse" | "view" | "analyze" | null {
   switch (value) {
@@ -105,23 +106,19 @@ export function decodeAppbarTab(value: string | null): "browse" | "view" | "anal
   }
 }
 
-export function decodeViewRibbonTab(value: string | null): "trail" | "perspectives" | "features" | null {
+export function decodeViewRibbonTab(value: string | null): "trail" | "perspectives" | "providers" | null {
   switch (value) {
     case "0": case "trail": return "trail";
     case "1": case "perspectives": return "perspectives";
-    case "2": case "features": return "features";
+    case "2": case "providers": return "providers";
     default: return null;
   }
 }
 
-/** Backwards-compatible provider URI migration for old History/bookmark links. */
-const LEGACY_PROVIDER_URIS: Readonly<Record<string, string>> = {
-  "urn:maestro:perspective:map": "gttp://ggg.maestro.ui/provider/map",
-};
-
+/** Accept current provider IRIs only; no legacy URI aliases. */
 export function validRibbonProviderUri(value: string | null): string | null {
   if (value === null || value.length > 2048 || !/^(?:https?:|gttp:|gttps:|urn:)/.test(value)) return null;
-  return LEGACY_PROVIDER_URIS[value] ?? value;
+  return value;
 }
 
 /** Copy authoritative ribbon parameters from a stored bookmark/history URL. */

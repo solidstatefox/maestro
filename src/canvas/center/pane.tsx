@@ -32,6 +32,7 @@ import { maestroStorageSet } from "@/lib/maestro-storage";
 
 import { CenterPaneFrame, CenterPaneBody } from "@/canvas/workspace-pane-shells";
 import { CodeBlock } from "@/components/ui/code-block";
+import { ValidationNotice } from "@/components/ui/validation-notice";
 
 import xmlFormat from "xml-formatter";
 
@@ -103,6 +104,19 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 
 /** UI owned by CenterCanvasPanel. State and commands come from the shared workspace controller. */
 export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceController }) {
+  const [dismissedQueryValidation, setDismissedQueryValidation] = useState("");
+  const contextReportKey = `${workspace.queryXml}::${workspace.historyBookmarkId ?? ""}`;
+  const showingContextValidation = workspace.workspaceTab === "analyze" ||
+    (workspace.workspaceTab === "view" && workspace.viewPanel === "perspectives");
+  const contextValidation = showingContextValidation ? workspace.queryContextReport : null;
+  const contextValidationPending = showingContextValidation && workspace.queryContextLoading;
+  const contextValidationProblem = showingContextValidation ? workspace.queryContextError : "";
+  const contextValidationNode = showingContextValidation ? <div className="shrink-0 px-4 pb-2">
+    {contextValidationPending && <p role="status" className="py-2 text-xs text-muted-foreground"><ElapsedStatus label="Validating query context" category="other" /></p>}
+    {contextValidationProblem && <ErrorDetails prefix="Query SHACL validation" error={contextValidationProblem} />}
+    {contextReportKey !== dismissedQueryValidation &&
+      <ValidationNotice report={contextValidation} onDismiss={() => setDismissedQueryValidation(contextReportKey)} />}
+  </div> : null;
   const {
     activeBreadcrumbIndex,
     activeLeafId,
@@ -229,11 +243,11 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
     urlStateInitialized,
     viewDiscoveryError,
     viewDiscoveryLoading,
-    viewFeature,
-    viewFeatureCount,
-    viewFeatureError,
-    viewFeatureHtml,
-    viewFeatureLoading,
+    viewProvider,
+    viewProviderCount,
+    viewProviderError,
+    viewProviderHtml,
+    viewProviderLoading,
     viewHtml,
     viewRenderError,
     visibleGroupValues,
@@ -367,6 +381,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                   </div>
                 </div>
               )}
+              {contextValidationNode}
               <ViewTabCanvas workspace={workspace} />
               <AnalyzeTabCanvas workspace={workspace} />
 
@@ -477,7 +492,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                   </div>
                   <ButtonGroup
                     aria-label="Results, badges, and query inspector"
-                    className="hidden shrink-0 items-center [&>*+*]:border-l [&>*+*]:border-input group-hover/header:inline-flex"
+                    className="hidden min-w-0 shrink-0 items-center overflow-hidden rounded-md border border-input bg-background [&>*+*]:border-l [&>*+*]:border-input [&>button]:rounded-none [&>button]:border-0 [&>button]:shadow-none group-hover/header:inline-flex"
                   >
                     <Tooltip>
                       <TooltipTrigger render={

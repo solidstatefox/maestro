@@ -1,4 +1,6 @@
 "use client";
+import { browserLog } from "@/lib/maestro-client-logging";
+
 import { ErrorDetails } from "@/components/ui/error-details";
 import { FacetItemDecoration } from "@/lib/facet-decoration-contract";
 import { readAutoConfiguredFacetKeys, type FacetAutofillCandidates, type AutoConfiguredFacetKey } from "@/canvas/left/configure";
@@ -105,6 +107,8 @@ export type PersonalWidget = {
   excluded: boolean;
   values: FctResult[];
   datatypeEvidence?: string[];
+  /** Exact live FCT query whose complete facet population produced the evidence. */
+  datatypeEvidenceScope?: string;
   selectedValues: string[];
   page: number;
   loading: boolean;
@@ -274,7 +278,7 @@ export function DistinctCount({
         )
           return;
         const message = requestError instanceof Error ? requestError.message : "Could not load distinct count.";
-        console.warn("Maestro facet item count failed", {
+        browserLog.warn("facet.item-count.failed", {
           kind,
           uri,
           propertyUri,
@@ -292,7 +296,7 @@ export function DistinctCount({
     // Query-tree edits can be emitted as a short sequence of intermediate states
     // (for example, deleting a bespoke facet). Wait for that sequence to settle so
     // one user action does not issue/flicker through several obsolete count queries.
-    console.info("Maestro DistinctCount effect scheduled", {
+    browserLog.debug("facet.distinct-count.scheduled", {
       kind,
       uri,
       propertyUri,
@@ -301,7 +305,7 @@ export function DistinctCount({
     });
     const refreshTimer = window.setTimeout(() => {
       if (cancelled) return;
-      console.info("Maestro DistinctCount request starting", { kind, uri, propertyUri });
+      browserLog.debug("facet.distinct-count.started", { kind, uri, propertyUri });
       // Keep the last completed count visible while this independent count query refreshes.
       setError("");
       void loadCount();
@@ -310,7 +314,7 @@ export function DistinctCount({
       cancelled = true;
       window.clearTimeout(refreshTimer);
       controller.abort();
-      console.info("Maestro DistinctCount effect cleaned up", { kind, uri, propertyUri });
+      browserLog.debug("facet.distinct-count.cleanup", { kind, uri, propertyUri });
     };
     // The compiled scalar count query is the semantic identity. Results paging,
     // parent object identity, and other non-count UI changes do not restart it.
@@ -409,13 +413,27 @@ function getRoleSelectionNodes(tree: FctQueryTree, uri: string): FctQueryNode[] 
     !facets.some(node => node.id === carrier.id) ? [carrier, ...facets] : facets;
 }
 
+/** The carrier of <view> is the focus, not an extra facet to invent. It can,
+ * however, already have an existing Personal widget whose values must survive
+ * navigation into that property. Traverse the live tree, not cached labels. */
+export function getActiveViewPropertyCarrier(tree: FctQueryTree): FctQueryNode | null {
+  const visit = (nodes: FctQueryNode[]): FctQueryNode | null => {
+    for (const node of nodes) {
+      if (node.children.some(child => child.name === "view" || child.id === "query-view" || child.uiKey === "query-view")) return node;
+      const found = visit(node.children);
+      if (found) return found;
+    }
+    return null;
+  };
+  return visit(tree.children);
+}
 export function treeHasPropertyFilter(
   tree: FctQueryTree,
   propertyUri: string,
 ): boolean {
-  return getActiveViewPropertyFilters(tree).some(
-    (node) => node.attributes.iri === propertyUri,
-  );
+  const carrier = getActiveViewPropertyCarrier(tree);
+  return getActiveViewPropertyFilters(tree).some(node => node.attributes.iri === propertyUri) ||
+    Boolean(carrier?.name === "property" && carrier.attributes.iri === propertyUri);
 }
 
 /**
@@ -449,6 +467,11 @@ export function PersonalWidgetQueryListener({
   setPersonalWidgets: Dispatch<SetStateAction<PersonalWidget[]>>;
 }) {
   const { tree } = useFctQuery();
+  // Datatype evidence is produced by the derived property widget query, but
+  // its validity belongs to the ORIGINAL live FCT scope. Never store the
+  // derived XML here: the Personal pane compares against the live query XML,
+  // so storing widgetQueryXml made every numeric facet look ineligible.
+  const liveQueryScopeXml = serializeFctQuery(tree);
   const widgetTree = createPropertyWidgetQuery(tree, propertyUri, "forward", undefined, true);
   const widgetQueryXml = groupBy
     ? serializeFctQuery(createGroupValuesQuery(tree, groupBy.option, { limit: groupBy.limit, offset: 0 }))
@@ -495,35 +518,14 @@ export function PersonalWidgetQueryListener({
         const fetchedValues: FctResult[] = Array.isArray(data.results)
           ? data.results
           : [];
-        // Once this property has an active value binding, show only the selected
-        // value(s) in its own widget. Other facets continue to be recomputed from
-        // the filtered query, while this widget reflects its current selection.
-        const activeFilter = getActiveViewPropertyFilters(tree).find(
-          (node) => node.attributes.iri === propertyUri,
-        );
-        const selectedTerms = (activeFilter?.children ?? [])
-          .filter((child) => child.name === "value")
-          .map((child) => {
-            const lang = child.attributes["xml:lang"];
-            // FCT literal constraints default to datatype="string". If the
-            // key defaults this missing datatype to "uri", a one-value
-            // literal facet filters its only checkbox out after selection.
-            const datatype = child.attributes.datatype ?? (lang ? undefined : "string");
-            return fctTermKey(child.text ?? "", datatype, lang);
-          });
-        // Equality bindings can be matched by exact RDF-term identity.
-        // For contains/regex/comparisons/ranges, the returned facet values
-        // satisfy the predicate but need not equal its operand (e.g.
-        // CONTAINS("1997-05-16", "1997")). Never drop those server matches.
-        const valueBindings = (activeFilter?.children ?? []).filter((child) => child.name === "value");
-        const equalityOnly = valueBindings.every((child) =>
-          !Object.hasOwn(child.attributes, "rangeStart") &&
-          !Object.hasOwn(child.attributes, "rangeEnd") &&
-          ["", "=", "eq", "equal"].includes((child.attributes.op ?? "=").trim().toLowerCase()),
-        );
-        const filteredValues = equalityOnly && selectedTerms.length
-          ? fetchedValues.filter((value) => selectedTerms.includes(facetValueKey(value)))
-          : fetchedValues;
+        // The derived FCT query retains the value constraints on this
+        // relationship and the FCT server has *already* applied them. Do not
+        // filter valid server rows a second time by an inferred RDF datatype:
+        // email_sha1 and other typed/plain-literal facets can have binding
+        // metadata different from the <value> lexical form, causing an empty
+        // Selected widget even when FCT returned rows. Trust the authoritative
+        // server selection and let facet item keys handle checkbox state.
+        const filteredValues = fetchedValues;
         const values = orderLikeGroups ? filteredValues.slice().sort(compareGroupValues) : filteredValues;
         if (cancelled) return;
         setPersonalWidgets((current) =>
@@ -533,6 +535,7 @@ export function PersonalWidgetQueryListener({
                   ...widget,
                   values,
                   datatypeEvidence: [...new Set((data.datatypeEvidence ?? []).map(item => item.datatype))],
+                  datatypeEvidenceScope: liveQueryScopeXml,
                   loading: false,
                   error: "",
                   page: Math.min(
@@ -804,7 +807,7 @@ export function useGraphFacetNavigationState() {
   const [graphSortPickerExpanded, setGraphSortPickerExpanded] = useState(false);
   const [graphListSparql, setGraphListSparql] = useState("");
   const [graphText, setGraphText] = useState("");
-  const [graphAutoFill, setGraphAutoFill] = useState(true);
+  const [graphAutoFill, setGraphAutoFill] = useState(false);
   const [graphFieldEditing, setGraphFieldEditing] = useState(false);
   const lastManualGraphRef = useRef("");
   const [graphNavigationHistory, setGraphNavigationHistory] = useState<string[]>([""]);

@@ -1,0 +1,35 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# Tag-cloud presentation is opt-in through the standard provider approval gate.
+# Properties are explicit RDF policy data, never regex-guessed by React.
+<gttp://ggg.maestro.ui/provider/tag-cloud> a mui:Provider ;
+  rdfs:label "Tag cloud"@en ;
+  mui:accepts <gttp://ggg.maestro.ui/provider/tag-cloud-input> ;
+  mui:widget <gttp://ggg.maestro.ui/widget/tag-cloud> ;
+  mui:tagProperty <http://www.w3.org/2004/02/skos/core#prefLabel> ;
+  mui:tagProperty <http://www.w3.org/2004/02/skos/core#altLabel> ;
+  mui:tagProperty <http://www.w3.org/2000/01/rdf-schema#label> ;
+  mui:tagProperty <http://purl.org/dc/terms/subject> ;
+  mui:tagProperty <http://purl.org/dc/terms/title> ;
+  mui:tagProperty <https://schema.org/keywords> ;
+  mui:tagProperty <http://schema.org/keywords> ;
+  mui:tagProperty <https://schema.org/name> ;
+  mui:tagProperty <http://schema.org/name> ;
+  mui:tagProperty <http://xmlns.com/foaf/0.1/name> .
+<gttp://ggg.maestro.ui/provider/tag-cloud-input> a mui:InputShape, sh:NodeShape ;
+  sh:or (
+    [ sh:property [ sh:path <http://www.w3.org/2004/02/skos/core#prefLabel> ] ]
+    [ sh:property [ sh:path <http://www.w3.org/2004/02/skos/core#altLabel> ] ]
+    [ sh:property [ sh:path <http://www.w3.org/2000/01/rdf-schema#label> ] ]
+    [ sh:property [ sh:path <http://purl.org/dc/terms/subject> ] ]
+    [ sh:property [ sh:path <http://purl.org/dc/terms/title> ] ]
+    [ sh:property [ sh:path <https://schema.org/keywords> ] ]
+    [ sh:property [ sh:path <http://schema.org/keywords> ] ]
+    [ sh:property [ sh:path <https://schema.org/name> ] ]
+    [ sh:property [ sh:path <http://schema.org/name> ] ]
+    [ sh:property [ sh:path <http://xmlns.com/foaf/0.1/name> ] ]
+  ) .
+<gttp://ggg.maestro.ui/widget/tag-cloud> a mui:TagCloudFacetWidget, mui:FacetWidget ;
+  rdfs:label "Weighted tag cloud"@en .

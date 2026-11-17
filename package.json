@@ -7,13 +7,15 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "prebuild": "node scripts/generate-shadcn-registry.mjs && node src/scripts/migration/round3-publish-maplibre-assets.mjs",
-    "predev": "node scripts/generate-shadcn-registry.mjs && node src/fct-migration/round3/publish-maplibre-assets.mjs"
+    "prebuild": "node src/scripts/migration/round5-static-graph-seed.mjs && node src/scripts/migration/round3-publish-maplibre-assets.mjs",
+    "predev": "node src/scripts/migration/round5-static-graph-seed.mjs && node src/scripts/migration/round3-publish-maplibre-assets.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
     "@google/genai": "^2.28.0",
+    "@mind-elixir/export-mindmap": "^0.1.11",
     "@tanstack/react-table": "^8.21.3",
+    "@zazuko/env": "^3.0.6",
     "@zazuko/env-node": "^3.1.0",
     "axios": "^1.21.0",
     "class-variance-authority": "^0.7.1",
@@ -25,6 +27,7 @@
     "liquidjs": "^10.30.1",
     "lucide-react": "^1.69.0",
     "maplibre-gl": "^6.17.0",
+    "mind-elixir": "^6.0.1",
     "motion": "^14.10.1",
     "n3": "^2.13.12",
     "next": "16.4.0",

@@ -1,3 +1,5 @@
+import { isValidFctNodeId } from "./fct-node-identity";
+
 /** Stable UI furniture identities. Dynamic widgets are not registered here:
  * their URN is deterministically derived from the FCT XML node `id`.
  * Existing gttp component references are retained for saved provenance.
@@ -5,7 +7,7 @@
 export const UI_COMPONENT = {
   recordPolicyDiscovery: "gttp://ggg.maestro.ui/component/record-policy-discovery",
   perspectiveRibbon: "gttp://ggg.maestro.ui/component/view-ribbon",
-  policiesFeature: "gttp://ggg.maestro.ui/component/policies-feature",
+  policiesProvider: "gttp://ggg.maestro.ui/component/policies-provider",
   otcDispatch: "urn:maestro:component:chat:transcode",
   appbar: "urn:maestro:component:appbar",
   viewRibbon: "urn:maestro:component:view:ribbon",
@@ -25,7 +27,7 @@ export const UI_DYNAMIC_PREFIX = {
 export type DynamicUiComponentKind = keyof typeof UI_DYNAMIC_PREFIX;
 
 export function dynamicUiComponentUrn(kind: DynamicUiComponentKind, xmlNodeId: string): string {
-  if (!/^[a-zA-Z_][a-zA-Z0-9_.:%-]{0,255}$/.test(xmlNodeId)) {
+  if (typeof xmlNodeId !== "string" || xmlNodeId.length > 256 || !isValidFctNodeId(xmlNodeId)) {
     throw new Error("A valid FCT node ID is required for a dynamic component URN.");
   }
   return `${UI_DYNAMIC_PREFIX[kind]}${xmlNodeId}`;

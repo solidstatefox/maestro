@@ -1,3 +1,4 @@
+import { MAESTRO_KIND_IDS, normalizeMaestroKind, maestroKindSparql } from "./maestro-kinds";
 import { ALL_GRAPHS } from "./graph-address-mode";
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
 import { normalizeFctValue } from "./fct-value-policy";
@@ -113,7 +114,33 @@ function appendValueFilter(node: FctQueryNode, subject: string, state: CompilerS
 }
 
 function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerState): void {
+  const groups = new Map<string, FctQueryNode[]>();
+  for (const node of nodes) if ((node.name === "property" || node.name === "property-of") && node.attributes.uid) {
+    const uid = node.attributes.uid;
+    if (!/^[a-z0-9]+$/.test(uid)) { state.errors.push(`Invalid OR identifier ${uid}`); continue; }
+    groups.set(uid, [...(groups.get(uid) ?? []), node]);
+  }
+  const handled = new Set<string>();
   for (const node of nodes) {
+    const uid = (node.name === "property" || node.name === "property-of") ? node.attributes.uid : undefined;
+    const members = uid ? groups.get(uid) : undefined;
+    if (uid && members && members.length > 1) {
+      if (handled.has(uid)) continue;
+      handled.add(uid);
+      const base = state.nextVariable;
+      let next = base;
+      const branches: string[] = [];
+      for (const member of members) {
+        const branchState: CompilerState = { nextVariable: base, viewVariable: state.viewVariable, patterns: [], errors: state.errors };
+        compileNodes([{ ...member, attributes: Object.fromEntries(Object.entries(member.attributes).filter(([key]) => key !== "uid")) }], subject, branchState);
+        if (branchState.viewVariable) state.viewVariable = branchState.viewVariable;
+        next = Math.max(next, branchState.nextVariable);
+        branches.push(`{ ${branchState.patterns.join(" \n  ")} }`);
+      }
+      state.nextVariable = next;
+      state.patterns.push(branches.join(" UNION "));
+      continue;
+    }
     switch (node.name) {
       case "view": {
         if ((node.uiKey === "query-view" || node.id === "query-view") || state.viewVariable === null) state.viewVariable = subject;
@@ -205,7 +232,7 @@ export type FacetCountExtension = {
 };
 
 /** Compile the app's supported FCT query-tree subset directly to a scalar SPARQL count. */
-export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountExtension, kindDirection?: "property" | "role", probeKind?: string): string | null {
+export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountExtension, kindDirection?: "property" | "role", probeKind?: string, temporalPredicate?: string): string | null {
   const state: CompilerState = {
     nextVariable: 0,
     viewVariable: null,
@@ -214,8 +241,17 @@ export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountEx
   };
   const root = "?fct0";
   state.nextVariable = 1;
-  compileNodes(tree.children, root, state);
-  if (state.errors.length || !state.viewVariable || !state.patterns.length) return null;
+  const rootUriMembers = tree.children.filter(node=>node.name==="value" && node.attributes.datatype==="uri");
+  const multipleRootMembers = rootUriMembers.length > 1;
+  if (multipleRootMembers && (rootUriMembers.length > 120 || tree.children.some(node=>node.name==="value" && node.attributes.datatype!=="uri"))) return null;
+  const members = multipleRootMembers ? rootUriMembers.map(valueTerm) : [];
+  if (members.some(member=>!member)) return null;
+  compileNodes(multipleRootMembers ? tree.children.filter(node=>node.name!=="value") : tree.children, root, state);
+  if (multipleRootMembers) state.patterns.unshift(`VALUES ${root} { ${members.join(" ")} }`);
+  // A root <view> with no filters is valid for Kind discovery: the candidate
+  // property/role triple below binds the otherwise unconstrained root. Ordinary
+  // scalar counts still require an explicit finite scope.
+  if (state.errors.length || !state.viewVariable || (!state.patterns.length && !kindDirection)) return null;
 
   const queryAttributes: string[] = [];
   const inference = tree.attributes.inference?.trim();
@@ -285,17 +321,12 @@ export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountEx
   // One VALUES + EXISTS SELECT evaluates every kind without N network calls.
   // Single-kind ASK variants are used only when an endpoint rejects batching.
   if (kindDirection) {
-    const kinds = ["web-url", "string", "numeric", "date", "email", "phone"];
-    if (probeKind !== undefined && !kinds.includes(probeKind)) return null;
+    const kinds = MAESTRO_KIND_IDS;
+    const normalizedProbe=probeKind === undefined ? undefined : normalizeMaestroKind(probeKind);
+    if (probeKind !== undefined && !normalizedProbe) return null;
     const value = "?maestroKindValue";
-    const valueStr = `STR(${value})`;
-    const numeric = `(isLiteral(${value}) && (DATATYPE(${value}) IN (<http://www.w3.org/2001/XMLSchema#integer>, <http://www.w3.org/2001/XMLSchema#decimal>, <http://www.w3.org/2001/XMLSchema#float>, <http://www.w3.org/2001/XMLSchema#double>, <http://www.w3.org/2001/XMLSchema#int>, <http://www.w3.org/2001/XMLSchema#long>, <http://www.w3.org/2001/XMLSchema#short>, <http://www.w3.org/2001/XMLSchema#byte>, <http://www.w3.org/2001/XMLSchema#nonNegativeInteger>, <http://www.w3.org/2001/XMLSchema#positiveInteger>, <http://www.w3.org/2001/XMLSchema#unsignedInt>, <http://www.w3.org/2001/XMLSchema#unsignedLong>, <http://www.w3.org/2001/XMLSchema#unsignedShort>, <http://www.w3.org/2001/XMLSchema#unsignedByte>) || REGEX(${valueStr}, "^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$")))`;
-    const date = `(isLiteral(${value}) && (DATATYPE(${value}) IN (<http://www.w3.org/2001/XMLSchema#date>, <http://www.w3.org/2001/XMLSchema#dateTime>, <http://www.w3.org/2001/XMLSchema#time>, <http://www.w3.org/2001/XMLSchema#gYear>, <http://www.w3.org/2001/XMLSchema#gYearMonth>) || REGEX(${valueStr}, "^[0-9]{4}-[0-9]{2}-[0-9]{2}")))`;
-    const email = `REGEX(${valueStr}, "^(mailto:)?[^@ ]+@[^@ ]+[.][^@ ]+$", "i")`;
-    const phone = `REGEX(${valueStr}, "^(tel:)?[+]?[0-9()+ .-]{7,}$", "i")`;
-    const web = `((isIRI(${value}) || isLiteral(${value})) && REGEX(${valueStr}, "^https?://", "i"))`;
-    const choices = [web, `isLiteral(${value}) && !(${numeric} || ${date} || ${email} || ${phone} || ${web})`, numeric, date, email, phone];
-    const check = probeKind ? choices[kinds.indexOf(probeKind)] : kinds.map((kind, i) => `(?maestroKind = "${kind}" && (${choices[i]}))`).join(" || ");
+    const choices=kinds.map(kind=>maestroKindSparql(kind,value) ?? "false");
+    const check = normalizedProbe ? choices[kinds.indexOf(normalizedProbe)] : kinds.map((kind,i)=>`(?maestroKind = "${kind}" && (${choices[i]}))`).join(" || ");
     const relation = kindDirection === "property"
       ? `${state.viewVariable} ?maestroKindPredicate ${value} .`
       : `${value} ?maestroKindPredicate ${state.viewVariable} .`;
@@ -309,6 +340,37 @@ export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountEx
     return [...queryAttributes, `${probeKind ? "ASK" : "SELECT DISTINCT ?maestroKind"} WHERE {\n  ${inner.replace(/\n/g, "\n  ")}\n}`].join("\n");
   }
   let extraProjections = "";
+  if (temporalPredicate) {
+    // Normalize the provider's date, dateTime, gYearMonth, gYear and canonical
+    // date-like strings to sortable *day* bounds. Partial dates have a different
+    // earliest/latest possible day, so MIN and MAX use separate bindings.
+    const predicate = iriTerm(temporalPredicate);
+    if (!predicate || extension) return null;
+    // A temporal-domain query carries its <view> directly on this property.
+    // The view variable is therefore already the date literal: do not add
+    // `?dateLiteral dcterms:created ?anotherValue`, which returns no matches.
+    const focusedOnTemporalFacet = (() => {
+      const contains = (nodes: FctQueryNode[]): boolean => nodes.some(node =>
+        node.name === "property" && node.attributes.iri === temporalPredicate && node.children.some(child => child.name === "view") ||
+        contains(node.children));
+      return contains(tree.children);
+    })();
+    const source = focusedOnTemporalFacet ? state.viewVariable : "?facetValue";
+    // Min/max of ISO lexical forms sorts chronologically for canonical years,
+    // months, days and datetimes. Avoid nested conditional BINDs which some
+    // Virtuoso builds silently leave unbound in aggregate SELECTs.
+    const normalize = `FILTER (isLiteral(${source})) BIND(STR(${source}) AS ?facetLex) FILTER (REGEX(?facetLex, "^[0-9]{4}(-[0-9]{2}(-[0-9]{2}([T ].*)?)?)?$"))`;
+
+    if (focusedOnTemporalFacet) {
+      // Avoid nesting a second graph pattern around the already scoped value.
+      whereBody += `\n${normalize}`;
+    } else {
+      const relation = `${state.viewVariable} ${predicate} ?facetValue . ${normalize}`;
+      const extraPattern = graph && graph !== ALL_GRAPHS ? `GRAPH <${graph}> { ${relation} }` : relation;
+      whereBody += `\nOPTIONAL { ${extraPattern} }`;
+    }
+    extraProjections = " (MIN(?facetLex) AS ?min) (MAX(?facetLex) AS ?max)";
+  }
   if (extension) {
     const predicate = iriTerm(extension.predicate);
     if (!predicate || !extension.projections.length || extension.projections.length > 8 ||
@@ -333,4 +395,10 @@ export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountEx
 /** Batched FCT-scoped kind preflight. No independently assembled query path. */
 export function buildFctKindAvailabilitySparql(tree: FctQueryTree, direction: "property" | "role", kind?: string): string | null {
   return buildFctCountSparql(tree, undefined, direction, kind);
+}
+
+/** Date provider domain, in the live FCT focus and graph scope. Values are ISO
+ * calendar days; UI never changes the original RDF literals or query filters. */
+export function buildFctTemporalDomainSparql(tree: FctQueryTree, property: string): string | null {
+  return buildFctCountSparql(tree, undefined, undefined, undefined, property);
 }

@@ -4,6 +4,7 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 
 export type ConfigurePaneWorkspace = Pick<WorkspaceController,
   | "commitConfigureFacetChanges"
+  | "reportConfigureLifecycle"
   | "configureSelectedProperties"
   | "configureSelectedRoles"
   | "FACET_PAGE_SIZE"
@@ -89,7 +90,7 @@ export type PersonalWidgetCardsWorkspace = Pick<WorkspaceController,
   | "setPersonalWidgets"
   | "setPropertyValue"
   | "workspaceTab"
-  | "viewFeature"
+  | "viewProvider"
 >;
 
 export type FilterPaneDirectWorkspace = Pick<WorkspaceController,
@@ -276,6 +277,8 @@ export type LeftPaneDirectWorkspace = Pick<WorkspaceController,
 >;
 
 export type RecordPaneWorkspace = Pick<WorkspaceController,
+  | "recordSelectionCleared"
+  | "accessCapabilities"
   | "RECORD_DESCRIPTION_PAGE_SIZE"
   | "activeBlankNodeTab"
   | "applyRecordAsRootValue"
@@ -372,10 +375,11 @@ export type RecordPaneWorkspace = Pick<WorkspaceController,
   | "setSelectedUri"
   | "validateSelectedRecord"
   | "workspaceTab"
-  | "viewFeature"
+  | "viewProvider"
 >;
 
 export type SettingsPaneWorkspace = Pick<WorkspaceController,
+  | "accessCapabilities"
   | "queryConcurrency"
   | "changeQueryConcurrency"
   | "authSession"
@@ -446,13 +450,19 @@ export type SettingsPaneWorkspace = Pick<WorkspaceController,
 >;
 
 export type AppBarDirectWorkspace = Pick<WorkspaceController,
+  | "accessCapabilities"
+  | "confirmQueryBookmark"
+  | "revokeQueryBookmark"
   | "setViewPanel"
   | "setSelectedViewUri"
-  | "setViewFeature"
+  | "setViewProvider"
   | "viewPanel"
-  | "viewFeature"
-  | "selectViewFeature"
+  | "viewProvider"
+  | "selectViewProvider"
   | "returnShareUrl"
+  | "returnToPreviousContext"
+  | "openPinnedShareUrl"
+  | "navigateWorkspaceTab"
   | "buildCurrentShareUrl"
   | "effectiveResultsTotalCount"
   | "recordStatus"
@@ -483,6 +493,7 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "deleteCurrentQueryHistory"
   | "endpointChecksCompleted"
   | "endpointChecksTotal"
+  | "endpointMenuError"
   | "endpointStatuses"
   | "exitEverywhere"
   | "exportBookmarks"
@@ -492,10 +503,12 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "formatHistoryAction"
   | "graphAlreadySelected"
   | "graphAutoFill"
+  | "graphFieldEditing"
   | "graphInfo"
   | "graphInfoOpen"
   | "graphProbe"
   | "graphProbeIdentity"
+  | "graphRegistryReady"
   | "graphText"
   | "groupBatchSize"
   | "handleFetchProfile"
@@ -553,6 +566,9 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "queryTree"
   | "queryTreeHeightDbRef"
   | "queryXml"
+  | "queryMatchedProviders"
+  | "policyApprovalRevision"
+  | "selectedUri"
   | "recordDescriptionPageSize"
   | "recordDescriptionQueryLimit"
   | "refreshMaestroPage"
@@ -584,10 +600,10 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "setFacetUsageRevision"
   | "setFindEndpointsEnabled"
   | "setGraphAutoFill"
+  | "setGraphFieldEditing"
   | "setGraphInfoOpen"
   | "setGraphText"
   | "setHistoryBookmarkId"
-  | "setIsQueryBookmarked"
   | "setIsRdfLoaderOpen"
   | "setLocalStorageUsageBytes"
   | "setLoginDialogOpen"
@@ -601,7 +617,6 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "setLoginTab"
   | "setLoginUsername"
   | "setLoginWebIdUri"
-  | "setMatchingBookmarkId"
   | "setOrderResults"
   | "setPanelLimitsOpen"
   | "setPendingCenterBatchLimit"
@@ -627,9 +642,9 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "tutorialMode"
   | "widgetTimeouts"
   | "workspaceTab"
-  | "viewFeature"
+  | "viewProvider"
 >;
 
-export type FilterPaneWorkspace = FilterPaneDirectWorkspace & PersonalWidgetCardsWorkspace & Pick<WorkspaceController, "setPersonalDateRange" | "setPersonalNumericRange" | "propertyFacets" | "activePropertyFilters" | "viewFeature" | "policyApprovalRevision" | "togglePolicyStatusFilter" | "toggleLiveStatusFilter" | "isQueryBookmarked" | "queryXml">;
+export type FilterPaneWorkspace = FilterPaneDirectWorkspace & PersonalWidgetCardsWorkspace & Pick<WorkspaceController, "setPersonalDateRange" | "setPersonalNumericRange" | "propertyFacets" | "activePropertyFilters" | "viewProvider" | "policyApprovalRevision" | "togglePolicyStatusFilter" | "toggleLiveStatusFilter" | "isQueryBookmarked" | "accessCapabilities" | "accessController" | "reportProviderLifecycle" | "queryXml">;
 export type LeftPaneWorkspace = LeftPaneDirectWorkspace & FilterPaneWorkspace & ConfigurePaneWorkspace;
 export type AppBarWorkspace = AppBarDirectWorkspace & SettingsPaneWorkspace;

@@ -1,3 +1,4 @@
+import { browserLog } from "@/lib/maestro-client-logging";
 /**
  * IndexedDB-backed key/value storage for Maestro's persistent browser state.
  *
@@ -108,7 +109,7 @@ export function initializeMaestroStorage(): Promise<void> {
     } catch (error) {
       // Keep the app usable when IndexedDB is blocked. Existing localStorage is
       // retained as a fallback and writes remain in the in-memory mirror.
-      console.error("[Maestro Storage] IndexedDB initialization failed; using browser fallback.", error);
+      browserLog.error("storage.indexeddb.init-failed", error);
       indexedDbAvailable = false;
       initialized = true;
     }
@@ -130,7 +131,7 @@ export function maestroStorageGet(key: string): string | null {
 export function maestroStorageSet(key: string, value: string): void {
   memory.set(key, value);
   void persistValue(key, value).catch((error) => {
-    console.error(`[Maestro Storage] Could not persist key ${key}.`, error);
+    browserLog.error("storage.indexeddb.write-failed", error);
   });
 }
 
@@ -138,7 +139,7 @@ export function maestroStorageSet(key: string, value: string): void {
 export function maestroStorageRemove(key: string): void {
   memory.delete(key);
   void persistValue(key, undefined).catch((error) => {
-    console.error(`[Maestro Storage] Could not remove key ${key}.`, error);
+    browserLog.error("storage.indexeddb.remove-failed", error);
   });
 }
 

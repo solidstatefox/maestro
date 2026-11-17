@@ -3,6 +3,7 @@
 import { fctProjectPage, type Projection } from "./fct-client";
 import type { FeatureKind, FeatureItem } from "@/lib/feature-view-xslt";
 import { toLabel } from "@/lib/uri-labels";
+import { readClientPolicyApprovals } from "@/lib/client-policy-approvals";
 
 const mui = "gttp://ggg.maestro.ecosys/ns/ui#";
 const rdf = "http://www.w3.org/2000/01/rdf-schema#";
@@ -15,13 +16,12 @@ const meta: Projection[] = [
     `${mui}forClass`, `${mui}recordShape`, `${mui}widget`, `${otc}outputShape`].map(property => ({ property, direction: "forward" as const })),
   { property: `${sh}class`, direction: "forward", path: [`${mui}accepts`, `${sh}class`] },
 ];
-const approval: Projection[] = [
-  ...["status", "triggeredBy", "lastRequestedBy", "lastRequestDate", "matchedRecord", "lastRequestHistory", "lastRequestComponent"]
-    .map(name => ({ property: `${mui}${name}`, direction: "forward" as const })),
-];
 
 function activation(feature: FeatureKind, target: string): string {
   if (feature === "fsm-providers") return "Activation: RDF-defined state transitions executed by the XState v5 adapter.";
+  if (feature === "perspectives") return "Activation: an approved PerspectiveWidget provider must match the current query scope.";
+  if (feature === "analysis-providers") return "Activation: this RDF-declared Analysis provider must be approved before use in Analyze.";
+  if (feature === "kinds") return "Activation: a KindProvider declares typed RDF term classification rules.";
   if (feature === "curators") return "Activation: approve this curator to trust its mui:widget RDF list of providers.";
   if (feature === "policies") return "Activation: a matching resource must satisfy this provider's SHACL policy.";
   if (feature === "transcoders") return "Activation: the input must satisfy the transcoder's input shape.";
@@ -32,27 +32,27 @@ function activation(feature: FeatureKind, target: string): string {
 export async function featureItemsFromFct(
   queryXml: string, uris: string[], feature: FeatureKind, bookmarked: boolean, signal?: AbortSignal,
 ): Promise<FeatureItem[]> {
-  const records = await fctProjectPage(queryXml, uris, [...meta, ...(bookmarked ? approval : [])], signal, bookmarked);
+  // Read-only FCT provider membership and metadata must never depend on an
+  // approval machine, bookmarked-query Status projection or provenance read.
+  const records = await fctProjectPage(queryXml, uris, meta, signal, false);
   // Feature *items* come exclusively from FCT. Approval is independent
   // client-policy metadata: a listed provider is effectively Approved only
   // while a current curator is Approved for its implementation digest.
   let approvals = new Map<string,"Approved" | "Pending" | null>();
   if (bookmarked && uris.length) {
-    const response = await fetch("/proxy/api/service?service=maestro&operationId=policies", {
-      method: "POST", credentials: "same-origin", cache: "no-store", signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({action:"statuses",uris:[...new Set(uris)].slice(0,500)}),
-    });
-    const body = await response.json() as {error?:string;approvals?:Array<{uri:string;status:"Approved"|"Pending"|null}>};
-    if(!response.ok || body.error)throw new Error(body.error||`Provider approval lookup failed (HTTP ${response.status})`);
-    approvals = new Map((body.approvals??[]).map(item=>[item.uri,item.status]));
+    try {
+      const entries = await readClientPolicyApprovals(uris.slice(0,500), signal);
+      approvals = new Map(entries.map(entry=>[entry.uri,entry.status]));
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      // A missing/invalid approval policy only disables approval actions. It
+      // must never erase the FCT provider cards or enter catalog.failed.
+    }
   }
   return records.map(record => {
     const values = (iri: string) => record.properties.get(iri);
     const resolvedTarget = first(values(`${mui}forClass`)) || first(values(`${sh}class`));
-    const statusValues = (values(`${mui}status`) || []).map(item => item.value);
-    const status = bookmarked ? (approvals.get(record.uri) ?? "") :
-      statusValues.includes(`${mui}Approved`) ? "Approved" : statusValues.includes(`${mui}Pending`) ? "Pending" : "";
+    const status = bookmarked ? (approvals.get(record.uri) ?? "") : "";
     const detail = first(values(`${mui}recordShape`)) || first(values(`${mui}widget`)) || first(values(`${otc}outputShape`));
     const item: FeatureItem & Record<string, string> = {
       uri: record.uri,
@@ -64,12 +64,8 @@ export async function featureItemsFromFct(
       activation: activation(feature, resolvedTarget),
       ...(bookmarked ? {
         bookmarked: "true", status,
-        triggeredBy: (values(`${mui}triggeredBy`) ?? []).map(v => v.value).join(", "),
-        lastRequestedBy: first(values(`${mui}lastRequestedBy`)),
-        lastRequestDate: first(values(`${mui}lastRequestDate`)),
-        matchedRecord: first(values(`${mui}matchedRecord`)),
-        lastRequestHistory: first(values(`${mui}lastRequestHistory`)),
-        lastRequestComponent: first(values(`${mui}lastRequestComponent`)),
+        triggeredBy: "", lastRequestedBy: "", lastRequestDate: "",
+        matchedRecord: "", lastRequestHistory: "", lastRequestComponent: "",
       } : { bookmarked: "false", status: "" }),
     };
     return item;

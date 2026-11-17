@@ -13,7 +13,7 @@ export async function describeFctSource(liveXml: string, resource: string, signa
   if (doc.querySelector("parsererror")) throw new Error("Malformed live FCT XML.");
   const root = doc.documentElement;
   if (root.localName !== "query" || !root.getAttribute("addr")) throw new Error("FCT graph address is missing.");
-  // This is a source-inspection query, not a Features approval listing.
+  // This is a source-inspection query, not a Providers approval listing.
   // Do not trigger a redundant bookmark/curation lookup from its navigation src.
   root.removeAttribute("src");
   while (root.firstChild) root.removeChild(root.firstChild);

@@ -1,4 +1,4 @@
-/** Shared Browse/Features alphabet selection grammar.
+/** Shared Browse/Providers alphabet selection grammar.
  * A,B,!C = starts with A OR starts with B OR NOT starts with C.
  * Shift-click toggles !letter; plain click toggles letter. */
 export function parseAlphabetSelections(index: string): string[] {

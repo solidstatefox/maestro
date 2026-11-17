@@ -1,4 +1,6 @@
-"use client";
+import { MAESTRO_KIND_IDS, classifyMaestroKind, type MaestroKind } from "./maestro-kinds";
+import { nextFctQueryId } from "./fct-node-identity";
+
 
 import { fctQueryTreeApi, type FctQueryTree, type FctQueryNode } from "./fct-query-api";
 
@@ -42,22 +44,11 @@ function locate(nodes: FctQueryNode[], id: string): FctQueryNode | null {
   return null;
 }
 function allocateId(tree: FctQueryTree): string {
-  const reserved = new Set<string>();
-  const visit = (nodes: FctQueryNode[]) => nodes.forEach(node => { reserved.add(node.id); visit(node.children); });
-  visit(tree.children);
-  let n = Math.max(10, Number.parseInt(tree.attributes.ctr || "10", 10) || 10);
-  while (reserved.has(n.toString(36))) n++;
-  return n.toString(36);
+  return nextFctQueryId(tree).id;
 }
 
-export type RecordValueKind = "web-url" | "string" | "numeric" | "date" | "email" | "phone";
-export const RECORD_VALUE_KINDS: readonly RecordValueKind[] = ["web-url", "string", "numeric", "date", "email", "phone"];
-export function classifyRecordValue(value: string, termType: string, datatype?: string): RecordValueKind {
-  if (termType === "uri" && /^https?:\/\//i.test(value)) return "web-url";
-  const dt = (datatype || "").toLowerCase();
-  if (/(?:integer|decimal|double|float|long|short|int|nonnegativeinteger|positiveinteger|byte|unsigned)/.test(dt) || (termType !== "uri" && /^[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?$/i.test(value))) return "numeric";
-  if (/(?:date|time|gyear)/.test(dt) || /^\d{4}-\d\d-\d\d(?:t|$)/i.test(value)) return "date";
-  if (/^(?:mailto:)?[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(value)) return "email";
-  if (/^(?:tel:)?\+?[\d().\s-]{7,}$/.test(value) && /\d/.test(value)) return "phone";
-  return "string";
+export type RecordValueKind = MaestroKind;
+export const RECORD_VALUE_KINDS: readonly RecordValueKind[] = MAESTRO_KIND_IDS;
+export function classifyRecordValue(value:string,termType:string,datatype?:string):RecordValueKind {
+  return classifyMaestroKind(value,termType,datatype);
 }

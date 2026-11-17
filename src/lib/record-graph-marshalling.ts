@@ -32,7 +32,7 @@ export function recordGraphFctQuery(args: {
     const views = Array.from(doc.getElementsByTagName("*")).filter(node => node.localName === "view");
     if (views.length !== 1) throw new Error("Expected one FCT view.");
     const view = views[0];
-    doc.documentElement.removeAttribute("src"); // Projection is not a Features navigation.
+    doc.documentElement.removeAttribute("src"); // Projection is not a Providers navigation.
     const rootFocus = view.parentElement === doc.documentElement;
     // For a root blank-node Record, the Results page itself is the identity.
     // Preserve that page's offset and do not expand its candidate set to the

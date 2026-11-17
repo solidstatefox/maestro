@@ -32,7 +32,8 @@ export function proxyFailure(request: Request, operation: string, error: unknown
   const upstreamBody = error && typeof error === "object" && "responseBody" in error ? String(error.responseBody) : "";
   const code = timedOut ? "UPSTREAM_TIMEOUT" : "UPSTREAM_ERROR";
   const requestId = request.headers.get("x-maestro-debug-request") || "";
-  proxyLog("error", operation, { message, code, status, requestId, ...extra, err: error });
+  proxyLog(timedOut ? "debug" : "error", operation, { code, status, requestId,
+    ...extra, ...(timedOut ? {} : { message, err: error }) });
   return NextResponse.json({ error: message, code, status, requestId,
     ...(upstreamBody ? { upstreamBody: upstreamBody.slice(0, 16000), upstreamBodyTruncated: upstreamBody.length > 16000 } : {}),
   }, { status, headers: browserDiagnosticHeaders(request, operation, { message, code, status, ...extra }) });

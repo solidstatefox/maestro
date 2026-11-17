@@ -232,6 +232,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
       ...updated,
       attributes: { ...updated.attributes,
         ctr: String(Math.max(10, Number(state.tree.attributes.ctr) || 10, Number(updated.attributes.ctr) || 10)),
+        uctr: Math.max(10, parseInt(state.tree.attributes.uctr || "a", 36) || 10, parseInt(updated.attributes.uctr || "a", 36) || 10).toString(36),
       },
     });
     state = {

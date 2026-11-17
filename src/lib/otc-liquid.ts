@@ -1,4 +1,5 @@
-/** Server-only Liquid renderer for OTC RDF templates. Bindings are implicit in otc:query projection. */
+"use client";
+/** Browser Liquid renderer for OTC RDF templates. Bindings are implicit in otc:query projection. */
 import { Liquid } from "liquidjs";
 
 export type LiquidTerm = { type: string; value: string; datatype?: string; "xml:lang"?: string };

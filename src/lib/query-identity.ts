@@ -18,7 +18,7 @@ const parser = new XMLParser({
 });
 
 const PAGING = new Set(["limit", "offset", "timeout", "pageSize", "page"]);
-const IGNORED = new Set(["id", "ctr"]);
+const IGNORED = new Set(["id", "ctr", "uctr"]);
 const UNORDERED_SCOPES = new Set(["query", "property", "property-of"]);
 
 type CanonicalNode = {

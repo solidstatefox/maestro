@@ -8,7 +8,7 @@ export type Projection = { property: string; direction: "forward" | "reverse"; p
 export type ProjectedRecord = { uri: string; label: string; properties: Map<string, EnrichedTerm[]> };
 const validIri = (iri: string) => /^[a-z][a-z\d+.-]*:[^\s<>"{}|^`\\]+$/i.test(iri);
 
-/** Reuse the ordinary FCT XML pipeline and its client cache; never call a feature-specific API. */
+/** Reuse the ordinary FCT XML pipeline and its client cache; never call a provider-specific API. */
 export async function fctRead(xml: string, signal?: AbortSignal) {
   const response = await cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal,
     headers: { "Content-Type": "text/xml; charset=utf-8" }, body: xml });

@@ -10,10 +10,10 @@ const STATUS = "gttp://ggg.maestro.ecosys/ns/ui#status";
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
 
 test("Status derives from the bookmarked XML without DOM serialization or altered selection", () => {
-  const original = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" addr="urn:policies@http://demo.openlinksw.com/sparql" src="urn:maestro:features:policies" id="a" ctr="15"><class iri="${MUI}ClassPolicy" id="b"/><status type="uri" id="c">${MUI}Approved</status><property iri="${MUI}lastRequestComponent" id="d"><view type="list" limit="30" offset="0" id="e"/></property></query>`;
+  const original = `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" addr="urn:policies@http://demo.openlinksw.com/sparql" src="urn:maestro:providers:policies" id="a" ctr="15"><class iri="${MUI}ClassPolicy" id="b"/><status type="uri" id="c">${MUI}Approved</status><property iri="${MUI}lastRequestComponent" id="d"><view type="list" limit="30" offset="0" id="e"/></property></query>`;
   const projected = cloneFctListStatusView(original);
   assert.ok(projected.includes(`addr="urn:policies@http://demo.openlinksw.com/sparql"`));
-  assert.ok(projected.includes(`src="urn:maestro:features:policies"`));
+  assert.ok(projected.includes(`src="urn:maestro:providers:policies"`));
   assert.ok(projected.includes(`<class iri="${MUI}ClassPolicy" id="b"/>`));
   assert.ok(projected.includes(`<property iri="${MUI}lastRequestComponent" id="d"><view type="list-status"/></property>`));
   assert.equal((projected.match(/<view\b/g) ?? []).length, 1);

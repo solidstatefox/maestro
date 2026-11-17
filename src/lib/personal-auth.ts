@@ -1,3 +1,4 @@
+import { browserLog } from "@/lib/maestro-client-logging";
 /**
  * Personal Graph Server Authentication & Session Management.
  * Supports Virtuoso's sparql-auth, sparql-oauth, and sparql-webid protocols.
@@ -281,7 +282,7 @@ export async function loadPersonalAuthSession(): Promise<PersonalAuthSession | n
     }
     return session;
   } catch (error) {
-    console.warn("Could not decrypt saved personal graph server session", error);
+    browserLog.warn("auth.saved-session.decrypt-failed", error);
     return null;
   }
 }

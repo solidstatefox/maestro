@@ -76,3 +76,19 @@ export async function transformWithMaestroSaxon(
   }
   return value;
 }
+
+/** Convert JSON into the W3C XPath `json-to-xml` representation using the
+ * same browser SaxonJS distribution as every other Maestro XSLT operation.
+ * Do not import the `saxon-js` npm package here: it is the Node distribution.
+ */
+export async function saxonJsonToXml(json: string): Promise<string> {
+  const saxon = await getSaxon();
+  const result = saxon.XPath.evaluate(
+    "serialize(json-to-xml($json), map { 'method': 'xml', 'omit-xml-declaration': true() })",
+    null,
+    { params: { json } },
+  );
+  const serialized = Array.isArray(result) && result.length === 1 ? result[0] : result;
+  if (typeof serialized !== "string") throw new Error("SaxonJS JSON-to-XML conversion returned a non-string result.");
+  return serialized;
+}

@@ -39,7 +39,7 @@ export function BrowseResultsCanvas({ workspace }: { workspace: WorkspaceControl
                   className="flex min-h-0 flex-1 flex-col overflow-hidden"
                 >
 
-              <BrowseResults results={stateFilteredResults} selectedUri={selectedUri} expandedUris={expandedUris} setExpandedUris={setExpandedUris} showResultBadges={showResultBadges} isRootView={isRootView} liveQueryHasText={liveQueryHasText} search={search} searchError={searchError} isLoading={isSearching || resultsBatchRequestPending.current || (!resultsPageComplete && resultsUiPage * resultsPageSize >= results.length) || !urlStateInitialized || !endpointReadyForQuery || !initialBrowseTriggered || resultsLoadedQueryIdentityRef.current !== activeQueryIdentityRef.current} facetHoverPreview={facetHoverPreview} tutorialMode={tutorialMode} onSelectResult={setSelectedUri} onNavigateClass={(iri) => navigateResultBadge(RDF_TYPE_URI, { value: iri, type: "uri" }, "forward", true)} renderBadge={(scope, term, index) => renderScopeValueBadge(scope, term, index)} />
+              <BrowseResults results={stateFilteredResults} selectedUri={selectedUri} expandedUris={expandedUris} setExpandedUris={setExpandedUris} showResultBadges={showResultBadges} isRootView={isRootView} liveQueryHasText={liveQueryHasText} search={search} searchError={searchError} isLoading={isSearching || resultsBatchRequestPending.current || (!resultsPageComplete && resultsUiPage * resultsPageSize >= results.length) || !urlStateInitialized || !endpointReadyForQuery || !initialBrowseTriggered || resultsLoadedQueryIdentityRef.current !== activeQueryIdentityRef.current} facetHoverPreview={facetHoverPreview} tutorialMode={tutorialMode} onSelectResult={workspace.selectBrowseResult} onNavigateClass={(iri) => navigateResultBadge(RDF_TYPE_URI, { value: iri, type: "uri" }, "forward", true)} renderBadge={(scope, term, index) => renderScopeValueBadge(scope, term, index)} />
                 </div>
               )}
 </>;
@@ -128,7 +128,7 @@ export function BrowseQueryTreeCanvas({ workspace }: { workspace: WorkspaceContr
                       Live query structure. Changes in Filters, Focus, navigation, and bindings appear here immediately.
                     </p>
                   </div>
-                  <ul className="space-y-1">
+                  <ul className="space-y-1" aria-label="Root FCT query">
                     {!search.trim() && !searchNode && !uriNode?.text?.trim() && renderQueryNode({
                       id: "query-everything",
                       name: "everything",

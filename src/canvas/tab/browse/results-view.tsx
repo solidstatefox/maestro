@@ -19,7 +19,7 @@ export interface BrowseResultsProps {
   isLoading: boolean;
   facetHoverPreview: Preview;
   tutorialMode: boolean;
-  onSelectResult: (uri: string) => void;
+  onSelectResult: (uri: string, shiftKey: boolean) => void;
   onNavigateClass: (uri: string) => void;
   renderBadge: (scope: ScopeValue, value: ScopeValue["values"][number], index: number) => ReactNode;
 }
@@ -62,7 +62,7 @@ export function BrowseResults({ results, selectedUri, expandedUris, setExpandedU
                       )}
                       <div className="flex items-start gap-2 p-3">
                         <button
-                          onClick={() => onSelectResult(item.uri)}
+                          onClick={(event) => onSelectResult(item.uri,event.shiftKey)}
                           className="min-w-0 flex-1 text-left cursor-pointer"
                         >
                           <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm font-medium cursor-pointer">
@@ -104,6 +104,7 @@ export function BrowseResults({ results, selectedUri, expandedUris, setExpandedU
                               key={`${item.uri}-match-${index}`}
                               className="border-b py-2 text-sm last:border-b-0"
                             >
+                              {match.predicate && <span className="mb-1 inline-flex max-w-full truncate rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300" title={match.predicate}>{toLabel(match.predicate, "Property")}</span>}
                               {match.excerpt ? (
                                 <span
                                   dangerouslySetInnerHTML={{

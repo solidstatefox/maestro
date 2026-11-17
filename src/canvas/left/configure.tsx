@@ -1,4 +1,6 @@
 "use client";
+import { browserLog } from "@/lib/maestro-client-logging";
+
 
 /** Shared static colors for the Configure pane's green scheme. */
 export const CONFIGURE_LIST_BACKGROUND_COLOR = "#EFF6FC";
@@ -52,7 +54,7 @@ export function recordFacetExclude(kind: "property" | "property-in", uri: string
     window.localStorage.setItem(FACET_EXCLUDE_STORAGE_KEY, JSON.stringify(registry));
   } catch (error) {
     // Browsing and filtering must continue when localStorage is unavailable.
-    console.error("[Maestro Auto-configure] Could not persist facet exclude flag.", error);
+    browserLog.error("configure.facet-exclude.persist-failed", error);
   }
 }
 
@@ -95,7 +97,7 @@ export function recordFacetAddition(kind: "property" | "property-in", uri: strin
     window.localStorage.setItem(FACET_ADD_COUNTS_STORAGE_KEY, JSON.stringify(counts));
   } catch (error) {
     // Browsing and filtering must continue when localStorage is unavailable.
-    console.error("[Maestro Auto-configure] Could not persist facet addition count.", error);
+    browserLog.error("configure.facet-count.persist-failed", error);
   }
 }
 

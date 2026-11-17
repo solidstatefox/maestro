@@ -28,3 +28,8 @@ vfct:historyAction rdfs:label "History action"@en ; dcterms:description "Operati
 vfct:label rdfs:label "Label"@en ; dcterms:description "Human-readable label used by a faceted query resource."@en .
 vfct:queryXML rdfs:label "Query XML"@en ; dcterms:description "Serialized faceted query in XML form."@en .
 vfct:savedQuery rdfs:label "Saved query"@en ; dcterms:description "Link to a saved faceted query resource."@en .
+
+# RDF materialization of each History visit's authoritative FCT query XML.
+vfct:query a rdfs:Class ; rdfs:label "Structured FCT query"@en .
+vfct:child rdfs:label "FCT XML child element"@en .
+vfct:attribute rdfs:label "FCT XML attribute"@en .

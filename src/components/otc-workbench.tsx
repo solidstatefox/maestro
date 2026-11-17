@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { loadPersonalAuthSession } from "@/lib/personal-auth";
+import { clientListTranscoders, clientVerifyOtcGraph } from "@/lib/client-otc-discovery";
+import { importOtcRdf } from "@/lib/client-otc-import";
 import { Parser, Writer, type Quad } from "n3";
-import { appendAssistantActivity, type AssistantActivity } from "@/lib/assistant-activity";
+import { runClientTranscoder } from "@/lib/client-otc-runner";
 
 export type OtcWorkbenchProps = {
   graphServerLabel: string;
@@ -28,54 +31,6 @@ type OtcResult = {
   trace?: Trace[];
 };
 
-async function send(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const response = await fetch(path, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body), cache: "no-store",
-  });
-  // Next.js may return an HTML error page (404/500, body-size limits, etc.).
-  // Never parse HTML as JSON or expose its contents (which may contain file paths).
-  const contentType = response.headers.get("content-type") ?? "";
-  const text = await response.text();
-  let result: Record<string, unknown>;
-  if (contentType.toLowerCase().includes("application/json")) {
-    try {
-      const decoded: unknown = JSON.parse(text);
-      if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) throw new Error("Invalid response format");
-      result = decoded as Record<string, unknown>;
-    } catch {
-      throw new Error(`OTC service returned malformed JSON (HTTP ${response.status}).`);
-    }
-  } else {
-    throw new Error(`OTC service returned HTTP ${response.status} instead of JSON. Check the Maestro server logs for the request to ${path}.`);
-  }
-  // Persist all survey calls even when a later phase fails and the API returns 400.
-  if (Array.isArray(result.activity)) {
-    const activity = result.activity.filter((item): item is AssistantActivity => {
-      if (!item || typeof item !== "object") return false;
-      const candidate = item as Partial<AssistantActivity>;
-      return typeof candidate.id === "string" && typeof candidate.source === "string"
-        && typeof candidate.prompt === "string" && typeof candidate.response === "string"
-        && typeof candidate.createdAt === "string"
-        && (candidate.status === "success" || candidate.status === "error");
-    });
-    if (activity.length) {
-      // Saving is independent of the UI being mounted: the activity remains in IndexedDB.
-      try { await appendAssistantActivity(activity); }
-      catch { /* OTC execution must not fail because browser log storage is unavailable. */ }
-    }
-  }
-  if (!response.ok) {
-    if (response.status === 401) throw new Error("Your login session is unavailable. Please log in to Maestro again.");
-    // Do not pass server exception text (which may include absolute local paths) to the UI.
-    const reason = typeof result.error === "string" ? result.error : "OTC request failed";
-    const safeReason = reason.replace(/[A-Za-z]:[\\/][^\s"'<>]+/g, "[local path]")
-      .slice(0, 450);
-    throw new Error(`${safeReason} (HTTP ${response.status})`);
-  }
-  return result;
-}
-
 function writeNTriples(quads: Quad[]): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const writer = new Writer({ format: "N-Triples" });
@@ -94,11 +49,10 @@ export function OtcWorkbench({ graphServerLabel, graphServerUrl, personalGraphSe
   useEffect(() => {
     let cancelled = false;
     const checkLogin = async () => {
-      // A session-cookie lookup only; this endpoint never contacts the Personal graph server.
+      // Reuse the decrypted client session; no HTTP request is needed.
       try {
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=otc", { method: "GET", cache: "no-store" });
-        const body = await response.json() as { authenticated?: boolean };
-        if (!cancelled) setLoginStatus(response.ok && body.authenticated ? "authenticated" : "signed-out");
+        const session = await loadPersonalAuthSession();
+        if (!cancelled) setLoginStatus(session?.graphStore && session.graphPrefix && session.authHeader ? "authenticated" : "signed-out");
       } catch {
         if (!cancelled) setLoginStatus("signed-out");
       }
@@ -150,7 +104,7 @@ export function OtcWorkbench({ graphServerLabel, graphServerUrl, personalGraphSe
     setResult(null); setOptions([]); setSelected("");
     setStatus("Importing OTC definitions and SHACL validators…");
     const rulesText = await rulesFile.text();
-    await send("/proxy/api/service?service=maestro&operationId=otc-import", { action: "append", graph: nextRules, extension: ".rdf", content: rulesText });
+    await importOtcRdf(nextRules, ".rdf", rulesText);
     setRulesGraph(nextRules);
     setStatus("Parsing OpenAI chatlog Turtle…");
     const raw = await sourceFile.text();
@@ -167,14 +121,14 @@ export function OtcWorkbench({ graphServerLabel, graphServerUrl, personalGraphSe
         content = await writeNTriples(quads.slice(i, end));
       }
       if (content.length > 400_000) throw new Error(`A single RDF triple near index ${i} exceeds the upload budget.`);
-      await send("/proxy/api/service?service=maestro&operationId=otc-import", { action: "append", graph: nextSource, extension: ".nt", content });
+      await importOtcRdf(nextSource, ".nt", content);
       i = end;
       setStatus(`Loading chatlog into the Personal graph server: ${i.toLocaleString()} / ${quads.length.toLocaleString()} triples`);
     }
-    const verification = await send("/proxy/api/service?service=maestro&operationId=otc-import", { action: "verify", graph: nextSource });
+    const verification = await clientVerifyOtcGraph(nextSource);
     if (!verification.exists) throw new Error("Chatlog upload finished but its graph could not be verified.");
     setSourceGraph(nextSource);
-    const listed = await send("/proxy/api/service?service=maestro&operationId=otc", { action: "list", rulesGraph: nextRules });
+    const listed = { transcoders: await clientListTranscoders(nextRules) };
     const found = listed.transcoders as Option[];
     if (!Array.isArray(found) || !found.length) throw new Error("No OTC transcoders were found in the imported rules graph.");
     setOptions(found);
@@ -186,11 +140,16 @@ export function OtcWorkbench({ graphServerLabel, graphServerUrl, personalGraphSe
     const base = graphBase();
     if (!sourceGraph || !rulesGraph || !selected) throw new Error("Import both files and select a transcoder first.");
     setStatus(publish ? "Validating and publishing transcoded RDF…" : "Evaluating OTC surveys with Maestro and checking successors…");
-    const response = await send("/proxy/api/service?service=maestro&operationId=otc", {
-      action: "run", rulesGraph, transcoder: selected, source: "personal", sourceGraph,
+    const completed = await runClientTranscoder({
+      rulesGraph, transcoder: selected, source: "personal", sourceGraph,
       namespace: base, dryRun: !publish,
+      // This workbench intentionally does not chain without user approval.
+      followSuccessors: false,
+      onProgress: (event) => {
+        if (event.status !== "running" || event.step === "qwen")
+          setStatus(`${event.step}: ${event.detail}`);
+      },
     });
-    const completed = response as OtcResult;
     setResult(completed);
     setStatus(completed.published ? `Published ${completed.tripleCount ?? 0} triples to ${completed.runGraph}` :
       completed.tripleCount ? `Generated ${completed.tripleCount} triples in a dry run. Download the Turtle or publish after review.` :

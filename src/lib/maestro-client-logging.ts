@@ -1,19 +1,45 @@
-/** Optional browser-side diagnostics for all same-origin Maestro proxy calls. */
+/**
+ * Browser Pino logging and optional same-origin proxy diagnostics.
+ * The Sheet's enabled/level preferences govern both application events and
+ * network diagnostics; callers must not send raw RDF, SPARQL or credentials.
+ */
+import pino from "pino";
+import { safeMaestroLogMessage, safeMaestroLogDetails } from "./maestro-log-sanitize";
+
 export type BrowserLogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
-const weights: Record<BrowserLogLevel, number> = { trace: 10, debug: 20, info: 30, warn: 40, error: 50, fatal: 60 };
+
+/** Pino's browser bundle uses the browser console; the server Pino transport stays server-only. */
+const logger = pino({
+  name: "maestro-browser",
+  level: "silent",
+  browser: { asObject: true },
+});
 let enabled = false;
 let logLevel: BrowserLogLevel = "debug";
 let installed = false;
 
-function emit(level: BrowserLogLevel, label: string, data: unknown): void {
-  if (!enabled || weights[level] < weights[logLevel]) return;
-  const log = level === "fatal" || level === "error" ? console.error : level === "warn" ? console.warn : level === "info" ? console.info : console.debug;
-  log(`[Maestro ${level.toUpperCase()}] ${label}`, data);
+/** Events are stable identifiers; the details allow-list prevents RDF/query leaks. */
+export function logMaestroBrowser(level: BrowserLogLevel, event: string, ...details: unknown[]): void {
+  if (!enabled) return;
+  const fields = Object.assign({}, ...details.map(safeMaestroLogDetails)) as Record<string, unknown>;
+  const safeEvent = safeMaestroLogMessage(event).replace(/[^a-zA-Z0-9._-]+/g, ".").slice(0, 96);
+  logger[level]({ component: "maestro-browser", event: safeEvent, ...fields }, safeEvent);
 }
+
+/** One typed interface for client lifecycle, display, storage, and proxy events. */
+export const browserLog = {
+  trace: (event: string, ...details: unknown[]) => logMaestroBrowser("trace", event, ...details),
+  debug: (event: string, ...details: unknown[]) => logMaestroBrowser("debug", event, ...details),
+  info: (event: string, ...details: unknown[]) => logMaestroBrowser("info", event, ...details),
+  warn: (event: string, ...details: unknown[]) => logMaestroBrowser("warn", event, ...details),
+  error: (event: string, ...details: unknown[]) => logMaestroBrowser("error", event, ...details),
+  fatal: (event: string, ...details: unknown[]) => logMaestroBrowser("fatal", event, ...details),
+};
 
 export function configureMaestroBrowserLogging(active: boolean, level: BrowserLogLevel): void {
   enabled = active;
   logLevel = level;
+  logger.level = active ? level : "silent";
   if (installed || typeof window === "undefined") return;
   installed = true;
   const original = window.fetch.bind(window);
@@ -27,33 +53,35 @@ export function configureMaestroBrowserLogging(active: boolean, level: BrowserLo
     requestHeaders.set("X-Maestro-Log-Level", logLevel);
     const started = performance.now();
     const requestId = requestHeaders.get("X-Maestro-Debug-Request") || "";
-    emit("debug", "proxy.request", { method: init?.method || (input instanceof Request ? input.method : "GET"), url: url.pathname, requestId });
+    browserLog.debug("proxy.request", { method: init?.method || (input instanceof Request ? input.method : "GET"),
+      route: url.pathname, requestId });
     try {
       const response = await original(input, { ...init, headers: requestHeaders });
       const elapsedMs = Math.round(performance.now() - started);
-      const level = response.ok ? "info" : "error";
-      emit(level, "proxy.response", { url: url.pathname, status: response.status, elapsedMs, requestId,
-        cache: response.headers.get("x-maestro-cache") });
+      // Proxy 504 is an expected deadline outcome; don't surface it as a JS failure.
+      const level: BrowserLogLevel = response.status === 504 ? "debug" : response.ok ? "info" :
+        response.status < 500 ? "warn" : "error";
+      logMaestroBrowser(level, "proxy.response", { route: url.pathname, status: response.status,
+        elapsedMs, requestId, cache: response.headers.get("x-maestro-cache") });
       if (response.headers.get("x-maestro-incomplete") === "true") {
-        emit("warn", "virtuoso.anytime", { url: url.pathname, requestId, source: requestHeaders.get("x-maestro-debug-source"),
-          message: "Virtuoso reported incomplete results; all returned rows are retained.",
-          sqlState: response.headers.get("x-maestro-upstream-sql-state") });
+        browserLog.info("virtuoso.anytime", { route: url.pathname, requestId, optional: true });
       }
       const encoded = response.headers.get("x-maestro-diagnostic");
-      if (encoded) {
-        try { emit("error", "proxy.diagnostic", JSON.parse(decodeURIComponent(escape(atob(encoded))))); }
-        catch { emit("warn", "proxy.diagnostic.decode", { requestId }); }
-      }
-      if (!response.ok && weights[logLevel] <= weights.error) {
+      if (encoded && response.status !== 504) {
         try {
-          const body = await response.clone().text();
-          emit("error", "proxy.upstream-response", { url: url.pathname, status: response.status, body: body.slice(0, 16000),
-            truncated: body.length > 16000, requestId });
-        } catch (error) { emit("warn", "proxy.response-read-failed", { error: String(error), requestId }); }
+          const diagnostic = JSON.parse(decodeURIComponent(escape(atob(encoded)))) as { event?: unknown; code?: unknown; status?: unknown };
+          browserLog.debug("proxy.diagnostic", { requestId, code: diagnostic.code, status: diagnostic.status });
+        } catch { browserLog.debug("proxy.diagnostic.decode-failed", { requestId }); }
       }
+      // Never print cloned upstream bodies: these can contain personal RDF, FCT
+      // XML, SPARQL or authentication diagnostics. HTTP status is sufficient.
       return response;
     } catch (error) {
-      emit("error", "proxy.network-failure", { url: url.pathname, requestId, elapsedMs: Math.round(performance.now() - started), error });
+      const cancelled = (error instanceof Error && error.name === "AbortError") || init?.signal?.aborted;
+      const timeout = error instanceof Error && (error.name === "TimeoutError" ||
+        /aborted due to timeout|timed? out/i.test(error.message));
+      if (!cancelled) logMaestroBrowser(timeout ? "debug" : "error", timeout ? "proxy.timeout" : "proxy.network-failure",
+        { route: url.pathname, requestId, elapsedMs: Math.round(performance.now() - started), error });
       throw error;
     }
   };

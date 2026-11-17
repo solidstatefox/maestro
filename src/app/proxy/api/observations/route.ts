@@ -1,3 +1,4 @@
+import { proxyLog } from "@/lib/maestro-logger";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { isIP } from "node:net";
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
     const result = await recordUriObservations({ observations, quadStore: endpoint.url, clientIp: ip });
     return NextResponse.json({ accepted: observations.length, ...result });
   } catch (error) {
-    console.error("URI observation report failed:", error);
+    proxyLog("error", "observations.report.failed", { errorName: error instanceof Error ? error.name : "UnknownError" });
     return NextResponse.json({ error: "Could not record URI observations." }, { status: 500 });
   }
 }

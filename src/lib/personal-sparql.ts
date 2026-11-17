@@ -1,10 +1,9 @@
-import { readFile, stat } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { graphForPrefix } from "./personal-auth";
 import { authNote, fetchWithDigestFallback } from "./digest-auth";
-import { buildInsertData, canParseRdfExtension, parseRdfDocument } from "./rdf-to-sparql";
+import { parseRdfDocument } from "./rdf-to-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
 
@@ -128,193 +127,6 @@ export const getOntologyGraph = (request?: Request): string => graphForFile("rdf
 export const getShapesGraph = (request?: Request): string => graphForFile("maestro-shacl-policies.ttl", request);
 export const VFCT_NS = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#";
 export const MAESTRO_IDS_NS = "gttp://ggg.maestro.ecosys/ids/";
-
-export type GraphSeedResult = { file: string; graph: string }[];
-
-/** One seed per personal session (store + graph + credentials), not one per server process. */
-const graphDirectorySeedPromises = new Map<string, Promise<GraphSeedResult>>();
-const graphDirectorySeedInProgress = new Set<string>();
-
-function seedSessionKey(request?: Request): string {
-  const session = getPersonalSession(request);
-  return [session?.graphStore ?? "", session?.graphPrefix ?? "", session?.authHeader ?? ""].join("|");
-}
-
-/** Wait for an in-progress login/reload of this session's RDF policy graph.
- * Policy queries must never observe the interval between CLEAR GRAPH and INSERT DATA.
- * This does not trigger a reload when no seeding is in progress.
- */
-export async function waitForPersonalGraphSeed(request?: Request): Promise<void> {
-  const pending = graphDirectorySeedPromises.get(seedSessionKey(request));
-  if (pending) await pending;
-}
-
-/** Upload each RDF document in /graph to <graphPrefix>/query + manifest fragment on the user's graph server. Pass force to reload (used right after login). */
-export async function ensureGraphDirectorySeeded(request?: Request, options: { force?: boolean } = {}): Promise<GraphSeedResult> {
-  assertPersonalSession(request);
-  const sessionKey = seedSessionKey(request);
-  // A force reload must not overtake another in-progress reload for this session.
-  const existing = graphDirectorySeedPromises.get(sessionKey);
-  if (existing && (!options.force || graphDirectorySeedInProgress.has(sessionKey))) return existing;
-  graphDirectorySeedInProgress.add(sessionKey);
-  const promise = (async (): Promise<GraphSeedResult> => {
-    const loaded: GraphSeedResult = [];
-    const mediaTypes: Record<string, string> = {
-      ".rdf": "application/rdf+xml; charset=utf-8",
-      ".rdfs": "application/rdf+xml; charset=utf-8",
-      ".owl": "application/rdf+xml; charset=utf-8",
-      ".xml": "application/rdf+xml; charset=utf-8",
-      ".ttl": "text/turtle; charset=utf-8",
-      ".nt": "application/n-triples; charset=utf-8",
-      ".n3": "text/n3; charset=utf-8",
-      ".jsonld": "application/ld+json; charset=utf-8",
-      ".trig": "application/trig; charset=utf-8",
-      ".nq": "application/n-quads; charset=utf-8",
-      ".n4": "application/n-quads; charset=utf-8",
-      ".rdfa": "application/xhtml+xml; charset=utf-8",
-      ".grdf": "application/x-grdf; charset=utf-8",
-    };
-    const manifest = getGraphManifest();
-    const files = await Promise.all(Object.keys(manifest).map(async name => {
-      if (!mediaTypes[extname(name).toLowerCase()]) {
-        throw new Error(`Manifest entry ${name} has an unsupported RDF extension.`);
-      }
-      const path = resolve(getGraphDirectory(), name);
-      const info = await stat(path).catch(() => null);
-      if (!info?.isFile()) throw new Error(`Manifest entry ${name} has no matching RDF file in ${getGraphDirectory()}.`);
-      return { name };
-    }));
-    if (files.length === 0) throw new Error(`No RDF documents were listed in graph/manifest.json.`);
-
-    const endpoint = personalSparqlUrl(request); // read endpoint (/sparql), advertised in the Datasites seed
-    const writeEndpoint = personalSparqlWriteUrl(request); // /sparql-auth for sparql-auth logins
-    const graphStoreUrl = new URL(writeEndpoint);
-    graphStoreUrl.pathname = /\/sparql-auth\/?$/i.test(graphStoreUrl.pathname)
-      ? graphStoreUrl.pathname.replace(/\/sparql-auth\/?$/i, "/sparql-graph-crud-auth")
-      : graphStoreUrl.pathname.replace(/\/sparql\/?$/i, "/sparql-graph-crud");
-    graphStoreUrl.search = "";
-    graphStoreUrl.hash = "";
-
-    // Clear a destination immediately before reloading its manifest files,
-    // not all destinations upfront. Load the graph-server registry first so
-    // it is never empty for the duration of the entire manifest import.
-    const clearedGraphs = new Set<string>();
-
-    for (const file of files.sort((a, b) =>
-      (a.name === "dataserver-seed.ttl" ? -1 : b.name === "dataserver-seed.ttl" ? 1 : a.name.localeCompare(b.name)))) {
-      const destinationGraph = graphForFile(file.name, request);
-      if (!clearedGraphs.has(destinationGraph)) {
-        try {
-          await updatePersonalSparql(`CLEAR SILENT GRAPH <${destinationGraph}>`, 30000, request);
-        } catch (error) {
-          throw new Error(`Could not clear manifest graph ${destinationGraph} before loading: ${describeUpstreamError(error)}`);
-        }
-        clearedGraphs.add(destinationGraph);
-        console.info(`Maestro cleared manifest graph ${destinationGraph}.`);
-      }
-      const fileGraphStoreUrl = new URL(graphStoreUrl.toString());
-      // Graph IRI is sent as-is (only URL-structural characters escaped), as in Virtuoso's own curl examples.
-      fileGraphStoreUrl.search = `?graph=${destinationGraph.replace(/[%&#+\s]/g, (c) => encodeURIComponent(c))}`;
-      const path = resolve(getGraphDirectory(), file.name);
-      let content = await readFile(path, "utf8");
-      if (!content.trim()) {
-        console.warn(`Maestro skipped empty RDF document ${file.name}.`);
-        continue;
-      }
-      if (file.name.toLowerCase() === "dataserver-seed.ttl") {
-        const normalizeEndpointUrl = (value: string): string => {
-          const url = new URL(value);
-          url.hash = "";
-          url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-          return url.toString().replace(/\/$/u, "");
-        };
-        const listed = [...content.matchAll(/schema:url\s+<([^>]+)>/gu)].map((match) => match[1]);
-        const personalUrl = normalizeEndpointUrl(endpoint.toString());
-        const alreadyListed = listed.some((value) => {
-          try { return normalizeEndpointUrl(value) === personalUrl; } catch { return false; }
-        });
-        if (!alreadyListed) {
-          content += `\n\n# Automatically added personal SPARQL endpoint (not explicitly listed in the seed).\n<${MAESTRO_IDS_NS}dataservers/endpoints#personal-sparql> a schema:EntryPoint ;\n    rdfs:label "Personal SPARQL" ;\n    schema:url <${endpoint.toString()}> ;\n    dcterms:isPartOf <${MAESTRO_IDS_NS}dataservers/endpoints> ;\n    schema:position "-1"^^xsd:integer .\n`;
-        }
-      }
-      // labels.ttl is valid RDF with session-relative URNs. Resolve them at
-      // ingestion to the user's real named graph IRIs rather than labelling
-      // placeholder resources or hardcoding a particular user's graph prefix.
-      if (file.name === "labels.ttl") {
-        const base = getUserGraph(request);
-        content = content.replace(/<urn:maestro:graph:([^>]*)>/g, (_match, suffix: string) =>
-          `<${base}${suffix}>`);
-      }
-      const extension = extname(file.name).toLowerCase();
-      if (canParseRdfExtension(extension)) {
-        // Preferred path: parse the document here and load it with SPARQL INSERT DATA through the write endpoint
-        // (/sparql-auth). The graph-store endpoint runs DB.DBA.TTLP_RL_NEW_GRAPH, which ordinary accounts such as
-        // OpenLink's demo "acme" user are not permitted to execute (SR575), whereas SPARQL updates are allowed.
-        let update: string;
-        try {
-          const triples = await parseRdfDocument(content, extension, destinationGraph);
-          // File-scoped implementation digest (conservative: editing another
-          // provider in the same document also requires curator reapproval).
-          // Hash the on-disk source *before* adding any generated RDF triples.
-          const implementationDigest = `sha256:${createHash("sha256").update(content, "utf8").digest("hex")}`;
-          const rdfType = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-          const mui = "gttp://ggg.maestro.ecosys/ns/ui#";
-          const subjects = [...new Set(triples.filter(triple => triple.predicate.value === rdfType &&
-            triple.object.value === `${mui}Provider` && triple.subject.termType === "NamedNode")
-            .map(triple => triple.subject.value))];
-          for (const uri of subjects) triples.push({
-            subject: { termType: "NamedNode", value: uri },
-            predicate: { termType: "NamedNode", value: `${mui}implementationDigest` },
-            object: { termType: "Literal", value: implementationDigest },
-          });
-          update = buildInsertData(destinationGraph, triples);
-        } catch (error) {
-          throw new Error(`Could not parse RDF document ${file.name}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        try {
-          await updatePersonalSparql(update, 60000, request);
-        } catch (error) {
-          throw new Error(`Could not load RDF document ${file.name} into graph ${destinationGraph}: ${describeUpstreamError(error)}`);
-        }
-      } else {
-        // Formats Maestro cannot parse itself (JSON-LD, RDFa, ...) still go through the graph-store endpoint,
-        // which requires the account to be allowed to run Virtuoso's RDF loader procedures.
-        const response = await fetchWithDigestFallback(fileGraphStoreUrl, {
-          method: "POST",
-          headers: personalSparqlHeaders(request, mediaTypes[extension], "text/plain, text/html, application/json, */*"),
-          body: content,
-          cache: "no-store",
-          signal: AbortSignal.timeout(30000),
-        });
-        const responseText = (await response.text()).slice(0, 3000);
-        if (!response.ok || /(?:Virtuoso\s+Exception|Error\s+SR|SPARQL\s+.*Error|failed)/i.test(responseText) && !/0 errors/i.test(responseText)) {
-          throw new Error(`Could not load RDF document ${file.name} into graph ${destinationGraph} (HTTP ${response.status}): ${responseText || "no response details"}${authNote(response) ? ` [${authNote(response)}]` : ""}`);
-        }
-      }
-      console.info(`Maestro loaded ${file.name} into ${destinationGraph}.`);
-      loaded.push({ file: file.name, graph: destinationGraph });
-    }
-    // After the manifest reload, reinstate the shared Record state vocabulary/SHACL restriction.
-    const { ensurePersonalStatusSchema } = await import("@/lib/personal-status-server");
-    await ensurePersonalStatusSchema(request!);
-    // Machine definitions may have changed during reseed. Never execute a
-    // previous RDF definition under a new policy version.
-    const { invalidateServerStatusMachines } = await import("@/lib/status-machine-server");
-    invalidateServerStatusMachines();
-    // Old copied provider approval triples are deliberately NOT treated as
-    // authority. Do not delete blanket status assertions here: curators are
-    // themselves mui:Providers and must retain their direct Approved grant.
-    return loaded;
-  })();
-  graphDirectorySeedPromises.set(sessionKey, promise);
-  void promise.then(() => {
-    graphDirectorySeedInProgress.delete(sessionKey);
-  }, () => {
-    graphDirectorySeedInProgress.delete(sessionKey);
-    if (graphDirectorySeedPromises.get(sessionKey) === promise) graphDirectorySeedPromises.delete(sessionKey);
-  });
-  return promise;
-}
 
 /** Accept a host-only graph-server identifier, defaulting to HTTPS SPARQL. */
 export function normalizeGraphServerUri(value: string): string {
@@ -494,7 +306,7 @@ export function getSeedFctEndpoints(): Promise<FctEndpoint[]> {
 }
 
 /** Logged in: read endpoint records from the existing personal RDF registry without mutating it.
- * Graph uploads happen explicitly on login via /proxy/api/graph-seed, never during
+ * Graph uploads happen explicitly via the browser SPARQL graph-seed workflow, never during
  * normal FCT refresh, endpoint discovery, or query execution. Logged-out
  * visitors use the local seed file only. */
 export async function getConfiguredFctEndpoints(request?: Request): Promise<FctEndpoint[]> {

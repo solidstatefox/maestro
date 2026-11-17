@@ -1,4 +1,5 @@
 "use client"
+import { browserLog } from "@/lib/maestro-client-logging";
 
 import * as React from "react"
 import * as maplibregl from "maplibre-gl"
@@ -267,7 +268,7 @@ function Map({
         } catch (error) {
           // Suppress abort errors during cleanup
           if (error instanceof Error && !error.message.includes("aborted")) {
-            console.error("Error removing map:", error)
+            browserLog.error("map.remove.failed", error)
           }
         } finally {
           mapInstance.current = null
@@ -674,7 +675,7 @@ function MapControls({
           }
         },
         (error) => {
-          console.error("Error getting location:", error)
+          browserLog.error("map.geolocation.failed", error)
         }
       )
     }
@@ -1033,7 +1034,7 @@ function MapClusterLayer<T = unknown>({
               )
             })
             .catch((err) => {
-              console.error("Error getting cluster expansion zoom:", err)
+              browserLog.error("map.cluster-zoom.failed", err)
             })
         }
       })

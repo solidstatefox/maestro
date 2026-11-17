@@ -1,10 +1,33 @@
 "use client";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { invokeClientRecordService } from "@/lib/client-record-service-invocation";
+import { clientRecordPolicyResponse } from "@/lib/client-record-policies";
+import { RootUriAutocomplete } from "@/canvas/top/root-uri-autocomplete";
+import { parseRootUri } from "@/lib/root-uri-policy";
+import { mergeBreadcrumbSummaries, reconcileBreadcrumbSummaries, reconcileBreadcrumbPendingIds } from "@/lib/breadcrumb-preview-state";
+import { createRootUriGateController, rootUriGateState } from "@/lib/app-lifecycle/root-uri-gate";
+import { listenForMaestroCopies, readRecentlyCopiedText } from "@/lib/recent-clipboard";
+import { resetMaestroKinds } from "@/lib/client-kinds";
+import { isAbsoluteFacetIri } from "@/lib/fct-facet-iri";
+import { NODE_ANALYTICS_ANALYSIS_URI } from "@/lib/overview-analytics-ids";
+import { OVERVIEW_PERSPECTIVE_URI } from "@/lib/overview-metrics";
+import { selectProviderCatalog } from "@/lib/app-lifecycle/provider-catalog";
+import { createMaestroQueryContextController, selectQueryContext } from "@/lib/app-lifecycle/query-context";
+import { createMaestroAnalyzeDiscoveryController } from "@/lib/app-lifecycle/analyze-discovery";
+import { createMaestroFacetRequestController } from "@/lib/app-lifecycle/facet-requests";
+import { createMaestroNavigationTransactionController } from "@/lib/app-lifecycle/navigation-transaction";
+import { clientQueryFavorites } from "@/lib/client-query-favorites";
+import { discoverRecordServices } from "@/lib/client-record-services";
+import { readOntologyMetadata } from "@/lib/client-ontology-metadata";
+import { readClientPolicyApprovals } from "@/lib/client-policy-approvals";
+import { loadClientPolicyTemplate } from "@/lib/client-policy-template";
+import { OrUidLabel } from "@/components/ui/or-uid-label";
 import { probeGraphWriteAccess } from "@/lib/graph-write-probe";
 import { NAMESPACE_METADATA } from "@/lib/namespace-metadata";
-import { featureItemsFromFct } from "@/lib/feature-catalog";
+import { providerItemsFromFct } from "@/lib/provider-catalog-items";
 import { readRecordGraphAuthors } from "@/lib/record-authors";
 import { discoverAnalyses, discoverViews } from "@/lib/personal-sparql-reads";
-import { featuresGraph, historyGraph } from "@/lib/graph-context";
+import { providerCatalogGraph, historyGraph } from "@/lib/graph-context";
 
 
 import { callOpenApiService } from "@/lib/service-client";
@@ -24,9 +47,13 @@ import { useFacetsState, useFacetRuntimeState } from "@/canvas/controllers/facet
 import { useResultsState } from "@/canvas/controllers/results";
 import { usePersonalRecordStatus } from "@/canvas/controllers/personal-record-status";
 import type { StatusFacetName } from "@/lib/personal-status-vocabulary";
-import { canUsePersonalStore } from "@/lib/personal-session-access";
+import { selectMaestroCapabilities } from "@/lib/app-lifecycle/access";
+import { useMaestroAccess } from "@/canvas/diagnostics/use-maestro-access";
+import { useMaestroOperations } from "@/canvas/diagnostics/use-maestro-operations";
 import { useRecordState } from "@/canvas/controllers/record";
 import { loadRecordDescription } from "@/canvas/controllers/record-description-loader";
+import { readOverviewCommonProperties } from "@/lib/overview-common-properties";
+import { rdfBindingKind } from "@/lib/bnode";
 import { useViewState } from "@/canvas/controllers/view";
 import { usePublishState } from "@/canvas/controllers/publish";
 import { useChatState } from "@/canvas/controllers/chat";
@@ -58,7 +85,7 @@ import { downloadRecordDescribeSnapshot, useRecordCoreState, useRecordPresentati
 import { blankNodeRecordListValuesQuery, rootBlankNodeRecordQuery } from "@/lib/bnode-dom";
 import { isBlankNodeLabel, parseBlankNodeRecordBindings, type BNodeRecordAnchor, type RecordValueTerm, type BlankNodeRecord } from "@/lib/bnode";
 import { parsePolicyQueryAction, resolveRecordFormatCategory, useRecordFormatSelection, type RecordPolicyOption } from "@/canvas/right/format";
-import { RecordValidationNotice, useRecordValidationState, validateRecordSnapshot } from "@/canvas/right/validator";
+import { useRecordValidationState, validateRecordSnapshot } from "@/canvas/right/validator";
 import { EndpointStatusIcon, type EndpointStatus, type EndpointOption } from "@/canvas/top/appbar";
 import { renderValueOperator } from "@/canvas/top/breadcrumb";
 
@@ -70,21 +97,23 @@ import type { FctValue } from "@/lib/fct-query-api";
 import maestroLanguages from "@/data/maestro-languages.json";
 import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
 import { listValuesProjectionSparql } from "@/lib/list-values-inspector";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { rememberNamespaceMetadata, rememberShortforms, setNamespacePrefixSource, setObservationQueryAddr, toLabel } from "@/lib/uri-labels";
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
-import { featureFctQuery, hasFeatureFctFilters } from "@/lib/feature-fct-query";
+import { providerFctQuery, hasProviderFctFilters } from "@/lib/provider-fct-query";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { configureMaestroBrowserLogging, type BrowserLogLevel } from "@/lib/maestro-client-logging";
+import { browserLog, configureMaestroBrowserLogging, type BrowserLogLevel } from "@/lib/maestro-client-logging";
+import { useAppLifecycleObserver } from "@/canvas/diagnostics/use-app-lifecycle-observer";
 import type { ReactNode, Dispatch, SetStateAction, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { MaestroAnalysisDataTable, type MaestroDataColumn, type MaestroDataRow } from "@/components/maestro-analysis-data-table";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from "recharts";
 import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
-import { FEATURE_VIEW_XSLT, type FeatureKind, type FeatureItem } from "@/lib/feature-view-xslt";
+import { PROVIDER_CATALOG_XSLT, type ProviderKind, type ProviderCatalogItem } from "@/lib/provider-catalog-xslt";
+import { SPIDER_ANALYSIS_URI } from "@/lib/spider-numeric-policy";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -114,13 +143,16 @@ import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightL
 import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
+import { graphAutoFillAllowsQuery } from "@/lib/app-lifecycle/graph-autofill";
 import { MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, abortPendingMaestroQueries, stopPendingMaestroQueries, resumePendingMaestroQueries, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
+import { canApplyAutoConfigure, validRecordGraphFamily, validRecordAuthorGraph } from "@/lib/app-lifecycle/context-guards";
 import { navigateFacetHeaderQuery } from "@/lib/fct-facet-header-navigation";
 import { DEFAULT_MAESTRO_CONCURRENCY, readMaestroConcurrency, writeMaestroConcurrency, syncMaestroConcurrency, type MaestroConcurrency } from "@/lib/maestro-concurrency";
 import { MAESTRO_TIMEOUT_CATEGORIES, readMaestroWidgetTimeouts, writeMaestroWidgetTimeouts, type MaestroTimeoutCategory } from "@/lib/maestro-query-timeouts";
 import { readRecordGraphDiscoveryLimits } from "@/lib/record-graph-limits";
+import { recordLabelBatches } from "@/lib/record-label-batches";
 import { recordGraphFctQuery, readRecordGraphFctResponse } from "@/lib/record-graph-marshalling";
 import { setMaestroIncompleteResults, getMaestroIncompleteResults, subscribeMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 import { resetMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
@@ -140,6 +172,7 @@ import hljs from "highlight.js/lib/core";
 import xmlLanguage from "highlight.js/lib/languages/xml";
 import sqlLanguage from "highlight.js/lib/languages/sql";
 import { serializeFctQuery, createPropertyWidgetQuery, createPersonalRoleValuesQuery, createGroupMemberQuery, createGroupValuesQuery, createDistinctCountQuery, setQueryViewAttributes } from "@/lib/fct-query-api";
+import { normalizeMaestroKind } from "@/lib/maestro-kinds";
 import type { FctQueryNode, FctQueryTree, FctUiResultSummary, DistinctCountKind } from "@/lib/fct-query-api";
 
 hljs.registerLanguage("xml", xmlLanguage);
@@ -216,6 +249,7 @@ const TEXT_SEARCH_NAME_PROPERTIES = [
 /** Shared workspace lifecycle and query orchestration. The FCT query API remains authoritative. */
 export function useWorkspaceController() {
   const [isSpongingUri, setIsSpongingUri] = useState(false);
+  useEffect(() => listenForMaestroCopies(), []);
   const {
     authSession, setAuthSession, personalPoliciesReady, setPersonalPoliciesReady,
     personalPoliciesSeedError, setPersonalPoliciesSeedError, loginDialogOpen, setLoginDialogOpen,
@@ -228,10 +262,11 @@ export function useWorkspaceController() {
     loginTesting, setLoginTesting, loginError, setLoginError,
     isFetchingAvatar, setIsFetchingAvatar, fetchedAvatarUrl, setFetchedAvatarUrl,
   } = useAuthenticationState();
+  useEffect(() => { if (!authSession) resetMaestroKinds(); }, [authSession]);
   const {
     deleteHistoryDialogOpen, setDeleteHistoryDialogOpen, isDeletingHistory, setIsDeletingHistory,
     isLoadingHistoryQuery, setIsLoadingHistoryQuery, historyHasOlder, setHistoryHasOlder,
-    historyHasNewer, setHistoryHasNewer, historyNavigationPending, setHistoryNavigationPending,
+    historyHasNewer, setHistoryHasNewer,
     historyActionItems, setHistoryActionItems, historyActionMenu, setHistoryActionMenu,
     historyHoverTimerRef, isDeletingCurrentHistory, setIsDeletingCurrentHistory, historyVisitQueryRef,
     historyVisitIdRef, historyWriteQueueRef, templateHistoryFlushRef, pendingHistoryVisitRef,
@@ -240,8 +275,7 @@ export function useWorkspaceController() {
     shareLinkCopied, setShareLinkCopied, bookmarkDialogOpen, setBookmarkDialogOpen,
     bookmarkTitle, setBookmarkTitle, bookmarkDescription, setBookmarkDescription,
     bookmarkTags, setBookmarkTags, bookmarkTagVocabulary, setBookmarkTagVocabulary,
-    bookmarkSaving, setBookmarkSaving, isQueryBookmarked, setIsQueryBookmarked,
-    matchingBookmarkId, setMatchingBookmarkId, bookmarkCheckRevision, setBookmarkCheckRevision,
+    bookmarkSaving, setBookmarkSaving, bookmarkCheckRevision, setBookmarkCheckRevision,
     historyBookmarkId, setHistoryBookmarkId, bookmarkTitleInputRef, isExportingBookmarks,
     setIsExportingBookmarks, isImportingBookmarks, setIsImportingBookmarks, bookmarkImportFileRef,
   } = useBookmarksState();
@@ -261,7 +295,7 @@ export function useWorkspaceController() {
     selectedUri, setSelectedUri, urlStateInitialized, setUrlStateInitialized,
     querySourceFormat, setQuerySourceFormat, sparqlQuery, setSparqlQuery,
     breadcrumbTrail, setBreadcrumbTrail, ancestorGhostRetainedRef, previousActiveGhostPathRef,
-    previousScopeRelationshipsRef, signalPickerExpanded, setSignalPickerExpanded, rootSearchExpanded,
+    previousScopeRelationshipsRef, rootBreadcrumb, signalPickerExpanded, setSignalPickerExpanded, rootSearchExpanded,
     setRootSearchExpanded, rootUriLabelCacheRef, namePropertyMenuOpen, setNamePropertyMenuOpen,
     breadcrumbPreviewSummaries, setBreadcrumbPreviewSummaries, breadcrumbMenuPreviewSummaries, setBreadcrumbMenuPreviewSummaries,
     breadcrumbPreviewPendingIds, setBreadcrumbPreviewPendingIds, metadataRegistryRef, collapsedQueryNodeIds,
@@ -311,24 +345,38 @@ export function useWorkspaceController() {
     resultListValuesDebug, setResultListValuesDebug, searchError, setSearchError,
     searchPipelineRun, setSearchPipelineRun, initialBrowseTriggered, setInitialBrowseTriggered,
   } = useResultsState();
-  const personalStoreReady = canUsePersonalStore(authSession, authRestoreComplete);
+  const { controller: accessController, snapshot: accessSnapshot, sessionKey: accessSessionKey } = useMaestroAccess(authSession, authRestoreComplete, personalPoliciesReady, personalPoliciesSeedError);
+  const personalStoreReady = selectMaestroCapabilities(accessSnapshot).canUsePersonalStore;
+  const policyProvidersReady = selectMaestroCapabilities(accessSnapshot).canUsePolicyProviders;
+  const [navigationTransactions] = useState(createMaestroNavigationTransactionController);
+  useLayoutEffect(() => { navigationTransactions.start(); return () => navigationTransactions.stop(); }, [navigationTransactions]);
+  const [facetRequests] = useState(createMaestroFacetRequestController);
+  useLayoutEffect(() => { facetRequests.startActor(); return () => facetRequests.stopActor(); }, [facetRequests]);
+  // Close login-dependent overlays on confirmed logout. Capability gates in
+  // render hide them synchronously; this also clears their local open state.
+  useEffect(() => {
+    if (!authRestoreComplete || personalStoreReady) return;
+    setBookmarkDialogOpen(false);
+    setDeleteHistoryDialogOpen(false);
+  }, [authRestoreComplete, personalStoreReady, setBookmarkDialogOpen, setDeleteHistoryDialogOpen]);
   const {
     isLoadingRecordPolicy, setIsLoadingRecordPolicy, recordPolicyCheckedUri, setRecordPolicyCheckedUri,
     recordPolicyError, setRecordPolicyError, isDescribing, setIsDescribing,
     recordDescriptionError, setRecordDescriptionError, recordDescribeIncomplete, setRecordDescribeIncomplete,
     activeFormatterRequestRef, formattedRecordKey, setFormattedRecordKey, formatterHasEnrichment,
-    setFormatterHasEnrichment, attemptedFormatterEnrichmentRef,
+    setFormatterHasEnrichment, attemptedFormatterEnrichmentRef, recordLifecycle,
   } = useRecordState();
   const {
     selectedViewUri, setSelectedViewUri, viewDiscoveryLoading, setViewDiscoveryLoading,
     viewDiscoveryError, setViewDiscoveryError, viewPanel, setViewPanel,
-    viewFeature, setViewFeature, viewFeatureHtml, setViewFeatureHtml,
-    viewFeatureLoading, setViewFeatureLoading, viewFeatureError, setViewFeatureError,
-    viewFeatureCount, setViewFeatureCount, viewHtml, setViewHtml,
+    viewProvider, setViewProvider, providerCatalogController, providerCatalogSnapshot, viewDiscoveryController, viewDiscoverySnapshot,
+    viewHtml, setViewHtml,
     viewXsltMetadata, setViewXsltMetadata, viewDomainRanks, setViewDomainRanks,
     viewRenderError, setViewRenderError, viewServerSoftware, setViewServerSoftware,
     viewServerDescriptions, setViewServerDescriptions,
   } = useViewState();
+  const [providerLifecyclePhase, reportProviderLifecycle] = useState("unobserved");
+  const [configureLifecyclePhase, reportConfigureLifecycle] = useState("idle");
   const {
     isRdfLoaderOpen, setIsRdfLoaderOpen, rdfSourceUrl, setRdfSourceUrl,
     rdfTargetGraph, setRdfTargetGraph, isRdfLoading, setIsRdfLoading,
@@ -630,7 +678,7 @@ useEffect(() => {
         const transaction = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite");
         transaction?.objectStore("preferences").put(queryTreeHeightPercent, "query-tree-height-percent");
       } catch (error) {
-        console.warn("Maestro could not persist Query Tree height in IndexedDB", error);
+        browserLog.warn("query-tree.height.persist-failed", error);
       }
     }, 180);
     return () => window.clearTimeout(timer);
@@ -647,7 +695,7 @@ useEffect(() => {
       const transaction = queryTreeHeightDbRef.current.transaction("preferences", "readwrite");
       transaction.objectStore("preferences").put(recordFormatEnabled, "record-format-enabled");
     } catch (error) {
-      console.warn("Maestro could not persist the Format toggle in IndexedDB", error);
+      browserLog.warn("record.format-toggle.persist-failed", error);
     }
   }, [recordFormatEnabled, recordFormatPreferenceLoaded]);
 
@@ -766,43 +814,10 @@ useEffect(() => {
     deleteNode,
   } = useQuerySessionController();
 
-  // Configure edits are a draft. Only Return to Filters commits them to the
-  // single authoritative FCT tree, producing one subscriber notification.
-  const [pendingConfigureFacets, setPendingConfigureFacets] = useState<Record<string, boolean>>({});
-  const queueConfigureFacet = (direction: "property" | "role", uri: string, selected: boolean) => {
-    setPendingConfigureFacets((current) => ({ ...current, [`${direction}:${uri}`]: selected }));
-  };
-  const commitConfigureFacetChanges = () => {
-    const entries = Object.entries(pendingConfigureFacets);
-    if (entries.length === 0) { setDefaultLeftTab("personal"); return; }
-    let next = queryTree;
-    const path = getPropertyPath();
-    const parentId = path.at(-1)?.id ?? null;
-    for (const [key, checked] of entries) {
-      const separator = key.indexOf(":");
-      const direction = key.slice(0, separator);
-      const uri = key.slice(separator + 1);
-      if (direction === "property") {
-        next = checked ? workbenchQueryTreeApi.addProperty(next, uri, parentId)
-                       : workbenchQueryTreeApi.removeProperty(next, uri, parentId);
-      } else if (direction === "role") {
-        next = workbenchQueryTreeApi.setRoleFilter(next, uri, checked);
-      }
-    }
-    setPendingConfigureFacets({});
-    replaceQueryTree(next);
-    setPersonalWidgets((current) => {
-      const updated = current.filter((widget) => pendingConfigureFacets[`property:${widget.uri}`] !== false);
-      for (const [key, checked] of entries) {
-        if (!checked || !key.startsWith("property:")) continue;
-        const uri = key.slice("property:".length);
-        if (uri === RDF_TYPE_URI || updated.some((widget) => widget.uri === uri)) continue;
-        updated.push({ uri, label: toLabel(uri, "Property"), excluded: false, values: [], selectedValues: [], page: 0, loading: true, error: "" });
-      }
-      return updated;
-    });
-    setDefaultLeftTab("personal");
-  };
+  // Configure edits use exactly the same authoritative query API as Filters.
+  // Return to Filters changes the panel only; there is no deferred draft.
+  const autoConfigureLoadedScopeRef = useRef<{ property: string; role: string }>({ property: "", role: "" });
+  const commitConfigureFacetChanges = () => setDefaultLeftTab("personal");
 
   // The live <view> stays at the current focus. A sibling relationship
   // marked group="true" supplies the grouping dimension and direction.
@@ -910,6 +925,14 @@ useEffect(() => {
     (searchNode?.attributes.type ?? "").split(/[\s,]+/).filter((type) => type === "class" || type === "property"));
   const search = searchDraft;
   const searchDraftRef = useRef(searchDraft);
+  // XState owns permission to publish a fixed-subject URI. The raw draft is
+  // intentionally independent of the FCT <value>; a search phrase can drive
+  // suggestions without ever being serialized as datatype="uri" or <text>.
+  const [rootUriGate] = useState(createRootUriGateController);
+  const rootUriSnapshot = useSyncExternalStore(rootUriGate.subscribe, rootUriGate.getSnapshot, rootUriGate.getSnapshot);
+  const rootUriGateStatus = rootUriGateState(rootUriSnapshot);
+  useEffect(() => { rootUriGate.start(); return () => rootUriGate.stop(); }, [rootUriGate]);
+  useEffect(() => { rootUriGate.edit(searchDraft); }, [rootUriGate, searchDraft]);
 
   // Follow query edits from elsewhere while retaining independent text and URI drafts.
   useEffect(() => {
@@ -1158,10 +1181,13 @@ useEffect(() => {
           .filter((node) => node.name !== "text")
           .map((node) => setMainViewType(node, FCT_VIEW_TYPES.LIST)),
       };
+      // Re-entering URI mode must also cross the XState gate. A stale saved
+      // free-text draft is never allowed to create an invalid <value>.
+      const decision = rootUriGate.commit(restoredUri);
       replaceQueryTree(workbenchQueryTreeApi.setValue(
         nonSearchTree,
         null,
-        restoredUri.trim() ? [{ text: restoredUri, datatype: "uri" }] : [],
+        decision.kind === "accepted" ? [{ text: decision.uri, datatype: "uri" }] : [],
         { replaceExisting: true, idPrefix: "query-uri-value" },
       ));
       setSearchPipelineRun((current) => current + 1);
@@ -1230,11 +1256,41 @@ useEffect(() => {
           }
         } catch (error) {
           if (!(error instanceof DOMException && error.name === "AbortError")) {
-            console.warn("URI label lookup failed:", error);
+            browserLog.warn("uri-label.lookup.failed", error);
           }
         }
       })();
     }
+  }
+
+  async function pasteRecentRootClipboard() {
+    const modeAtClick = selectedSignalModeRef.current;
+    // Clipboard hydration belongs only to the URI field, never text signals.
+    if (modeAtClick !== "uri") return;
+    const recentlyCopied = await readRecentlyCopiedText();
+    // A delayed clipboard permission prompt must not paste into another mode.
+    if (recentlyCopied !== null && parseRootUri(recentlyCopied) &&
+        !/[\s<>{}]/.test(recentlyCopied) &&
+        selectedSignalModeRef.current === modeAtClick && rootSearchExpandedRef.current) {
+      updateSearchText(recentlyCopied);
+    }
+  }
+
+  function commitRootUri(value: string, selectedLabel?: string) {
+    if (selectedLabel && parseRootUri(value)) {
+      rootUriLabelCacheRef.current.set(value, selectedLabel);
+    }
+    const decision = rootUriGate.commit(value);
+    // Keep the user's draft, including an incomplete URL or search phrase, in
+    // the input. A rejected commit leaves the last valid FCT query unchanged.
+    searchDraftRef.current = value;
+    setSearchDraft(value);
+    setSavedUriDraft(value);
+    if (decision.kind === "rejected") return;
+    const withoutText = { ...queryTree, children: queryTree.children.filter(node => node.name !== "text") };
+    replaceQueryTree(workbenchQueryTreeApi.setValue(withoutText, null,
+      decision.kind === "accepted" ? [{ text: decision.uri, datatype: "uri" }] : [],
+      { replaceExisting: true, idPrefix: "query-uri-value" }));
   }
 
   function updateSearchText(value: string) {
@@ -1242,16 +1298,6 @@ useEffect(() => {
     setSearchDraft(value);
     if (textSearchMode === "uri") {
       setSavedUriDraft(value);
-      const nonSearchTree = {
-        ...queryTree,
-        children: queryTree.children.filter((node) => node.name !== "text"),
-      };
-      replaceQueryTree(workbenchQueryTreeApi.setValue(
-        nonSearchTree,
-        null,
-        value.trim() ? [{ text: value, datatype: "uri" }] : [],
-        { replaceExisting: true, idPrefix: "query-uri-value" },
-      ));
       return;
     }
     if (searchNode) {
@@ -1320,7 +1366,7 @@ useEffect(() => {
     // query as new user additions.
     if (!previousNodes) {
       if (debugAutoConfigure) {
-        console.debug("[Maestro Auto-configure] baseline", Array.from(currentNodes.values()));
+        browserLog.debug("configure.auto.baseline", Array.from(currentNodes.values()));
       }
       return;
     }
@@ -1336,11 +1382,11 @@ useEffect(() => {
       recordFacetAddition(current.kind, current.uri);
       recordedAddition = true;
       if (debugAutoConfigure) {
-        console.debug("[Maestro Auto-configure] recorded query addition", { id, ...current });
+        browserLog.debug("configure.auto.addition", { id, ...current });
       }
     }
     if (debugAutoConfigure) {
-      console.debug("[Maestro Auto-configure] query snapshot", {
+      browserLog.debug("configure.auto.snapshot", {
         queryRevision,
         previous: Array.from(previousNodes.values()),
         current: Array.from(currentNodes.values()),
@@ -1801,52 +1847,53 @@ useEffect(() => {
   // dereferencing belongs to the OpenAPI service transport, not a lookup API.
   useEffect(() => { rememberNamespaceMetadata(NAMESPACE_METADATA); }, []);
 
-  // Bookmark identity is the canonical live query, not a transient History ID
-  // or the serializer's node IDs. Rechecking the SAME query must not briefly
-  // turn off the Bookmark button and tear down the Status widget.
-  const bookmarkQueryKey = canonicalQueryIdentityXml(queryXml);
-  const bookmarkActiveQueryKeyRef = useRef("");
-  const bookmarkCheckedQueryKeyRef = useRef("");
-  const verifiedQueryBookmarked = isQueryBookmarked && bookmarkCheckedQueryKeyRef.current === bookmarkQueryKey;
+  // Phase B: XState is the sole UI authority for bookmark membership and
+  // personal-store capabilities. No React bookmark boolean or verification refs.
   useEffect(() => {
-    if (!personalStoreReady || !graphRegistryReady) {
-      bookmarkActiveQueryKeyRef.current = "";
-      bookmarkCheckedQueryKeyRef.current = "";
-      setIsQueryBookmarked(false);
-      setMatchingBookmarkId("");
-      return;
-    }
-    if (!urlStateInitialized) return;
-    let active = true;
-    if (bookmarkActiveQueryKeyRef.current !== bookmarkQueryKey) {
-      bookmarkActiveQueryKeyRef.current = bookmarkQueryKey;
-      bookmarkCheckedQueryKeyRef.current = "";
-      setIsQueryBookmarked(false);
-      setMatchingBookmarkId("");
-    }
-    const timer = window.setTimeout(async () => {
-      try {
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+    // A temporary personal-store readiness gap during relogin/reseeding is not
+    // a navigation event. Only a confirmed logout may leave the Providers view.
+    if (!authRestoreComplete || authSession || personalStoreReady) return;
+    setWorkspaceTab("browse");
+    setViewProvider(null);
+  }, [authRestoreComplete, authSession, personalStoreReady, setWorkspaceTab, setViewProvider]);
+  const bookmarkQueryKey = canonicalQueryIdentityXml(queryXml);
+  const autoConfigureScopeKey = `${bookmarkQueryKey}\u0000${selectedEndpointId}\u0000${queryRefreshRevision}`;
+  const accessCapabilities = selectMaestroCapabilities(accessSnapshot, {
+    queryKey: bookmarkQueryKey,
+    recordSelected: Boolean(selectedUri),
+    providersActive: workspaceTab === "view" && viewPanel === "providers" && Boolean(viewProvider),
+  });
+  const verifiedQueryBookmarked = accessCapabilities.canShowStatusFacet;
+  const matchingBookmarkId = accessCapabilities.bookmarkId;
+  const confirmQueryBookmark = useCallback((bookmarkId: string) => {
+    accessController.send({ type: "BOOKMARK_CONFIRMED", queryKey: bookmarkQueryKey, bookmarkId });
+  }, [accessController, bookmarkQueryKey]);
+  const revokeQueryBookmark = useCallback(() => {
+    accessController.send({ type: "BOOKMARK_REVOKED", queryKey: bookmarkQueryKey });
+  }, [accessController, bookmarkQueryKey]);
+  useLayoutEffect(() => {
+    accessController.send({ type: "QUERY_CHANGED", queryKey: bookmarkQueryKey });
+  }, [accessController, bookmarkQueryKey]);
+  useEffect(() => {
+    if (!personalStoreReady || !graphRegistryReady || !urlStateInitialized) return;
+    // The access actor owns the request and its abort lifecycle. This React
+    // effect only supplies the current query/context and the transport adapter.
+    accessController.send({
+      type: "BOOKMARK_CHECK_REQUESTED", queryKey: bookmarkQueryKey, sessionKey: accessSessionKey,
+      execute: async (signal) => {
+        const response = await clientQueryFavorites({
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "check", queryXml }),
-          cache: "no-store",
+          cache: "no-store", signal,
         });
         const payload = await response.json() as { bookmarked?: boolean; historyId?: string | null };
-        if (active && response.ok) {
-          bookmarkCheckedQueryKeyRef.current = bookmarkQueryKey;
-          setIsQueryBookmarked(payload.bookmarked === true);
-          setMatchingBookmarkId(payload.bookmarked && payload.historyId ? payload.historyId : "");
-        }
-      } catch {
-        // An unresponsive bookmark store is not proof an unchanged query was
-        // unbookmarked. Preserve its last confirmed state until rechecked.
-      }
-    }, 350);
-    return () => { active = false; window.clearTimeout(timer); };
-    // The canonical key, not XML node IDs or History IDs, is the bookmark dependency.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookmarkQueryKey, urlStateInitialized, bookmarkCheckRevision, personalStoreReady, graphRegistryReady]);
+        if (!response.ok) throw new Error(`Bookmark verification HTTP ${response.status}`);
+        return { bookmarked: payload.bookmarked === true,
+          bookmarkId: payload.bookmarked ? payload.historyId ?? "" : "" };
+      },
+    });
+  }, [bookmarkQueryKey, queryXml, urlStateInitialized, bookmarkCheckRevision,
+    personalStoreReady, graphRegistryReady, accessSessionKey, accessController]);
 
   // Keep History navigation enabled state synchronized with the actual store.
   // With no loaded History item, the comparison cursor is the current time.
@@ -1871,7 +1918,7 @@ useEffect(() => {
         // whose enabled state it controls. Separate requests make the component
         // identity unambiguous in DevTools and server-side request logs.
         const [backResponse, forwardResponse] = await Promise.all([
-          fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+          clientQueryFavorites( {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -1881,7 +1928,7 @@ useEffect(() => {
             cache: "no-store",
             signal: controller.signal,
           }),
-          fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+          clientQueryFavorites( {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -1932,6 +1979,7 @@ useEffect(() => {
     serializedQuery: string | null,
     restored: ShareableUiState | null,
     restoredHistoryId?: string | null,
+    restoreAutoFillPreference = false,
   ): boolean {
     if (restoredHistoryId) setHistoryBookmarkId(restoredHistoryId);
     let restoredQueryFromUrl = false;
@@ -1950,6 +1998,14 @@ useEffect(() => {
         // Keep the datasite field tied to the graph attribute in q, rather than
         // allowing a separately saved draft field to override the shared query.
         const restoredAddress = restoredTree.attributes.addr ?? "";
+        const restoredServer = restoredAddress.includes("@") ? restoredAddress.slice(restoredAddress.indexOf("@") + 1) : "";
+        if (restoredServer) {
+          const matchingEndpoint = fctEndpoints.find((item) =>
+            item.id === restoredServer || graphServerUrlMatches(item.url, restoredServer, item.schemeInferred));
+          // Query + graph-server selector must never point to different stores.
+          // The registry can still be loading on the initial URL restoration.
+          if (matchingEndpoint) setSelectedEndpointId(matchingEndpoint.id);
+        }
         const addressDelimiter = restoredAddress.indexOf("@");
         const incomingGraph = addressDelimiter >= 0 ? restoredAddress.slice(0, addressDelimiter) : "";
         // Three distinct address modes: empty graph triggers discovery,
@@ -1973,9 +2029,9 @@ useEffect(() => {
     }
     if (restored) {
       // Ribbon identity is the SHACL provider resource URI, never its label.
-      if (restored.viewPanel === "trail" || restored.viewPanel === "perspectives" || restored.viewPanel === "features") setViewPanel(restored.viewPanel);
+      if (restored.viewPanel === "trail" || restored.viewPanel === "perspectives" || restored.viewPanel === "providers") setViewPanel(restored.viewPanel);
       if (restored.selectedViewUri === "" || (typeof restored.selectedViewUri === "string" && restored.selectedViewUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedViewUri))) setSelectedViewUri(restored.selectedViewUri);
-      if (restored.viewFeature === null || restored.viewFeature === "policies" || restored.viewFeature === "formats" || restored.viewFeature === "transcoders" || restored.viewFeature === "facet-widgets" || restored.viewFeature === "curators" || restored.viewFeature === "fsm-providers") setViewFeature(restored.viewFeature);
+      if (restored.viewProvider === null || restored.viewProvider === "policies" || restored.viewProvider === "formats" || restored.viewProvider === "transcoders" || restored.viewProvider === "facet-widgets" || restored.viewProvider === "curators" || restored.viewProvider === "fsm-providers" || restored.viewProvider === "kinds" || restored.viewProvider === "perspectives" || restored.viewProvider === "analysis-providers") setViewProvider(restored.viewProvider);
       if (typeof restored.selectedAnalysisUri === "string" && restored.selectedAnalysisUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedAnalysisUri)) setSelectedAnalysisUri(restored.selectedAnalysisUri);
       if (typeof restored.analyzeHistogram === "boolean") setAnalyzeHistogram(restored.analyzeHistogram);
       // Endpoint selection is authoritative in the restored query addr.
@@ -2019,6 +2075,10 @@ useEffect(() => {
           ? restored.selectedNamePropertyUri.split(/[\s,]+/).filter(Boolean)
           : null;
       if (restoredNameProperties?.length) setSelectedNamePropertyUris(restoredNameProperties);
+      else if (serializedQuery) {
+        const textNode = parseFctQueryXml(serializedQuery)?.children.find(node => node.name === "text");
+        setSelectedNamePropertyUris((textNode?.attributes.property ?? RDFS_LABEL_URI).split(/[\s,]+/).filter(Boolean));
+      }
       if (typeof restored.savedSearchDraft === "string") {
         setSavedSearchDraft(restored.savedSearchDraft);
         if (!restoredQueryFromUrl && !restored.savedUriDraft) setSearchDraft(restored.savedSearchDraft);
@@ -2027,7 +2087,12 @@ useEffect(() => {
         setSavedUriDraft(restored.savedUriDraft);
         if (!restoredQueryFromUrl) setSearchDraft(restored.savedUriDraft);
       }
-      if (typeof restored.graphAutoFill === "boolean") setGraphAutoFill(restored.graphAutoFill);
+      // Auto-fill is a user-operated preference. The incoming page URL may
+      // explicitly restore it ONCE, but an old History/bookmark snapshot must
+      // not silently re-enable it while the user is browsing.
+      if (restoreAutoFillPreference && typeof restored.graphAutoFill === "boolean") {
+        setGraphAutoFill(restored.graphAutoFill);
+      }
       if (typeof restored.graphText === "string" && restored.graphText !== ALL_GRAPHS) {
         lastManualGraphRef.current = restored.graphText;
         if (!restoredQueryFromUrl) {
@@ -2079,7 +2144,7 @@ useEffect(() => {
     const decodedTabFromUrl = decodeAppbarTab(tabFromUrl);
     if (decodedTabFromUrl) setWorkspaceTab(decodedTabFromUrl);
     const initialUiState = readShareableUiState();
-    restoreQueryAndUiState(params.get("q"), initialUiState, params.get("history"));
+    restoreQueryAndUiState(params.get("q"), initialUiState, params.get("history"), true);
     if (!initialUiState) setShowResultBadges(maestroStorageGet("maestro-show-result-badges") === "true");
     // An explicit ?tab= wins over a possibly older workspaceTab in saved state.
     if (decodedTabFromUrl) setWorkspaceTab(decodedTabFromUrl);
@@ -2106,7 +2171,7 @@ useEffect(() => {
       rolesPage,
       findEndpointsEnabled,
       centralTab,
-      viewFeature,
+      viewProvider,
       selectedAnalysisUri,
       analyzeHistogram,
       queryToggle: queryTreeOpen,
@@ -2135,35 +2200,18 @@ useEffect(() => {
     return url.href;
   }
 
-  // Capture the History/share URL from BEFORE a sourced query mutation.
-  // No separate teardown: restoring that URL removes the sourced query and the button.
-  const [returnShareUrl, setReturnShareUrl] = useState<string | null>(null);
-  const previousQuerySnapshotRef = useRef<{ xml: string; url: string; src: string | null } | null>(null);
-  useEffect(() => {
-    if (!urlStateInitialized) return;
-    const previous = previousQuerySnapshotRef.current;
-    const source = querySourceAttribute(queryTree);
-    if (previous && previous.xml !== queryXml) {
-      if (source && source !== previous.src && !historyRestoreInProgressRef.current) {
-        setReturnShareUrl(previous.url);
-      } else if (!source) {
-        setReturnShareUrl(null);
-      }
-    } else if (!source) {
-      setReturnShareUrl(null);
-    }
-    previousQuerySnapshotRef.current = { xml: queryXml, url: buildCurrentShareUrl(), src: source };
-  }, [urlStateInitialized, queryXml, queryTree, queryRevision, workspaceTab, viewPanel, selectedViewUri]);
+  // Phase C navigation actor owns the Providers Return destination.
+  // See useMaestroOperations below; FCT/URL restoration remains authoritative.
 
   useEffect(() => {
     if (!urlStateInitialized) return;
     const url = new URL(buildCurrentShareUrl());
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft, viewPanel, selectedViewUri, viewFeature, selectedAnalysisUri, analyzeHistogram]);
+  }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft, viewPanel, selectedViewUri, viewProvider, selectedAnalysisUri, analyzeHistogram]);
 
   /** Persist one History visit for a query snapshot, preserving queue ordering. */
   async function writeHistoryVisit(queryXmlSnapshot: string, stateUrlSnapshot: string, action: { operator: "+" | "-"; xpath: string; value?: string } | null) {
-    const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+    const response = await clientQueryFavorites( {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "visit", queryXml: queryXmlSnapshot, stateUrl: stateUrlSnapshot, historyAction: action }), cache: "no-store",
     });
@@ -2179,7 +2227,7 @@ useEffect(() => {
       currentParams.set("history", payload.historyId);
       window.history.replaceState(window.history.state, "", `${window.location.pathname}?${currentParams.toString()}${window.location.hash}`);
     }
-    await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+    await clientQueryFavorites( {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "updateState", historyId: payload.historyId, stateUrl: visitUrl.toString() }), cache: "no-store",
     });
@@ -2214,13 +2262,13 @@ useEffect(() => {
         // Never overwrite an older visit's URL with the URL for a newer query
         // while that newer query's History item is still being written.
         if (currentId && historyVisitIdRef.current === currentId && historyVisitQueryRef.current === queryXml) {
-          await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+          await clientQueryFavorites( {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "updateState", historyId: currentId, stateUrl }), cache: "no-store",
           });
         }
       } catch (error) {
-        console.warn("Maestro History synchronization failed", error);
+        browserLog.warn("history.synchronization.failed", error);
       }
     };
 
@@ -2247,7 +2295,7 @@ useEffect(() => {
         try {
           await writeHistoryVisit(pending.queryXml, pending.stateUrl, pending.action);
         } catch (error) {
-          console.warn("Maestro History synchronization failed", error);
+          browserLog.warn("history.synchronization.failed", error);
         }
       };
       historyWriteQueueRef.current = historyWriteQueueRef.current.then(persistLatest, persistLatest);
@@ -2263,7 +2311,7 @@ useEffect(() => {
     historyWriteQueueRef.current = historyWriteQueueRef.current.then(synchronizeWhenCollapsed, synchronizeWhenCollapsed);
     // Do not cancel queued writes in effect cleanup; pending History is flushed
     // when the root breadcrumb search field closes.
-  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession, selectedSignalMode, viewPanel, selectedViewUri, viewFeature, selectedAnalysisUri, analyzeHistogram]);
+  }, [urlStateInitialized, queryXml, queryRevision, historyBookmarkId, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, rootSearchExpanded, authSession, selectedSignalMode, viewPanel, selectedViewUri, viewProvider, selectedAnalysisUri, analyzeHistogram]);
 
   // The graph text box may contain an unapplied draft distinct from the query's graph binding.
   // Restore that draft after the query-graph synchronization effect has run once.
@@ -2387,8 +2435,42 @@ useEffect(() => {
     setCentralTab("results");
     setWorkspaceTab("browse");
   }
-  const [configurePropertyKind, setConfigurePropertyKind] = useState("all");
-  const [configureRoleKind, setConfigureRoleKind] = useState("all");
+  // Kind menu state belongs to the active FCT view; its selected values also
+  // survive component remounts and are carried by shareable view attributes.
+  const [configurePropertyKind,setConfigurePropertyKindState]=useState("all");
+  const [configureRoleKind,setConfigureRoleKindState]=useState("all");
+  const activeKindView=useMemo(()=>{
+    const find=(nodes:FctQueryNode[]):FctQueryNode|undefined=>{
+      for(const node of nodes){if(node.name==="view")return node;const nested=find(node.children);if(nested)return nested;}
+      return undefined;
+    };
+    return find(queryTree.children);
+  },[queryTree]);
+  // Share-URL FCT attributes take precedence over local preferences.
+  const kindViewKey=`${activeKindView?.id??""}\u0000${activeKindView?.attributes["kind-property"]??""}\u0000${activeKindView?.attributes["kind-role"]??""}`;
+  useEffect(()=>{
+    const stored=(direction:"property"|"role")=>{
+      try{return window.localStorage.getItem(`maestro:kind:${direction}`)||"all";}catch{return "all";}
+    };
+    const fromQuery=(direction:"property"|"role")=>activeKindView?.attributes[`kind-${direction}`] ||
+      (direction==="property" && !activeKindView?.attributes["kind-role"] ? activeKindView?.attributes.kind : undefined);
+    const kind=(direction:"property"|"role")=>normalizeMaestroKind(fromQuery(direction)||stored(direction))||"all";
+    setConfigurePropertyKindState(kind("property"));
+    setConfigureRoleKindState(kind("role"));
+  },[kindViewKey]);
+  const setConfigureKind=(direction:"property"|"role",kind:string)=>{
+    const normalized=kind === "string" ? "text" : kind === "anonymous" ? "anynomous" : kind;
+    if(direction==="property")setConfigurePropertyKindState(normalized);else setConfigureRoleKindState(normalized);
+    if(typeof window!=="undefined")try{window.localStorage.setItem(`maestro:kind:${direction}`,normalized);}catch{}
+    if(!activeKindView)return;
+    const scoped=workbenchQueryTreeApi.setNodeAttribute(queryTree,activeKindView.id,
+      direction==="property"?"kind-property":"kind-role",normalized==="all"?null:normalized);
+    // This is the actual FCT view kind; generated facet variants override it
+    // with their own direction-specific value on each request.
+    replaceQueryTree(workbenchQueryTreeApi.setNodeAttribute(scoped,activeKindView.id,"kind",normalized==="all"?null:normalized));
+  };
+  const setConfigurePropertyKind=(kind:string)=>setConfigureKind("property",kind);
+  const setConfigureRoleKind=(kind:string)=>setConfigureKind("role",kind);
   const queryWithoutPagingXml = useCallback(
   (viewType?: FctViewType, sortByCount = false, classTree = false) =>
     serializeFctQuery(
@@ -2493,16 +2575,21 @@ useEffect(() => {
   
   
   const queryGraphServer = readGraphServerFromQueryXml(queryCountXml);
-  // The graph portion of addr is a required preprocessing result, not a
-  // second, independent component state. A missing graph authorizes only the
-  // constrained LIMIT 1 discovery probe until it completes with no matches.
+  // Graph auto-fill is optional address enrichment, not graph-server health.
+  // An inconclusive/failed discovery must not disable ordinary FCT queries.
   const graphAddress = queryTree.attributes.addr ?? "";
   const graphSeparator = graphAddress.indexOf("@");
   const graphAlreadySelected = graphSeparator > 0 && Boolean(graphAddress.slice(0, graphSeparator).trim());
   setObservationQueryAddr(queryTree.attributes.addr ?? "");
-  const graphProbeIdentity = `${queryXml}\u0000${selectedEndpointId}\u0000${queryRefreshRevision}`;
+  // Reuse the existing canonical query identity, which excludes pagination.
+  // Results page changes must not restart a potentially expensive graph probe.
+  const graphProbeIdentity = `${bookmarkQueryKey}\u0000${selectedEndpointId}\u0000${queryRefreshRevision}`;
   const [graphProbe, setGraphProbe] = useState<{ identity: string; state: "empty" | "running" | "no-graph" | "error"; error?: string }>({ identity: "", state: "empty" });
-  const graphResolutionReady = !graphAutoFill || graphAlreadySelected || (graphProbe.identity === graphProbeIdentity && graphProbe.state === "no-graph");
+  const graphResolutionReady = graphAutoFillAllowsQuery({
+    enabled: graphAutoFill, graphSelected: graphAlreadySelected,
+    graphFieldEditing, queryIdentity: graphProbeIdentity,
+    probeIdentity: graphProbe.identity, probeState: graphProbe.state,
+  });
   const selectedRegisteredGraphServer = fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId);
   const queryServerMatchesSelection = Boolean(queryGraphServer && selectedRegisteredGraphServer &&
     graphServerUrlMatches(selectedRegisteredGraphServer.url, queryGraphServer, selectedRegisteredGraphServer.schemeInferred));
@@ -2511,8 +2598,8 @@ useEffect(() => {
   const graphHealthReady = Boolean(selectedEndpointId && queryServerMatchesSelection && selectedServerProvenHealthy);
   useEffect(() => {
     if (!urlStateInitialized || !graphHealthReady || graphAlreadySelected || graphFieldEditing || !graphAutoFill) return;
-    // The probe is keyed on the exact live XML, so a changed query invalidates
-    // old results. Neither a failed probe nor a partial result grants access.
+    // The probe follows the canonical live FCT scope. A changed search or
+    // graph address invalidates earlier results; changing pages does not.
     const controller = new AbortController();
     setGraphProbe({ identity: graphProbeIdentity, state: "running" });
     void (async () => {
@@ -2522,9 +2609,20 @@ useEffect(() => {
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-preprocess", "GraphPreprocessor") },
           body: JSON.stringify({ queryXml, discoverGraph: true }),
         });
-        const data = await response.json() as { graph?: string | null; found?: boolean; error?: string };
-        if (!response.ok) throw new Error(data.error ?? `Graph discovery returned HTTP ${response.status}`);
+        // Proxy errors outside the discovery branch can be XML. Inspect the
+        // HTTP status first so a 504 does not become a misleading JSON error.
+        const text = await response.text();
+        let data: { graph?: string | null; found?: boolean; error?: string; selection?: string } = {};
+        try { data = JSON.parse(text) as typeof data; } catch { /* A non-JSON error body is not a failed graph server. */ }
+        if (!response.ok) {
+          const timedOut = response.status === 504 || /timed? out|timeout|signal timed out/i.test(data.error ?? "");
+          throw new Error(timedOut ? "Graph discovery timed out" :
+            `Graph discovery unavailable (HTTP ${response.status})`);
+        }
         if (controller.signal.aborted) return;
+        if (data.selection === "first-match") {
+          browserLog.info("graph.discovery.rank-fallback", { status: 200, optional: true });
+        }
         if (!data.found) {
           setGraphProbe({ identity: graphProbeIdentity, state: "no-graph" });
         } else if (data.graph && /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|^`\\]+$/.test(data.graph)) {
@@ -2536,11 +2634,22 @@ useEffect(() => {
           throw new Error("Graph discovery returned an invalid graph URI.");
         }
       } catch (error) {
-        if (!controller.signal.aborted) setGraphProbe({ identity: graphProbeIdentity, state: "error", error: error instanceof Error ? error.message : String(error) });
+        if (!controller.signal.aborted) {
+          const message = error instanceof Error ? error.message : String(error);
+          const timeout = /timed? out|timeout|signal timed out/i.test(message);
+          browserLog[timeout ? "debug" : "warn"](timeout ? "graph.discovery.timeout" : "graph.discovery.unavailable",
+            { status: timeout ? 504 : undefined, optional: true });
+          // Do not block the live FCT pipeline: its unscoped/default-dataset
+          // query is still valid when automatic graph selection is unavailable.
+          setGraphProbe({ identity: graphProbeIdentity, state: "error", error: timeout ? "Graph discovery timed out" : "Graph discovery unavailable" });
+        }
       }
     })();
     return () => controller.abort();
-  }, [urlStateInitialized, graphHealthReady, graphAlreadySelected, graphFieldEditing, graphAutoFill, graphProbeIdentity, queryXml]);
+  // The query XML is captured when the canonical identity changes. Paging
+  // cannot alter the FCT scope used for graph discovery.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlStateInitialized, graphHealthReady, graphAlreadySelected, graphFieldEditing, graphAutoFill, graphProbeIdentity]);
   const endpointReadyForQuery = graphRegistryReady && graphResolutionReady && Boolean(
     selectedEndpointId && graphHealthReady &&
     // addr is authoritative: the verified SPARQL URL must be the one in <query>.
@@ -2928,7 +3037,7 @@ useEffect(() => {
     setIsLoadingRecordPolicy(false);
     setIsDescribing(false);
     setViewDiscoveryLoading(false);
-    setViewFeatureLoading(false);
+    if (providerCatalogKey) providerCatalogController.send({ type: "CATALOG_CANCELLED", key: providerCatalogKey });
     setIsValidatingRecord(false);
     setConfigureQueryTransition(false);
     resultsBatchRequestPending.current = false;
@@ -2996,8 +3105,8 @@ useEffect(() => {
   
   
   
-  const { recordValidation, setRecordValidation, isValidatingRecord, setIsValidatingRecord } = useRecordValidationState();
-  const { formattedRecordHtml, setFormattedRecordHtml, recordLabelRevision, setRecordLabelRevision, formattedRecordButtonsHtml, setFormattedRecordButtonsHtml, recordFormatPreviews, setRecordFormatPreviews, recordFormatMenuOpen, setRecordFormatMenuOpen, recordControlsOpen, setRecordControlsOpen, recordFormatError, setRecordFormatError, bookmarkQueryDebugOpen, setBookmarkQueryDebugOpen, bookmarkQueryDebug, setBookmarkQueryDebug, recordServices, setRecordServices, recordServiceTab, setRecordServiceTab, recordServiceResults, setRecordServiceResults, recordServiceArguments, setRecordServiceArguments, recordServiceDom, setRecordServiceDom, recordDebug, setRecordDebug, recordUriLabelCacheRef, activeServiceRecordRef, formattedRecordContainerRef } = useRecordPresentationState(preferredAlphabetLanguage);
+  const { recordValidation, setRecordValidation, isValidatingRecord, setIsValidatingRecord } = useRecordValidationState(recordLifecycle);
+  const { formattedRecordHtml, setFormattedRecordHtml, recordLabelRevision, setRecordLabelRevision, formattedRecordButtonsHtml, setFormattedRecordButtonsHtml, recordFormatPreviews, setRecordFormatPreviews, recordFormatMenuOpen, setRecordFormatMenuOpen, recordControlsOpen, setRecordControlsOpen, recordFormatError, setRecordFormatError, bookmarkQueryDebugOpen, setBookmarkQueryDebugOpen, bookmarkQueryDebug, setBookmarkQueryDebug, recordServices, setRecordServices, recordServiceTab, setRecordServiceTab, recordServiceResults, setRecordServiceResults, recordServiceArguments, setRecordServiceArguments, recordServiceDom, setRecordServiceDom, recordDebug, setRecordDebug, recordUriLabelCacheRef, activeServiceRecordRef, formattedRecordContainerRef } = useRecordPresentationState(preferredAlphabetLanguage, recordLifecycle);
   /** Download the RDF triples in the exact DESCRIBE snapshot shown in Record. */
   const downloadRecordDescribe = () => downloadRecordDescribeSnapshot(
     recordDescriptionSnapshot,
@@ -3113,6 +3222,28 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     badges: getActiveViewRoleFilters(queryTree).length > 0 ? "yes" : "no",
     order: orderResults ? "yes" : "no",
   }));
+  // Phase C: keyed graph/query/navigation XState actors orchestrate the
+  // existing data-plane. The proxy scheduler remains the request authority.
+  const operationGraphKey = `${selectedEndpointId}\u0000${queryGraphServer ?? ""}`;
+  const operationQueryKey = `${selectedEndpointId}\u0000${resultsRequestXml}\u0000${queryRefreshRevision}`;
+  const operations = useMaestroOperations({
+    graphKey: operationGraphKey,
+    graphRegistryReady,
+    graphSelected: Boolean(selectedEndpointId),
+    graphReady: graphHealthReady,
+    querySourceReady: endpointReadyForQuery,
+    graphFailed: Boolean(selectedEndpointStatus && selectedEndpointStatus.state !== "ok" && selectedEndpointStatus.state !== "probe-error"),
+    queryKey: operationQueryKey,
+    queryHydrated: urlStateInitialized,
+    navigationKey: queryXml,
+    navigationUrl: typeof window === "undefined" ? "" : buildCurrentShareUrl(),
+    navigationTab: workspaceTab,
+    navigationIsProvider: Boolean(querySourceAttribute(queryTree)?.startsWith("urn:maestro:providers:")),
+    restoringHistory: historyRestoreInProgressRef.current,
+  });
+  const canExecuteMaestroQuery = operations.execution.canExecuteQuery;
+  const returnShareUrl = operations.snapshot.navigation.returnUrl || null;
+  const historyNavigationPending = operations.snapshot.navigation.historyPending;
   const resultsCountRequestIdentity = `${selectedEndpointId}\u0000${resultsCountSparql ?? ""}`;
   const completeFirstResultsPage = resultsPageComplete && resultsOffset === 0 &&
     resultsLoadedQueryIdentityRef.current === activeQueryIdentityRef.current;
@@ -3122,7 +3253,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   latestResultsCountRequestIdentityRef.current = resultsCountRequestIdentity;
 
   useEffect(() => {
-    const endpointReady = endpointReadyForQuery;
+    const endpointReady = endpointReadyForQuery && canExecuteMaestroQuery;
     // Share URL restoration must precede even the count query. Otherwise
     // the initial default FCT tree triggers a needless request on startup.
     if (!urlStateInitialized || !endpointReady) {
@@ -3165,7 +3296,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         }
       } catch (error) {
         if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
-        console.warn("SPARQL result count query failed:", error);
+        browserLog.warn("results.count.failed", error);
         if (!cancelled && latestResultsCountRequestIdentityRef.current === resultsCountRequestIdentity) {
           setResultsTotalCount(null);
         }
@@ -3186,7 +3317,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [urlStateInitialized, resultsCountSparql, resultsCountRequestIdentity, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision, completeFirstResultsPage, queryXml]);
+  }, [urlStateInitialized, resultsCountSparql, resultsCountRequestIdentity, selectedEndpointId, endpointReadyForQuery, canExecuteMaestroQuery, queryRefreshRevision, completeFirstResultsPage, queryXml]);
 
   // Hydrate from the existing Maestro IndexedDB store (not the live query XML).
   useEffect(() => {
@@ -3208,7 +3339,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   }, []);
   useEffect(() => {
     if (!queryConcurrencyHydrated) return;
-    void syncMaestroConcurrency(queryConcurrency).catch(error => console.warn("[Maestro] Query quota sync failed", error));
+    void syncMaestroConcurrency(queryConcurrency).catch(error => browserLog.warn("query.quota.sync-failed", error));
   }, [authSession, queryConcurrency, queryConcurrencyHydrated]);
   function changeQueryConcurrency(next: MaestroConcurrency) {
     const updated = { ...next, heavyPerServer: Math.min(next.heavyPerServer, next.lightPerServer) };
@@ -3367,14 +3498,14 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     // URL restoration must finish before the initial browse decision is made.
     // In particular, never clear search text here: it may have been restored
     // from the shared URL or typed while the endpoint health check was running.
-    if (!urlStateInitialized || !endpointReadyForQuery || initialBrowseTriggered) return;
+    if (!urlStateInitialized || !canExecuteMaestroQuery || initialBrowseTriggered) return;
 
     setInitialBrowseTriggered(true);
 
     // Results already subscribes to endpoint readiness and the restored query.
     // Do not advance searchPipelineRun here: it schedules a *second* identical
     // first-load request whenever the initial search text is empty.
-  }, [urlStateInitialized, selectedEndpointId, endpointReadyForQuery, initialBrowseTriggered, search]);
+  }, [urlStateInitialized, selectedEndpointId, canExecuteMaestroQuery, initialBrowseTriggered, search]);
 
   useEffect(() => {
     const query = search.trim();
@@ -3387,17 +3518,18 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     // Do not fetch the default tree while a shared query is restoring, or
     // before the selected endpoint has passed the health check. Empty search
     // remains a valid query once both prerequisites are ready.
-    const endpointReady = endpointReadyForQuery;
+    const endpointReady = endpointReadyForQuery && canExecuteMaestroQuery;
     if (!urlStateInitialized || !endpointReady) return;
     setSearchError("");
 
     const timer = setTimeout(async () => {
       if (controller.signal.aborted) return;
       setIsSearching(true);
+      operations.controller.send({ type: "RESULTS_STARTED", key: operationQueryKey });
       setSearchError("");
 
       try {
-        console.info("Maestro Results FCT request starting", {
+        browserLog.debug("results.fct.started", {
           queryFingerprint: proxyDebugFingerprint(resultsRequestXml),
           queryLength: resultsRequestXml.length,
         });
@@ -3440,6 +3572,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         if (cancelled || requestQueryIdentity !== activeQueryIdentityRef.current) return;
 
         resultsLoadedQueryIdentityRef.current = requestQueryIdentity;
+        operations.controller.send({ type: "RESULTS_SUCCEEDED", key: operationQueryKey });
         setSparqlQuery(data.sparql || "");
         setResultsPageMatchCount(nextResults.length);
         setResultsPageComplete(!data.incomplete && rawResults.length < resultsBatchSize);
@@ -3455,10 +3588,13 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           return Array.from(merged.values());
         });
 
-        setSelectedUri((current) => current || nextResults[0]?.uri || "");
+        if (!recordSelectionClearedRef.current) setSelectedUri((current) => current || nextResults[0]?.uri || "");
       } catch (error) {
         // A user pressing X must preserve already-loaded results.
-        if (cancelled || controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) return;
+        if (cancelled || controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+          if (!cancelled) operations.controller.send({ type: "RESULTS_CANCELLED", key: operationQueryKey });
+          return;
+        }
 
         setResults([]);
         resultsLoadedQueryIdentityRef.current = "";
@@ -3467,6 +3603,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         setSearchError(
           presentServerError(error instanceof Error ? error.message : "Search failed."),
         );
+        operations.controller.send({ type: "RESULTS_FAILED", key: operationQueryKey });
       } finally {
         resultsBatchRequestPending.current = false;
         if (!cancelled) setIsSearching(false);
@@ -3477,8 +3614,9 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       cancelled = true;
       clearTimeout(timer);
       controller.abort();
+      operations.controller.send({ type: "RESULTS_CANCELLED", key: operationQueryKey });
     };
-  }, [urlStateInitialized, search, resultsRequestXml, resultsBatchSize, queryCountXml, resultsOffset, selectedEndpointId, endpointReadyForQuery, searchPipelineRun, queryTree]);
+  }, [urlStateInitialized, search, resultsRequestXml, resultsBatchSize, queryCountXml, resultsOffset, selectedEndpointId, endpointReadyForQuery, canExecuteMaestroQuery, operationQueryKey, operations.controller, searchPipelineRun, queryTree]);
 
   // Result badges are optional SPARQL enrichment. Keep this separate from the
   // FCT search pipeline so toggling badges never reloads/flickers the result set.
@@ -3613,7 +3751,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         setResultListValuesDebug({ xml: resultsListValuesXml,
           sparql: `${listValuesProjectionSparql(missing.slice(0, LIST_VALUES_MAX_RESOURCES).map(term => ({ ...term, type: term.type as "uri" | "literal" })), projectionColumns,
             projectionGraph === "$ALL$" ? "" : projectionGraph)}\n# Projection failed: ${error instanceof Error ? error.message : String(error)}` });
-        console.warn("Results badge enrichment failed:", error);
+        browserLog.warn("results.badges.failed", error);
       }
     })();
     return () => { cancelled = true; controller.abort(); };
@@ -3825,7 +3963,8 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       return;
     }
     let cancelled = false;
-    const controller = new AbortController();
+    const facetScopeKey = JSON.stringify([classFacetQueryXml,selectedEndpointId,queryRefreshRevision]);
+    const controller = facetRequests.start("categories", facetScopeKey);
     setIsLoadingClasses(true);
     setClassFacetError("");
     setCategoriesIncomplete(false);
@@ -3888,7 +4027,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           for (const row of classRows) if (!uniqueClasses.has(row.uri)) uniqueClasses.set(row.uri, row);
           setClassFacets(Array.from(uniqueClasses.values()));
 
-		  setClassFacetWarning("");
+		  setClassFacetWarning(data.warning || "");
           const incomplete = originalIncomplete || data.incomplete || usedSampleFallback;
           setCategoriesIncomplete(incomplete);
           const sampleNote = usedSampleFallback ? "Categories were recovered by a bounded non-aggregating scan. Counts reflect distinct resources in the returned sample, not complete class totals." : "";
@@ -3900,18 +4039,19 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           setClassFacetError(facetLoadErrorMessage(error, "Failed to load classes facets."));
         } finally {
           if (!cancelled) setIsLoadingClasses(false);
+          if (!cancelled) facetRequests.settle("categories", facetScopeKey);
         }
       })();
     }, 250);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
-      controller.abort();
+      facetRequests.cancel("categories", facetScopeKey);
       // A cancelled request skips its finally block; release this widget's
       // loading indicator during cleanup. A replacement effect sets it true.
       setIsLoadingClasses(false);
     };
-  }, [search, classFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+  }, [search, classFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision, facetRequests]);
 
   // The tree request supplies relationships only, never additional category items or counts.
   // Its output is intersected with the authoritative flat class list at render time.
@@ -3972,7 +4112,8 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       return;
     }
     let cancelled = false;
-    const controller = new AbortController();
+    const facetScopeKey = JSON.stringify([propertyFacetQueryXml,selectedEndpointId,queryRefreshRevision]);
+    const controller = facetRequests.start("properties", facetScopeKey);
     setIsLoadingProperties(true);
     setPropertyFacetError("");
     const timer = window.setTimeout(() => {
@@ -3988,26 +4129,30 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           if (!response.ok && !data.incomplete) throw new Error(data.error ?? "Failed to load properties facets.");
           if (cancelled) return;
           rememberShortforms(data?.shortforms);
+          autoConfigureLoadedScopeRef.current.property = autoConfigureScopeKey;
           setPropertyFacets(Array.isArray(data.properties) ? data.properties.filter((item) => item.uri !== RDF_TYPE_URI) : []);
 		  setPropertyFacetWarning("");
           setMaestroIncompleteResults("properties", { incomplete: data.incomplete, requestId: "", message: data.warning || "" });
           setPropertyFacetSparql(typeof data.sparql === "string" ? data.sparql : "");
         } catch (error) {
           if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
+          autoConfigureLoadedScopeRef.current.property = autoConfigureScopeKey;
+          setFacetAutofillCandidates(current => ({ ...current, property: [] }));
           setPropertyFacetError(facetLoadErrorMessage(error, "Failed to load properties facets."));
           setMaestroIncompleteResults("properties", { incomplete: true, requestId: "", message: error instanceof Error ? error.message : String(error) });
         } finally {
           if (!cancelled) setIsLoadingProperties(false);
+          if (!cancelled) facetRequests.settle("properties", facetScopeKey);
         }
       })();
     }, 250);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
-      controller.abort();
+      facetRequests.cancel("properties", facetScopeKey);
       // The replacement request owns the loading flag; do not clear it on cancellation.
     };
-  }, [search, propertyFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+  }, [search, propertyFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision, facetRequests]);
 
   // Roles has a completely separate request lifecycle from Categories and Properties.
   useEffect(() => {
@@ -4017,7 +4162,8 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       return;
     }
     let cancelled = false;
-    const controller = new AbortController();
+    const facetScopeKey = JSON.stringify([roleFacetQueryXml,selectedEndpointId,queryRefreshRevision]);
+    const controller = facetRequests.start("roles", facetScopeKey);
     setIsLoadingRoles(true);
     setRoleFacetError("");
     const timer = window.setTimeout(() => {
@@ -4033,26 +4179,30 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           if (!response.ok && !data.incomplete) throw new Error(data.error ?? "Failed to load roles facets.");
           if (cancelled) return;
           rememberShortforms(data?.shortforms);
+          autoConfigureLoadedScopeRef.current.role = autoConfigureScopeKey;
           setRoleFacets(Array.isArray(data.roles) ? data.roles : []);
 		  setRoleFacetWarning("");
           setMaestroIncompleteResults("roles", { incomplete: data.incomplete, requestId: "", message: data.warning || "" });
           setRoleFacetSparql(typeof data.sparql === "string" ? data.sparql : "");
         } catch (error) {
           if (cancelled || (error instanceof Error && error.name === "AbortError")) return;
+          autoConfigureLoadedScopeRef.current.role = autoConfigureScopeKey;
+          setFacetAutofillCandidates(current => ({ ...current, "property-in": [] }));
           setRoleFacetError(facetLoadErrorMessage(error, "Failed to load roles facets."));
           setMaestroIncompleteResults("roles", { incomplete: true, requestId: "", message: error instanceof Error ? error.message : String(error) });
         } finally {
           if (!cancelled) setIsLoadingRoles(false);
+          if (!cancelled) facetRequests.settle("roles", facetScopeKey);
         }
       })();
     }, 250);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
-      controller.abort();
+      facetRequests.cancel("roles", facetScopeKey);
       // The replacement request owns the loading flag; do not clear it on cancellation.
     };
-  }, [search, roleFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+  }, [search, roleFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision, facetRequests]);
 
   // Graphs is a bounded discovery widget, not an aggregate/count workload.
   // Display the graph URIs returned within the Sheet limit. If there are more
@@ -4071,7 +4221,8 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       return;
     }
     let cancelled = false;
-    const controller = new AbortController();
+    const facetScopeKey = JSON.stringify([leftWidgetLimits.graphs, queryCountXml, selectedEndpointId, queryRefreshRevision]);
+    const controller = facetRequests.start("graphs", facetScopeKey);
     setIsLoadingGraphs(true);
     setGraphListIncomplete(false);
     setGraphListSparql("");
@@ -4139,7 +4290,7 @@ setGraphFacets(graphs);
         setGraphHasMore(typeof data.rowCount === "number" ? data.rowCount >= limit : graphs.length >= limit);
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
-          console.warn("Graph page load failed:", error);
+          browserLog.warn("graph.page.failed", error);
           // Do not erase the last usable graph page because a subsequent
           // timeout or transient network failure returned no new rows.
           setGraphHasMore(false);
@@ -4148,12 +4299,15 @@ setGraphFacets(graphs);
             message: error instanceof Error ? error.message : "Graph query did not complete." });
         }
       } finally {
-        if (!cancelled) setIsLoadingGraphs(false);
+        if (!cancelled) {
+          setIsLoadingGraphs(false);
+          facetRequests.settle("graphs", facetScopeKey);
+        }
       }
     }
     void loadGraphPage();
-    return () => { cancelled = true; controller.abort(); };
-  }, [leftWidgetLimits.graphs, queryCountXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+    return () => { cancelled = true; facetRequests.cancel("graphs", facetScopeKey); };
+  }, [leftWidgetLimits.graphs, queryCountXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision, facetRequests]);
 
 
   // Defensively merge duplicate resource rows by URI. The API normally groups
@@ -4183,6 +4337,16 @@ setGraphFacets(graphs);
       return grouped;
     }, new Map<string, FctResult>()),
   ).map(([, item]) => item);
+  // Shift-click can intentionally clear the single Record selection and show
+  // the virtual common-values Record. Never let auto-pick immediately undo it.
+  const [recordSelectionCleared,setRecordSelectionCleared]=useState(false);
+  const recordSelectionClearedRef=useRef(false);
+  const selectBrowseResult = (uri:string,shiftKey:boolean) => {
+    if(shiftKey && selectedUri===uri){recordSelectionClearedRef.current=true;setRecordSelectionCleared(true);setSelectedUri("");return;}
+    if(!shiftKey){recordSelectionClearedRef.current=false;setRecordSelectionCleared(false);setSelectedUri(uri);}
+  };
+  useEffect(()=>{recordSelectionClearedRef.current=false;setRecordSelectionCleared(false);},[queryXml]);
+  useEffect(()=>{if(selectedUri){recordSelectionClearedRef.current=false;setRecordSelectionCleared(false);}},[selectedUri]);
   const allLoadedResults = visibleResults;
   // Match excerpts/counts are meaningful only for the root-level live <view>.
   // A nested view represents a focused path, not a root text-search result set.
@@ -4191,8 +4355,8 @@ setGraphFacets(graphs);
   // text match to explain, whatever the search field happens to contain.
   const liveQueryHasText = queryTree.children.some((node) => node.name === "text");
   const visibleResultsPage = allLoadedResults.slice(resultsUiPage * resultsPageSize, (resultsUiPage + 1) * resultsPageSize);
-  // The lit Bookmark button is the sole client-side feature gate for Personal states.
-  const recordStatus = usePersonalRecordStatus({ enabled: personalStoreReady && verifiedQueryBookmarked, results: visibleResultsPage, selectedUri, queryXml, resultsReady: urlStateInitialized && !isSearching && endpointReadyForQuery, pageIdentity: `${resultsOffset}:${resultsUiPage}:${resultsPageSize}:${queryRefreshRevision}`,
+  // The lit Bookmark button is the sole client-side provider gate for Personal states.
+  const recordStatus = usePersonalRecordStatus({ enabled: accessCapabilities.canShowRecordStatusActions, results: visibleResultsPage, selectedUri, queryXml, resultsReady: urlStateInitialized && !isSearching && endpointReadyForQuery, pageIdentity: `${resultsOffset}:${resultsUiPage}:${resultsPageSize}:${queryRefreshRevision}`,
     onHiddenChanged: refreshQuery, selectedStatuses: selectedStatusFilters, toggleSelectedStatus: toggleSelectedStatusFilter });
   // Save last *known* query-wide Results/New observations on the History visit.
   // Unavailable statistics are never converted to zero, and stale pipelines
@@ -4207,7 +4371,7 @@ setGraphFacets(graphs);
     const key = `${historyId}:${effectiveResultsTotalCount}:${lastNewCount ?? "unknown"}`;
     if (historyMetricWriteKeyRef.current === key) return;
     historyMetricWriteKeyRef.current = key;
-    void fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+    void clientQueryFavorites( {
       method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "updateMetrics", historyId,
         lastResultCount: effectiveResultsTotalCount, lastNewCount }),
@@ -4221,10 +4385,10 @@ setGraphFacets(graphs);
     // Group members can be selected even when they are not on the ordinary
     // Results page. Do not let Results-page auto-selection override that pick
     // while the Groups tab is active; restore page-local selection on return.
-    if (centralTab !== "groups" && explicitBlankNodeAnchor?.label !== selectedUri && visibleResultsPage.length > 0 && !visibleResultsPage.some((item) => item.uri === selectedUri)) {
+    if (!recordSelectionCleared && centralTab !== "groups" && explicitBlankNodeAnchor?.label !== selectedUri && visibleResultsPage.length > 0 && !visibleResultsPage.some((item) => item.uri === selectedUri)) {
       setSelectedUri(visibleResultsPage[0].uri);
     }
-  }, [centralTab, resultsOffset, resultsPageSize, resultsUiPage, visibleResultsPage, selectedUri, explicitBlankNodeAnchor?.label]);
+  }, [centralTab, resultsOffset, resultsPageSize, resultsUiPage, visibleResultsPage, selectedUri, recordSelectionCleared, explicitBlankNodeAnchor?.label]);
 
   useEffect(() => {
     if (!urlStateInitialized || isSearching || !resultsPageComplete || results.length === 0) return;
@@ -4273,7 +4437,7 @@ setGraphFacets(graphs);
   // The graph membership request is independent of optional author metadata.
   // One Record lifecycle for URI, literal and blank-node selections. The
   // selection may arrive before the corresponding Results response during any
-  // navigation (including History/Bookmarks, Features, Back/Forward and URL
+  // navigation (including History/Bookmarks, Providers, Back/Forward and URL
   // restore). Never start either Record SELECT or graph marshalling against
   // identity metadata from a previous live query. The query's existing Results
   // subscriber/cancellation pipeline supplies the barrier; no new tokens.
@@ -4290,11 +4454,17 @@ setGraphFacets(graphs);
 
   // Always send the authoritative query address; endpoint selection must not
   // diverge from the graph server in the live query address.
+  const recordGraphIdentity = [selectedUri, selectedRecordTermType, selectedEndpointId,
+    bookmarkQueryKey, queryTree.attributes.addr ?? "", blankNodeGraphQueryXml ?? ""].join("\u0000");
+  const lastRecordGraphIdentityRef = useRef("");
   useEffect(() => {
-    setRecordGraphs([]);
-    setRecordGraphAuthors([]);
-    setSelectedRecordGraph("");
-    setSelectedRecordAuthor("");
+    if (lastRecordGraphIdentityRef.current !== recordGraphIdentity) {
+      lastRecordGraphIdentityRef.current = recordGraphIdentity;
+      setRecordGraphs([]);
+      setRecordGraphAuthors([]);
+      setSelectedRecordGraph("");
+      setSelectedRecordAuthor("");
+    }
     setRecordGraphError("");
     setRecordAuthorError("");
     // A server ID alone does not guarantee that its registry, health check,
@@ -4329,7 +4499,12 @@ setGraphFacets(graphs);
         }
         const data = readRecordGraphFctResponse(raw);
         if (!data.complete) throw new Error("Record graph marshalling was incomplete; graph list cannot be trusted.");
-        if (!controller.signal.aborted) setRecordGraphs(data.graphs ?? []);
+        if (!controller.signal.aborted) {
+          const graphs = data.graphs ?? [];
+          setRecordGraphs(graphs);
+          // Refresh may invalidate a chosen family. Keep valid choices only.
+          setSelectedRecordGraph(previous => validRecordGraphFamily(previous, graphs) ? previous : "");
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
           const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
@@ -4342,7 +4517,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedRecordTermType, blankNodeGraphQueryXml, selectedEndpointId, endpointReadyForQuery, recordIdentityPending, queryTree.attributes.addr, queryRefreshRevision]);
+  }, [selectedUri, selectedRecordTermType, blankNodeGraphQueryXml, selectedEndpointId, endpointReadyForQuery, recordIdentityPending, queryTree.attributes.addr, queryRefreshRevision, recordGraphIdentity]);
 
   // A graph proved by the executed FCT Record selection is displayed as a
   // fixed label, not a dropdown. It still has graph-authorship metadata.
@@ -4351,10 +4526,15 @@ setGraphFacets(graphs);
 
   // Load author provenance after a family is chosen, or once an explicit
   // Record graph binding has been verified by the FCT response.
+  const authorScopeIdentity = `${recordGraphIdentity}\u0000${selectedRecordGraph || boundRecordGraph}`;
+  const lastAuthorScopeRef = useRef("");
   useEffect(() => {
-    setRecordGraphAuthors([]);
+    if (lastAuthorScopeRef.current !== authorScopeIdentity) {
+      lastAuthorScopeRef.current = authorScopeIdentity;
+      setRecordGraphAuthors([]);
+      setSelectedRecordAuthor("");
+    }
     setRecordAuthorError("");
-    setSelectedRecordAuthor("");
     if (recordIdentityPending || (!selectedRecordGraph && !boundRecordGraph) || !graphsInSelectedFamily.length || !selectedUri) {
       setLoadingRecordAuthors(false);
       return;
@@ -4364,7 +4544,10 @@ setGraphFacets(graphs);
     void (async () => {
       try {
         const authors = await readRecordGraphAuthors(queryTree.attributes.addr ?? "", graphsInSelectedFamily, controller.signal);
-        if (!controller.signal.aborted) setRecordGraphAuthors(authors);
+        if (!controller.signal.aborted) {
+          setRecordGraphAuthors(authors);
+          setSelectedRecordAuthor(previous => validRecordAuthorGraph(previous, authors) ? previous : "");
+        }
       } catch (error) {
         if (!controller.signal.aborted) setRecordAuthorError(error instanceof Error ? error.message : "Could not discover graph authors.");
       } finally {
@@ -4372,7 +4555,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedRecordGraph, boundRecordGraph, recordGraphs, blankNodeGraphQueryXml, recordIdentityPending, queryTree.attributes.addr, queryRefreshRevision]);
+  }, [selectedUri, selectedRecordGraph, boundRecordGraph, recordGraphs, blankNodeGraphQueryXml, recordIdentityPending, queryTree.attributes.addr, queryRefreshRevision, authorScopeIdentity]);
 
   // Membership discovery does not change an unfiltered DESCRIBE. Only selected
   // graph/author filters need the discovered list, avoiding a second record load.
@@ -4381,14 +4564,16 @@ setGraphFacets(graphs);
   // Load the selected resource once through Record SELECT; pagination is local to
   // the returned property/value pairs and does not trigger another server query.
   useEffect(() => {
-    if (!selectedUri || !selectedEndpointId) {
+    const virtualCommon = recordSelectionCleared && !selectedUri;
+    recordLifecycle.selectRecord(selectedUri || virtualCommon ? currentRecordDescriptionKey : "");
+    if ((!selectedUri && !virtualCommon) || !selectedEndpointId) {
       setDescribedRecord([]);
       setRecordDescriptionSnapshot(null);
       setRecordDescriptionPage(0);
       setIsDescribing(false);
       return;
     }
-    if (recordIdentityPending) {
+    if (recordIdentityPending && !virtualCommon) {
       // Wait for the matching FCT Results identity for every Record term type.
       // Do not emit a stale-selection error or begin graph marshalling.
       setRecordDescriptionError("");
@@ -4397,7 +4582,7 @@ setGraphFacets(graphs);
       return;
     }
     let cancelled = false;
-    const controller = new AbortController();
+    const controller = recordLifecycle.scopedAbort(currentRecordDescriptionKey, "description");
     setBlankNodeRecords([]);
     setActiveBlankNodeTab(0);
     setDescribedRecord([]);
@@ -4415,6 +4600,25 @@ setGraphFacets(graphs);
     setRecordDebug({ xml: "", sparql: "", formatterXml: "", formatterSparql: "", policyDiscovery: "", templateLookup: "" });
     async function loadDescription() {
       try {
+        if (virtualCommon) {
+          // Swap only the description data source. The standard Record
+          // grouping, kind filter, Property/Role tables, and value actions
+          // consume the same RecordValueTerm[] as an ordinary Record SELECT.
+          const common = await readOverviewCommonProperties(queryXml, controller.signal);
+          if (cancelled || controller.signal.aborted) return;
+          const sharedRows: RecordValueTerm[] = common.properties.map(item => ({
+            property: item.predicate, value: item.value, direction: "property" as const,
+            termType: rdfBindingKind(item.termType),
+            ...(item.datatype ? { datatype: item.datatype } : {}),
+            ...(item.lang ? { lang: item.lang } : {}),
+          }));
+          setDescribedRecord(sharedRows);
+          setDescribedRecordUri("");
+          setRecordDescriptionSnapshot(null); // No real subject, no DESCRIBE RDF to export.
+          setRecordDebug(current => ({ ...current, xml: queryXml,
+            sparql: "Shared values: distinct FCT population and grouped predicate/value intersections." }));
+          return;
+        }
         let snapshotXml = "";
         let snapshotIncomplete = false;
         let rows: RecordValueTerm[] = [];
@@ -4500,7 +4704,7 @@ setGraphFacets(graphs);
         }
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
-          console.warn("Record SELECT failed:", error);
+          browserLog.warn("record.description.failed", error);
           const message = error instanceof Error ? error.message : String(error);
           setRecordDescriptionError(`Record SELECT failed: ${message}`);
           setRecordFormatError(`Record SELECT failed: ${message}`);
@@ -4509,19 +4713,21 @@ setGraphFacets(graphs);
           setRecordDescribeIncomplete(false);
         }
       } finally {
-        if (!cancelled) setIsDescribing(false);
+        recordLifecycle.releaseAbort(currentRecordDescriptionKey, "description", controller);
+        if (!cancelled && !controller.signal.aborted) setIsDescribing(false);
       }
     }
     void loadDescription();
-    return () => { cancelled = true; controller.abort(); };
-  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, blankNodeAnchor?.parent, blankNodeAnchor?.predicate, blankNodeAnchor?.depth, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, preferredAlphabetLanguage, queryRefreshRevision, resultsRequestXml, recordIdentityPending]);
+    return () => { cancelled = true; controller.abort(); recordLifecycle.releaseAbort(currentRecordDescriptionKey, "description", controller); };
+  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, blankNodeAnchor?.parent, blankNodeAnchor?.predicate, blankNodeAnchor?.depth, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, preferredAlphabetLanguage, queryRefreshRevision, resultsRequestXml, recordIdentityPending, recordSelectionCleared, queryXml]);
 
   // The separate Record graph dropdown loader already knows which named graphs
-  // contain this resource. Reuse that list for a single background label query;
-  // never enumerate named graphs inside the initial Record SELECT or delay it.
+  // contain this resource. Reuse that list for optional bounded background
+  // label queries; never enumerate named graphs in the initial Record SELECT.
   useEffect(() => {
     if (!selectedUri || describedRecordUri !== selectedUri || isDescribing ||
-        !recordGraphs.length || !describedRecord.length || !selectedEndpointId) return;
+        !recordGraphs.length || !describedRecord.length || !selectedEndpointId ||
+        !endpointReadyForQuery) return;
     const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`;
     const labelCache = recordUriLabelCacheRef.current;
     const valueUris = [...new Set(describedRecord
@@ -4537,58 +4743,77 @@ setGraphFacets(graphs);
     if (!graphIris.length) return;
     const controller = new AbortController();
     void (async () => {
+      const predicates = [
+        "http://www.w3.org/2000/01/rdf-schema#label",
+        "http://www.w3.org/2004/02/skos/core#prefLabel",
+        "http://schema.org/name", "https://schema.org/name",
+        "http://xmlns.com/foaf/0.1/name", "http://purl.org/dc/terms/title",
+      ];
+      const requested = new Set(missing);
+      const best = new Map<string, { rank: number; text: string }>();
       try {
-        const response = await cachedFetchFct("/proxy/api/sparql", {
-          method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-value-labels", "RecordValueLabels") },
-          body: JSON.stringify({ recordValueLabels: { addr: queryTree.attributes.addr, uris: missing, graphs: graphIris, preferredLanguage: preferredAlphabetLanguage, version: 2 } }),
-        });
-        const data = await response.json() as {
-          error?: string;
-          results?: { bindings?: Array<Record<string, { type: string; value: string; "xml:lang"?: string }>> };
-        };
-        if (!response.ok) throw new Error(data.error || "Record URI label lookup failed.");
-        if (controller.signal.aborted) return;
-        const predicates = [
-          "http://www.w3.org/2000/01/rdf-schema#label",
-          "http://www.w3.org/2004/02/skos/core#prefLabel",
-          "http://schema.org/name", "https://schema.org/name",
-          "http://xmlns.com/foaf/0.1/name", "http://purl.org/dc/terms/title",
-        ];
-        const requested = new Set(missing);
-        const best = new Map<string, { rank: number; text: string }>();
-        for (const binding of data.results?.bindings ?? []) {
-          const uri = binding.labelResource?.value ?? "";
-          const label = binding.label;
-          if (!requested.has(uri) || binding.labelResource?.type !== "uri" ||
-              label?.type !== "literal" || !label.value.trim()) continue;
-          const predicate = predicates.indexOf(binding.labelPredicate?.value ?? "");
-          if (predicate < 0) continue;
-          const lang = (label["xml:lang"] ?? "").toLowerCase();
-          const rank = predicate * 2 + (lang === preferredAlphabetLanguage.toLowerCase() || lang.startsWith(`${preferredAlphabetLanguage.toLowerCase()}-`) ? 0 : 1);
-          const current = best.get(uri);
-          if (!current || rank < current.rank ||
-              (rank === current.rank && label.value.localeCompare(current.text) < 0)) {
-            best.set(uri, { rank, text: label.value });
+        // Graph/URI cross-products can overwhelm shared SPARQL servers.
+        // Keep the same graph coverage, but perform bounded, sequential reads;
+        // stop at the first transport failure instead of flooding the proxy.
+        for (const { uris, graphs } of recordLabelBatches(missing, graphIris)) {
+          if (controller.signal.aborted) return;
+          const response = await cachedFetchFct("/proxy/api/sparql", {
+            method: "POST", cache: "no-store", signal: controller.signal,
+            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-value-labels", "RecordValueLabels") },
+            body: JSON.stringify({ recordValueLabels: { addr, uris, graphs, preferredLanguage: preferredAlphabetLanguage, version: 2 } }),
+          });
+          if (response.status === 504) {
+            // Optional enrichment: a deadline is a normal outcome, even when
+            // an upstream server returns no JSON body. Finally retains labels
+            // from all completed batches.
+            browserLog.debug("record.labels.timeout", { status: 504, optional: true });
+            return;
+          }
+          const data = await response.json() as {
+            error?: string;
+            results?: { bindings?: Array<Record<string, { type: string; value: string; "xml:lang"?: string }>> };
+          };
+          if (!response.ok) throw new Error(data.error || `Record URI label lookup returned HTTP ${response.status}.`);
+          if (controller.signal.aborted) return;
+          for (const binding of data.results?.bindings ?? []) {
+            const uri = binding.labelResource?.value ?? "";
+            const label = binding.label;
+            if (!requested.has(uri) || binding.labelResource?.type !== "uri" ||
+                label?.type !== "literal" || !label.value.trim()) continue;
+            const predicate = predicates.indexOf(binding.labelPredicate?.value ?? "");
+            if (predicate < 0) continue;
+            const lang = (label["xml:lang"] ?? "").toLowerCase();
+            const rank = predicate * 2 + (lang === preferredAlphabetLanguage.toLowerCase() || lang.startsWith(`${preferredAlphabetLanguage.toLowerCase()}-`) ? 0 : 1);
+            const current = best.get(uri);
+            if (!current || rank < current.rank ||
+                (rank === current.rank && label.value.localeCompare(current.text) < 0)) {
+              best.set(uri, { rank, text: label.value });
+            }
           }
         }
-        if (controller.signal.aborted) return;
-        let updated = false;
-        for (const [uri, label] of best) {
-          const key = `${addr}\u0000${uri}`;
-          if (labelCache.get(key) !== label.text) {
-            labelCache.set(key, label.text);
-            updated = true;
-          }
-        }
-        if (updated) setRecordLabelRevision((value) => value + 1);
       } catch (error) {
-        if (!controller.signal.aborted) console.warn("Record named-graph label enrichment failed:", error);
+        // This is optional display enrichment, never a failure of the Record
+        // description or formatter. Keep labels already found in prior batches.
+        if (!controller.signal.aborted) browserLog[error instanceof Error &&
+          (error.name === "TimeoutError" || /aborted due to timeout|timed? out/i.test(error.message))
+          ? "debug" : "warn"]("record.labels.unavailable", { optional: true, error });
+      } finally {
+        if (!controller.signal.aborted) {
+          let updated = false;
+          for (const [uri, label] of best) {
+            const key = `${addr}\u0000${uri}`;
+            if (labelCache.get(key) !== label.text) {
+              labelCache.set(key, label.text);
+              updated = true;
+            }
+          }
+          if (updated) setRecordLabelRevision((value) => value + 1);
+        }
       }
     })();
     return () => controller.abort();
   }, [selectedUri, describedRecordUri, describedRecord, isDescribing, recordGraphs,
-      selectedRecordGraph, selectedRecordAuthor, selectedEndpointId,
+      selectedRecordGraph, selectedRecordAuthor, selectedEndpointId, endpointReadyForQuery,
       queryTree.attributes.addr, queryTree.attributes.graph, preferredAlphabetLanguage]);
 
   // The formatted card may already be on screen when named-graph labels arrive.
@@ -4653,12 +4878,12 @@ setGraphFacets(graphs);
       setRecordPolicyCheckedUri(selectedUri);
       return;
     }
-    const controller = new AbortController();
+    const controller = recordLifecycle.scopedAbort(currentRecordDescriptionKey, "policy");
     setIsLoadingRecordPolicy(true);
     // Retain the current selection while the next record's policy is resolved;
     // the record-keyed render guard prevents showing stale formatted HTML.
     setRecordPolicyError("");
-    maestroQueryFetch("/proxy/api/service?service=maestro&operationId=policies", {
+    clientRecordPolicyResponse({
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-discover", "RecordPolicyDiscovery") },
@@ -4671,7 +4896,7 @@ setGraphFacets(graphs);
       signal: controller.signal,
     }).then(async (response) => {
       const payload = await response.json() as { policies?: { uri: string; label: string; recordShape: string; matchedClasses?: string[]; templates: { uri: string; label: string }[] }[]; error?: string; debugSparql?: string };
-      if (!controller.signal.aborted) setRecordDebug((current) => ({ ...current, policyDiscovery: payload.debugSparql ?? `POST /proxy/api/service?service=maestro&operationId=policies\n${JSON.stringify({ action: "discover", recordTypes }, null, 2)}` }));
+      if (!controller.signal.aborted) setRecordDebug((current) => ({ ...current, policyDiscovery: payload.debugSparql ?? `Browser ClassPolicy / SHACL discovery via personal SPARQL\n${JSON.stringify({ recordTypes }, null, 2)}` }));
       if (!response.ok) throw new Error(payload.error || `Policy lookup returned HTTP ${response.status}.`);
       if (!controller.signal.aborted) {
         const hasSavedHistoryQuery = describedRecord.some((item) => item.property === "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#historyQueryXML" && item.value.trim().length > 0);
@@ -4738,13 +4963,26 @@ setGraphFacets(graphs);
       if (!controller.signal.aborted && !(error instanceof DOMException && error.name === "AbortError")) {
         setRecordPolicyError(error instanceof Error ? error.message : "Could not look up the record policy.");
       }
-    }).finally(() => { if (!controller.signal.aborted) { setIsLoadingRecordPolicy(false); setRecordPolicyCheckedUri(selectedUri); } });
-    return () => controller.abort();
+    }).finally(() => {
+      recordLifecycle.releaseAbort(currentRecordDescriptionKey, "policy", controller);
+      if (!controller.signal.aborted) { setIsLoadingRecordPolicy(false); setRecordPolicyCheckedUri(selectedUri); }
+    });
+    return () => { controller.abort(); recordLifecycle.releaseAbort(currentRecordDescriptionKey, "policy", controller); };
   }, [selectedUri, selectedRecordTermType, personalSparqlEndpoint, describedRecord, describedRecordUri, isDescribing, recordFormatPreferenceLoaded, authSession, personalPoliciesReady, personalPoliciesSeedError, selectedResult?.uri, selectedGroupRecord?.uri, queryXml, historyBookmarkId]);
 
 
+  const browseValidationRequestRef = useRef<AbortController | null>(null);
+  const recordValidationIdentityRef = useRef(currentRecordDescriptionKey);
+  recordValidationIdentityRef.current = currentRecordDescriptionKey;
+  useEffect(() => () => { browseValidationRequestRef.current?.abort(); }, [currentRecordDescriptionKey]);
   async function validateSelectedRecord(policyOverride: RecordPolicyOption | null = recordPolicy) {
     if (!selectedUri || !policyOverride || !personalPoliciesReady) return;
+    browseValidationRequestRef.current?.abort();
+    const controller = new AbortController();
+    browseValidationRequestRef.current = controller;
+    const validationKey = currentRecordDescriptionKey;
+    const current = () => !controller.signal.aborted &&
+      browseValidationRequestRef.current === controller && recordValidationIdentityRef.current === validationKey;
     setIsValidatingRecord(true);
     setRecordValidation(null);
     setRecordPolicyError("");
@@ -4755,7 +4993,8 @@ setGraphFacets(graphs);
       if (!snapshot || snapshot.key !== currentRecordDescriptionKey || snapshot.uri !== selectedUri || isDescribing) {
         throw new Error("The record description must finish loading before validation.");
       }
-      const report = await validateRecordSnapshot(policyOverride, snapshot);
+      const report = await validateRecordSnapshot(policyOverride, snapshot, controller.signal);
+      if (!current()) return;
       setRecordValidation(report);
       // Validate is the sole trigger for ingesting SHACL-discovered Personal facets.
       // Query clones preserve the live scope but cannot mutate its view.
@@ -4769,11 +5008,12 @@ setGraphFacets(graphs);
         });
         const validateQueryXml = serializeFctQuery(validateTree);
         const facetResponse = await maestroQueryFetch("/proxy/api/fct", {
-          method: "POST", cache: "no-store",
+          method: "POST", cache: "no-store", signal: controller.signal,
           headers: { "Content-Type": "application/xml", ...proxyDebugHeaders("record-shacl-fct-validate", "RecordShaclFacets") },
           body: validateQueryXml,
         });
         const facetXml = await facetResponse.text();
+        if (!current()) return;
         if (!facetResponse.ok) throw new Error(`SHACL FCT validate returned HTTP ${facetResponse.status}: ${facetXml.slice(0, 500)}`);
         const facetPayload = parseFctResponse(facetXml);
         if (facetPayload.error) throw new Error(facetPayload.error);
@@ -4835,13 +5075,19 @@ setGraphFacets(graphs);
           setDefaultLeftTab("personal");
         }
       } catch (facetError) {
-        console.warn("SHACL facet ingestion failed after record validation:", facetError);
+        if (!current()) return;
+        browserLog.warn("record.validation.facets.failed", facetError);
         setRecordPolicyError(facetError instanceof Error ? `Validation completed, but SHACL facet ingestion failed: ${facetError.message}` : "SHACL facet ingestion failed.");
       }
     } catch (error) {
-      setRecordPolicyError(error instanceof Error ? error.message : "Could not validate this record.");
+      if (current()) {
+        const message = error instanceof Error ? error.message : "Could not validate this record.";
+        setRecordPolicyError(message);
+        recordLifecycle.send({ type: "OP_FAILED", key: validationKey, operation: "validation", error: message });
+      }
     } finally {
-      setIsValidatingRecord(false);
+      if (current()) setIsValidatingRecord(false);
+      if (browseValidationRequestRef.current === controller) browseValidationRequestRef.current = null;
     }
   }
 
@@ -4877,7 +5123,10 @@ setGraphFacets(graphs);
     recordFormatterAbortControllersRef.current.add(controller);
     const isCurrentRequest = () => !controller.signal.aborted && latestRecordFormatKeyRef.current === requestKey;
     let formatStage = "Record formatting";
-    if (!preview && !enrichLinkedResources && isCurrentRequest()) { setRecordFormatError(""); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setFormattedRecordKey(""); }
+    if (!preview && !enrichLinkedResources && isCurrentRequest()) {
+      setRecordFormatError(""); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setFormattedRecordKey("");
+      recordLifecycle.operation("format", "OP_STARTED", currentRecordDescriptionKey, requestKey);
+    }
     try {
       if (!preview && !enrichLinkedResources) {
         formatStage = "Record SHACL validation";
@@ -4888,14 +5137,9 @@ setGraphFacets(graphs);
           throw new Error(`The selected format was not loaded because its SHACL validation did not pass. ${checked.message} ${checked.violations.map((v) => v.message).join(" ")}`.trim());
         }
       }
-      formatStage = "Record template retrieval (Maestro policy service)";
-      const templateResponse = await maestroQueryFetch("/proxy/api/service?service=maestro&operationId=policies", {
-        method: "POST", cache: "no-store", signal: controller.signal, headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-policy-template", "RecordPolicyTemplate") },
-        body: JSON.stringify({ action: "template", template: templateUri }),
-      });
-      const templatePayload = await templateResponse.json() as { templateXslt?: string; enrichmentXslt?: string; nextName?: string; nextVersion?: string; error?: string; debugSparql?: string };
-      if (!preview && isCurrentRequest()) setRecordDebug((current) => ({ ...current, templateLookup: templatePayload.debugSparql ?? `POST /proxy/api/service?service=maestro&operationId=policies\n${JSON.stringify({ action: "template", template: templateUri }, null, 2)}` }));
-      if (!templateResponse.ok || typeof templatePayload.templateXslt !== "string") throw new Error(templatePayload.error || `Template reload returned HTTP ${templateResponse.status}.`);
+      formatStage = "Record template discovery (personal SPARQL)";
+      const templatePayload = await loadClientPolicyTemplate(templateUri, controller.signal);
+      if (!preview && isCurrentRequest()) setRecordDebug((current) => ({ ...current, templateLookup: templatePayload.debugSparql }));
       if (!preview && !enrichLinkedResources && isCurrentRequest()) setFormatterHasEnrichment(Boolean(templatePayload.enrichmentXslt));
       if (!isCurrentRequest()) return null;
       formatStage = "Record formatting preparation";
@@ -5018,7 +5262,7 @@ setGraphFacets(graphs);
             }).slice(0, 6);
           } catch (error) {
             if (controller.signal.aborted) return null;
-            console.debug("Optional Commons images unavailable", error);
+            browserLog.debug("commons.images.unavailable", error);
           }
         }
       }
@@ -5499,7 +5743,7 @@ setGraphFacets(graphs);
             }
             historyVisitQueryRef.current = finalXml;
           } catch (cause) {
-            console.warn("Could not persist every queued template edit to History", cause);
+            browserLog.warn("history.queued-edits.failed", cause);
             // Let Maestro's ordinary History effect record the final query if
             // an intermediate History write fails.
             historyVisitQueryRef.current = "";
@@ -5540,10 +5784,13 @@ setGraphFacets(graphs);
         setFormattedRecordButtonsHtml({});
       }
       if (enrichLinkedResources) {
-        console.warn("Optional stylesheet enrichment failed; initial formatted Record remains available.", message);
+        browserLog.warn("record.stylesheet.enrichment.failed", message);
       }
       return null;
     } finally {
+      if (!preview && !enrichLinkedResources && !isCurrentRequest()) {
+        recordLifecycle.operation("format", "OP_CANCELLED", currentRecordDescriptionKey, requestKey);
+      }
       recordFormatterAbortControllersRef.current.delete(controller);
     }
   }
@@ -5606,17 +5853,10 @@ setGraphFacets(graphs);
     const types = Array.from(new Set([...recordTypes, ...scopeTypes]));
     if (!types.length) return;
     const controller = new AbortController();
-    void maestroQueryFetch("/proxy/api/service?service=maestro&operationId=services", {
-      method: "POST", cache: "no-store",
-      headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-service-discover", "RecordServices") },
-      body: JSON.stringify({ action: "discover", recordTypes: types }),
-      signal: controller.signal,
-    }).then(async (response) => {
-      const payload = await response.json() as { services?: RecordService[]; error?: string };
-      if (!response.ok) throw new Error(payload.error || `Service discovery failed (${response.status}).`);
-      if (!controller.signal.aborted && activeServiceRecordRef.current === key) setRecordServices(payload.services ?? []);
+    void discoverRecordServices(types,controller.signal).then((services) => {
+      if (!controller.signal.aborted && activeServiceRecordRef.current === key) setRecordServices(services);
     }).catch((error: unknown) => {
-      if (!controller.signal.aborted) console.warn("Record service discovery unavailable:", error);
+      if (!controller.signal.aborted) browserLog.info("record.services.discovery-unavailable", error);
     });
     return () => controller.abort();
   }, [selectedUri, currentRecordDescriptionKey, selectedRecordTemplateUri, describedRecordUri, isDescribing, personalStoreReady, recordDescriptionSnapshot?.key]);
@@ -5714,14 +5954,10 @@ setGraphFacets(graphs);
     if (operation.requires.some((name) => !argumentsForService[name])) return;
     setRecordServiceResults((previous) => ({...previous,[service.uri]:{html:"",error:"",loading:true,name:operation.label}}));
     try {
-      const response = await maestroQueryFetch("/proxy/api/service?service=maestro&operationId=services", {
-        method: "POST", cache: "no-store",
-        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-service-execute", "RecordServiceInvocation") },
-        body: JSON.stringify({action:"invoke", service:service.uri, operation:operation.uri,
-          recordUri:selectedUri, queryXml, fctXml:snapshot.xml, arguments:argumentsForService}),
+      const result = await invokeClientRecordService({
+        service:service.uri,operation:operation.uri,recordUri:selectedUri,
+        queryXml,fctXml:snapshot.xml,arguments:argumentsForService,
       });
-      const result = await response.json() as {html?:string; values?:Record<string,string>; error?:string};
-      if (!response.ok) throw new Error(result.error || `Service failed (${response.status}).`);
       if (activeServiceRecordRef.current !== key) return;
       if (result.values) setRecordServiceArguments((previous) => ({...previous,
         [service.uri]:{...previous[service.uri],...result.values}}));
@@ -5943,13 +6179,8 @@ const activeLeafId: string | null =
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=perspectives", {
-          method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "approved", providerUri: selectedViewUri }),
-        });
-        const approval = await response.json() as { approved?: boolean };
-        if (!response.ok || !approval.approved || controller.signal.aborted) return;
+        const approvals = await readClientPolicyApprovals([selectedViewUri], controller.signal);
+        if (approvals[0]?.status !== "Approved" || controller.signal.aborted) return;
         let next = queryTree;
         for (const uri of required) {
       next = workbenchQueryTreeApi.addProperty(next, uri, context.parentId);
@@ -6130,8 +6361,8 @@ useEffect(() => {
 
 useEffect(() => {
   if (!endpointReadyForQuery) {
-    setBreadcrumbPreviewSummaries({});
-    setBreadcrumbPreviewPendingIds(new Set());
+    setBreadcrumbPreviewSummaries(current => reconcileBreadcrumbSummaries(current, {}));
+    setBreadcrumbPreviewPendingIds(current => reconcileBreadcrumbPendingIds(current, new Set()));
     return;
   }
   const controller = new AbortController();
@@ -6162,7 +6393,7 @@ useEffect(() => {
       if (listData.error) return undefined;
       return listData.results[0];
     } catch (error) {
-      if (!controller.signal.aborted) console.info("Maestro e.g. badge list fallback failed", { component, error });
+      if (!controller.signal.aborted) browserLog.info("example.badges.fallback", { component, error });
       return undefined;
     }
   };
@@ -6198,7 +6429,7 @@ useEffect(() => {
       if (first || count === 0) metadataRegistryRef.current.set(metadataRegistryKey(tree), summary);
       return summary;
     } catch (error) {
-      if (!controller.signal.aborted) console.info("Maestro breadcrumb preview lookup failed", { crumb: crumbId, error });
+      if (!controller.signal.aborted) browserLog.info("breadcrumb.preview.failed", { crumb: crumbId, error });
       return null;
     }
   };
@@ -6211,7 +6442,7 @@ useEffect(() => {
       if (first) metadataRegistryRef.current.set(metadataRegistryKey(tree), summary);
       return summary;
     } catch (error) {
-      if (!controller.signal.aborted) console.info("Maestro breadcrumb chain lookup failed", { crumb: crumbId, error });
+      if (!controller.signal.aborted) browserLog.info("breadcrumb.chain.failed", { crumb: crumbId, error });
       return null;
     }
   };
@@ -6251,7 +6482,7 @@ useEffect(() => {
             }
             metadataRegistryRef.current.set(metadataRegistryKey(scopeTree), scope);
           } catch (error) {
-            if (!controller.signal.aborted) console.info("Maestro breadcrumb preview classes lookup failed", { crumb: crumb.id, error });
+            if (!controller.signal.aborted) browserLog.info("breadcrumb.classes.failed", { crumb: crumb.id, error });
           }
         }
         if (cancelled || controller.signal.aborted) return resolved;
@@ -6326,13 +6557,14 @@ useEffect(() => {
   // fills syncResolved synchronously, before the lines below read it.
   const syncResolved: Record<string, FctUiResultSummary> = {};
   void walkChain(false, (id, summary) => { syncResolved[id] = summary; });
-  setBreadcrumbPreviewSummaries((current) => ({ ...current, ...syncResolved }));
-  setBreadcrumbPreviewPendingIds(new Set(targetCrumbs.filter((crumb) => !syncResolved[crumb.id]).map((crumb) => crumb.id)));
+  setBreadcrumbPreviewSummaries(current => mergeBreadcrumbSummaries(current, syncResolved));
+  setBreadcrumbPreviewPendingIds(current => reconcileBreadcrumbPendingIds(current,
+    new Set(targetCrumbs.filter((crumb) => !syncResolved[crumb.id]).map((crumb) => crumb.id))));
 
   const timer = window.setTimeout(() => {
     void walkChain(true, (id, summary) => {
       if (cancelled || controller.signal.aborted) return;
-      setBreadcrumbPreviewSummaries((current) => ({ ...current, [id]: summary }));
+      setBreadcrumbPreviewSummaries(current => mergeBreadcrumbSummaries(current, { [id]: summary }));
       setBreadcrumbPreviewPendingIds((current) => {
         if (!current.has(id)) return current;
         const next = new Set(current);
@@ -6342,8 +6574,9 @@ useEffect(() => {
     }).then((resolved) => {
       if (cancelled || controller.signal.aborted) return;
       // Drop summaries for crumbs that no longer exist or could not be resolved.
-      setBreadcrumbPreviewSummaries(resolved);
-      setBreadcrumbPreviewPendingIds(new Set(centerPaneIsLoading && !resolved[activeScopeId] ? [activeScopeId] : []));
+      setBreadcrumbPreviewSummaries(current => reconcileBreadcrumbSummaries(current, resolved));
+      setBreadcrumbPreviewPendingIds(current => reconcileBreadcrumbPendingIds(current,
+        new Set(centerPaneIsLoading && !resolved[activeScopeId] ? [activeScopeId] : [])));
     });
   }, 120);
   return () => {
@@ -6372,12 +6605,6 @@ useEffect(() => {
   );
   const configureSelectedProperties = new Set(selectedProperties);
   const configureSelectedRoles = new Set(selectedRoles);
-  for (const [key, checked] of Object.entries(pendingConfigureFacets)) {
-    const separator = key.indexOf(":");
-    const collection = key.startsWith("property:") ? configureSelectedProperties : configureSelectedRoles;
-    const uri = key.slice(separator + 1);
-    if (checked) collection.add(uri); else collection.delete(uri);
-  }
 
   const selectedClasses = new Set(getClassesAtNode(activeLeafId));
   // Keep query-selected Categories visible even if the classes endpoint omits
@@ -6403,15 +6630,7 @@ useEffect(() => {
       const discovered: OntologyClassMetadata[] = [];
       for (const batch of batches) {
         if (controller.signal.aborted) return;
-        const response = await fetch("/proxy/api/service?service=maestro&operationId=ontology", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ uris: batch }),
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error(`Ontology discovery/ingestion returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
-        const payload = await response.json() as { items?: OntologyClassMetadata[] };
-        discovered.push(...(payload.items ?? []));
+        discovered.push(...await readOntologyMetadata(batch, controller.signal));
       }
       if (controller.signal.aborted) return;
       setOntologyClassMetadata((current) => {
@@ -6420,21 +6639,14 @@ useEffect(() => {
         return next;
       });
     })().catch((error: unknown) => {
-      if (!controller.signal.aborted) console.info("Maestro category ontology discovery or ingestion was incomplete; inspect the Maestro ontology service response and personal SPARQL store.", error);
+      if (!controller.signal.aborted) browserLog.info("category.ontology.discovery-incomplete", error);
     });
     return () => controller.abort();
   }, [categoryMetadataUrisKey, personalStoreReady]);
   useEffect(() => {
-    if (!authSession) { setPersonalSparqlEndpoint(""); return; }
-    const controller = new AbortController();
-    void fetch("/proxy/api/service?service=maestro&operationId=ontology", { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Personal SPARQL endpoint lookup returned HTTP ${response.status}.`);
-        return await response.json() as { endpoint?: string };
-      })
-      .then((payload) => { if (!controller.signal.aborted) setPersonalSparqlEndpoint(payload.endpoint ?? ""); })
-      .catch((error: unknown) => { if (!controller.signal.aborted) console.info("Could not read the personal SPARQL endpoint configuration.", error); });
-    return () => controller.abort();
+    // Endpoint configuration is part of the authenticated client session.
+    // Only ontology ingestion (a cross-origin RDF fetch) needs a trusted server.
+    setPersonalSparqlEndpoint(authSession?.graphStore ?? "");
   }, [authSession]);
 
   const pagedUnselectedClasses = unselectedClassDisplayFacets.slice(classesPage * FACET_PAGE_SIZE, (classesPage + 1) * FACET_PAGE_SIZE);
@@ -6510,7 +6722,7 @@ useEffect(() => {
   // active query scope, so a second SPARQL request is unnecessary and can fail
   // on endpoints that expose FCT but restrict their SPARQL service.
   useEffect(() => {
-    if (typeof window === "undefined" || isLoadingProperties) return;
+    if (typeof window === "undefined" || isLoadingProperties || autoConfigureLoadedScopeRef.current.property !== autoConfigureScopeKey) return;
     const counts = readFacetAddCounts();
     const highFrequency = new Set(
       Object.entries(counts.property)
@@ -6527,10 +6739,10 @@ useEffect(() => {
         ? current
         : { ...current, property: candidates },
     );
-  }, [isLoadingProperties, propertyFacets, facetUsageRevision, selectedPropertyKey]);
+  }, [isLoadingProperties, propertyFacets, facetUsageRevision, selectedPropertyKey, autoConfigureScopeKey]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || isLoadingRoles) return;
+    if (typeof window === "undefined" || isLoadingRoles || autoConfigureLoadedScopeRef.current.role !== autoConfigureScopeKey) return;
     const counts = readFacetAddCounts();
     const highFrequency = new Set(
       Object.entries(counts["property-in"])
@@ -6547,7 +6759,7 @@ useEffect(() => {
         ? current
         : { ...current, "property-in": candidates },
     );
-  }, [isLoadingRoles, roleFacets, facetUsageRevision, selectedRoleKey]);
+  }, [isLoadingRoles, roleFacets, facetUsageRevision, selectedRoleKey, autoConfigureScopeKey]);
   // Shared lookup for relationship paths. Direction selects the RDF edge tag;
   // the ID prefix distinguishes a path node from an ordinary filter node.
   function findRelationshipPathNode(
@@ -6617,7 +6829,15 @@ useEffect(() => {
 
   // Add every pending Auto-configure candidate. A facet whose registry exclude
   // boolean is true is written to the live query with exclude="yes".
-  const runAutoConfigure = () => executeAutoConfigure({
+  const runAutoConfigure = () => {
+    // Transient candidates must have been collected from both current-scope
+    // FCT responses. Persisted usage preferences are not query selection.
+    if (!canApplyAutoConfigure({
+      scope: autoConfigureScopeKey, propertySource: autoConfigureLoadedScopeRef.current.property,
+      roleSource: autoConfigureLoadedScopeRef.current.role, ready: endpointReadyForQuery,
+      propertiesLoading: isLoadingProperties, rolesLoading: isLoadingRoles,
+    })) return;
+    executeAutoConfigure({
     facetAutofillCandidates,
     selectedProperties,
     selectedRoles,
@@ -6626,14 +6846,11 @@ useEffect(() => {
     handleRoleCheckboxChange,
     setAutoConfiguredFacet,
     setNodeAttribute,
-  });
+    });
+  };
 
   // Single source of truth for both checkbox changes and property-label clicks.
   function handlePropertyCheckboxChange(uri: string, checked: boolean, trackUsage = true) {
-    if (defaultLeftTab === "facets") {
-      queueConfigureFacet("property", uri, checked);
-      return;
-    }
     // rdf:type may still be needed in the authoritative query for Result Badges
     // and Group By Category, but must never create a Personal facet widget.
     if (uri === RDF_TYPE_URI && checked) {
@@ -6738,6 +6955,10 @@ useEffect(() => {
   }
 
   function toggleClass(uri: string, checked: boolean) {
+    if (checked && !isAbsoluteFacetIri(uri)) {
+      setClassFacetWarning(`Cannot select relative Category IRI ${uri}; the server must return the complete RDF class IRI.`);
+      return;
+    }
     if (checked) addClass(activeLeafId, uri);
     else removeClass(activeLeafId, uri);
   }
@@ -6762,8 +6983,16 @@ useEffect(() => {
     // graphsite from addr after the user has explicitly cleared the field.
     const graph = queryTree.attributes.graph?.trim() ?? "";
     const server = separator >= 0 ? address.slice(separator + 1) : "";
-    const resolved = fctEndpoints.find((item) => item.url === server);
-    // Never rewrite a saved URI that points to a different graph server.
+    const resolved = fctEndpoints.find((item) => item.id === server || graphServerUrlMatches(item.url, server, item.schemeInferred));
+    // The query address is authoritative for automatic/History/Providers navigation.
+    // Only chooseFctEndpoint may intentionally replace it. Never silently redirect
+    // a query to the currently displayed graph-server selection.
+    const queryEndpoint = server && fctEndpoints.find((item) =>
+      item.id === server || graphServerUrlMatches(item.url, server, item.schemeInferred));
+    if (queryEndpoint && queryEndpoint.id !== endpoint.id) {
+      setSelectedEndpointId(queryEndpoint.id);
+      return;
+    }
     if (server && !resolved && server !== endpoint.id) return;
     const normalized = `${graph}@${resolved?.url ?? endpoint.url}`;
     if (address !== normalized) setQueryAttribute("addr", normalized);
@@ -6783,14 +7012,14 @@ useEffect(() => {
     historyHoverTimerRef.current = setTimeout(() => {
       setHistoryActionMenu(direction);
       setHistoryActionItems([]);
-      void fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+      void clientQueryFavorites( {
         method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history-actions", "HistoryActionMenu") },
         // Radiate from the loaded History item: earlier items for Back, later items for Forward.
         body: JSON.stringify({ action: "recentActions", direction, historyId: historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId || undefined) : (historyBookmarkId || undefined) }), cache: "no-store",
       }).then(async (response) => {
         const payload = await response.json() as { items?: Array<{ historyId: string; created: string; action: { operator: "+" | "-"; xpath: string; value?: string } | null }> };
         if (response.ok && Array.isArray(payload.items)) setHistoryActionItems(payload.items);
-      }).catch((error) => console.info("Could not load recent History actions", error));
+      }).catch((error) => browserLog.info("history.recent-actions.failed", error));
     }, 1500);
   }
 
@@ -6816,11 +7045,48 @@ useEffect(() => {
     return `${operator} ${action.xpath}${operator === "+" && action.value ? ` = ${action.value}` : ""}`;
   }
 
-  async function navigateQueryHistory(direction: "backward" | "forward") {
-    if (historyNavigationPending !== null) return;
+  function navigateQueryHistory(direction: "backward" | "forward") {
+    if (operations.controller.getSnapshot().navigation.historyPending !== null) return;
+    navigationTransactions.cancel(); // Also cancel a pending Providers endpoint pivot.
+    operations.controller.send({ type: "HISTORY_NAVIGATION_PENDING", direction });
     historyRestoreInProgressRef.current = true;
-    // History navigation is a new query pipeline, not a pagination operation.
-    // Cancel immediately, before the asynchronous History lookup begins.
+    navigationTransactions.run(`history:${direction}:${historyBookmarkId}`, async (signal) => {
+      try {
+      const response = await clientQueryFavorites( {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-maestro-debug-component": direction === "backward" ? "HistoryBackButton" : "HistoryForwardButton",
+        },
+        body: JSON.stringify({ action: "navigate", direction, historyId: historyBookmarkId }), cache: "no-store", signal,
+      });
+      if (signal.aborted) return;
+      const payload = await response.json() as { found?: boolean; stateUrl?: string; queryXml?: string; historyId?: string; error?: string };
+      if (signal.aborted) return;
+      if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+      if (!payload.found) {
+        toast.add({ title: `No ${direction === "backward" ? "earlier" : "later"} query in History`, type: "info" });
+        return;
+      }
+      if (!payload.queryXml || !payload.historyId) {
+        throw new Error("The selected History item does not contain a saved query.");
+      }
+
+      // stateUrl is RDF-stored metadata, not a navigation target. Read its
+      // serialized UI state, but apply the query XML returned by the RDF result
+      // set as the authoritative query. The shared restore function updates the
+      // query store and all related UI state without reloading the page.
+      const savedUrl = payload.stateUrl ? new URL(payload.stateUrl, window.location.href) : null;
+      const restoredUiState = savedUrl ? readShareableUiState(savedUrl.search) : null;
+      const restoredTree = parseFctQueryXml(payload.queryXml);
+      if (!restoredTree) throw new Error("The selected History item contains invalid FCT query XML.");
+      const graphServerId = readGraphServerFromQueryXml(payload.queryXml);
+      if (!graphServerId) throw new Error("The History item does not identify a graph server in addr.");
+      await synchronizeFctEndpointSelection(graphServerId);
+      if (signal.aborted) return;
+
+      // History navigation is a new query pipeline, not a pagination operation.
+      // Commit teardown only after the History item and endpoint are validated.
     stopPendingMaestroQueries();
     resetMaestroQueryExecutionClocks();
     resetMaestroIncompleteResults();
@@ -6852,37 +7118,6 @@ useEffect(() => {
     setIsCountingResults(false);
     setGroupValuesLoading(false);
     setConfigureQueryTransition(false);
-    setHistoryNavigationPending(direction);
-    try {
-      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-maestro-debug-component": direction === "backward" ? "HistoryBackButton" : "HistoryForwardButton",
-        },
-        body: JSON.stringify({ action: "navigate", direction, historyId: historyBookmarkId }), cache: "no-store",
-      });
-      const payload = await response.json() as { found?: boolean; stateUrl?: string; queryXml?: string; historyId?: string; error?: string };
-      if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
-      if (!payload.found) {
-        toast.add({ title: `No ${direction === "backward" ? "earlier" : "later"} query in History`, type: "info" });
-        return;
-      }
-      if (!payload.queryXml || !payload.historyId) {
-        throw new Error("The selected History item does not contain a saved query.");
-      }
-
-      // stateUrl is RDF-stored metadata, not a navigation target. Read its
-      // serialized UI state, but apply the query XML returned by the RDF result
-      // set as the authoritative query. The shared restore function updates the
-      // query store and all related UI state without reloading the page.
-      const savedUrl = payload.stateUrl ? new URL(payload.stateUrl, window.location.href) : null;
-      const restoredUiState = savedUrl ? readShareableUiState(savedUrl.search) : null;
-      const restoredTree = parseFctQueryXml(payload.queryXml);
-      if (!restoredTree) throw new Error("The selected History item contains invalid FCT query XML.");
-      const graphServerId = readGraphServerFromQueryXml(payload.queryXml);
-      if (!graphServerId) throw new Error("The History item does not identify a graph server in addr.");
-      await synchronizeFctEndpointSelection(graphServerId);
 
       historyVisitQueryRef.current = serializeFctQuery(restoredTree);
       historyVisitIdRef.current = payload.historyId;
@@ -6900,42 +7135,61 @@ useEffect(() => {
       if (savedUrl?.searchParams.has("state")) params.set("state", savedUrl.searchParams.get("state")!);
       if (savedUrl) copyRibbonUrlParams(savedUrl.searchParams, params);
       window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not navigate query History.";
-      toast.add({ title: "Could not navigate query History", description: message, type: "error" });
-    } finally {
-      historyRestoreInProgressRef.current = false;
-      setHistoryNavigationPending(null);
-    }
+      } finally {
+        historyRestoreInProgressRef.current = false;
+        operations.controller.send({ type: "HISTORY_NAVIGATION_PENDING", direction: null });
+      }
+    });
   }
 
-  /** A Features button replaces the single authoritative live FCT query,
-   * exactly like navigating to a saved History query. No shadow feature query:
-   * Trail, left facets, Results, and the Features cards read this same tree. */
-  const featureNavigationSequenceRef = useRef(0);
-  async function selectViewFeature(feature: FeatureKind | null) {
-    if (!feature) { setViewFeature(null); return; }
-    const sequence = ++featureNavigationSequenceRef.current;
+  const navigationFailedKeyRef = useRef("");
+  useEffect(() => {
+    return navigationTransactions.subscribe(() => {
+      const snapshot = navigationTransactions.getSnapshot();
+      if (snapshot.value !== "failed" || snapshot.context.key === navigationFailedKeyRef.current) return;
+      navigationFailedKeyRef.current = snapshot.context.key;
+      if (snapshot.context.key.startsWith("providers:")) operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" });
+      toast.add({ title: "Could not navigate query", description: snapshot.context.error, type: "error" });
+    });
+  }, [navigationTransactions, operations.controller]);
+
+  /** A Providers button replaces the single authoritative live FCT query,
+   * exactly like navigating to a saved History query. No shadow provider query:
+   * Trail, left facets, Results, and the Providers cards read this same tree. */
+  const providerNavigationSequenceRef = useRef(0);
+  async function selectViewProvider(providerKind: ProviderKind | null) {
+    if (!providerKind) { navigationTransactions.cancel(); operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" }); setViewProvider(null); return; }
+    ++providerNavigationSequenceRef.current;
+    // A ribbon click alone does not displace Browse. XState commits Return
+    // atomically only after the replacement query has been restored.
+    const displacedQueryKey = queryXml;
+    const displacedAddress = queryTree.attributes.addr ?? "";
+    const isSourceStillCurrent = () =>
+      serializeFctQuery(workbenchQueryTreeApi.getTree()) === displacedQueryKey;
     // If the necessary constraints already exist, this is just a ribbon
     // selection. Do not reset the live FCT query, endpoint, pagination,
     // breadcrumbs, filters, or user edits.
-    try {
-      const payload = featuresGraph(authSession, feature);
-      if (sequence !== featureNavigationSequenceRef.current) return;
-      // A feature query is recognized only at its own graph address; a
-      // similarly named filter on another graph is not a feature query.
-      if (hasFeatureFctFilters(queryTree, feature, payload.graph, payload.personalEndpointUrl)) {
+    navigationTransactions.run(`providers:${providerKind}`, async (signal) => {
+      const payload = providerCatalogGraph(authSession, providerKind);
+      if (signal.aborted) return;
+      // A providerKind query is recognized only at its own graph address; a
+      // similarly named filter on another graph is not a providerKind query.
+      if (hasProviderFctFilters(queryTree, providerKind, payload.graph, payload.personalEndpointUrl)) {
+        // This changes the ribbon only, not the authoritative live query.
+        operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" });
         setWorkspaceTab("view");
-        setViewFeature(feature);
-        setViewPanel("features");
+        setViewProvider(providerKind);
+        setViewPanel("providers");
         setCentralTab("results");
         return;
       }
-      // Must select the personal endpoint before committing the query: the
-      // graph-server selector can otherwise rewrite addr to the previous server.
-      await synchronizeFctEndpointSelection(payload.personalEndpointUrl);
-      if (sequence !== featureNavigationSequenceRef.current) return;
-      const tree = featureFctQuery(queryTree, feature, payload.graph, payload.personalEndpointUrl, resultsBatchSize);
+      // Validate the selected server before the live-query transaction, but do
+      // not publish an endpoint-only intermediate state (it can rewrite addr).
+      const personalEndpoint = fctEndpoints.find((item) =>
+        graphServerUrlMatches(item.url, payload.personalEndpointUrl, item.schemeInferred));
+      if (!personalEndpoint) throw new Error("The Providers query personal graph server is not registered.");
+      if (signal.aborted || !isSourceStillCurrent() || queryTree.attributes.addr !== displacedAddress) return;
+      const tree = providerFctQuery(queryTree, providerKind, payload.graph, personalEndpoint.url, resultsBatchSize);
       const xml = serializeFctQuery(tree);
       // Home-style teardown before installing the one authoritative query;
       // do not reset the store to an intermediate empty query.
@@ -6943,28 +7197,120 @@ useEffect(() => {
       resetMaestroQueryExecutionClocks();
       resetMaestroIncompleteResults();
       clearWidgetsForViewChange();
-      if (!restoreQueryAndUiState(xml, null)) throw new Error("Could not restore the Features FCT query.");
+      // Capture a Browse-only Return candidate before the query store publishes
+      // the new Providers source. Do not create Return merely by opening a ribbon.
+      operations.controller.send({ type: "PROVIDERS_ENTRY_REQUESTED", fromUrl: buildCurrentShareUrl() });
+      if (signal.aborted || !isSourceStillCurrent()) {
+        operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" });
+        return;
+      }
+      if (!restoreQueryAndUiState(xml, null)) {
+        operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" });
+        throw new Error("Could not restore the Providers FCT query.");
+      }
+      // The old query is still the observed actor scope: capture its Browse
+      // context synchronously, before any React tab/query observation can race.
+      operations.controller.send({ type: "BROWSE_QUERY_DISPLACED", sourceKey: displacedQueryKey });
       // Switching the ribbon is a live-query navigation, even when the
       // preceding tab was Bookmarks or another personal perspective.
       setWorkspaceTab("view");
-      setViewFeature(feature);
-      setViewPanel("features");
+      setViewProvider(providerKind);
+      setViewPanel("providers");
       setSearchDraft("");
       setSavedSearchDraft("");
       setCentralTab("results");
       setControlsSheetOpen(false);
-    } catch (error) {
-      toast.add({ title: "Could not navigate to Features", description: error instanceof Error ? error.message : "Features FCT query failed.", type: "error" });
+    });
+  }
+
+  /** Pinned Provider bookmarks are in-app query navigations, NOT page reloads.
+   * All share parameters still use the canonical URL-restore pipeline; the
+   * existing navigation actor captures the displaced Browse context first. */
+  function openPinnedShareUrl(value: string): boolean {
+    let destination: URL;
+    try { destination = new URL(value, window.location.origin); }
+    catch { return false; }
+    if (destination.origin !== window.location.origin || !/^https?:$/.test(destination.protocol)) return false;
+    const xml = destination.searchParams.get("q");
+    if (!xml || !parseFctQueryXml(xml)) return false;
+    const restored = readShareableUiState(destination.search);
+    const tab = restored?.workspaceTab ?? "browse";
+    // Entering a ribbon always saves exactly the original Browse query;
+    // subsequent ribbon switches never overwrite that XState snapshot.
+    if (tab !== "browse") navigateWorkspaceTab(tab);
+    ++providerNavigationSequenceRef.current;
+    navigationTransactions.cancel();
+    abortPendingMaestroQueries();
+    resetMaestroQueryExecutionClocks();
+    resetMaestroIncompleteResults();
+    clearWidgetsForViewChange();
+    if (!restoreQueryAndUiState(xml, restored)) return false;
+    setQueryRefreshRevision((revision) => revision + 1);
+    return true;
+  }
+
+  /** Restore the displaced user's context. XState owns the Return capability;
+   * the query's addr, not the toolbar's previous selection, chooses the server. */
+  function returnToPreviousContext() {
+    const urlValue = operations.controller.getSnapshot().navigation.returnUrl;
+    if (!urlValue) return false;
+    let previous: URL;
+    try { previous = new URL(urlValue, window.location.origin); }
+    catch { return false; }
+    if (previous.origin !== window.location.origin) return false;
+    const xml = previous.searchParams.get("q");
+    if (!xml || !parseFctQueryXml(xml)) return false;
+    const restored = readShareableUiState(previous.search);
+    navigationTransactions.cancel();
+    abortPendingMaestroQueries();
+    resetMaestroQueryExecutionClocks();
+    resetMaestroIncompleteResults();
+    clearWidgetsForViewChange();
+    if (!restoreQueryAndUiState(xml, restored)) return false;
+    // A Return entry always contains a Browse live query, never a ribbon query.
+    setWorkspaceTab("browse");
+    setViewProvider(null);
+    setViewPanel("trail");
+    setCentralTab("results");
+    operations.controller.send({ type: "CONTEXT_RETURNED" });
+    setQueryRefreshRevision((revision) => revision + 1);
+    return true;
+  }
+
+  /** Switching between View and Analyze never creates or consumes Return.
+   * Re-entering Browse restores its displaced query if one is saved. */
+  function navigateWorkspaceTab(tab: "browse" | "view" | "analyze") {
+    // Leaving View cancels an in-flight Provider navigation before it can
+    // replace a later Browse or Analyze query with a stale personal query.
+    // This is the same XState request-ownership rule as History navigation.
+    if (tab !== "view") {
+      ++providerNavigationSequenceRef.current;
+      navigationTransactions.cancel();
+      operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" });
     }
+    // A saved Browse query remains recoverable even if a ribbon-generated
+    // Analyze query has since replaced the intermediate Providers query.
+    if (tab === "browse" && operations.controller.getSnapshot().navigation.returnUrl) {
+      if (returnToPreviousContext()) return;
+    }
+    if (tab !== "browse") {
+      operations.controller.send({
+        type: "RIBBON_ENTRY_FROM_BROWSE", sourceKey: queryXml,
+        fromUrl: buildCurrentShareUrl(),
+      });
+    }
+    setWorkspaceTab(tab);
   }
 
   async function loadHistoryQuery(includeFavorites = false) {
     if (isLoadingHistoryQuery) return;
-    // An explicit Show action invalidates an outstanding asynchronous Feature
-    // navigation. A late provider load must never route back to Features.
-    ++featureNavigationSequenceRef.current;
+    // An explicit Show action invalidates an outstanding asynchronous Provider
+    // navigation. A late provider load must never route back to Providers.
+    ++providerNavigationSequenceRef.current;
+    navigationTransactions.cancel();
+    operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" });
     setWorkspaceTab("browse");
-    setViewFeature(null);
+    setViewProvider(null);
     setViewPanel("trail");
     setSelectedViewUri("");
     setIsLoadingHistoryQuery(true);
@@ -6997,8 +7343,8 @@ useEffect(() => {
       // the same restore path used by URL state. That path updates the live
       // query store through its API, notifying the query tree, breadcrumbs,
       // facets, results, and URL-state listeners together.
-      // Health-checks the personal server, selects it, and throws if it is offline.
-      await synchronizeFctEndpointSelection(personalEndpoint.url);
+      // The generated History query carries its selected server in addr.
+      // Do not publish a different toolbar server before restoring the query.
       const baseHistoryGraph = payload.historyGraph.replace(/#.*$/, "");
       const graphIri = `${baseHistoryGraph}#${includeFavorites ? "bookmarks" : "history"}`;
       const addrAttr = `${graphIri}@${personalEndpoint.url}`;
@@ -7023,10 +7369,13 @@ useEffect(() => {
       if (!restoreQueryAndUiState(historyQueryXml, null)) {
         throw new Error("Could not restore the generated History query.");
       }
+      // History/Bookmarks are explicit Browse navigations, not ribbon hijacks.
+      // Never preserve the old query in Return for this action.
+      operations.controller.send({ type: "CONTEXT_RETURNED" });
       // URL/live-query restoration can carry a tab snapshot. The explicit
       // Show action always lands on Browse regardless of that snapshot.
       setWorkspaceTab("browse");
-      setViewFeature(null);
+      setViewProvider(null);
       setViewPanel("trail");
       setSelectedViewUri("");
 
@@ -7054,7 +7403,7 @@ useEffect(() => {
     setIsDeletingCurrentHistory(true);
     try {
       await historyWriteQueueRef.current;
-      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+      const response = await clientQueryFavorites( {
         method: "POST",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history", "DeleteCurrentHistory") },
         body: JSON.stringify({ action: "deleteCurrentHistory", historyId: historyBookmarkId }),
@@ -7100,7 +7449,7 @@ useEffect(() => {
     if (isExportingBookmarks) return;
     setIsExportingBookmarks(true);
     try {
-      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+      const response = await clientQueryFavorites( {
         method: "POST", cache: "no-store",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-bookmark", "ExportBookmarks") },
         body: JSON.stringify({ action: "exportBookmarks" }),
@@ -7129,7 +7478,7 @@ useEffect(() => {
     try {
       if (file.size > 4_000_000) throw new Error("Bookmark import files must be smaller than 4 MB.");
       const imported = JSON.parse(await file.text()) as unknown;
-      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+      const response = await clientQueryFavorites( {
         method: "POST", cache: "no-store",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-bookmark", "ImportBookmarks") },
         body: JSON.stringify({ action: "importBookmarks", archive: imported }),
@@ -7147,7 +7496,7 @@ useEffect(() => {
     if (isDeletingHistory) return;
     setIsDeletingHistory(true);
     try {
-      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+      const response = await clientQueryFavorites( {
         method: "POST", headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-bookmark", "DeleteBookmarks") },
         body: JSON.stringify({ action: "deleteBookmarks" }), cache: "no-store",
       });
@@ -7164,7 +7513,7 @@ useEffect(() => {
     if (isDeletingHistory) return;
     setIsDeletingHistory(true);
     try {
-      const response = await fetch("/proxy/api/service?service=maestro&operationId=query-favorites", {
+      const response = await clientQueryFavorites( {
         method: "POST",
         headers: { "Content-Type": "application/json", ...proxyDebugHeaders("query-history", "DeleteHistory") },
         body: JSON.stringify({ action: "deleteHistory" }),
@@ -7181,7 +7530,7 @@ useEffect(() => {
       window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
       setHistoryHasOlder(false);
       setHistoryHasNewer(false);
-      setHistoryNavigationPending(null);
+      operations.controller.send({ type: "HISTORY_NAVIGATION_PENDING", direction: null });
       setDeleteHistoryDialogOpen(false);
       toast.add({ title: "History deleted", description: "Query History visits were removed from your RDF store. Saved bookmarks were preserved.", type: "success" });
     } catch (error) {
@@ -7282,10 +7631,6 @@ useEffect(() => {
   }
 
   function handleRoleCheckboxChange(uri: string, checked: boolean, trackUsage = true) {
-    if (defaultLeftTab === "facets") {
-      queueConfigureFacet("role", uri, checked);
-      return;
-    }
     if (trackUsage) setAutoConfiguredFacet("property-in", uri, false);
     setRoleFilter(uri, checked);
   }
@@ -7531,7 +7876,7 @@ useEffect(() => {
         ...(first ? { uri: first.uri, termType: first.termType ?? "uri" } : {}),
       } }));
     } catch (error) {
-      console.info("Maestro submenu example lookup failed", { nodeId, error });
+      browserLog.info("submenu.example.failed", { nodeId, error });
     } finally {
       breadcrumbMenuPreviewPendingRef.current.delete(nodeId);
     }
@@ -7637,9 +7982,9 @@ useEffect(() => {
   function queryNodeLabel(node: FctQueryNode): string {
     const iri = node.attributes.iri;
     if ((node.uiKey === "query-everything" || node.id === "query-everything")) return "Everything";
-    if ((node.uiKey === "query-text" || node.id === "query-text"))
+    if (node.name === "text" || (node.uiKey === "query-text" || node.id === "query-text"))
       return node.text || "Everything";
-    if ((node.uiKey === "query-view" || node.id === "query-view")) {
+    if (node.name === "view" || (node.uiKey === "query-view" || node.id === "query-view")) {
       return `Focus · limit ${node.attributes.limit ?? "30"} · offset ${node.attributes.offset ?? "0"}`;
     }
     if (node.name === "value")
@@ -7672,7 +8017,7 @@ useEffect(() => {
   const rootClassNodes = queryTree.children.filter((node) => node.name === "class");
   const rootStatusNodes = queryTree.children.filter((node) => node.name === "status");
   // Prefer the Text node, otherwise attach root classes to a root Value node.
-  const rootClassCarrierId = queryTree.children.find((node) => (node.uiKey === "query-text" || node.id === "query-text"))?.id
+  const rootClassCarrierId = queryTree.children.find((node) => node.name === "text")?.id
     ?? queryTree.children.find((node) => node.name === "value")?.id
     ?? "query-everything";
   const classLabelsForQueryNode = (node: FctQueryNode): string[] => {
@@ -7687,26 +8032,26 @@ useEffect(() => {
   };
 
   const rootPreviewNodeId = queryTree.children.find((node) => node.name === "value" && node.attributes.datatype === "uri")?.id
-    ?? queryTree.children.find((node) => (node.uiKey === "query-text" || node.id === "query-text"))?.id
+    ?? queryTree.children.find((node) => node.name === "text")?.id
     ?? "query-everything";
   const renderQueryNode = (
     node: FctQueryNode,
     depth = 0,
   ): ReactNode => {
     // A nested <view> is the focus marker for its parent, not a separate tree row.
-    if ((node.uiKey === "query-view" || node.id === "query-view")) return null;
-    const protectedNode = (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-view" || node.id === "query-view") || (node.uiKey === "query-everything" || node.id === "query-everything");
-    const rootHasFocusView = queryTree.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"));
+    if (node.name === "view" || node.uiKey === "query-view" || node.id === "query-view") return null;
+    const protectedNode = node.name === "text" || (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-view" || node.id === "query-view") || (node.uiKey === "query-everything" || node.id === "query-everything");
+    const rootHasFocusView = queryTree.children.some((child) => child.name === "view");
     const isRoot = depth === 0;
     // A <view> belongs to its immediate parent. Color that parent's icon green
     // wherever it occurs in the tree; at the root, the standalone view focuses
     // the root search/value node instead.
-    const hasAttachedFocusView = node.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"));
-    const isRootFocusCarrier = isRoot && rootHasFocusView && ((node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-everything" || node.id === "query-everything") || node.name === "value");
+    const hasAttachedFocusView = node.children.some((child) => child.name === "view");
+    const isRootFocusCarrier = isRoot && rootHasFocusView && (node.name === "text" || (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-everything" || node.id === "query-everything") || node.name === "value");
     const isFocusCarrier = hasAttachedFocusView || isRootFocusCarrier;
     const isRootUriValue = isRoot && node.name === "value" && node.attributes.datatype === "uri";
     const SearchModeIcon = signalOptions.find((option) => option.mode === textSearchMode)?.Icon ?? Signal;
-    const NodeIcon = (node.uiKey === "query-text" || node.id === "query-text")
+    const NodeIcon = (node.name === "text" || node.uiKey === "query-text" || node.id === "query-text")
       ? SearchModeIcon
       : (node.uiKey === "query-everything" || node.id === "query-everything")
         ? SearchModeIcon
@@ -7747,12 +8092,12 @@ useEffect(() => {
     // to remove, so the minus is not shown at all.
     const isRootCarrierRow = isRoot && node.id === rootClassCarrierId;
     const rootTextOrValue = isRootCarrierRow && (
-      ((node.uiKey === "query-text" || node.id === "query-text") && Boolean(node.text?.trim() || search.trim())) ||
+      (node.name === "text" && Boolean(node.text?.trim() || search.trim())) ||
       (node.name === "value" && Boolean(node.text?.trim())));
     const showMinus = !isRootCarrierRow || rootTextOrValue || rootClassesOnThisNode.length > 0 || rootStatusesOnThisNode.length > 0;
     const lockedNode = protectedNode && !isRootCarrierRow;
     const visibleChildren = node.children.filter((child) =>
-      (child.uiKey !== "query-view" && child.id !== "query-view") && child.name !== "class" && child.name !== "status" && !(inlinesValues && child.name === "value" && (Boolean(child.text) || hasValueRange(child))));
+      child.name !== "view" && (child.uiKey !== "query-view" && child.id !== "query-view") && child.name !== "class" && child.name !== "status" && !(inlinesValues && child.name === "value" && (Boolean(child.text) || hasValueRange(child))));
     const hasVisibleChildren = visibleChildren.length > 0;
     const isCollapsed = collapsedQueryNodeIds.has(node.id);
     const toggleCollapsed = () => setCollapsedQueryNodeIds((current) => {
@@ -7800,7 +8145,7 @@ useEffect(() => {
                 className="min-w-0 break-words text-left underline-offset-2 hover:underline cursor-pointer"
                 onClick={() => navigateToPropertyPath(node.id)}
               >
-                {queryNodeLabel(node)}{node.name === "property-of" ? " of" : ""}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
+                <OrUidLabel uid={node.attributes.uid}>{queryNodeLabel(node)}{node.name === "property-of" ? " of" : ""}</OrUidLabel>{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
               </button>} /><TooltipContent>{`Navigate to ${node.name === "property-of" ? "reverse-role" : "property"} scope: ${node.attributes.iri ?? queryNodeLabel(node)}`}</TooltipContent></Tooltip>
             ) : (
               <Tooltip><TooltipTrigger render={<span
@@ -7993,34 +8338,27 @@ useEffect(() => {
     } finally { setIsSpongingUri(false); }
   }
 
+  // Content of the root's one persistent InputGroup, NEVER a second nested group.
   const searchInputGroup = (
-                  <ButtonGroup
-                    aria-label="Search text and signal controls"
-                    className="min-w-0 flex-1 rounded-none border-0 [&>*+*]:border-l [&>*+*]:border-input [&>span]:border-l-0 [&>input]:min-w-0 [&>input]:flex-1 [&>input]:rounded-none [&>input]:border-0 [&>input]:bg-background [&>input]:px-3 [&>input]:py-2 [&>input]:text-sm"
-                  >
+                  <>
                     {textSearchMode === "uri" ? (
                       <>
-                      <Tooltip><TooltipTrigger render={<span
-                        role="img"
-                        aria-label="URI"
-                        className="flex h-10 shrink-0 items-center justify-center px-2 text-muted-foreground"
-                      >
-                        <GlobeCode className="size-4" aria-hidden="true" />
-                      </span>} /><TooltipContent>{"URI"}</TooltipContent></Tooltip>
-                      {/^https?:\/\//i.test(rootSearchText) && /(?:^|\.)uriburner\.com$/i.test((() => { try { return new URL(fctEndpoints.find((entry) => entry.id === selectedEndpointId)?.url ?? "").hostname; } catch { return ""; } })()) && (
-                        <Tooltip><TooltipTrigger render={<button type="button" disabled={isSpongingUri} onClick={() => void spongeCurrentUri()} aria-label="Sponge URI with URIBurner" className="flex h-10 shrink-0 items-center gap-1 px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"><WandSparkles className="size-4" aria-hidden="true" />{isSpongingUri ? "Sponging…" : "Sponge"}</button>} /><TooltipContent>Ask URIBurner to dereference this URI, then refresh the query</TooltipContent></Tooltip>
-                      )}
+                      <Tooltip><TooltipTrigger render={<InputGroupAddon align="inline-start"
+                        role="img" aria-label={`URI validation: ${rootUriGateStatus}`}
+                        className={`h-10 shrink-0 py-0 ${rootUriGateStatus === "rejected" ? "text-destructive" : rootUriGateStatus === "valid" || rootUriGateStatus === "accepted" ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}
+                      ><GlobeCode className="size-4" aria-hidden="true" /></InputGroupAddon>} /><TooltipContent>{`URI validation: ${rootUriGateStatus}`}</TooltipContent></Tooltip>
                       </>
                     ) : (
+                      <InputGroupAddon align="inline-start" className="h-10 px-0">
                       <DropdownMenu
                         open={namePropertyMenuOpen}
                         onOpenChange={(open) => {
                           setNamePropertyMenuOpen(open);
-                          if (!open) setRootSearchExpanded(false);
+                          // Property selector lifecycle does not close the root editor.
                         }}
                       >
                         <Tooltip>
-                          <TooltipTrigger render={<DropdownMenuTrigger asChild><button type="button" onMouseEnter={() => { setRootSearchExpanded(true); setNamePropertyMenuOpen(true); }} aria-label={`Choose name/label property; currently ${selectedNamePropertyLabel}`} className="flex h-10 shrink-0 items-center justify-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"><SearchCode className="size-4" aria-hidden="true" /></button></DropdownMenuTrigger>} />
+                          <TooltipTrigger render={<DropdownMenuTrigger asChild><button type="button" onMouseEnter={() => setNamePropertyMenuOpen(true)} aria-label={`Choose name/label property; currently ${selectedNamePropertyLabel}`} className="flex h-10 shrink-0 items-center justify-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"><SearchCode className="size-4" aria-hidden="true" /></button></DropdownMenuTrigger>} />
                           <TooltipContent>Choose name/label property — currently {selectedNamePropertyLabel}</TooltipContent>
                         </Tooltip>
                         <DropdownMenuContent align="start" className="max-h-80 min-w-56 overflow-y-auto">
@@ -8062,55 +8400,14 @@ useEffect(() => {
                           })}
                         </DropdownMenuContent>
                       </DropdownMenu>
+                      </InputGroupAddon>
                     )}
-                    <input
-                      autoFocus
-                      value={search}
-                      onChange={(event) => updateSearchText(event.target.value)}
-                      placeholder={textSearchMode === "uri" ? "Enter URI" : "Enter keywords"}
-                      aria-label="Search results"
-                      className="min-w-0 flex-1 outline-none"
-                    />
-                    <div
-                      aria-label="Search mode"
-                      className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none ${signalPickerExpanded ? "w-50" : "w-10"}`}
-                      onMouseEnter={() => setSignalPickerExpanded(true)}
-                      onMouseLeave={() => setSignalPickerExpanded(false)}
-                      onFocusCapture={() => setSignalPickerExpanded(true)}
-                      onBlurCapture={(event) => {
-                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                          setSignalPickerExpanded(false);
-                        }
-                      }}
-                    >
-                      <div className="inline-flex w-[12.5rem] shrink-0 overflow-hidden">
-                        {(signalPickerExpanded
-                          ? signalOptions
-                          : [...signalOptions].sort((left, right) =>
-                              left.mode === textSearchMode ? -1 : right.mode === textSearchMode ? 1 : 0,
-                            )
-                        ).map(({ mode, Icon, label }) => (
-                          <Tooltip key={mode}>
-                            <TooltipTrigger render={
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setTextSearchMode(mode);
-                                  setSignalPickerExpanded(false);
-                                }}
-                                aria-pressed={textSearchMode === mode}
-                                aria-label={label}
-                                aria-hidden={!signalPickerExpanded && textSearchMode !== mode}
-                                tabIndex={!signalPickerExpanded && textSearchMode !== mode ? -1 : 0}
-                                className={`flex h-10 w-10 shrink-0 items-center justify-center transition-colors ${textSearchMode === mode ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
-                              ><span className="relative flex size-4 items-center justify-center">{mode !== "clear" && <Signal aria-hidden="true" strokeWidth={2.5} className="absolute inset-0 size-4 text-muted-foreground/35" />}<Icon aria-hidden="true" strokeWidth={2.5} className="absolute inset-0 size-4" /></span></button>
-                            } />
-                            <TooltipContent>{label}</TooltipContent>
-                          </Tooltip>
-                        ))}
-                      </div>
-                    </div>
-                  </ButtonGroup>
+                    {textSearchMode === "uri" ? <RootUriAutocomplete value={search} addr={queryTree.attributes.addr ?? ""}
+                      gateState={rootUriGateStatus} onDraft={updateSearchText} onCommit={commitRootUri}
+                      onRequestClose={() => setRootSearchExpanded(false)}/> : <InputGroupInput
+                      autoFocus value={search} onChange={(event) => updateSearchText(event.target.value)}
+                      placeholder="Enter keywords" aria-label="Search results" className="h-10 min-w-0 flex-1" />}
+                  </>
   );
 
   // Analyze Table projects the immediate successors of the live focus, not
@@ -8187,92 +8484,101 @@ useEffect(() => {
   const analyzeClassKey = JSON.stringify(analyzeFocusClasses);
   type DiscoveredView = { uri: string; label: string; icon?: string; template: string; matchedClass: string; stylesheet: string };
   const [discoveredViews, setDiscoveredViews] = useState<DiscoveredView[]>([]);
+
   
   
   
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
+  // The authoritative current History item and its exact FCT query form the
+  // XState context. No provider ribbon discovery may start on failed validation.
+  const [queryContextController] = useState(createMaestroQueryContextController);
+  const queryContextSnapshot = useSyncExternalStore(queryContextController.subscribe, queryContextController.getSnapshot, queryContextController.getSnapshot);
+  const currentHistoryQueryId = historyVisitQueryRef.current === queryXml
+    ? (historyVisitIdRef.current || historyBookmarkId) : "";
+  const queryContextActive = workspaceTab === "analyze" || (workspaceTab === "view" && viewPanel === "perspectives");
+  const queryContextKey = queryContextActive && personalStoreReady && currentHistoryQueryId
+    ? JSON.stringify([currentHistoryQueryId,queryXml,authSession?.graphStore,authSession?.graphPrefix,policyApprovalRevision]) : "";
+  const queryContext = selectQueryContext(queryContextSnapshot,queryContextKey);
+  useEffect(()=>{queryContextController.start();return()=>queryContextController.stop();},[queryContextController]);
+  useEffect(()=>{
+    if (!queryContextKey || !currentHistoryQueryId){queryContextController.clear();return;}
+    queryContextController.validate(queryContextKey,currentHistoryQueryId,queryXml);
+    return ()=>queryContextController.clear();
+  },[queryContextController,queryContextKey,currentHistoryQueryId,queryXml]);
+  const queryContextReady = queryContext.ready;
+  const queryMatchedProvidersKey = queryContext.matchedProviders.join("\u0000");
+  // The invoked View actor owns the bounded discovery and abort signal.
+  // Its result is scoped to the class identity and authenticated personal store.
+  const viewDiscoveryScope = JSON.stringify([workspaceTab, viewClassKey, accessSessionKey, viewPanel, queryMatchedProvidersKey]);
   useEffect(() => {
-    if (workspaceTab !== "view") return;
+    if (workspaceTab !== "view" || (viewPanel === "perspectives" && !queryContextReady)) { viewDiscoveryController.inactive(); return; }
     const classes = JSON.parse(viewClassKey) as string[];
-    const controller = new AbortController();
-    setDiscoveredViews([]);
-    setViewDiscoveryError("");
-    if (!classes.length) { setViewDiscoveryLoading(false); return; }
-    setViewDiscoveryLoading(true);
-    // Discovery is read-only. Do not leave View waiting indefinitely when a
-    // personal SPARQL server is slow or a proxy request stalls.
-    const timeout = setTimeout(() => {
-      controller.abort();
-      setViewDiscoveryLoading(false);
-      setViewDiscoveryError("Locating views timed out. Check the personal SPARQL server and try again.");
-    }, 15000);
-    void (async () => {
-      try {
-        // Round 3: use the authenticated standard SPARQL Results transport.
-        // The retired discovery route previously returned an HTML 404 here.
-        const views = await discoverViews(classes, controller.signal);
-        if (!controller.signal.aborted) {
-          setDiscoveredViews(views);
-          setSelectedViewUri((current) => current || (views[0]?.uri ?? ""));
-        }
-      } catch (error) {
-        if (controller.signal.aborted) {
-          // Ignore stale requests after changing scope or leaving the View tab.
-          // For the active request, the timeout callback below sets the error.
-        } else {
-          setViewDiscoveryError(error instanceof Error ? error.message : "Could not locate views.");
-        }
-      } finally {
-        clearTimeout(timeout);
-        if (!controller.signal.aborted) setViewDiscoveryLoading(false);
-      }
-    })();
-    return () => { clearTimeout(timeout); controller.abort(); };
-  }, [workspaceTab, viewClassKey]);
-  // Feature browsing is read-only: displaying a library NEVER records a policy
-  // discovery. Only a successful resource-policy match can create Pending and
-  // update mui:lastRequestedBy; a library list is not a SHACL eligibility ASK.
-  const featurePageUrisKey = visibleResultsPage.map(item => item.uri).join("\u0000");
+    if (!classes.length || !personalStoreReady) { viewDiscoveryController.inactive(); return; }
+    viewDiscoveryController.discover(viewDiscoveryScope, (signal) =>
+      discoverViews(classes, AbortSignal.any([signal, AbortSignal.timeout(15000)]), queryContext.matchedProviders));
+    // Clean-up cancels a pending actor but never reselects a stale View.
+    return () => viewDiscoveryController.inactive();
+  }, [viewDiscoveryController, viewDiscoveryScope, viewClassKey, workspaceTab, personalStoreReady, viewPanel, queryContextReady, queryMatchedProvidersKey]);
   useEffect(() => {
-    if (workspaceTab !== "view" || !viewFeature) return;
-    // The ordinary FCT query owns the displayed population. While it is
-    // executing, never display a stale Features catalog from the prior query.
-    if (isSearching) { setViewFeatureHtml(""); setViewFeatureLoading(true); return; }
-    const featureUris = [...new Set(featurePageUrisKey.split("\u0000").filter(Boolean))];
-    const controller = new AbortController();
-    setViewFeatureLoading(true);
-    setViewFeatureError("");
-    setViewFeatureHtml("");
-    // Hierarchy discovery may query the graph server and dereference linked ontology RDF.
-    const featureTimeoutMs = configuredTimeoutMs(`feature-${viewFeature}`) || 28000;
-    const timer = setTimeout(() => controller.abort(), featureTimeoutMs);
-    void (async () => {
+    const matches = viewDiscoverySnapshot.context.key === viewDiscoveryScope && workspaceTab === "view";
+    const phase = matches ? viewDiscoverySnapshot.value : "inactive";
+    setViewDiscoveryLoading(phase === "loading");
+    setViewDiscoveryError(phase === "failed" ? viewDiscoverySnapshot.context.error : "");
+    if (phase === "ready") {
+      const views = viewDiscoverySnapshot.context.items;
+      setDiscoveredViews(views);
+      // Discovery is not user selection: the selected Perspective can come
+      // from a different provider registry, or from a restored share URL.
+    }
+    if (phase === "inactive") setDiscoveredViews([]);
+  }, [viewDiscoverySnapshot, viewDiscoveryScope, workspaceTab, setViewDiscoveryLoading, setViewDiscoveryError, setSelectedViewUri]);
+  const providerCatalogKey = viewProvider && workspaceTab === "view"
+    ? JSON.stringify([viewProvider, queryXml, queryRefreshRevision, visibleResultsPage.map(item => item.uri), policyApprovalRevision, verifiedQueryBookmarked, accessSessionKey])
+    : "";
+  const providerCatalog = selectProviderCatalog(providerCatalogSnapshot, providerCatalogKey);
+  const viewProviderHtml = providerCatalog.html;
+  const viewProviderLoading = providerCatalog.loading;
+  const viewProviderError = providerCatalog.error;
+  const viewProviderCount = providerCatalog.count;
+  // Provider browsing is read-only. Membership remains the current FCT Results
+  // population; the machine owns the exact async job, timeout and cancellation.
+  const providerPageUrisKey = visibleResultsPage.map(item => item.uri).join("\u0000");
+  useEffect(() => {
+    if (!providerCatalogKey || !viewProvider) {
+      providerCatalogController.send({ type: "CATALOG_INACTIVE" });
+      return;
+    }
+    // This catalog is an FCT result projection. Optional FSM and approval
+    // reads cannot veto Kinds, Curators, Transcoders or FSM discovery. Each
+    // provider's own actions enforce their separate acceptance prerequisites.
+    if (isSearching) {
+      providerCatalogController.send({ type: "CATALOG_WAITING", key: providerCatalogKey });
+      return;
+    }
+    const key = providerCatalogKey;
+    if (providerCatalogController.getSnapshot().value === "cancelled" &&
+        providerCatalogController.getSnapshot().context.key === key) return;
+    const providerKind = viewProvider;
+    const uris = [...new Set(providerPageUrisKey.split("\u0000").filter(Boolean))];
+    const timeoutMs = configuredTimeoutMs(`provider-${providerKind}`) || 28000;
+    providerCatalogController.execute(key, async (signal) => {
+      // The machine-provided signal aborts automatically when a different
+      // Provider, page, approval, login or query scope takes ownership.
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      const activeSignal = AbortSignal.any([signal, timeoutSignal]);
       try {
-        // The live FCT Results set owns population. One list-values projection
-        // retrieves card metadata and, only for a saved Bookmark, personal status.
-        const decorated = await featureItemsFromFct(String(queryXml), featureUris, viewFeature, verifiedQueryBookmarked, controller.signal);
-        if (controller.signal.aborted) return;
-        setViewFeatureCount(decorated.length);
-        const featureHtml = await renderDiscoveredViewXslt(FEATURE_VIEW_XSLT[viewFeature], decorated);
-        if (!controller.signal.aborted) setViewFeatureHtml(featureHtml);
+        const decorated = await providerItemsFromFct(String(queryXml), uris, providerKind, verifiedQueryBookmarked, activeSignal);
+        if (activeSignal.aborted) throw activeSignal.reason;
+        const html = await renderDiscoveredViewXslt(PROVIDER_CATALOG_XSLT[providerKind], decorated);
+        if (activeSignal.aborted) throw activeSignal.reason;
+        return { html, count: decorated.length };
       } catch (error) {
-        if (!controller.signal.aborted) setViewFeatureError(error instanceof Error ? error.message : "Feature lookup failed.");
-      } finally {
-        clearTimeout(timer);
-        if (!controller.signal.aborted) setViewFeatureLoading(false);
+        if (timeoutSignal.aborted && !signal.aborted) throw new Error("Providers catalog request timed out.");
+        throw error;
       }
-    })();
-    return () => { clearTimeout(timer); controller.abort(); };
-  }, [workspaceTab, viewFeature, queryXml, featurePageUrisKey, isSearching, policyApprovalRevision, verifiedQueryBookmarked, matchingBookmarkId]);
+    });
+    return () => providerCatalogController.send({ type: "CATALOG_CANCELLED", key });
+  }, [providerCatalogController, providerCatalogKey, providerPageUrisKey, isSearching, viewProvider, queryXml,
+    verifiedQueryBookmarked, policyProvidersReady, personalPoliciesSeedError, accessSnapshot.context.policyStage, accessSnapshot.context.policyError]);
   const selectedView = discoveredViews.find((view) => view.uri === selectedViewUri);
   // Registry keys are internal slugs, while FCT results contain RDF resource IRIs.
   // Join on endpoint URL first; also accept the registry's display label for
@@ -8444,34 +8750,48 @@ useEffect(() => {
       } catch (error) {
         if (!controller.signal.aborted) {
           setAnalysisValuesError(error instanceof Error ? error.message : "Could not load Analyze facet values.");
-          console.warn("Analyze facet values failed:", error);
+          browserLog.warn("analyze.facet-values.failed", error);
         }
       }
     })();
     return () => controller.abort();
   }, [workspaceTab, endpointReadyForQuery, analysisRequestKey, analysisFacetKey, analysisResourceKey, queryXml]);
 
+  const [analyzeDiscoveryController] = useState(createMaestroAnalyzeDiscoveryController);
+  const analyzeDiscoverySnapshot = useSyncExternalStore(analyzeDiscoveryController.subscribe, analyzeDiscoveryController.getSnapshot, analyzeDiscoveryController.getSnapshot);
+  const analyzeDiscoveryKey = JSON.stringify([workspaceTab, analyzeClassKey, selectedEndpointId,
+    authSession?.graphStore, authSession?.graphPrefix, queryContextKey, queryMatchedProvidersKey]);
+  useEffect(() => { analyzeDiscoveryController.start(); return () => analyzeDiscoveryController.stop(); }, [analyzeDiscoveryController]);
   useEffect(() => {
-    if (workspaceTab !== "analyze") return;
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        // Round 3: single read-only SELECT using /proxy/api/sparql.
-        const definitions = await discoverAnalyses(JSON.parse(analyzeClassKey) as string[], controller.signal);
-        if (!controller.signal.aborted) {
-          setAnalysisDefinitions(definitions);
-          setSelectedAnalysisUri((current) => definitions.some((item) => item.uri === current) ? current : (definitions[0]?.uri ?? ""));
-        }
-      } catch (error) {
-        if (!controller.signal.aborted) setAnalysisError(error instanceof Error ? error.message : "Analysis discovery failed.");
-      }
-    })();
-    return () => controller.abort();
-  }, [workspaceTab, analyzeClassKey]);
+    if (workspaceTab !== "analyze" || !personalStoreReady || !queryContextReady) {
+      analyzeDiscoveryController.cancel();
+      return;
+    }
+    const classes = JSON.parse(analyzeClassKey) as string[];
+    analyzeDiscoveryController.discover(analyzeDiscoveryKey, signal => discoverAnalyses(classes,
+      AbortSignal.any([signal, AbortSignal.timeout(15000)]), queryContext.matchedProviders));
+    return () => analyzeDiscoveryController.cancel();
+  }, [analyzeDiscoveryController, analyzeDiscoveryKey, workspaceTab, personalStoreReady, queryContextReady]);
+  useEffect(() => {
+    const current = workspaceTab === "analyze" && analyzeDiscoverySnapshot.context.key === analyzeDiscoveryKey;
+    const phase = current ? analyzeDiscoverySnapshot.value : "inactive";
+    if (phase === "ready") {
+      const definitions = analyzeDiscoverySnapshot.context.providers;
+      setAnalysisDefinitions(definitions);
+      setSelectedAnalysisUri(previous => (previous === NODE_ANALYTICS_ANALYSIS_URI || previous === OVERVIEW_PERSPECTIVE_URI ||
+        definitions.some(definition => definition.uri === previous)) ? previous : (definitions[0]?.uri ?? ""));
+      setAnalysisError("");
+    } else if (phase === "failed") {
+      setAnalysisDefinitions([]);
+      setAnalysisError(analyzeDiscoverySnapshot.context.error);
+    } else if (phase === "inactive") {
+      setAnalysisDefinitions([]);
+    }
+  }, [analyzeDiscoverySnapshot, analyzeDiscoveryKey, workspaceTab, setAnalysisDefinitions, setSelectedAnalysisUri, setAnalysisError]);
 
   useEffect(() => {
     if (workspaceTab !== "analyze") return;
-    if (selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-activity" ||
+    if (selectedAnalysisUri === NODE_ANALYTICS_ANALYSIS_URI || selectedAnalysisUri === OVERVIEW_PERSPECTIVE_URI || selectedAnalysisUri === SPIDER_ANALYSIS_URI || selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-activity" ||
         selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-tags") {
       setAnalysisTable(null);
       setAnalysisLoading(false);
@@ -8608,10 +8928,60 @@ useEffect(() => {
   // All query mutations, sibling menus, preview metadata and active state stay here.
   
 
-    return {
+  // Read-only diagnostics of XState-owned lifecycles and FCT workspace facts.
+  // They never compete with the existing query, cancellation or access gates.
+  const appLifecycle = useAppLifecycleObserver({
+    authRestored: authRestoreComplete,
+    signedIn: accessCapabilities.canUsePersonalStore,
+    personalStoreReady,
+    graphRegistryReady,
+    selectedServerExists: Boolean(selectedEndpointId),
+    selectedServerReady: graphHealthReady,
+    selectedServerFailed: Boolean(selectedEndpointStatus && selectedEndpointStatus.state !== "ok" && selectedEndpointStatus.state !== "probe-error"),
+    queryHydrated: urlStateInitialized,
+    queryStarted: initialBrowseTriggered,
+    queryReady: endpointReadyForQuery,
+    queryLoading: isSearching || isCountingResults,
+    queryError: Boolean(searchError),
+    bookmarkVerified: accessCapabilities.bookmarkVerified,
+    queryBookmarked: verifiedQueryBookmarked,
+    presentationTab: workspaceTab,
+    viewProvidersOpen: workspaceTab === "view" && viewPanel === "providers",
+    providerCatalogLoading: viewProviderLoading,
+    providerCatalogError: Boolean(viewProviderError),
+    providerPhase: providerLifecyclePhase,
+    configurePhase: configureLifecyclePhase,
+    returnAvailable: Boolean(returnShareUrl),
+    recordSelected: Boolean(selectedUri),
+    recordPhase: (() => {
+      const phases = recordLifecycle.getSnapshot().context.phases;
+      return `description:${phases.description} policy:${phases.policy} format:${phases.format} validation:${phases.validation}`;
+    })(),
+    recordLoading: isDescribing || isLoadingRecordPolicy,
+    recordReady: Boolean(selectedUri && describedRecordUri === selectedUri),
+    recordError: Boolean(recordDescriptionError || recordPolicyError),
+    requestBusy: isSearching || isCountingResults || isLoadingProperties || isLoadingRoles ||
+      isLoadingClasses || isLoadingCategoryTree || isLoadingGraphs || isLoadingAlphabet ||
+      groupValuesLoading || loadingRecordGraphs || loadingRecordAuthors ||
+      isLoadingRecordPolicy || isDescribing || viewDiscoveryLoading ||
+      viewProviderLoading || isValidatingRecord,
+  });
+
+  return {
+    appLifecycle,
+    providerCatalogController,
+    reportProviderLifecycle,
+    reportConfigureLifecycle,
+    operationsController: operations.controller,
+    operationsSnapshot: operations.snapshot,
+    operationExecution: operations.execution,
+    accessController,
+    accessCapabilities,
+    confirmQueryBookmark,
+    revokeQueryBookmark,
     buildCurrentShareUrl,
     returnShareUrl,
-    queryActivityPending: isSearching || isCountingResults || isLoadingProperties || isLoadingRoles || isLoadingClasses || isLoadingCategoryTree || isLoadingGraphs || isLoadingAlphabet || groupValuesLoading || loadingRecordGraphs || loadingRecordAuthors || isLoadingRecordPolicy || isDescribing || viewDiscoveryLoading || viewFeatureLoading || isValidatingRecord,
+    queryActivityPending: isSearching || isCountingResults || isLoadingProperties || isLoadingRoles || isLoadingClasses || isLoadingCategoryTree || isLoadingGraphs || isLoadingAlphabet || groupValuesLoading || loadingRecordGraphs || loadingRecordAuthors || isLoadingRecordPolicy || isDescribing || viewDiscoveryLoading || viewProviderLoading || isValidatingRecord,
     FACET_PAGE_SIZE,
     RECORD_DESCRIPTION_PAGE_SIZE,
     activeBlankNodeTab,
@@ -8718,6 +9088,7 @@ useEffect(() => {
     endpointHealthToast,
     endpointMenuError,
     graphRegistryReady,
+    graphHealthReady,
     endpointReadyForQuery,
     endpointStatuses,
     exitEverywhere,
@@ -8736,6 +9107,7 @@ useEffect(() => {
     formattedRecordContainerRef,
     graphAlreadySelected,
     graphAutoFill,
+    graphFieldEditing,
     graphFacets,
     graphHasMore,
     graphInfo,
@@ -8765,7 +9137,6 @@ useEffect(() => {
     handleFetchProfile,
     handleLoginSubmit,
     handlePropertyCheckboxChange,
-    pendingConfigureFacets,
     configureSelectedProperties,
     configureSelectedRoles,
     commitConfigureFacetChanges,
@@ -8864,6 +9235,7 @@ useEffect(() => {
     queryRefreshRevision,
     querySourceFormat,
     queryTree,
+    replaceQueryTree,
     queryTreeHeightDbRef,
     queryTreeHeightPercent,
     queryTreeOpen,
@@ -8947,7 +9319,7 @@ useEffect(() => {
     selectedRecordTermType,
     selectedResult,
     selectedRoles,
-    selectedUri,
+    selectedUri, recordSelectionCleared, selectBrowseResult,
     selectedView,
     selectedViewUri,
     setActiveBlankNodeTab,
@@ -8988,6 +9360,7 @@ useEffect(() => {
     setFormattedRecordButtonsHtml,
     setFormattedRecordHtml,
     setGraphAutoFill,
+    setGraphFieldEditing,
     setGraphInfoOpen,
     setGraphSort,
     setGraphSortPickerExpanded,
@@ -9001,7 +9374,6 @@ useEffect(() => {
     setGroupValues,
     setHistoryBookmarkId,
     setHoveredFacetKey,
-    setIsQueryBookmarked,
     setIsRdfLoaderOpen,
     setIsRdfLoading,
     setLocalStorageUsageBytes,
@@ -9016,7 +9388,6 @@ useEffect(() => {
     setLoginTab,
     setLoginUsername,
     setLoginWebIdUri,
-    setMatchingBookmarkId,
     setNodeAttribute,
     setOrderResults,
     setPanelLimitsOpen,
@@ -9072,13 +9443,19 @@ useEffect(() => {
     setShowResultBadges,
     setTimeoutEditorOpen,
     setTutorialMode,
-    setViewFeature,
-    selectViewFeature,
+    setViewProvider,
+    selectViewProvider,
+    navigateWorkspaceTab,
+    openPinnedShareUrl,
+    returnToPreviousContext,
     setViewPanel,
     setWidgetTimeouts,
     setWorkspaceTab,
     shareLinkCopied,
     shiftKeyDown,
+    // The Overview compares ALL predicates offered by the root name dropdown,
+    // never just the predicates checked for search.
+    overviewNameProperties: TEXT_SEARCH_NAME_PROPERTIES,
     showClassResults,
     showConfigureProperties,
     showConfigureRoles,
@@ -9098,15 +9475,20 @@ useEffect(() => {
     validateSelectedRecord,
     viewDiscoveryError,
     viewDiscoveryLoading,
-    viewFeature,
+    viewProvider,
     toggleLiveStatusFilter,
     togglePolicyStatusFilter,
-    viewFeatureCount,
-    viewFeatureError,
-    viewFeatureHtml,
+    viewProviderCount,
+    viewProviderError,
+    viewProviderHtml,
     policyApprovalRevision,
     setPolicyApprovalRevision,
-    viewFeatureLoading,
+    queryContextReady,
+    queryContextLoading: queryContext.loading,
+    queryContextReport: queryContext.report,
+    queryContextError: queryContext.error,
+    queryMatchedProviders: queryContext.matchedProviders,
+    viewProviderLoading,
     viewHtml,
     viewPanel,
     viewRenderError,
@@ -9132,6 +9514,7 @@ useEffect(() => {
     getBreadcrumbSiblings,
     handleBreadcrumbClick,
     handleRootBreadcrumbClick,
+    pasteRecentRootClipboard,
     hoveredBreadcrumbBadgeId,
     namePropertyMenuOpen,
     openBreadcrumbDropdownId,
@@ -9140,11 +9523,15 @@ useEffect(() => {
     renderBreadcrumbNodeMenuItem,
     rootBadgePossessive,
     rootLabelPossessive,
+    rootBreadcrumb,
     rootSearchExpanded,
     rootSearchText,
     rootUriLabel,
     rootUriValues,
     searchInputGroup,
+    setTextSearchMode,
+    signalPickerExpanded,
+    setSignalPickerExpanded,
     setHoveredBreadcrumbBadgeId,
     setOpenBreadcrumbDropdownId,
     signalOptions,

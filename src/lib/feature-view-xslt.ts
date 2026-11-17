@@ -1,6 +1,6 @@
 /** XSLT 1.0 presentations for the five contextual feature registries.
  * Inputs are projection rows from the personal RDF store, never raw HTML. */
-export type FeatureKind = "policies" | "formats" | "transcoders" | "facet-widgets" | "curators" | "fsm-providers";
+export type FeatureKind = "policies" | "formats" | "transcoders" | "facet-widgets" | "curators" | "fsm-providers" | "kinds" | "perspectives" | "analysis-providers";
 export type FeatureItem = { uri: string; label: string; description?: string; target?: string; detail?: string; author?: string; activation?: string };
 
 const common = `<?xml version="1.0" encoding="UTF-8"?>
@@ -93,6 +93,24 @@ export const FEATURE_VIEW_XSLT: Record<FeatureKind, string> = {
 <xsl:template name="last-fragment"><xsl:param name="value"/><xsl:choose><xsl:when test="contains($value, '/')"><xsl:call-template name="last-fragment"><xsl:with-param name="value" select="substring-after($value, '/')"/></xsl:call-template></xsl:when><xsl:otherwise><xsl:value-of select="$value"/></xsl:otherwise></xsl:choose></xsl:template>
 <xsl:template name="appbar-button"></xsl:template>
 </xsl:stylesheet>`,
+  perspectives: `${common}
+  <xsl:template match="/results"><section data-view-title="Perspectives" data-view-icon="telescope" class="grid grid-cols-1 gap-3 lg:grid-cols-2" aria-label="Perspective providers"><xsl:apply-templates select="result"/></section></xsl:template>
+  <xsl:template match="result"><article data-feature-uri="{@uri}" class="rounded-lg border bg-card p-4 space-y-2">
+    <div class="flex items-center gap-2"><xsl:if test="string-length(@status) &gt; 0"><input type="checkbox" data-policy-action="toggle" aria-label="Approve perspective provider"><xsl:if test="@status = 'Approved'"><xsl:attribute name="checked">checked</xsl:attribute></xsl:if></input></xsl:if>
+    <h3 class="font-medium"><button type="button" data-feature-open-uri="{@uri}" title="{@uri}" class="underline decoration-dotted hover:text-foreground"><xsl:value-of select="@label"/></button></h3></div>
+    <xsl:if test="string-length(@author) &gt; 0"><p class="text-xs text-muted-foreground">by <xsl:value-of select="@author"/></p></xsl:if>
+    <xsl:if test="string-length(@description) &gt; 0"><p class="text-sm text-muted-foreground"><xsl:value-of select="@description"/></p></xsl:if>
+    <xsl:if test="string-length(@detail) &gt; 0"><p class="break-all text-xs text-muted-foreground">Widget: <xsl:value-of select="@detail"/></p></xsl:if>
+    <button type="button" data-feature-code="true" class="rounded border px-2 py-1 text-xs">Code</button>
+  </article></xsl:template></xsl:stylesheet>`,
+  kinds: `${common}
+  <xsl:template match="/results"><section data-view-title="Kinds" data-view-icon="regex" class="grid grid-cols-1 gap-3 lg:grid-cols-2" aria-label="Kinds providers"><xsl:apply-templates select="result"/></section></xsl:template>
+  <xsl:template match="result"><article data-feature-uri="{@uri}" class="rounded-lg border bg-card p-4 space-y-2">
+    <div class="flex items-center gap-2"><xsl:if test="string-length(@status) &gt; 0"><input type="checkbox" data-policy-action="toggle" aria-label="Approve Kinds provider"><xsl:if test="@status = 'Approved'"><xsl:attribute name="checked">checked</xsl:attribute></xsl:if></input></xsl:if>
+    <h3 class="font-medium"><button type="button" data-feature-open-uri="{@uri}" class="underline decoration-dotted"><xsl:value-of select="@label"/></button></h3></div>
+    <xsl:if test="string-length(@description) &gt; 0"><p class="text-sm text-muted-foreground"><xsl:value-of select="@description"/></p></xsl:if>
+    <xsl:if test="string-length(@detail) &gt; 0"><p class="break-all text-xs text-muted-foreground">Kinds: <xsl:value-of select="@detail"/></p></xsl:if>
+  </article></xsl:template></xsl:stylesheet>`,
   "facet-widgets": `${common}
   <xsl:template match="/results"><section data-view-title="Facets" data-view-icon="layout-grid" class="grid grid-cols-1 gap-3 lg:grid-cols-2" aria-label="Facet widget providers"><xsl:apply-templates select="result"/></section></xsl:template>
   <xsl:template match="result"><article data-feature-uri="{@uri}" class="rounded-lg border bg-card p-4 space-y-2">
@@ -103,6 +121,15 @@ export const FEATURE_VIEW_XSLT: Record<FeatureKind, string> = {
   </article></xsl:template>
   <xsl:template name="appbar-button"></xsl:template>
 </xsl:stylesheet>`,
+  "analysis-providers": `${common}
+  <xsl:template match="/results"><section data-view-title="Analysis Providers" data-view-icon="chart-no-axes-combined" class="grid grid-cols-1 gap-3 lg:grid-cols-2" aria-label="Analyze provider approval"><xsl:apply-templates select="result"/></section></xsl:template>
+  <xsl:template match="result"><article data-feature-uri="{@uri}" class="rounded-lg border bg-card p-4 space-y-2">
+    <div class="flex items-center gap-2"><xsl:if test="string-length(@status) &gt; 0"><input type="checkbox" data-policy-action="toggle" aria-label="Approve Analysis provider"><xsl:if test="@status = 'Approved'"><xsl:attribute name="checked">checked</xsl:attribute></xsl:if></input></xsl:if><h3 class="font-medium"><xsl:value-of select="@label"/></h3></div>
+    <xsl:if test="string-length(@description) &gt; 0"><p class="text-sm text-muted-foreground"><xsl:value-of select="@description"/></p></xsl:if>
+    <xsl:if test="string-length(@activation) &gt; 0"><p class="text-xs text-muted-foreground"><xsl:value-of select="@activation"/></p></xsl:if>
+    <p class="break-all text-xs text-muted-foreground"><xsl:value-of select="@uri"/></p>
+    <button type="button" data-feature-code="true" class="rounded border px-2 py-1 text-xs text-muted-foreground hover:bg-accent">Code</button>
+  </article></xsl:template></xsl:stylesheet>`,
   "fsm-providers": `${common}
   <xsl:template match="/results"><section data-view-title="FSM Providers" data-view-icon="route" class="grid grid-cols-1 gap-3 lg:grid-cols-2" aria-label="Finite state machine providers"><xsl:apply-templates select="result"/></section></xsl:template>
   <xsl:template match="result"><article data-feature-uri="{@uri}" class="rounded-lg border bg-card p-4 space-y-2">

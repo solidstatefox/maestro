@@ -1,3 +1,4 @@
+import { browserLog } from "@/lib/maestro-client-logging";
 let proxyDebugSequence = 0;
 
 function fingerprint(value: string): string {
@@ -38,5 +39,5 @@ export function logProxyCaller(
   const component = request.headers.get("x-maestro-debug-component") ?? (typeof fallback?.component === "string" ? fallback.component : null);
   const requestId = request.headers.get("x-maestro-debug-request") ?? (typeof fallback?.requestId === "string" ? fallback.requestId : null);
   if (!source && !component && !requestId) return;
-  console.info("[Maestro proxy caller]", { route, source, component, requestId });
+  browserLog.debug("proxy.caller", { route, source, component, requestId });
 }

@@ -71,18 +71,18 @@
 
 <gttp://ggg.maestro.ecosys/shacl/policy/query-history-visit> dcterms:description "Associates matching RDF resources with the Query history bookmark policy policy and its processing instructions." .
 
-<gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective> dcterms:description "Provides the Bookmarks feature through Maestro policy discovery, using the Bookmarks Perspective widget." .
+<gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective> dcterms:description "Provides the Bookmarks provider through Maestro policy discovery, using the Bookmarks Perspective widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/bookmarks-perspective-input> rdfs:label "bookmarks perspective input" ;
     dcterms:description "Defines the SHACL input constraints for bookmarks perspective input provider discovery and matching." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/entrypoint> rdfs:label "entrypoint" ;
-    dcterms:description "Provides the entrypoint feature through Maestro policy discovery, using the Entry Point Cards widget." .
+    dcterms:description "Provides the entrypoint provider through Maestro policy discovery, using the Entry Point Cards widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/entrypoint-input> rdfs:label "entrypoint input" ;
     dcterms:description "Defines the SHACL input constraints for entrypoint input provider discovery and matching." .
 
-<gttp://ggg.maestro.ecosys/shacl/provider/history-perspective> dcterms:description "Provides the History feature through Maestro policy discovery, using the History Perspective widget." .
+<gttp://ggg.maestro.ecosys/shacl/provider/history-perspective> dcterms:description "Provides the History provider through Maestro policy discovery, using the History Perspective widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/history-perspective-input> rdfs:label "history perspective input" ;
     dcterms:description "Defines the SHACL input constraints for history perspective input provider discovery and matching." .
@@ -91,10 +91,10 @@
     dcterms:description "Defines the SHACL input constraints for record 0 input provider discovery and matching." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-0> rdfs:label "record 0 template 0" ;
-    dcterms:description "Provides the record 0 template 0 feature through Maestro policy discovery, using the Bookmark Query Results Template widget." .
+    dcterms:description "Provides the record 0 template 0 provider through Maestro policy discovery, using the Bookmark Query Results Template widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-1> rdfs:label "record 0 template 1" ;
-    dcterms:description "Provides the record 0 template 1 feature through Maestro policy discovery, using the Bookmark Record Template widget." .
+    dcterms:description "Provides the record 0 template 1 provider through Maestro policy discovery, using the Bookmark Record Template widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-1-input-class-1> rdfs:label "record 1 input class 1" ;
     dcterms:description "Defines the SHACL input constraints for record 1 input class 1 provider discovery and matching." .
@@ -106,56 +106,56 @@
     dcterms:description "Defines the SHACL input constraints for record 1 input class 3 provider discovery and matching." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-1-template-2> rdfs:label "record 1 template 2" ;
-    dcterms:description "Provides the record 1 template 2 feature through Maestro policy discovery, using the Dbpedia Book Record Template widget." .
+    dcterms:description "Provides the record 1 template 2 provider through Maestro policy discovery, using the Dbpedia Book Record Template widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-2-input> rdfs:label "record 2 input" ;
     dcterms:description "Defines the SHACL input constraints for record 2 input provider discovery and matching." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-2-template-3> rdfs:label "record 2 template 3" ;
-    dcterms:description "Provides the record 2 template 3 feature through Maestro policy discovery, using the Dbpedia Film Record Template widget." .
+    dcterms:description "Provides the record 2 template 3 provider through Maestro policy discovery, using the Dbpedia Film Record Template widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-3-input> rdfs:label "record 3 input" ;
     dcterms:description "Defines the SHACL input constraints for record 3 input provider discovery and matching." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-3-template-4> rdfs:label "record 3 template 4" ;
-    dcterms:description "Provides the record 3 template 4 feature through Maestro policy discovery, using the Dbpedia Organisation Record Template widget." .
+    dcterms:description "Provides the record 3 template 4 provider through Maestro policy discovery, using the Dbpedia Organisation Record Template widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-4-input> rdfs:label "record 4 input" ;
     dcterms:description "Defines the SHACL input constraints for record 4 input provider discovery and matching." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-4-template-5> rdfs:label "record 4 template 5" ;
-    dcterms:description "Provides the record 4 template 5 feature through Maestro policy discovery, using the Dbpedia Person Record Template widget." .
+    dcterms:description "Provides the record 4 template 5 provider through Maestro policy discovery, using the Dbpedia Person Record Template widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-5-input> rdfs:label "record 5 input" ;
     dcterms:description "Defines the SHACL input constraints for record 5 input provider discovery and matching." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-5-template-6> rdfs:label "record 5 template 6" ;
-    dcterms:description "Provides the record 5 template 6 feature through Maestro policy discovery, using the Dbpedia Place Record Template widget." .
+    dcterms:description "Provides the record 5 template 6 provider through Maestro policy discovery, using the Dbpedia Place Record Template widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-6-input> rdfs:label "record 6 input" ;
     dcterms:description "Defines the SHACL input constraints for record 6 input provider discovery and matching." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-6-template-7> rdfs:label "record 6 template 7" ;
-    dcterms:description "Provides the record 6 template 7 feature through Maestro policy discovery, using the Dbpedia Species Record Template widget." .
+    dcterms:description "Provides the record 6 template 7 provider through Maestro policy discovery, using the Dbpedia Species Record Template widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-7-input> rdfs:label "record 7 input" ;
     dcterms:description "Defines the SHACL input constraints for record 7 input provider discovery and matching." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-7-template-8> rdfs:label "record 7 template 8" ;
-    dcterms:description "Provides the record 7 template 8 feature through Maestro policy discovery, using the Dbpedia Work Record Template widget." .
+    dcterms:description "Provides the record 7 template 8 provider through Maestro policy discovery, using the Dbpedia Work Record Template widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-8-input> rdfs:label "record 8 input" ;
     dcterms:description "Defines the SHACL input constraints for record 8 input provider discovery and matching." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-8-template-9> rdfs:label "record 8 template 9" ;
-    dcterms:description "Provides the record 8 template 9 feature through Maestro policy discovery, using the Query History Visit Record Template widget." .
+    dcterms:description "Provides the record 8 template 9 provider through Maestro policy discovery, using the Query History Visit Record Template widget." .
 
-<gttp://ggg.maestro.ecosys/shacl/provider/temporal-created> dcterms:description "Provides the Date/time feature through Maestro policy discovery, using the Temporal Facet widget." .
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-created> dcterms:description "Provides the Date/time provider through Maestro policy discovery, using the Temporal Facet widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/temporal-created-input> rdfs:label "temporal created input" ;
     dcterms:description "Defines the SHACL input constraints for temporal created input provider discovery and matching." .
 
-<gttp://ggg.maestro.ecosys/shacl/provider/temporal-history> dcterms:description "Provides the Date/time feature through Maestro policy discovery, using the Temporal Facet widget." .
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-history> dcterms:description "Provides the Date/time provider through Maestro policy discovery, using the Temporal Facet widget." .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/temporal-history-input> rdfs:label "temporal history input" ;
     dcterms:description "Defines the SHACL input constraints for temporal history input provider discovery and matching." .

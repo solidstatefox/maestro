@@ -28,8 +28,21 @@ export function featureFctQuery(tree: FctQueryTree, feature: FeatureKind, graph:
     // Record formatters only: a provider must supply a RecordViewerWidget.
     children = [node("feature-provider", "class", `${MUI}Provider`),
       node("feature-record-widget", "property", `${MUI}widget`, [node("feature-record-type", "class", `${MUI}RecordViewerWidget`)]), view];
+  } else if (feature === "perspectives") {
+    // All PerspectiveWidget providers, including Map and personal collections.
+    // Provider approval remains independent of contextual applicability.
+    children = [node("feature-perspective-provider", "class", `${MUI}Provider`),
+      node("feature-perspective-widget", "property", `${MUI}widget`, [node("feature-perspective-widget-type", "class", `${MUI}PerspectiveWidget`)]), view];
+  } else if (feature === "analysis-providers") {
+    // The provider is the result, not its widget. Spider and the bookmark
+    // Analyze tools are ma:Analysis + mui:Provider in the policies graph.
+    // Ordinary ma:Analysis resources without mui:Provider are not approvable.
+    children = [node("feature-analysis-provider", "class", `${MUI}Provider`),
+      node("feature-analysis-type", "class", "gttp://ggg.maestro.ecosys/ns/analyze#Analysis"), view];
   } else if (feature === "fsm-providers") {
     children = [node("feature-fsm-provider", "class", `${MUI}StateMachineProvider`), view];
+  } else if (feature === "kinds") {
+    children = [node("feature-kinds", "class", `${MUI}KindProvider`), view];
   } else if (feature === "curators") {
     children = [node("feature-curator", "class", `${MUI}CurationProvider`), view];
   } else if (feature === "facet-widgets") {
@@ -42,19 +55,15 @@ export function featureFctQuery(tree: FctQueryTree, feature: FeatureKind, graph:
       view,
     ];
   } else {
-    // The input shape is the root, while the view displays the transcoder
-    // reachable through mui:accepts. Both accepted shape and widget types
-    // are regular FCT relationship/class constraints.
-    children = [
-      node("feature-input-shape", "class", `${MUI}InputShape`),
-      node("feature-transcoder-accepts", "property-of", `${MUI}accepts`, [
-        node("feature-transcoder-type", "class", `${OTC}Transcoder`),
-        node("feature-transcoder-provider", "class", `${MUI}Provider`),
-        node("feature-transcoder-widget", "property", `${MUI}widget`, [node("feature-rdf-widget", "class", `${MUI}RdfTranscoderWidget`)]),
-        view,
-      ]),
-    ];
+    // The transcoder itself is the provider shown in Results. The former
+    // InputShape -> inverse mui:accepts -> Transcoder projection needlessly
+    // required complex inverse-role FCT translation before any provider could
+    // appear and could fail with HTTP 400. A regular type facet enumerates all
+    // registered Transcoder resources from the designated OTC named graph;
+    // acceptance/applicability remain separate from catalog membership.
+    children = [node("feature-transcoder-type", "class", `${OTC}Transcoder`), view];
   }
+
   return {
     name: "query",
     attributes: {
@@ -89,17 +98,19 @@ export function hasFeatureFctFilters(tree: FctQueryTree, feature: FeatureKind, g
     const widget = relation(children, "property", `${MUI}widget`);
     return hasClass(children, `${MUI}Provider`) && Boolean(widget && hasClass(widget.children, `${MUI}RecordViewerWidget`));
   }
+  if (feature === "perspectives") {
+    const widget = relation(children, "property", `${MUI}widget`);
+    return hasClass(children, `${MUI}Provider`) && Boolean(widget && hasClass(widget.children, `${MUI}PerspectiveWidget`));
+  }
+  if (feature === "analysis-providers") return hasClass(children, `${MUI}Provider`) &&
+    hasClass(children, "gttp://ggg.maestro.ecosys/ns/analyze#Analysis");
   if (feature === "fsm-providers") return hasClass(children, `${MUI}StateMachineProvider`);
   if (feature === "curators") return hasClass(children, `${MUI}CurationProvider`);
+  if (feature === "kinds") return hasClass(children, `${MUI}KindProvider`);
   if (feature === "facet-widgets") {
     const widget = relation(children, "property", `${MUI}widget`);
     return hasClass(children, `${MUI}Provider`) &&
       Boolean(widget && hasClass(widget.children, `${MUI}FacetWidget`));
   }
-  const accepts = relation(children, "property-of", `${MUI}accepts`);
-  if (!hasClass(children, `${MUI}InputShape`) || !accepts) return false;
-  const widget = relation(accepts.children, "property", `${MUI}widget`);
-  return hasClass(accepts.children, `${OTC}Transcoder`) &&
-    hasClass(accepts.children, `${MUI}Provider`) &&
-    Boolean(widget && hasClass(widget.children, `${MUI}RdfTranscoderWidget`));
+  return hasClass(children, `${OTC}Transcoder`);
 }

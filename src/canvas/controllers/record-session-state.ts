@@ -17,7 +17,7 @@ import { useRecordFormatSelection } from "@/canvas/right/format";
 export function useRecordSessionState(preferredLanguage: string) {
   const lifecycle = useRecordState();
   const core = useRecordCoreState();
-  const presentation = useRecordPresentationState(preferredLanguage);
+  const presentation = useRecordPresentationState(preferredLanguage, lifecycle.recordLifecycle);
   const pagination = useRecordPageSettings();
   const format = useRecordFormatSelection();
   return { ...lifecycle, ...core, ...presentation, ...pagination, ...format };

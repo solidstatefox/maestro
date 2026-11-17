@@ -1,5 +1,6 @@
 "use client";
 import { ErrorDetails } from "@/components/ui/error-details";
+import { useProviderWidgetLifecycle } from "@/canvas/diagnostics/use-provider-widget-lifecycle";
 import { useEffect, useMemo, useState } from "react";
 import { Slider } from "@/components/ui/slider";
 import { maestroQueryFetch } from "@/lib/client-query-cache";
@@ -50,12 +51,16 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
     return buildFctCountSparql(copy, { predicate: property, projections: provider.projections });
   }, [tree, property, provider]);
   const [domain, setDomain] = useState<[number, number] | null>(null);
+  const [domainKey, setDomainKey] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<[number, number] | null>(null);
+  const widgetPhase = useProviderWidgetLifecycle(`${provider.uri}|${property}|${tree.attributes.addr}`, {
+    loading, ready: Boolean(domain) && domainKey === `${tree.attributes.addr}\u0000${query}`, error,
+  });
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);setDraft(null);setError("");
+    setLoading(true);setDomain(null);setDomainKey("");setDraft(null);setError("");
     if (!query) { setError("Numeric domain is unavailable for this FCT query scope."); setLoading(false); return () => controller.abort(); }
     void (async () => {
       try {
@@ -68,7 +73,7 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
         if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
         if (data.incomplete) throw new Error("Numeric domain query timed out before completing.");
         const min = numeric(data.min ?? undefined);const max = numeric(data.max ?? undefined);
-        if (!controller.signal.aborted && min !== null && max !== null && min <= max) setDomain([min,max]);
+        if (!controller.signal.aborted && min !== null && max !== null && min <= max) { setDomain([min,max]); setDomainKey(`${tree.attributes.addr}\u0000${query}`); }
       } catch (reason) {
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Numeric domain unavailable");
       } finally {
@@ -77,9 +82,9 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
     })();
     return () => controller.abort();
   }, [query, tree.attributes.addr]);
-  if (!domain) return error ? <ErrorDetails prefix="Numeric facet" error={error} /> : <div className="h-56 w-[104px] shrink-0 animate-pulse border-r pr-2" aria-label="Loading numeric facet domain"><div className="mx-auto h-full w-1.5 rounded bg-muted" /></div>;
+  if (!domain || domainKey !== `${tree.attributes.addr}\u0000${query}`) return error ? <ErrorDetails prefix="Numeric facet" error={error} /> : <div data-provider-phase={widgetPhase} className="h-56 w-[104px] shrink-0 animate-pulse border-r pr-2" aria-label="Loading numeric facet domain"><div className="mx-auto h-full w-1.5 rounded bg-muted" /></div>;
   const [min,max] = domain;
-  if (min === max) return <span className="text-xs text-muted-foreground">{display(min)}</span>;
+  if (min === max) return <div className="flex h-56 w-[104px] shrink-0 items-center justify-center border-r pr-2 text-xs text-muted-foreground" aria-label="Constant numeric domain">{display(min)}</div>;
   const lower = Math.max(min, Math.min(max, numeric(start) ?? min));
   const upper = Math.max(lower, Math.min(max, numeric(end) ?? max));
   const current = draft ?? [lower, upper];
@@ -87,7 +92,7 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
   // Radix places MAX at the top of a vertical slider and MIN at the bottom.
   // The first value is the lower bound (bottom thumb), the second is the
   // upper bound (top thumb). Keep those labels in the same visual order.
-  return <div aria-busy={loading} className={`flex h-56 w-[104px] shrink-0 flex-col items-center gap-1 border-r pr-2 text-[10px] tabular-nums ${loading ? "opacity-50" : ""}`} data-numeric-facet-provider={provider.uri}>
+  return <div data-provider-phase={widgetPhase} aria-busy={loading} className={`flex h-56 w-[104px] shrink-0 flex-col items-center gap-1 border-r pr-2 text-[10px] tabular-nums ${loading ? "opacity-50" : ""}`} data-numeric-facet-provider={provider.uri}>
     <div className="w-full text-center leading-tight" aria-label={`Domain maximum ${format(max)}; selected upper bound ${format(current[1])}`}>
       <div className="text-muted-foreground">Max {display(max)}</div>
       <div>To {display(current[1])}</div>

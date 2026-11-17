@@ -2,6 +2,7 @@
 import { toast } from "@/components/ui/toast";
 
 import { useEffect, useRef, useState } from "react";
+import type { MaestroRecordSessionController } from "@/lib/app-lifecycle/record-session";
 
 /** State and graph-provenance selection shared by Record subviews. */
 import type { RecordValueTerm, BlankNodeRecord } from "@/lib/bnode";
@@ -48,8 +49,14 @@ export type RecordService = { uri: string; label: string; operations: { uri: str
 export type ServiceResult = { html: string; error: string; loading: boolean; name: string };
 
 /** Renderer state shared by Record default, format, and service views. */
-export function useRecordPresentationState(preferredAlphabetLanguage: string) {
-  const [formattedRecordHtml, setFormattedRecordHtml] = useState("");
+export function useRecordPresentationState(preferredAlphabetLanguage: string, lifecycle: MaestroRecordSessionController) {
+  const [formattedRecordHtml, setFormattedRecordHtmlState] = useState("");
+  const setFormattedRecordHtml = (html: string) => {
+    setFormattedRecordHtmlState(html);
+    const snapshot = lifecycle.getSnapshot();
+    if (html) lifecycle.operation("format", "OP_SUCCEEDED", snapshot.context.key);
+    else if (snapshot.context.phases.format === "ready") lifecycle.operation("format", "OP_RESET", snapshot.context.key);
+  };
   // URI label lookups are presentation enhancements; never block the initial card.
   const recordUriLabelCacheRef = useRef(new Map<string, string>());
   // URI display labels also obey the preferred language. Never reuse labels
@@ -60,7 +67,12 @@ export function useRecordPresentationState(preferredAlphabetLanguage: string) {
   const [recordFormatPreviews, setRecordFormatPreviews] = useState<Record<string, string>>({});
   const [recordFormatMenuOpen, setRecordFormatMenuOpen] = useState(false);
   const [recordControlsOpen, setRecordControlsOpen] = useState(true);
-  const [recordFormatError, setRecordFormatError] = useState("");
+  const recordFormatError = lifecycle.getSnapshot().context.errors.format;
+  const setRecordFormatError = (message: string) => {
+    const key = lifecycle.getSnapshot().context.key;
+    lifecycle.send(message ? { type: "OP_FAILED", key, operation: "format", error: message }
+      : { type: "ERROR_CLEARED", key, operation: "format" });
+  };
   const [bookmarkQueryDebugOpen, setBookmarkQueryDebugOpen] = useState(false);
   const [bookmarkQueryDebug, setBookmarkQueryDebug] = useState({ xml: "", sparql: "", response: "", countResponse: "" });
   // SHACL-discovered services use the same rendered Book XSLT tab host as

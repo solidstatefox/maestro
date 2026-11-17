@@ -9,11 +9,11 @@ import { motion, useReducedMotion } from "motion/react";
  * The original gallery uses button panels; Maestro separates triggers from panels so
  * breadcrumbs, menus and other nested interactive controls remain accessible. */
 export function MaestroHoverExpand({ active, onChange, panels }: {
-  active: "trail" | "perspectives" | "features"; onChange: (value: "trail" | "perspectives" | "features") => void;
-  panels: { id: "trail" | "perspectives" | "features"; label: string; content: ReactNode }[];
+  active: string; onChange: (value: string) => void;
+  panels: { id: string; label: string; content: ReactNode }[];
 }) {
   const reducedMotion = useReducedMotion();
-  return <div id={UI_COMPONENT.viewRibbon} className="flex h-24 min-w-0 shrink-0 overflow-hidden border-b bg-background" role="group" aria-label="View navigation">
+  return <div id={UI_COMPONENT.viewRibbon} className="flex h-24 min-w-0 shrink-0 overflow-hidden border-b bg-background" role="group" aria-label="Ribbon navigation">
     {panels.map((panel) => {
       const expanded = active === panel.id;
       return <motion.section key={panel.id} className={`flex min-w-0 overflow-hidden border-r last:border-r-0 ${expanded ? "flex-1" : "shrink-0"}`} initial={false}

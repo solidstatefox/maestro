@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { featureFctQuery } from "../src/lib/feature-fct-query";
+import { providerFctQuery } from "../src/lib/provider-fct-query";
 import { compileFctXmlToSparql } from "../src/lib/fct-sparql-translator";
 import { isCoercibleNumericLexical } from "../src/lib/virtuoso-numeric-coercion";
 
@@ -9,7 +9,7 @@ const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
 const read = (relative: string) => readFileSync(relative, "utf8");
 
 test("Policies use first-class FCT Status fixtures rather than a regex facet value", () => {
-  const tree = featureFctQuery({ name: "query", attributes: {}, children: [] }, "policies",
+  const tree = providerFctQuery({ name: "query", attributes: {}, children: [] }, "policies",
     "urn:test:approvals", "https://example.org/sparql", 30);
   assert.deepEqual(tree.children.filter(node => node.name === "status"), []);
   assert.ok(!tree.children.some(node => node.name === "property" && node.attributes.iri === `${MUI}status`));

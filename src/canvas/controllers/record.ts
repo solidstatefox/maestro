@@ -1,38 +1,47 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createMaestroRecordSessionController } from "@/lib/app-lifecycle/record-session";
 
-/** State owned by the record subsystem. Query-tree mutations still use the authoritative FCT store. */
+/** One XState lifecycle per Record viewer, including Browse session zero.
+ * The existing Record FCT snapshot and policy data are not copied into XState. */
 export function useRecordState() {
-  const [isLoadingRecordPolicy, setIsLoadingRecordPolicy] = useState(false);
+  const [recordLifecycle] = useState(createMaestroRecordSessionController);
+  const recordSnapshot = useSyncExternalStore(recordLifecycle.subscribe, recordLifecycle.getSnapshot, recordLifecycle.getSnapshot);
+  useLayoutEffect(() => {
+    recordLifecycle.start();
+    return () => recordLifecycle.stop();
+  }, [recordLifecycle]);
+  const send = (operation: "description" | "policy", loading: boolean) => {
+    const key = recordLifecycle.getSnapshot().context.key;
+    recordLifecycle.operation(operation, loading ? "OP_STARTED" : "OP_SUCCEEDED", key);
+  };
+  const error = (operation: "description" | "policy", value: string) => {
+    const key = recordLifecycle.getSnapshot().context.key;
+    if (value) recordLifecycle.send({ type: "OP_FAILED", operation, key, error: value });
+    else recordLifecycle.send({ type: "ERROR_CLEARED", operation, key });
+  };
   const [recordPolicyCheckedUri, setRecordPolicyCheckedUri] = useState("");
-  const [recordPolicyError, setRecordPolicyError] = useState("");
-  const [isDescribing, setIsDescribing] = useState(false);
-  const [recordDescriptionError, setRecordDescriptionError] = useState("");
   const [recordDescribeIncomplete, setRecordDescribeIncomplete] = useState(false);
   const activeFormatterRequestRef = useRef("");
   const [formattedRecordKey, setFormattedRecordKey] = useState("");
   const [formatterHasEnrichment, setFormatterHasEnrichment] = useState(false);
   const attemptedFormatterEnrichmentRef = useRef("");
-
   return {
-    isLoadingRecordPolicy,
-    setIsLoadingRecordPolicy,
-    recordPolicyCheckedUri,
-    setRecordPolicyCheckedUri,
-    recordPolicyError,
-    setRecordPolicyError,
-    isDescribing,
-    setIsDescribing,
-    recordDescriptionError,
-    setRecordDescriptionError,
-    recordDescribeIncomplete,
-    setRecordDescribeIncomplete,
+    recordLifecycle,
+    isLoadingRecordPolicy: recordSnapshot.context.phases.policy === "loading",
+    setIsLoadingRecordPolicy: (value: boolean) => send("policy", value),
+    recordPolicyCheckedUri, setRecordPolicyCheckedUri,
+    recordPolicyError: recordSnapshot.context.errors.policy,
+    setRecordPolicyError: (value: string) => error("policy", value),
+    isDescribing: recordSnapshot.context.phases.description === "loading",
+    setIsDescribing: (value: boolean) => send("description", value),
+    recordDescriptionError: recordSnapshot.context.errors.description,
+    setRecordDescriptionError: (value: string) => error("description", value),
+    recordDescribeIncomplete, setRecordDescribeIncomplete,
     activeFormatterRequestRef,
-    formattedRecordKey,
-    setFormattedRecordKey,
-    formatterHasEnrichment,
-    setFormatterHasEnrichment,
+    formattedRecordKey, setFormattedRecordKey,
+    formatterHasEnrichment, setFormatterHasEnrichment,
     attemptedFormatterEnrichmentRef,
   };
 }

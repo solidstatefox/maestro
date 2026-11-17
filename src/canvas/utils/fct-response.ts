@@ -1,4 +1,7 @@
 "use client";
+import { resolveFacetIri } from "@/lib/fct-facet-iri";
+import { browserLog } from "@/lib/maestro-client-logging";
+
 
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 import { snapshotFctQueryXml } from "@/lib/fct-query-api";
@@ -35,6 +38,7 @@ export type FctResponseColumn = {
 
 export type FctMatch = {
   excerpt: string;
+  predicate?: string;
   columns?: FctResponseColumn[];
   graph?: string;
   score?: FctResponseColumn;
@@ -154,6 +158,7 @@ const dbActivity = getText("db-activity");
   })).filter(e => e.datatype && Number.isFinite(e.count) && e.count > 0);
   const resultNode = byLocalName(root, "result")[0];
   const resultType = resultNode?.getAttribute("type") ?? "text";
+  const documentBase = root.getAttributeNS("http://www.w3.org/XML/1998/namespace", "base") || resultNode?.getAttributeNS("http://www.w3.org/XML/1998/namespace", "base") || undefined;
   const rows = resultNode ? byLocalName(resultNode, "row") : [];
   const termColumn = (element: Element, index: number): FctResponseColumn => {
     const attributes: Record<string, string> = {};
@@ -238,7 +243,8 @@ const dbActivity = getText("db-activity");
       ...(first.datatype ? { datatype: first.datatype } : {}),
       ...(first.lang ? { lang: first.lang } : {}),
       columns,
-      matches: excerpt ? [{ excerpt, columns: columns.slice(1) }] : [],
+      matches: excerpt ? [{ excerpt, ...(isText && columns.find(column => column.attributes?.var === "matchPredicate")?.termType === "uri"
+        ? { predicate: columns.find(column => column.attributes?.var === "matchPredicate")!.value } : {}), columns: columns.slice(1) }] : [],
       ...(parsedScopeValues.length > 0 ? { scopeValues: parsedScopeValues } : {}),
       ...(recordAnchor ? { recordAnchor } : {}),
     };
@@ -249,13 +255,22 @@ const dbActivity = getText("db-activity");
       item.matches = [{ excerpt: third.value, columns: columns.slice(2) }];
     return [item];
   });
+  let invalidClassCount = 0;
   const facetItems = rowColumns.flatMap((columns) => {
     if (!columns[0]) return [];
+    // Only a full RDF class URI can be serialized as <class iri="...">.
+    // Resolve relative values solely when the FCT response declares xml:base;
+    // never resolve #OscarNominee against the Maestro app or SPARQL endpoint.
+    const classUri = resultType === FCT_VIEW_TYPES.CLASSES
+      ? (resolveFacetIri(columns[0].attributes.iri || columns[0].value, documentBase) ?? resolveFacetIri(columns[0].value, documentBase))
+      : null;
+    if (resultType === FCT_VIEW_TYPES.CLASSES && !classUri) {invalidClassCount++;return [];}
+    const value = classUri ?? columns[0].value;
     const labelKind = resultType === FCT_VIEW_TYPES.CLASSES ? "Class" : resultType === FCT_VIEW_TYPES.PROPERTIES_IN ? "Role" : resultType === FCT_VIEW_TYPES.PROPERTIES ? "Property" : undefined;
     const exampleColumn = resultType === FCT_VIEW_TYPES.PROPERTIES || resultType === FCT_VIEW_TYPES.PROPERTIES_IN ? columns[2] : undefined;
     return [{
-      uri: columns[0].value,
-      label: columns[0].label || columns[0].shortform || toLabel(columns[0].value, labelKind),
+      uri: value,
+      label: columns[0].label || columns[0].shortform || toLabel(value, labelKind),
       count: columns[1]?.value === undefined ? -1 : Number(columns[1].value),
       ...(resultType === FCT_VIEW_TYPES.CLASSES && columns[2]?.termType === "uri" && columns[2].value ? { parent: columns[2].value } : {}),
       ...(exampleColumn?.value ? { example: { uri: exampleColumn.value, label: exampleColumn.label || exampleColumn.shortform || (exampleColumn.termType === "uri" ? toLabel(exampleColumn.value, "Class") : exampleColumn.value), termType: exampleColumn.termType } } : {}),
@@ -273,6 +288,7 @@ const dbActivity = getText("db-activity");
       });
     }
   }
+  const categoryWarning = invalidClassCount ? `${invalidClassCount} Category IRI(s) were relative without an XML base; those entries cannot be selected safely.` : "";
   return {
     datatypeEvidence,
     sparql: getText("sparql"),
@@ -281,7 +297,7 @@ const dbActivity = getText("db-activity");
     complete: getText("complete") === "yes" ? "yes" : "no",
     incomplete: getText("complete") !== "yes" || sqlState === "S1TAT" || Boolean(warning),
 	
-	...(warning ? { warning } : {}),
+	...((warning || categoryWarning) ? { warning: [warning,categoryWarning].filter(Boolean).join("; ") } : {}),
 ...(sqlState ? { sqlState } : {}),
 ...(sqlMessage ? { sqlMessage } : {}),
 ...(execMilliseconds ? { execMilliseconds } : {}),
@@ -316,11 +332,12 @@ const dbActivity = getText("db-activity");
 
 /**
  * Some raw graph-server errors are not actionable as-is. A Virtuoso ANYTIME timeout means the query ran into the
- * server's time limit; the raw text goes to the console and the UI tells the user what to change instead.
+ * server's time limit; the browser logger emits a bounded diagnostic (when enabled)
+ * and the UI tells the user what to change instead.
  */
 export function presentServerError(message: string): string {
   if (/ANYTIME\s+timeout/i.test(message)) {
-    console.error("Maestro: the graph server reported an ANYTIME timeout.", message);
+    browserLog.debug("fct.anytime.timeout", message);
     return `The graph server reported an ANYTIME timeout (partial or no results). ${message} Check the query's complexity and the graph server's own timeout limit; a nonzero Maestro timeout does not override server limits.`;
   }
   return message;

@@ -168,6 +168,9 @@ export async function clearClientQueryCache(): Promise<void> {
 const pendingQueryControllers = new Set<AbortController>();
 export type PendingMaestroQuery = { id: number; label: string; state: "queued" | "active" };
 const pendingQueryDetails = new Map<AbortController, PendingMaestroQuery>();
+// Link the public request signal to its tracked controller so dispatch status
+// reflects the existing browser scheduler without creating a second queue.
+const pendingQueryOwnerBySignal = new WeakMap<AbortSignal, AbortController>();
 let nextPendingQueryId = 0;
 const pendingQueryDetailListeners = new Set<(queries: PendingMaestroQuery[]) => void>();
 // React subscribers must not receive a fresh array when no observable detail changed.
@@ -256,6 +259,7 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
   const controller = new AbortController();
   const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   pendingQueryControllers.add(controller);
+  pendingQueryOwnerBySignal.set(combinedSignal, controller);
   pendingQueryDetails.set(controller, { id: ++nextPendingQueryId, label, state: "queued" });
   notifyPendingQueries();
   try {
@@ -263,6 +267,7 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
     if (combinedSignal.aborted) throw new DOMException("Maestro query aborted", "AbortError");
     return result;
   } finally {
+    pendingQueryOwnerBySignal.delete(combinedSignal);
     pendingQueryControllers.delete(controller);
     pendingQueryDetails.delete(controller);
     notifyPendingQueries();
@@ -326,6 +331,12 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
     const clockScope = maestroQueryClockScope(init?.headers ? new Headers(init.headers) : undefined);
     const job: ScheduledRequest = { background, signal: init?.signal, run: () => {
       started = true;
+      const owner = init?.signal ? pendingQueryOwnerBySignal.get(init.signal) : undefined;
+      const tracked = owner ? pendingQueryDetails.get(owner) : undefined;
+      if (tracked && tracked.state !== "active") {
+        pendingQueryDetails.set(owner!, { ...tracked, state: "active" });
+        notifyPendingQueryDetails();
+      }
       const headers = new Headers(init?.headers);
       headers.set("x-maestro-query-events", "1");
       return fetch(input, { ...init, headers }).then(response => unwrapMaestroQueryEvents(response, clockScope, init?.signal));
@@ -362,24 +373,15 @@ async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit)
   const isStatusProjection = /<view\b[^>]*\btype\s*=\s*["']list-status["']/i.test(fctXml);
   const address = isFctQuery && !isStatusProjection ? fctXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "" : "";
   const endpointUrl = address.includes("@") ? address.slice(address.indexOf("@") + 1).replace(/&amp;/g, "&") : "";
-  try {
-    const response = await scheduledGraphFetch(input, init);
-    if (!init?.signal?.aborted && typeof window !== "undefined") {
-      // A proxy cache hit and a federated Status projection do not prove the
-      // underlying graph server responded to this request.
-      if (response.status === 200 && endpointUrl && response.headers.get("X-Maestro-Cache") !== "HIT") {
-        window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, { detail: { endpointUrl } }));
-      } else if (response.status >= 400 && /\/proxy\/api\/(?:fct|sparql|record-graphs|policies|xslt)(?:[/?]|$)/.test(url)) {
-        console.warn(`[Maestro] Request returned HTTP ${response.status}: ${url}`);
-      }
+  const response = await scheduledGraphFetch(input, init);
+  if (!init?.signal?.aborted && typeof window !== "undefined") {
+    // A proxy cache hit and a federated Status projection do not prove the
+    // underlying graph server responded to this request.
+    if (response.status === 200 && endpointUrl && response.headers.get("X-Maestro-Cache") !== "HIT") {
+      window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, { detail: { endpointUrl } }));
     }
-    return response;
-  } catch (error) {
-    if (!(error instanceof Error && error.name === "AbortError") && !init?.signal?.aborted) {
-      console.warn(`[Maestro] Request failed: ${url}`, error);
-    }
-    throw error;
   }
+  return response;
 }
 
 /** Apply a saved per-widget deadline to non-FCT proxy requests (record graphs/policies). */
@@ -436,7 +438,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
   // Personal state assertions are mutable independently of the live XML.
   // A cache hit here could display a pre-Seen or pre-Hidden result set.
   if (urlStr.includes("/proxy/api/fct") && typeof init?.body === "string" &&
-      (/<(?:[\w.-]+:)?status\b/i.test(init.body) || init.body.includes("urn:maestro:features:"))) {
+      (/<(?:[\w.-]+:)?status\b/i.test(init.body) || init.body.includes("urn:maestro:providers:"))) {
     return track(await monitoredProxyFetch(input, init));
   }
   const key = computeClientCacheKey(urlStr, init);

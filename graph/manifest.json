@@ -25,5 +25,7 @@
   "labels.ttl": "/graph",
   "maestro-status-machines.ttl": "/shacl/policies",
   "kinds/provider.ttl": "/shacl/policies",
-  "spider/provider.ttl": "/shacl/policies"
+  "spider/provider.ttl": "/shacl/policies",
+  "email-regex/provider.ttl": "/shacl/policies",
+  "kanban/provider.ttl": "/shacl/policies"
 }

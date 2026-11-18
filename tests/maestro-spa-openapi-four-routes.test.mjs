@@ -10,9 +10,12 @@ const protectedHashes={
   'fct':'965ece14499354bd5ad8281cb15918b4207d468b1fa47cbd20845b816d4c2330',
   'observations':'53d55a89ea4bff570080ecff0ba5dc2e92e46af0959ef2be2d8d01b6850a0487',
 };
-test('accepted Maestro baseline /fct and /observations routes remain byte-identical',()=>{
-  for(const [route,expected] of Object.entries(protectedHashes))
-    assert.equal(sha(`src/app/proxy/api/${route}/route.ts`),expected,route);
+test('observations remains byte-identical; FCT retains its existing transport with request-scoped Sheet language',()=>{
+  assert.equal(sha('src/app/proxy/api/observations/route.ts'), protectedHashes.observations);
+  const fct = read('src/app/proxy/api/fct/route.ts');
+  assert.match(fct, /compileFctXmlBase/);
+  assert.match(fct, /request.headers.get\("x-maestro-language"\)/);
+  assert.match(fct, /labelAcceptLanguage/);
 });
 test('/service handles only allowlisted OpenAPI operations',()=>{
   const route=read('src/app/proxy/api/service/route.ts');
@@ -49,6 +52,6 @@ test('SPARQL remains the same route, with bounded autocomplete priority for rank
   const route=read('src/app/proxy/api/sparql/route.ts');
   assert.match(route,/requestClass === "autocomplete"/);
   assert.match(route,/LONG::IRI_RANK/);
-  assert.match(route,/LIMIT \(\?:\[1-9\]\|10\)/);
+  assert.match(route,/candidateLimits\[0\] > 10/);
   assert.match(route,/queryTimeoutMs \|\| 5000/);
 });

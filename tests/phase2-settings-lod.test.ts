@@ -16,8 +16,10 @@ test("two matching shadcn resizable handles are siblings of the three workspace 
   const workspace = read("src/canvas/workspace.tsx");
   const right = read("src/canvas/right/pane.tsx");
   const shells = read("src/canvas/workspace-pane-shells.tsx");
-  assert.equal(workspace.match(/<ResizableHandle withHandle \/>/g)?.length, 2);
-  assert.ok(workspace.indexOf("<ResizableHandle withHandle />") < workspace.indexOf("<CenterCanvasPanel"));
+  assert.equal(workspace.match(/<ResizableHandle withHandle className="shrink-0" \/>/g)?.length, 2);
+  assert.match(workspace, /\(!urlStateInitialized \|\| workspaceTab === "browse"\) && <ResizableHandle/);
+  assert.match(workspace, /\(!urlStateInitialized \|\| workspaceTab === "browse"\) && \(skeletons\.record/);
+  assert.ok(workspace.indexOf('<ResizableHandle withHandle') < workspace.indexOf('<CenterCanvasPanel'));
   assert.doesNotMatch(right, /<ResizableHandle/);
   assert.doesNotMatch(shells, /overflow-hidden border-r/);
 });
@@ -38,26 +40,24 @@ test("query src provenance drives the blue Return control through the controller
   const controller = read("src/canvas/utils/workspace-controller.tsx");
   const header = read("src/canvas/top/appbar-pane.tsx");
   assert.match(query, /querySourceAttribute/);
-  assert.match(controller, /previousQuerySnapshotRef/);
+  assert.match(controller, /operations\.snapshot\.navigation\.returnUrl/);
+  assert.match(controller, /const returnShareUrl/);
   assert.match(header, /CornerDownLeft/);
   assert.match(header, /returnShareUrl/);
 });
 
-test("Categories reads one personal ontology graph and deduplicates namespace fetches", () => {
-  const importer = read("src/lib/ontology-ingest.ts");
-  const ontologyRoute = read("src/app/proxy/api/service/handlers/ontology.ts");
-  assert.match(importer, /parseRdfDocument/);
-  assert.match(importer, /buildInsertData/);
-  assert.match(importer, /updatePersonalSparql/);
-  assert.match(importer, /getPersonalOntologyGraph/);
-  assert.match(importer, /byNamespace/);
+test("Categories ingest RDF into one personal ontology graph and dedupe source namespaces in the browser", () => {
+  const importer = read("src/lib/client-ontology-ingest.ts");
+  assert.match(importer, /parseClientRdf/);
+  assert.match(importer, /clientRdfInsert/);
+  assert.match(importer, /updatePersonal\(/);
+  assert.match(importer, /personalContext\(/);
+  assert.match(importer, /const graph=`\$\{ctx\.base\}\/ontology`/);
+  assert.match(importer, /const namespaces=new Map/);
   assert.match(importer, /namespaceOf/);
-  assert.match(importer, /getUserGraph/);
   assert.match(importer, /OWL_IMPORTS/);
   assert.match(importer, /RDFS_IS_DEFINED_BY/);
-  assert.match(importer, /publicOntologyUrl/);
-  assert.match(ontologyRoute, /ingestOntologyDocuments/);
-  assert.doesNotMatch(ontologyRoute, /discoveredGraphIri|getOntologyGraph|dereferenceClass|compactMetadata|metadataCache/);
-  assert.match(ontologyRoute, /getPersonalOntologyGraph/);
-  assert.match(ontologyRoute, /GRAPH \${graphIri}/);
+  assert.match(importer, /const seen=new Set/);
+  assert.match(importer, /MAX_DOCUMENTS/);
+  assert.ok(!read("src/app/proxy/api/service/route.ts").includes('ingestOntologyDocuments'));
 });

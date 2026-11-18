@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, type ReactNode } from "react";
+import { Menu } from "@base-ui/react/menu";
 import { CircleCheck, CircleAlert, CircleX } from "lucide-react";
 import { readClientProviderDiagnostics, type ProviderDiagnostic } from "@/lib/client-provider-diagnostics";
 
@@ -20,11 +21,19 @@ export function ViewDiagnosticsHover({ children, enabled }: { children: ReactNod
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [hovered, enabled]);
-  return <span className="relative inline-flex shrink-0 items-stretch"
-    onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
-    {children}
-    {enabled && hovered && <span role="status" aria-label="View provider diagnostics"
-      className="absolute left-0 top-full z-[500] block max-h-[min(70vh,32rem)] w-[min(36rem,90vw)] overflow-auto rounded-md border border-border bg-popover p-3 text-left text-popover-foreground shadow-xl">
+  // Base UI owns the positioning and collision calculation; the panel is
+  // portaled and therefore cannot resize or shake the appbar's tab strip.
+  // Render the real View tab inside the trigger so tab navigation remains native.
+  return <Menu.Root open={enabled && hovered} onOpenChange={setHovered}>
+    <Menu.Trigger nativeButton={false} openOnHover delay={100} closeDelay={250}
+      render={<span className="inline-flex shrink-0 items-stretch">{children}</span>} />
+    {enabled && <Menu.Portal>
+      <Menu.Positioner side="bottom" align="center" sideOffset={8}
+        positionMethod="fixed" collisionPadding={12}
+        collisionAvoidance={{ side: "flip", align: "shift", fallbackAxisSide: "none" }}
+        className="z-[500] max-w-[calc(100vw-1.5rem)]">
+        <Menu.Popup aria-label="View provider diagnostics"
+          className="max-h-[min(70vh,32rem)] w-[min(36rem,calc(100vw-1.5rem))] overflow-y-auto overflow-x-hidden rounded-md border border-border bg-popover p-3 text-left text-popover-foreground shadow-xl">
       <span className="block pb-2 text-xs font-semibold">Loaded policies and provider definitions</span>
       {loading && <span className="block text-xs text-muted-foreground">Reading personal graph…</span>}
       {error && <span className="block text-xs text-destructive">{error}</span>}
@@ -46,6 +55,8 @@ export function ViewDiagnosticsHover({ children, enabled }: { children: ReactNod
         })}
       </span>)}
       <span className="block text-[11px] text-muted-foreground">Green: conforms · Red: fails · Amber: report unavailable or inconclusive. Read-only; no navigation.</span>
-    </span>}
-  </span>;
+        </Menu.Popup>
+      </Menu.Positioner>
+    </Menu.Portal>}
+  </Menu.Root>;
 }

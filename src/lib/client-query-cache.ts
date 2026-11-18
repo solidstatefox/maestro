@@ -1,3 +1,4 @@
+import { maestroLanguageHeader } from "./maestro-language";
 import { readMaestroConcurrency } from "./maestro-concurrency";
 import { maestroQueryClockScope } from "./maestro-query-execution-clock";
 import { unwrapMaestroQueryEvents } from "./client-query-events";
@@ -83,7 +84,8 @@ export function computeClientCacheKey(url: string, init?: RequestInit): string |
     const bodyStr = typeof init?.body === "string" ? init.body : "";
     // Endpoint selection mutation should not be cached
     if ((bodyStr.includes('"selectEndpointId"') || bodyStr.includes('"selectEndpointUrl"'))) return null;
-    return `POST::${url}::${bodyStr}`;
+    const language = new Headers(init?.headers).get("x-maestro-language") ?? "";
+    return `POST::${url}::lang=${language}::${bodyStr}`;
   }
   return null;
 }
@@ -166,7 +168,8 @@ export async function clearClientQueryCache(): Promise<void> {
 
 /** In-flight Maestro query operations, shared by query listeners and the Refresh/Abort control. */
 const pendingQueryControllers = new Set<AbortController>();
-export type PendingMaestroQuery = { id: number; label: string; state: "queued" | "active" };
+export type PendingMaestroQuery = { id: number; label: string; state: "preparing" | "queued" | "active";
+  queueIndex: number; serverQueueIndex?: number; queueServer?: string };
 const pendingQueryDetails = new Map<AbortController, PendingMaestroQuery>();
 // Link the public request signal to its tracked controller so dispatch status
 // reflects the existing browser scheduler without creating a second queue.
@@ -178,17 +181,27 @@ const pendingQueryDetailListeners = new Set<(queries: PendingMaestroQuery[]) => 
 let lastPendingDetails: PendingMaestroQuery[] = [];
 function pendingDetailsEqual(a: readonly PendingMaestroQuery[], b: readonly PendingMaestroQuery[]): boolean {
   return a.length === b.length && a.every((item, index) =>
-    item.id === b[index].id && item.label === b[index].label && item.state === b[index].state);
+    item.id === b[index].id && item.label === b[index].label && item.state === b[index].state && item.queueIndex === b[index].queueIndex && item.serverQueueIndex === b[index].serverQueueIndex && item.queueServer === b[index].queueServer);
+}
+/** Render the authoritative scheduler's waiting order, not registration order.
+ * Active/pre-dispatch entries have no queue position and follow the queued rows. */
+function orderedPendingQueryDetails(): PendingMaestroQuery[] {
+  return [...pendingQueryDetails.values()].sort((a, b) => {
+    const aQueued = a.queueIndex > 0;
+    const bQueued = b.queueIndex > 0;
+    if (aQueued !== bQueued) return aQueued ? -1 : 1;
+    return aQueued ? a.queueIndex - b.queueIndex || a.id - b.id : a.id - b.id;
+  });
 }
 function notifyPendingQueryDetails() {
-  const snapshot = [...pendingQueryDetails.values()];
+  const snapshot = orderedPendingQueryDetails();
   if (pendingDetailsEqual(snapshot, lastPendingDetails)) return;
   lastPendingDetails = snapshot;
   for (const listener of pendingQueryDetailListeners) listener(snapshot);
 }
 export function subscribePendingMaestroQueryDetails(listener: (queries: PendingMaestroQuery[]) => void): () => void {
   pendingQueryDetailListeners.add(listener);
-  listener([...pendingQueryDetails.values()]);
+  listener(orderedPendingQueryDetails());
   return () => { pendingQueryDetailListeners.delete(listener); };
 }
 export function cancelIndividualMaestroQuery(id: number): void {
@@ -197,6 +210,7 @@ export function cancelIndividualMaestroQuery(id: number): void {
     controller.abort();
     pendingQueryControllers.delete(controller);
     pendingQueryDetails.delete(controller);
+    refreshPendingQueueIndexes();
     notifyPendingQueries();
     return;
   }
@@ -260,7 +274,7 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
   const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   pendingQueryControllers.add(controller);
   pendingQueryOwnerBySignal.set(combinedSignal, controller);
-  pendingQueryDetails.set(controller, { id: ++nextPendingQueryId, label, state: "queued" });
+  pendingQueryDetails.set(controller, { id: ++nextPendingQueryId, label, state: "preparing", queueIndex: 0 });
   notifyPendingQueries();
   try {
     const result = await operation(combinedSignal);
@@ -270,6 +284,7 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
     pendingQueryOwnerBySignal.delete(combinedSignal);
     pendingQueryControllers.delete(controller);
     pendingQueryDetails.delete(controller);
+    refreshPendingQueueIndexes();
     notifyPendingQueries();
   }
 }
@@ -281,6 +296,7 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
  */
 type ScheduledRequest = {
   background: boolean;
+  owner?: AbortController;
   signal?: AbortSignal | null;
   run: () => Promise<Response>;
   resolve: (value: Response) => void;
@@ -291,6 +307,40 @@ let activeProxyRequests = 0;
 let browserQueueGeneration = 0;
 const requestQueue: ScheduledRequest[] = [];
 let schedulerTearingDown = false;
+/** The existing browser transport queue is the sole source of order.
+ * 0 means dispatched (or not yet admitted); positive positions are the
+ * actual one-based waiting order after interactive-priority insertion. */
+function refreshPendingQueueIndexes(): void {
+  // There are two real scheduling stages: requests still waiting in the
+  // browser transport, and requests admitted to the proxy but waiting for its
+  // heavy/light slot. The latter already have authoritative proxy-wide
+  // positions. Merge those two disjoint waiting sets here (never in React)
+  // and give each visible pending item a *unique* one-based ordinal. Running
+  // requests and requests awaiting their first scheduling event have none.
+  const browserPositions = new Map<AbortController, number>();
+  requestQueue.forEach((job, index) => {
+    if (job.owner) browserPositions.set(job.owner, index + 1);
+  });
+  const waiting = [...pendingQueryDetails.entries()].flatMap(([controller, detail]) => {
+    if (detail.state === "active") {
+      return detail.serverQueueIndex && detail.serverQueueIndex > 0
+        ? [{ controller, stage: 0, position: detail.serverQueueIndex, id: detail.id }]
+        : [];
+    }
+    const browserPosition = browserPositions.get(controller);
+    return browserPosition ? [{ controller, stage: 1, position: browserPosition, id: detail.id }] : [];
+  }).sort((a, b) => a.stage - b.stage || a.position - b.position || a.id - b.id);
+  const displayPositions = new Map(waiting.map((item, index) => [item.controller, index + 1]));
+  let changed = false;
+  for (const [controller, detail] of pendingQueryDetails) {
+    const next = displayPositions.get(controller) ?? 0;
+    if (detail.queueIndex !== next) {
+      pendingQueryDetails.set(controller, { ...detail, queueIndex: next });
+      changed = true;
+    }
+  }
+  if (changed) notifyPendingQueryDetails();
+}
 function isBackgroundQuery(init?: RequestInit): boolean {
   const headers = new Headers(init?.headers);
   const label = `${headers.get("x-maestro-debug-source") ?? ""} ${headers.get("x-maestro-debug-component") ?? ""}`.toLowerCase();
@@ -303,6 +353,7 @@ function dispatchScheduledRequests(): void {
     const job = requestQueue[i];
     if (job.signal?.aborted) { requestQueue.splice(i, 1); job.abort(); continue; }
     requestQueue.splice(i, 1);
+    refreshPendingQueueIndexes();
     const generation = browserQueueGeneration;
     activeProxyRequests++;
     void job.run().then(job.resolve, job.reject).finally(() => {
@@ -325,21 +376,32 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
       canceled = true;
       const index = requestQueue.indexOf(job);
       if (index >= 0) requestQueue.splice(index, 1);
+      refreshPendingQueueIndexes();
       reject(new DOMException("Query canceled", "AbortError"));
       dispatchScheduledRequests();
     };
     const clockScope = maestroQueryClockScope(init?.headers ? new Headers(init.headers) : undefined);
-    const job: ScheduledRequest = { background, signal: init?.signal, run: () => {
+    const owner = init?.signal ? pendingQueryOwnerBySignal.get(init.signal) : undefined;
+    const job: ScheduledRequest = { background, owner, signal: init?.signal, run: () => {
       started = true;
       const owner = init?.signal ? pendingQueryOwnerBySignal.get(init.signal) : undefined;
       const tracked = owner ? pendingQueryDetails.get(owner) : undefined;
       if (tracked && tracked.state !== "active") {
         pendingQueryDetails.set(owner!, { ...tracked, state: "active" });
-        notifyPendingQueryDetails();
+        refreshPendingQueueIndexes();
       }
       const headers = new Headers(init?.headers);
       headers.set("x-maestro-query-events", "1");
-      return fetch(input, { ...init, headers }).then(response => unwrapMaestroQueryEvents(response, clockScope, init?.signal));
+      const onServerQueuePosition = (queueIndex: number, server: string) => {
+        if (!owner) return;
+        const item = pendingQueryDetails.get(owner);
+        if (!item) return;
+        pendingQueryDetails.set(owner, { ...item,
+          serverQueueIndex: queueIndex, queueServer: server, state: "active" });
+        refreshPendingQueueIndexes();
+      };
+      return fetch(input, { ...init, headers }).then(response =>
+        unwrapMaestroQueryEvents(response, clockScope, init?.signal, onServerQueuePosition));
     }, resolve, reject, abort };
     if (init?.signal?.aborted) { reject(new DOMException("Query canceled", "AbortError")); return; }
     init?.signal?.addEventListener("abort", abort, { once: true });
@@ -347,6 +409,14 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
     if (background) requestQueue.push(job);
     else requestQueue.splice(requestQueue.findIndex((entry) => entry.background) >= 0
       ? requestQueue.findIndex((entry) => entry.background) : requestQueue.length, 0, job);
+    // Only actual queue members are called queued. A registered request
+    // awaiting FCT setup is preparing and has no fabricated position.
+    if (owner) {
+      const tracked = pendingQueryDetails.get(owner);
+      if (tracked && tracked.state === "preparing")
+        pendingQueryDetails.set(owner, { ...tracked, state: "queued" });
+    }
+    refreshPendingQueueIndexes();
     dispatchScheduledRequests();
   });
 }
@@ -387,12 +457,18 @@ async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit)
 /** Apply a saved per-widget deadline to non-FCT proxy requests (record graphs/policies). */
 async function maestroQueryFetchImpl(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
+  headers.set("x-maestro-language", maestroLanguageHeader());
   const source = [headers.get("x-maestro-debug-source") || "", headers.get("x-maestro-debug-component") || ""].join(" ");
   const timeoutMs = configuredTimeoutMs(source);
-  if (!timeoutMs) return monitoredProxyFetch(input, init);
+  if (!timeoutMs) return monitoredProxyFetch(input, { ...init, headers });
   headers.set("x-maestro-query-timeout-ms", String(timeoutMs));
   const signal = init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
-  return monitoredProxyFetch(input, { ...init, headers, signal });
+  // The timeout signal is a new AbortSignal. Preserve the existing request's
+  // tracked owner so the scheduler (and X/Refresh hover) can attribute it.
+  const owner = init?.signal ? pendingQueryOwnerBySignal.get(init.signal) : undefined;
+  if (owner) pendingQueryOwnerBySignal.set(signal, owner);
+  try { return await monitoredProxyFetch(input, { ...init, headers, signal }); }
+  finally { if (owner) pendingQueryOwnerBySignal.delete(signal); }
 }
 
 /**
@@ -407,6 +483,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
   }
   const requestHeaders = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
   if (urlStr.includes("/proxy/api/fct")) requestHeaders.set("x-maestro-concurrency", JSON.stringify(readMaestroConcurrency()));
+  requestHeaders.set("x-maestro-language", maestroLanguageHeader());
   const debugSource = [requestHeaders.get("x-maestro-debug-source") || "", requestHeaders.get("x-maestro-debug-component") || ""].join(" ");
   const timeoutMs = configuredTimeoutMs(debugSource);
   if (timeoutMs) requestHeaders.set("x-maestro-query-timeout-ms", String(timeoutMs));

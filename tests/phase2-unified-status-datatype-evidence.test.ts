@@ -12,14 +12,16 @@ test('Status compilation reads the universal graph with no approval-value split'
 
 test('numeric detection uses unpaginated datatype aggregate, not sampled facet values', () => {
   const compiler = read('src/lib/fct-sparql-translator.ts');
-  const discovery = read('src/app/proxy/api/service/handlers/personal-facet-providers.ts');
+  const discovery = read('src/lib/client-facet-providers.ts');
   const route = read('src/app/proxy/api/fct/route.ts');
   assert.match(compiler, /datatypeEvidenceQuery = buildStatusSelect/);
   assert.match(compiler, /groupBy: \[inferred, original\]/);
   assert.match(route, /compiled\.datatypeEvidenceQuery/);
   assert.match(route, /datatypeEvidence/);
   assert.doesNotMatch(discovery, /numericExamples|hasObservedNumeric|slice\(0, 20\)/);
-  assert.match(discovery, /matchShaclProviders\(/);
+  assert.match(discovery, /validateClientShaclRows\(/);
+  assert.match(discovery, /readClientPolicyApprovals\(/);
+  assert.match(discovery, /input\.datatypeEvidence/);
 });
 
 test('numeric provider matches datatype evidence through SHACL qualified values', () => {

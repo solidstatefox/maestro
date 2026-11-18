@@ -43,7 +43,7 @@ function LabeledRings({items}: {items:OverviewPercent[]}) {
   return <div className="mx-auto aspect-square max-h-[250px] w-full max-w-[250px] min-w-0" role="img"
     aria-label={chartData.map(item=>`${item.name}: ${pct(item.percentage)}`).join(", ")}>
     <ResponsiveContainer width="100%" height="100%">
-      <RadialBarChart data={chartData} startAngle={-90} endAngle={380} innerRadius={30} outerRadius={110}>
+      <RadialBarChart data={chartData} startAngle={-90} endAngle={270} innerRadius={30} outerRadius={110}>
         <PolarAngleAxis type="number" domain={[0,100]} tick={false} axisLine={false}/>
         <Tooltip cursor={false} contentStyle={tooltipStyle} formatter={(value,name,entry)=>[`${pct(Number(value))} · ${compact.format((entry?.payload as {count?:number})?.count??0)} of ${compact.format((entry?.payload as {denominator?:number})?.denominator??0)}`,(entry?.payload as {name?:string})?.name??"Coverage"]}/>
         <RadialBar dataKey="percentage" background={{fill:"var(--muted)"}} isAnimationActive={false}>

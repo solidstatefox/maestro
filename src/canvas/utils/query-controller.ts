@@ -181,7 +181,7 @@ export function parseFctQueryXml(xml: string): FctQueryTree | null {
   const parseNode = (element: Element, path: string, isRootChild: boolean): FctQueryNode => {
     const name = element.localName;
     const attributes: Record<string, string> = {};
-    for (const attribute of Array.from(element.attributes)) attributes[attribute.name] = attribute.value;
+    for (const attribute of Array.from(element.attributes)) if (!(name === "view" && attribute.name === "indexLang")) attributes[attribute.name] = attribute.value;
     const xmlId = attributes.id;
     delete attributes.id;
     const iri = attributes.iri ?? "";

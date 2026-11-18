@@ -5,6 +5,16 @@
     "asset": "09d0db2d66573e278871632ef3898ab3b7706510cb79051bfe17084fe2acde83.json"
   },
   {
+    "file": "email-regex/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "98658a15bc3bb4d8ba31a71003a39bfa5680d6d600b51c3baf7f319bc2aaac23.json"
+  },
+  {
+    "file": "kanban/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "041a122aef4910aa14405fe4e0d7a4c3cb63e9777a4d4fdf90a253dc27be119a.json"
+  },
+  {
     "file": "kinds/provider.ttl",
     "destination": "/shacl/policies",
     "asset": "73a9229edfce2c7f948fda61d8fe27eb780c571cfcac289da6feb64fdc2d27f6.json"

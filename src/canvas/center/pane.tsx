@@ -320,7 +320,6 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                       className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
                       onClick={(event) => {
                         setNodeAttribute("query-view", "indexLabels", alphabetLabelUris);
-                        setNodeAttribute("query-view", "indexLang", preferredAlphabetLanguage);
                         setNodeAttribute("query-view", "index", toggleAlphabetSelection(alphabetIndex, letter, event.shiftKey) || null);
                         setResultsUiPage(0); setResults([]); setResultsPage(resultsBatchSize, 0);
                       }}>
@@ -492,7 +491,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                   </div>
                   <ButtonGroup
                     aria-label="Results, badges, and query inspector"
-                    className="hidden min-w-0 shrink-0 items-center overflow-hidden rounded-md border border-input bg-background [&>*+*]:border-l [&>*+*]:border-input [&>button]:rounded-none [&>button]:border-0 [&>button]:shadow-none group-hover/header:inline-flex"
+                    className="inline-flex min-w-0 shrink-0 items-center overflow-hidden rounded-md border border-input bg-background [&>*+*]:border-l [&>*+*]:border-input [&>button]:rounded-none [&>button]:border-0 [&>button]:shadow-none"
                   >
                     <Tooltip>
                       <TooltipTrigger render={

@@ -41,12 +41,12 @@ test('URI suggestion type enrichment is optional, bounded, hierarchy-aware and n
   assert.match(typeSource,/\.slice\(0, 10\)/);
   assert.match(typeSource,/LIMIT 150/);
   const component=read('src/canvas/top/root-uri-autocomplete.tsx');
-  assert.match(component,/const ranked = \[\.\.\.unique\.values\(\)\]/);
+  assert.match(component,/return \[\.\.\.unique\.values\(\)\]\.slice\(0,settings\.limit\)/);
   const lifecycle=read('src/lib/app-lifecycle/uri-autocomplete.ts');
   assert.match(lifecycle,/type Enricher/);
   assert.match(lifecycle,/target: "complete"/);
   assert.match(lifecycle,/items: context.items.map\(item =>/);
-  assert.match(component,/return selectAutocompleteTypes\(payload.results\?\.bindings/);
+  assert.match(component,/const incomingType = row\.type\?\.type === "uri"/);
   assert.match(component,/rdfType\??/);
   assert.match(read('src/lib/uri-autocomplete-query.ts'),/ORDER BY DESC \(<LONG::IRI_RANK>/);
   const transpiled=ts.transpileModule(typeSource,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;

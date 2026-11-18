@@ -52,10 +52,13 @@ test("Approved numeric provider declares guarded coercion and scalar MIN/MAX pro
   const ttl = read("graph/numeric/provider.ttl");
   assert.match(ttl, /mui:numericCoercion "finite-lexical-v1"/);
   assert.match(ttl, /mui:expression "\?facetNumber"/);
-  assert.match(ttl, /sh:pattern/);
-  const route = read("src/app/proxy/api/service/handlers/personal-facet-providers.ts");
-  assert.match(route, /COERCIBLE_NUMERIC_MODE/);
-  assert.match(route, /readPolicyApprovals\(request\)/);
+  assert.match(ttl, /mui:numericPattern/);
+  assert.match(ttl, /sh:qualifiedValueShape/);
+  const client = read("src/lib/client-facet-providers.ts");
+  assert.match(client, /COERCIBLE_NUMERIC_MODE/);
+  assert.match(client, /validateClientShaclRows\(/);
+  assert.match(client, /readClientPolicyApprovals\(/);
+  assert.match(client, /eligibleNumeric\.filter\(p=>approved\.has\(p\.uri\)\)/);
 
   const tree: FctQueryTree = {
     name: "query", attributes: { id: "a", ctr: "14", addr: "https://example.org/graph@https://example.org/sparql" }, children: [

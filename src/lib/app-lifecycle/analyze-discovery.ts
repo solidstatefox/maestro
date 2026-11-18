@@ -37,8 +37,14 @@ export function createMaestroAnalyzeDiscoveryController() {
   return {
     start() { if (actor) return; actor = fresh(); sub = actor.subscribe(next => { snapshot = next; publish(); }); actor.start(); },
     stop() { sub?.unsubscribe(); sub = null; actor?.stop(); actor = null; snapshot = fresh().getSnapshot(); publish(); },
-    discover(key: string, execute: Executor) { actor?.send({ type: "DISCOVER", key, execute }); },
-    cancel() { actor?.send({ type: "CANCEL" }); },
+    discover(key: string, execute: Executor) {
+      if (!actor) return;
+      if (snapshot.context.key === key && (snapshot.matches("loading") || snapshot.matches("ready"))) return;
+      actor.send({ type: "DISCOVER", key, execute });
+    },
+    cancel() {
+      if (actor && !snapshot.matches("inactive")) actor.send({ type: "CANCEL" });
+    },
     getSnapshot: () => snapshot,
     subscribe(cb: () => void) { listeners.add(cb); return () => { listeners.delete(cb); }; },
   };

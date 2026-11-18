@@ -33,7 +33,9 @@ export const maestroUriAutocompleteMachine = setup({
     CLEAR: { target: ".idle", actions: assign(({ context }) => ({ ...empty(), popupOpen: context.popupOpen })) },
     FIND: { target: ".debouncing", actions: assign(({ context, event }) => ({
       ...empty(), key: event.key, execute: event.execute, enrich: event.enrich ?? null,
-      popupOpen: context.popupOpen,
+      // A new eligible draft is a new editing session: loading, empty and
+      // failure states must remain visible in the anchored popup.
+      popupOpen: true,
     })) },
     POPUP_OPEN: { actions: assign({ popupOpen: true }) },
     POPUP_CLOSE: { actions: assign({ popupOpen: false }) },

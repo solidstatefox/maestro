@@ -1,0 +1,38 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix schema: <https://schema.org/> .
+@prefix dbo: <http://dbpedia.org/ontology/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+# Extraction behavior is RDF policy, not a hard-coded table of email IRIs in TS.
+# The generic derived-regex FCT engine reads pid/rid and the projection attributes.
+<gttp://ggg.maestro.ui/provider/email-regex> a mui:Provider ;
+  rdfs:label "Email components"@en ;
+  mui:accepts <gttp://ggg.maestro.ui/provider/email-regex-input> ;
+  mui:widget <gttp://ggg.maestro.ui/widget/email-regex> ;
+  mui:sourcePattern "^(?:mailto:)?([^@\\s]+)@([^@\\s]+)$" ;
+  mui:derivedField <gttp://ggg.maestro.ui/derived/email-username>,
+                   <gttp://ggg.maestro.ui/derived/email-domain> .
+
+<gttp://ggg.maestro.ui/provider/email-regex-input> a mui:InputShape, sh:NodeShape ;
+  sh:or (
+    [ sh:property [ sh:path schema:email ] ]
+    [ sh:property [ sh:path <http://schema.org/email> ] ]
+    [ sh:property [ sh:path foaf:mbox ] ]
+    [ sh:property [ sh:path dbo:email ] ]
+    [ sh:property [ sh:path <http://dbpedia.org/property/email> ] ]
+  ) .
+
+<gttp://ggg.maestro.ui/widget/email-regex> a mui:FacetWidget ;
+  rdfs:label "Email capture facets"@en .
+
+<gttp://ggg.maestro.ui/derived/email-username> a mui:DerivedFacet ;
+  rdfs:label "email: username"@en ;
+  mui:resultPredicate <gttp://ggg.maestro.ui/derived/email#username> ;
+  mui:capture "1" .
+<gttp://ggg.maestro.ui/derived/email-domain> a mui:DerivedFacet ;
+  rdfs:label "email: domain"@en ;
+  mui:resultPredicate <gttp://ggg.maestro.ui/derived/email#domain> ;
+  mui:capture "2" .

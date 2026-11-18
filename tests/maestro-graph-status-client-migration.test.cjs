@@ -18,7 +18,7 @@ function loadClientStatusReads(select) {
       personalContext: async () => ({base:'https://test.example/query',addr:'https://test.example/query@https://test.example/sparql'}),
       selectPersonal: select,
     },
-    '@/lib/status-machine-client': {loadClientStatusMachines: async () => [{}]},
+    '@/lib/status-machine-client': {loadClientStatusMachines: async () => [{targetClasses:new Set(['http://www.w3.org/2000/01/rdf-schema#Resource'])}]},
     '@/lib/status-machine-runtime': {
       STATUS_RDFS:'http://www.w3.org/2000/01/rdf-schema#',
       machineForTarget: () => ({}),

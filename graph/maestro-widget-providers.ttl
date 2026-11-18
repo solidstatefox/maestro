@@ -1,8 +1,10 @@
 @prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
 @prefix schema: <https://schema.org/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/entrypoint> a mui:Provider ;
+    rdfs:label "Graph Servers" ;
     mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/entrypoint-input> ;
     mui:widget <gttp://ggg.maestro.ecosys/shacl/view#EntryPointCards> .
 
@@ -101,7 +103,7 @@
 
 <gttp://ggg.maestro.ecosys/shacl/template#QueryHistoryVisitRecordTemplate> a mui:RecordViewerWidget .
 
-<gttp://ggg.maestro.ecosys/shacl/view#EntryPointCards> a mui:CardGridWidget .
+<gttp://ggg.maestro.ecosys/shacl/view#EntryPointCards> a mui:CardGridWidget, mui:PerspectiveWidget .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-0-input> a mui:InputShape ;
     sh:class <http://www.w3.org/2002/01/bookmark#Bookmark> .

@@ -16,12 +16,40 @@ const valid=(value:string)=>value.length>0&&value.length<4096&&/^[a-z][a-z0-9+.-
 type Input={properties:string[];queryXml:string;datatypeEvidence:Record<string,string[]>};
 type NumericEntry=NumericProviderMatch & {shape:string};
 const unique=<T,>(values:T[])=>[...new Set(values)];
-export async function discoverClientFacetProviders(input:Input,signal?:AbortSignal):Promise<ProviderMatches>{
+export async function discoverClientFacetProviders(
+  input:Input, signal?:AbortSignal, onTags?: (approvedTags: TagProviderMatch[]) => void,
+):Promise<ProviderMatches>{
   const properties=unique(input.properties.filter(valid)).slice(0,200);
   if(!properties.length)return {temporal:[],numeric:[],tags:[]};
   const ctx=await personalContext(),graph=`${ctx.base}/shacl/policies`,ontology=`${ctx.base}/ontology-cache`;
   const values=properties.map(value=>`<${value}>`).join(" ");
   const prefixes=`PREFIX mui: <${MUI}> PREFIX sh: <${SH}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>`;
+  // Start the Tag Cloud lookup immediately. This provider is structurally
+  // matched by the live facet property; unrelated Calendar/Numeric SHACL
+  // probes must not delay or veto it. Its own approval is still mandatory.
+  const tagDiscovery = (async (): Promise<TagProviderMatch[]> => {
+    try {
+      const rows = await selectPersonal(`${prefixes} SELECT DISTINCT ?provider ?property WHERE { GRAPH <${graph}> {
+        ?provider a mui:Provider ; mui:accepts ?shape ; mui:widget ?widget ; mui:tagProperty ?property .
+        ?widget a mui:TagCloudFacetWidget . ?shape a mui:InputShape .
+        { { ?shape sh:property/sh:path ?property }
+          UNION { ?shape sh:or/rdf:rest*/rdf:first/sh:property/sh:path ?property } }
+        } VALUES ?property { ${values} }
+      } LIMIT 200`, ctx, signal);
+      const candidates:TagProviderMatch[] = [...new Map(rows.map(row => ({
+        uri: row.provider?.value ?? "", property: row.property?.value ?? "",
+      })).filter(row => valid(row.uri) && properties.includes(row.property))
+        .map(row => [row.property,row] as const)).values()];
+      const decisions = await readClientPolicyApprovals(unique(candidates.map(row => row.uri)), signal);
+      const approved = new Set(decisions.filter(row => row.status === "Approved").map(row => row.uri));
+      const ready = candidates.filter(row => approved.has(row.uri));
+      if (!signal?.aborted) onTags?.(ready);
+      return ready;
+    } catch (error) {
+      if (!signal?.aborted) browserLog.warn("facet-provider.tags-discovery.unavailable", error);
+      return [];
+    }
+  })();
   const dateRows=await selectPersonal(`${prefixes} SELECT DISTINCT ?provider ?property ?label ?range ?acceptedDatatype WHERE {
     GRAPH <${graph}> { ?provider a mui:Provider ; mui:accepts ?shape ; mui:widget ?widget .
       ?shape sh:path ?property . ?widget a mui:DateRangeFacetWidget .
@@ -114,15 +142,7 @@ export async function discoverClientFacetProviders(input:Input,signal?:AbortSign
       }
     }
   }
-  const tagRows=await selectPersonal(`${prefixes} SELECT DISTINCT ?provider ?property WHERE { GRAPH <${graph}> {
-    ?provider a mui:Provider ; mui:accepts ?shape ; mui:widget ?widget ; mui:tagProperty ?property .
-    ?widget a mui:TagCloudFacetWidget . ?shape a mui:InputShape .
-    { { ?shape sh:property/sh:path ?property }
-      UNION { ?shape sh:or/rdf:rest*/rdf:first/sh:property/sh:path ?property } }
-    } VALUES ?property { ${values} }
-  } LIMIT 200`,ctx,signal);
-  const tags:TagProviderMatch[]=[...new Map(tagRows.map(row=>({uri:row.provider?.value??"",property:row.property?.value??""}))
-    .filter(row=>valid(row.uri)&&properties.includes(row.property)).map(row=>[row.property,row] as const)).values()];
+  const tags = await tagDiscovery;
   const eligibleNumeric=numeric.filter(p=>p.eligibleProperties.length>0);
   if(input.queryXml?.includes("<query")&&input.queryXml.length<=200_000){
     const discovered=unique([...dates.map(p=>p.uri),...eligibleNumeric.map(p=>p.uri),...tags.map(p=>p.uri)]);

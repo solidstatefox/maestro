@@ -40,7 +40,7 @@ export function RecordValuePages({
   children?: React.ReactNode;
   pageSize?: number;
   className?: string;
-  layout?: "stack" | "wrap";
+  layout?: "stack" | "wrap" | "groups";
   id?: string;
 }) {
   const values = React.Children.toArray(children).filter(React.isValidElement);
@@ -53,7 +53,9 @@ export function RecordValuePages({
     <div id={id} className={`min-w-0 ${className}`}>
       <div className={layout === "wrap" ? "min-w-0 leading-8" : "flex min-w-0 flex-col gap-1.5"}>
         {values.slice(start, start + size).map((value, i) => (
-          layout === "wrap" ? (
+          layout === "groups" ? (
+            <React.Fragment key={(value as React.ReactElement).key ?? start + i}>{value}</React.Fragment>
+          ) : layout === "wrap" ? (
             <span className="inline-block max-w-full align-baseline mr-1.5" key={(value as React.ReactElement).key ?? start + i}>
               {value}
             </span>

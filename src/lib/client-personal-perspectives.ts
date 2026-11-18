@@ -53,12 +53,14 @@ export async function discoverClientPerspectives(classes: string[], signal?: Abo
  * Record's rdf:type against the live graph before writing provenance. */
 export async function discoverMatchedClientPerspectives(
   classes: string[], queryXml: string, record: string, history?: string, signal?: AbortSignal,
+  queryProviders: string[] = [],
 ): Promise<ClientPerspective[]> {
   const requested = [...new Set(classes.filter(safe))].slice(0,100);
-  if(!requested.length)return [];
+  const contextual = [...new Set(queryProviders.filter(safe))].slice(0, 100);
+  if (!requested.length && !contextual.length) return [];
   const ctx = await personalContext();
   const shapes = `${ctx.base}/shacl/policies`, ontology = `${ctx.base}/ontology-cache`;
-  const candidates = await selectPersonal(`PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
+  const candidates = requested.length ? await selectPersonal(`PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
     SELECT DISTINCT ?provider ?kind ?target ?stylesheet WHERE { GRAPH <${shapes}> {
       ?provider a mui:Provider ; mui:perspectiveKind ?kind ; mui:widget ?template ; mui:accepts ?input .
       ?input <${SH}class> ?target .
@@ -66,7 +68,7 @@ export async function discoverMatchedClientPerspectives(
     }
     VALUES ?queryClass { ${requested.map(uri=>`<${uri}>`).join(" ")} }
     FILTER(?queryClass = ?target || EXISTS { GRAPH <${ontology}> { ?queryClass rdfs:subClassOf+ ?target } })
-    } LIMIT 100`,ctx,signal);
+    } LIMIT 100`,ctx,signal) : [];
   const providers = candidates.map(row=>({
     uri:row.provider?.value??"",kind:row.kind?.value??"",target:row.target?.value??"",stylesheet:row.stylesheet?.value??"",
   })).filter(item=>safe(item.uri)&&safe(item.target)&&(item.kind==="bookmarks"||item.kind==="history")&&
@@ -104,5 +106,5 @@ export async function discoverMatchedClientPerspectives(
       }catch(error){if(signal?.aborted)throw error;}
     }
   }
-  return discoverClientPerspectives(requested,signal);
+  return discoverClientPerspectives(requested, signal, contextual);
 }

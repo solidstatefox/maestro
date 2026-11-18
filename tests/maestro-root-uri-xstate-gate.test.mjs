@@ -37,16 +37,16 @@ test('XState commit gate owns the FCT URI writer without falling back to text',(
 test('Base Combobox commits selected URI, disables autocomplete for URL-shaped drafts, and indicates XState',()=>{
   const component=read('src/canvas/top/root-uri-autocomplete.tsx');
   const query=read('src/lib/uri-autocomplete-query.ts');
-  assert.match(component,/const key = !urlDraft/);
+  assert.match(component,/const key = !suspended && !urlDraft/);
   assert.match(component,/onDraft\(selected\.uri\);onCommit\(selected\.uri, selected\.label\)/);
   assert.match(component,/showTrigger=\{false\}/);
   assert.match(component,/data-xstate-gate=\{gateState\}/);
   assert.doesNotMatch(component, />XState<\/span>/);
-  assert.match(read('src/canvas/utils/workspace-controller.tsx'), /text-green-600 dark:text-green-400/);
+  assert.match(read('src/canvas/top/root-autocomplete-query-inspector.tsx'), /text-green-600 dark:text-green-400/);
   assert.match(component,/maxLength=\{MAX_ROOT_URI_CHARS\}/);
   assert.match(query,/isRootUriOrPrefix\(text\)/);
   assert.doesNotMatch(query,/const uriPrefix =/);
-  assert.match(query,/SELECT DISTINCT \?uri \?label/);
+  assert.match(query,/SELECT \?uri \?label \?type/);
 });
 
 test('Clipboard obeys both 10s freshness and URL length without truncating',()=>{

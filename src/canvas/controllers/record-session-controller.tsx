@@ -13,7 +13,7 @@ import type { RecordSessionDescriptor, RecordSessionsController } from "@/canvas
 import { parseBlankNodeRecordBindings, type RecordValueTerm } from "@/lib/bnode";
 import { cachedFetchFct, maestroQueryFetch } from "@/lib/client-query-cache";
 import { readRecordGraphAuthors } from "@/lib/record-authors";
-import { recordGraphFctQuery, readRecordGraphFctResponse } from "@/lib/record-graph-marshalling";
+import { recordGraphFctQuery, loadCompleteRecordGraphList } from "@/lib/record-graph-marshalling";
 import { readRecordGraphDiscoveryLimits } from "@/lib/record-graph-limits";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
 import { downloadRecordDescribeSnapshot } from "@/canvas/right/record";
@@ -64,6 +64,7 @@ export function useRecordPivotWorkspace(
     browse.recordDescriptionQueryLimit, browse.preferredAlphabetLanguage].join("\u0000");
   useLayoutEffect(() => {
     own.recordLifecycle.selectRecord(currentRecordDescriptionKey);
+    own.blankNodeContext.select(currentRecordDescriptionKey, recordTermType);
   }, [own.recordLifecycle, currentRecordDescriptionKey]);
   const requestKeyRef = useRef(currentRecordDescriptionKey);
   requestKeyRef.current = currentRecordDescriptionKey;
@@ -85,7 +86,7 @@ export function useRecordPivotWorkspace(
     own.setDescribedRecordUri("");
     own.setRecordDescriptionSnapshot(null);
     own.setBlankNodeRecords([]);
-    own.setActiveBlankNodeTab(0);
+    own.setActiveBlankNodeTab(-1);
     own.setFormattedRecordHtml("");
     own.setRecordFormatError("");
     own.setRecordDescriptionPage(0);
@@ -97,14 +98,16 @@ export function useRecordPivotWorkspace(
           throw new Error("No named graphs are available for this Record graph or author.");
         }
         if (recordTermType === "bnode") {
+          if (!own.blankNodeContext.begin()) throw new Error("Blank-node Record access was rejected by its XState context.");
           const queryXml = identity.bnodeQueryXml;
           const anchor = identity.bnodeAnchor;
-          if (!queryXml || !anchor) throw new Error("This blank-node pivot needs the existing URI-anchored FCT blank-node query.");
+          if (!queryXml) throw new Error("This blank-node pivot needs the existing FCT blank-node query.");
           const response = await cachedFetchFct("/proxy/api/sparql", {
             method: "POST", cache: "no-store", signal: request.signal,
             headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-blank-node-siblings", "RecordDescription") },
-            body: JSON.stringify({ recordBlankNodes: { queryXml, parent: anchor.parent,
-              predicate: anchor.predicate, preferredLanguage: browse.preferredAlphabetLanguage,
+            body: JSON.stringify({ recordBlankNodes: { queryXml,
+              ...(anchor ? { parent: anchor.parent, predicate: anchor.predicate } : { unanchored: true }),
+              preferredLanguage: browse.preferredAlphabetLanguage,
               limit: browse.recordDescriptionQueryLimit,
               ...(selectedGraphs.length ? { graphs: selectedGraphs } : {}) } }),
           });
@@ -117,8 +120,10 @@ export function useRecordPivotWorkspace(
           const incomplete = Boolean(payload.incomplete) ||
             (payload.results?.bindings?.length ?? 0) >= browse.recordDescriptionQueryLimit;
           const siblings = parseBlankNodeRecordBindings(payload.results?.bindings ?? [], incomplete);
-          const activeIndex = Math.max(0, siblings.findIndex(row => row.id === selectedUri));
-          const chosen = siblings[activeIndex];
+          if (!siblings.length) throw new Error("The blank-node Record path no longer matches a node in this graph.");
+          // Pivots have no durable identity for a root-level blank-node page.
+          const activeIndex = own.blankNodeContext.received(siblings.length, incomplete || !anchor);
+          const chosen = activeIndex >= 0 ? siblings[activeIndex] : undefined;
           own.setBlankNodeRecords(siblings);
           own.setActiveBlankNodeTab(activeIndex);
           own.setDescribedRecord(chosen?.rows ?? []);
@@ -143,6 +148,7 @@ export function useRecordPivotWorkspace(
         }
       } catch (error) {
         if (request.signal.aborted) return;
+        own.blankNodeContext.fail();
         own.setRecordDescriptionError(error instanceof Error ? error.message : String(error));
       } finally {
         if (!request.signal.aborted) own.setIsDescribing(false);
@@ -174,16 +180,17 @@ export function useRecordPivotWorkspace(
         const projection = recordGraphFctQuery({ addr: browse.queryTree.attributes.addr,
           ...(recordTermType === "bnode" ? { blankQueryXml: identity.bnodeQueryXml || "" } : { uri: selectedUri }),
           limits: readRecordGraphDiscoveryLimits() });
-        const response = await cachedFetchFct("/proxy/api/fct", {
-          method: "POST", cache: "no-store", signal: request.signal,
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-fct", "RecordGraphs") },
-          body: JSON.stringify({ queryXml: projection }),
-        });
-        const raw = await response.text();
-        if (!response.ok) throw new Error(raw.slice(0, 800));
-        const data = readRecordGraphFctResponse(raw);
-        if (!data.complete) throw new Error("Record graph discovery was incomplete.");
-        if (!request.signal.aborted) own.setRecordGraphs(data.graphs ?? []);
+        const graphs = await loadCompleteRecordGraphList(projection, async (pageXml) => {
+          const response = await cachedFetchFct("/proxy/api/fct", {
+            method: "POST", cache: "no-store", signal: request.signal,
+            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-fct", "RecordGraphs") },
+            body: JSON.stringify({ queryXml: pageXml }),
+          });
+          const raw = await response.text();
+          if (!response.ok) throw new Error(raw.slice(0, 800));
+          return raw;
+        }, request.signal);
+        if (!request.signal.aborted) own.setRecordGraphs(graphs);
       } catch (error) {
         if (!request.signal.aborted) own.setRecordGraphError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -198,12 +205,19 @@ export function useRecordPivotWorkspace(
   useEffect(() => {
     own.setRecordGraphAuthors([]);
     own.setSelectedRecordAuthor("");
-    if (!own.selectedRecordGraph || !graphsInSelectedFamily.length) return;
+    own.setRecordAuthorError("");
+    if (!own.selectedRecordGraph || !graphsInSelectedFamily.length) {
+      own.setLoadingRecordAuthors(false);
+      return;
+    }
     const request = new AbortController();
     const release = controller.registerRequest(session.id, request);
     own.setLoadingRecordAuthors(true);
     void readRecordGraphAuthors(browse.queryTree.attributes.addr ?? "", graphsInSelectedFamily, request.signal)
-      .then(authors => { if (!request.signal.aborted) own.setRecordGraphAuthors(authors); })
+      .then(authors => { if (!request.signal.aborted) {
+        own.setRecordGraphAuthors(authors);
+        own.setSelectedRecordAuthor(previous => authors.some(author => author.graph === previous) ? previous : "");
+      } })
       .catch(error => { if (!request.signal.aborted) own.setRecordAuthorError(String(error)); })
       .finally(() => { if (!request.signal.aborted) own.setLoadingRecordAuthors(false); release(); });
     return () => { request.abort(); release(); };
@@ -425,6 +439,7 @@ export function useRecordPivotWorkspace(
     selectedResult: undefined,
     selectedUri,
     setActiveBlankNodeTab: own.setActiveBlankNodeTab,
+    chooseBlankNodeCandidate: own.chooseBlankNodeCandidate,
     setDescribedRecord: own.setDescribedRecord,
     setExplicitBlankNodeAnchor: own.setExplicitBlankNodeAnchor,
     setFormattedRecordButtonsHtml: own.setFormattedRecordButtonsHtml,

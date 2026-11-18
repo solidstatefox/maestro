@@ -25,7 +25,7 @@ export function ElapsedStatus({ label, category, requestWaves = 1, clockScope }:
       setAnimationTick(Math.floor((performance.now() - mountedAt) / 100));
       if (clockScope) {
         const snapshot = getMaestroQueryExecutionSnapshot(clockScope);
-        setElapsedMs(snapshot.elapsedMs);
+        setElapsedMs(previous => Math.floor(previous / 1000) === Math.floor(snapshot.elapsedMs / 1000) ? previous : snapshot.elapsedMs);
         // The same mounted component may survive a live query change or Refresh.
         // The next pipeline starts queued with no ratio until its first dispatch.
         if (displayedGeneration.current !== snapshot.generation) {
@@ -39,7 +39,8 @@ export function ElapsedStatus({ label, category, requestWaves = 1, clockScope }:
         setElapsedMs(0);
       }
       const configured = category ? readMaestroWidgetTimeouts()[category] : 0;
-      setTimeoutMs(configured > 0 ? configured * 1000 : null);
+      const nextTimeout = configured > 0 ? configured * 1000 : null;
+      setTimeoutMs(previous => previous === nextTimeout ? previous : nextTimeout);
     };
     update();
     const timer = window.setInterval(update, 100);

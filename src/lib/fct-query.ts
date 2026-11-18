@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useSyncExternalStore } from "react";
-import { ensureFctQueryIds } from "./fct-node-identity";
+import { parseFctIdCounter, serializeFctIdCounter, ensureFctQueryIds } from "./fct-node-identity";
 import { cloneFctQueryTree } from "./fct-query-clone";
 export { serializeFctQuery } from "./fct-query-serialize";
 
@@ -178,13 +178,13 @@ export function attachViewToPropertyInQueryTree(
     children: [],
   };
   const attach = (nodes: FctQueryNode[]): FctQueryNode[] => {
-    const viewIndex = nodes.findIndex((node) => (node.id === view.id || (Boolean(view.uiKey) && node.uiKey === view.uiKey)) || (node.uiKey === "query-view" || node.id === "query-view"));
-    if (viewIndex >= 0) {
-      const withoutView = nodes.filter((node) => (node.id !== view.id && (!view.uiKey || node.uiKey !== view.uiKey)) && (node.uiKey !== "query-view" && node.id !== "query-view"));
-      const existing = withoutView.find((node) => node.name === relationship && node.attributes.iri === iri);
+    // View ownership is a structural FCT fact, never an @id convention.
+    if (nodes.some(node => node.name === "view")) {
+      const withoutView = nodes.filter(node => node.name !== "view");
+      const existing = withoutView.find(node => node.name === relationship && node.attributes.iri === iri);
       if (existing) {
-        return withoutView.map((node) => node.id === existing.id
-          ? { ...node, children: [...node.children.filter((child) => (child.uiKey !== "query-view" && child.id !== "query-view")), leafView] }
+        return withoutView.map(node => node === existing
+          ? { ...node, children: [...node.children.filter(child => child.name !== "view"), leafView] }
           : node);
       }
       return [...withoutView, {
@@ -224,15 +224,26 @@ function createQueryStore(initialTree?: FctQueryTree) {
     }
   }
 
+  function stripLegacyViewLanguage(nodes: FctQueryNode[]): FctQueryNode[] {
+    return nodes.map(node => ({ ...node,
+      attributes: node.name === "view"
+        ? Object.fromEntries(Object.entries(node.attributes).filter(([key]) => key !== "indexLang"))
+        : { ...node.attributes },
+      children: stripLegacyViewLanguage(node.children),
+    }));
+  }
+
   function updateTree(
     update: (tree: FctQueryTree) => FctQueryTree,
   ) {
-    const updated = update(state.tree);
+    const proposed = update(state.tree);
+    const updated = { ...proposed, children: stripLegacyViewLanguage(proposed.children) };
     const nextTree = ensureFctQueryIds({
       ...updated,
       attributes: { ...updated.attributes,
         ctr: String(Math.max(10, Number(state.tree.attributes.ctr) || 10, Number(updated.attributes.ctr) || 10)),
-        uctr: Math.max(10, parseInt(state.tree.attributes.uctr || "a", 36) || 10, parseInt(updated.attributes.uctr || "a", 36) || 10).toString(36),
+        uctr: serializeFctIdCounter(Math.max(parseFctIdCounter(state.tree.attributes.uctr, "base36"), parseFctIdCounter(updated.attributes.uctr, "base36")), "base36"),
+        rctr: serializeFctIdCounter(Math.max(parseFctIdCounter(state.tree.attributes.rctr, "base36"), parseFctIdCounter(updated.attributes.rctr, "base36")), "base36"),
       },
     });
     state = {
@@ -246,7 +257,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
   /** Replace the authoritative query with a validated snapshot, e.g. one restored from a share URL. */
   function replaceTree(tree: FctQueryTree) {
     if (!isValidQueryTree(tree)) throw new TypeError("Invalid FCT query tree");
-    const clonedTree = ensureFctQueryIds(cloneQueryTree(tree));
+    const clonedTree = ensureFctQueryIds({ ...cloneQueryTree(tree), children: stripLegacyViewLanguage(tree.children) });
     const rootUriValues = clonedTree.children.filter(
       (node) => node.name === "value" && node.attributes.datatype === "uri",
     );

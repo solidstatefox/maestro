@@ -84,7 +84,10 @@ export function OverviewConnectionFinder({population,endpoint,graph,scopeKey,dis
       <p className="text-xs text-blue-700 dark:text-sky-400">Select a first-degree Path node in the mindmap to ask which FCT query contains both resources through that shared relationship.</p>
       <div className="relative h-[450px] overflow-hidden rounded-lg border bg-card"><MindMap data={mindMap} readonly compact onSelectNodes={(selected)=>{
         const id=selected[0]?.id ?? "";
-        const match=/^connection-path-(\d+)$/.exec(id);
+        // Mindmap library reports the *actual clicked node*: it may be the
+        // Path heading or one of its descendant relationship nodes. Every
+        // node in a verified path represents that path's FCT question.
+        const match=/^connection-(?:path-)?(\d+)(?:-\d+)?$/.exec(id);
         if(match && onBrowsePath) {const path=paths[Number(match[1])];if(path)onBrowsePath(path);}
       }}><MindMapControls/></MindMap></div>
     </>}

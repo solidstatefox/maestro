@@ -79,7 +79,7 @@ export function BrowseGroupsCanvas({ workspace }: { workspace: WorkspaceControll
                           const memberKey = `${selectedGroupByOption!.key}::${groupValueKey(groupValue)}`;
                           // A missing member state is not evidence of an active request.
                           // In particular, an aborted request must not leave this card spinning forever.
-                          const members = groupMembers[memberKey] ?? { results: [], loading: false, error: "Group members have not been loaded." };
+                          const members = groupMembers[memberKey] ?? { results: [], loading: true, error: "" };
                           const selectedRelationshipNode = findQueryNode(queryTree.children, selectedGroupByOption!.nodeId);
                           const expectedBinding = groupValueBinding(groupValue);
                           const bound = (selectedRelationshipNode?.children ?? []).some((child) => child.name === "value" && child.text === expectedBinding.text && (child.attributes.datatype ?? "uri") === expectedBinding.datatype && (child.attributes["xml:lang"] ?? "") === (expectedBinding.lang ?? ""));

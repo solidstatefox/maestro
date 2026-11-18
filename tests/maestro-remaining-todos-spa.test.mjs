@@ -18,7 +18,7 @@ test('Root has Base UI Combobox without chevron and popup-specific statuses',()=
   assert.match(component,/from "@base-ui\/react"/);
   assert.match(root,/showTrigger=\{false\}/);
   assert.match(root,/<ComboboxContent[\s\S]*result\.loading[\s\S]*result\.error[\s\S]*No results/);
-  assert.match(read('src/lib/uri-autocomplete-query.ts'),/SELECT DISTINCT \?uri \?label/);
+  assert.match(read('src/lib/uri-autocomplete-query.ts'),/SELECT \?uri \?label \?type/);
   assert.match(read('src/lib/uri-autocomplete-query.ts'),/IRI_RANK/);
   assert.doesNotMatch(read('src/lib/uri-autocomplete-query.ts'),/\\p\{L\}/);
   assert.match(read('src/lib/app-lifecycle/uri-autocomplete.ts'),/ready:/);

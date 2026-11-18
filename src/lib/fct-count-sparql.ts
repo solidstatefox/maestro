@@ -1,3 +1,4 @@
+import { effectiveMaestroLanguage, validMaestroLanguage } from "./maestro-language";
 import { MAESTRO_KIND_IDS, normalizeMaestroKind, maestroKindSparql } from "./maestro-kinds";
 import { ALL_GRAPHS } from "./graph-address-mode";
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
@@ -10,6 +11,7 @@ type CompilerState = {
   viewVariable: string | null;
   patterns: string[];
   errors: string[];
+  relationBindings: Map<string,string>;
 };
 
 function escapeSparqlString(value: string): string {
@@ -51,6 +53,7 @@ function nextVariable(state: CompilerState): string {
 }
 
 function appendValueFilter(node: FctQueryNode, subject: string, state: CompilerState): void {
+  if (node.attributes.enabled === "false") return;
   const start = node.attributes.rangeStart?.trim();
   const end = node.attributes.rangeEnd?.trim();
   if (start !== undefined || end !== undefined) {
@@ -131,7 +134,8 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
       let next = base;
       const branches: string[] = [];
       for (const member of members) {
-        const branchState: CompilerState = { nextVariable: base, viewVariable: state.viewVariable, patterns: [], errors: state.errors };
+        const branchState: CompilerState = { nextVariable: base, viewVariable: state.viewVariable,
+          patterns: [], errors: state.errors, relationBindings: new Map(state.relationBindings) };
         compileNodes([{ ...member, attributes: Object.fromEntries(Object.entries(member.attributes).filter(([key]) => key !== "uid")) }], subject, branchState);
         if (branchState.viewVariable) state.viewVariable = branchState.viewVariable;
         next = Math.max(next, branchState.nextVariable);
@@ -149,12 +153,28 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
       }
       case "property":
       case "property-of": {
+        if (node.attributes.derive === "regex") {
+          const source = state.relationBindings.get(node.attributes.pid || "");
+          const pattern = node.attributes.pattern || "";
+          const capture = node.attributes.capture || "";
+          if (!source || !pattern || pattern.length > 2000 || !/^[1-9]$/.test(capture)) {
+            state.errors.push("Derived regex facet is missing a bound spawning facet or a valid capture.");
+            break;
+          }
+          const related = nextVariable(state);
+          state.patterns.push(`FILTER (REGEX(STR(${source}), "${escapeSparqlString(pattern)}"))`);
+          state.patterns.push(`BIND(REPLACE(STR(${source}), "${escapeSparqlString(pattern)}", "$${capture}") AS ${related})`);
+          if (node.attributes.rid) state.relationBindings.set(node.attributes.rid, related);
+          compileNodes(node.children, related, state);
+          break;
+        }
         const predicate = iriTerm(node.attributes.iri);
         if (!predicate) {
           state.errors.push(`The FCT <${node.name}> node has a missing or unsupported IRI.`);
           break;
         }
         const related = nextVariable(state);
+        if (node.attributes.rid) state.relationBindings.set(node.attributes.rid, related);
         const relationshipPattern = node.name === "property"
           ? `${subject} ${predicate} ${related} .`
           : `${related} ${predicate} ${subject} .`;
@@ -232,12 +252,13 @@ export type FacetCountExtension = {
 };
 
 /** Compile the app's supported FCT query-tree subset directly to a scalar SPARQL count. */
-export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountExtension, kindDirection?: "property" | "role", probeKind?: string, temporalPredicate?: string): string | null {
+export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountExtension, kindDirection?: "property" | "role", probeKind?: string, temporalPredicate?: string, effectiveLanguage = effectiveMaestroLanguage()): string | null {
   const state: CompilerState = {
     nextVariable: 0,
     viewVariable: null,
     patterns: [],
     errors: [],
+    relationBindings: new Map(),
   };
   const root = "?fct0";
   state.nextVariable = 1;
@@ -271,8 +292,8 @@ export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountEx
     return null;
   };
   const viewNode = findView(tree.children);
-  const preferredLanguage = (viewNode?.attributes.indexLang ?? "en").toLowerCase();
-  if (preferredLanguage !== "all" && !/^[a-z]{2,3}$/.test(preferredLanguage)) return null;
+  const preferredLanguage = validMaestroLanguage(effectiveLanguage);
+  if (!preferredLanguage) return null;
   // Same literal-focus restriction as Results; do not filter URI resources.
   const hasExplicitViewLanguage = (() => {
     const find = (nodes: FctQueryNode[]): boolean | null => {

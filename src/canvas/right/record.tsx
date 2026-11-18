@@ -1,21 +1,33 @@
 "use client";
 import { toast } from "@/components/ui/toast";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import type { MaestroRecordSessionController } from "@/lib/app-lifecycle/record-session";
 
 /** State and graph-provenance selection shared by Record subviews. */
-import type { RecordValueTerm, BlankNodeRecord } from "@/lib/bnode";
+import { createBlankNodeRecordContext, type RecordValueTerm, type BlankNodeRecord } from "@/lib/bnode";
 export type { RecordValueTerm, BlankNodeRecord } from "@/lib/bnode";
 export type RecordGraphAuthor = { graph: string; author: string; predicate: string };
 export function useRecordCoreState() {
+  // One XState blank-node context per Record viewer, initially inactive.
+  // URI and literal Records cannot activate or select blank-node siblings.
+  const [blankNodeContext] = useState(createBlankNodeRecordContext);
+  useEffect(() => () => blankNodeContext.stop(), [blankNodeContext]);
   // An RDF blank-node label identifies a node only within the SELECT result set.
   // Retain its parent URI and predicate instead of attempting to query _:label.
   const [explicitBlankNodeAnchor, setExplicitBlankNodeAnchor] = useState<{
     label: string; parent: string; predicate: string;
   } | null>(null);
   const [blankNodeRecords, setBlankNodeRecords] = useState<BlankNodeRecord[]>([]);
-  const [activeBlankNodeTab, setActiveBlankNodeTab] = useState(0);
+  const [activeBlankNodeTab, setActiveBlankNodeTabState] = useState(-1);
+  const activeBlankNodeTabRef = useRef(-1);
+  const chooseBlankNodeCandidate = useCallback((index: number) => blankNodeContext.choose(index), [blankNodeContext]);
+  const setActiveBlankNodeTab = useCallback((update: SetStateAction<number>) => {
+    const index = typeof update === "function" ? update(activeBlankNodeTabRef.current) : update;
+    if (index !== -1 && !blankNodeContext.choose(index)) return;
+    activeBlankNodeTabRef.current = index;
+    setActiveBlankNodeTabState(index);
+  }, [blankNodeContext]);
   const [describedRecord, setDescribedRecord] = useState<RecordValueTerm[]>([]);
   const [describedRecordUri, setDescribedRecordUri] = useState("");
   // One authoritative SELECT snapshot feeds both Default and graph-stored XSLT formats.
@@ -42,7 +54,7 @@ export function useRecordCoreState() {
   );
   const recordAuthors = recordGraphAuthors.filter((entry) => graphsInSelectedFamily.includes(entry.graph));
 
-  return { explicitBlankNodeAnchor, setExplicitBlankNodeAnchor, blankNodeRecords, setBlankNodeRecords, activeBlankNodeTab, setActiveBlankNodeTab, describedRecord, setDescribedRecord, describedRecordUri, setDescribedRecordUri, recordDescriptionSnapshot, setRecordDescriptionSnapshot, recordGraphs, setRecordGraphs, selectedRecordGraph, setSelectedRecordGraph, selectedRecordAuthor, setSelectedRecordAuthor, recordGraphError, setRecordGraphError, loadingRecordGraphs, setLoadingRecordGraphs, loadingRecordAuthors, setLoadingRecordAuthors, recordAuthorError, setRecordAuthorError, recordGraphAuthors, setRecordGraphAuthors, recordGraphOptions, graphsInSelectedFamily, recordAuthors, recordGraphFamily };
+  return { blankNodeContext, chooseBlankNodeCandidate, explicitBlankNodeAnchor, setExplicitBlankNodeAnchor, blankNodeRecords, setBlankNodeRecords, activeBlankNodeTab, setActiveBlankNodeTab, describedRecord, setDescribedRecord, describedRecordUri, setDescribedRecordUri, recordDescriptionSnapshot, setRecordDescriptionSnapshot, recordGraphs, setRecordGraphs, selectedRecordGraph, setSelectedRecordGraph, selectedRecordAuthor, setSelectedRecordAuthor, recordGraphError, setRecordGraphError, loadingRecordGraphs, setLoadingRecordGraphs, loadingRecordAuthors, setLoadingRecordAuthors, recordAuthorError, setRecordAuthorError, recordGraphAuthors, setRecordGraphAuthors, recordGraphOptions, graphsInSelectedFamily, recordAuthors, recordGraphFamily };
 }
 
 export type RecordService = { uri: string; label: string; operations: { uri: string; label: string; requires: string[] }[] };

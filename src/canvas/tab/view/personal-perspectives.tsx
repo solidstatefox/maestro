@@ -80,20 +80,26 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [html, setHtml] = useState("");
+  const [renderedSignature, setRenderedSignature] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [notLoggedIn, setNotLoggedIn] = useState(false);
+  const loadedProviderIdentity = useRef("");
   const [appbarButtons, setAppbarButtons] = useState<AppbarButton[]>([]);
   const resultsRef = useRef<HTMLDivElement>(null);
   const [iconSlots, setIconSlots] = useState<IconSlot[]>([]);
-  const [matchingResources, setMatchingResources] = useState<Set<string> | null>(null);
+  const [matchingResources, setMatchingResources] = useState<{ scope: string; ids: Set<string> } | null>(null);
   const [scopeLoading, setScopeLoading] = useState(false);
   const scopedQuery = useMemo(() => typeof DOMParser === "undefined" ? null : rootResourceQuery(queryXml), [queryXml]);
   useEffect(() => {
     const controller = new AbortController();
-    setMatchingResources(null);
+    // Scope results are associated with their exact FCT XML; never display a
+    // prior scope as if it were validated for the new query. Retain the old
+    // result until the new result arrives to avoid needless re-projections.
     if (!active || !scopedQuery) { setScopeLoading(false); return () => controller.abort(); }
+    // A prior scope's error is not evidence that this FCT scope failed.
+    setError("");
     setScopeLoading(true);
     void (async () => {
       try {
@@ -119,7 +125,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
           if (data.rows.length < 500) break;
           if (offset === 4500) throw new Error("The current query has more than 5000 matching resources. Narrow the query to filter this perspective precisely.");
         }
-        if (!controller.signal.aborted) setMatchingResources(ids);
+        if (!controller.signal.aborted) setMatchingResources({ scope: scopedQuery, ids });
       } catch (cause) {
         if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not apply current query to perspective");
       } finally { if (!controller.signal.aborted) setScopeLoading(false); }
@@ -150,7 +156,16 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
   useEffect(() => {
     if (!active || !kind) return;
     const controller = new AbortController();
-    setLoading(true); setError(""); setNotLoggedIn(false); setCollection(null); setHtml(""); setSelected([]);
+    // A same-provider refresh should not erase a previously loaded collection
+    // before the replacement arrives. That produced blank Bookmarks/History
+    // cards during provider validation/reentry. Never retain results when
+    // switching to a different provider identity.
+    const identity = `${kind}\u0000${providerUri}`;
+    if (loadedProviderIdentity.current !== identity) {
+      loadedProviderIdentity.current = identity;
+      setCollection(null); setHtml(""); setSelected([]);
+    }
+    setLoading(true); setError(""); setNotLoggedIn(false);
     void (async () => {
       try {
         const data = await loadPerspectiveCollection(kind, providerUri, controller.signal);
@@ -158,7 +173,10 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
       } catch (err) {
         if (!controller.signal.aborted) {
           const message = err instanceof Error ? err.message : "Loading failed";
-          if (message.startsWith("Log in to use the personal graph server.")) setNotLoggedIn(true);
+          if (message.startsWith("Log in to use the personal graph server.")) {
+            setNotLoggedIn(true);
+            setCollection(null); setHtml("");
+          }
           else setError(message);
         }
       }
@@ -166,14 +184,22 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
     })();
     return () => controller.abort();
   }, [active, kind, providerUri, revision]);
+  const scopeIsReady = !scopedQuery || matchingResources?.scope === scopedQuery;
   const filtered = useMemo(() => [...(collection?.rows ?? [])]
-    .filter(row => !scopedQuery || (matchingResources !== null && matchingResources.has(row.uri)))
+    .filter(row => !scopedQuery || (matchingResources?.scope === scopedQuery && matchingResources.ids.has(row.uri)))
     .sort((a,b) => Number(Boolean(bookmarkShortcut(b, appbarButtons, collection?.rows ?? []))) - Number(Boolean(bookmarkShortcut(a, appbarButtons, collection?.rows ?? []))))
     .filter(row => [row.label, row.description, row.url, row.created, ...(row.tags ?? []), row.queryXml].some(v => v.toLowerCase().includes(search.toLowerCase().trim()))),
     [collection, search, appbarButtons, scopedQuery, matchingResources]);
   const visible = useMemo(() => filtered.slice(0, 500), [filtered]);
+  // A previously rendered XSLT collection must never be shown under a new
+  // FCT scope or search. Rendering is async and can complete after a ribbon
+  // or query change; identify the *source* of the markup, not its React node.
+  const contentSignature = useMemo(() => JSON.stringify([
+    kind, providerUri, scopedQuery, visible.map(row => row.uri), selected,
+    appbarButtons.map(button => [button.uri, button.action, button.icon]),
+  ]), [kind, providerUri, scopedQuery, visible, selected, appbarButtons]);
   useEffect(() => {
-    if (!collection) return;
+    if (!collection || !scopeIsReady) return;
     let current = true;
     void renderDiscoveredViewXslt(collection.provider.stylesheet, visible.map(row => ({
       appbarIcon: kind === "bookmarks" ? bookmarkShortcut(row, appbarButtons, collection.rows)?.icon : undefined,
@@ -183,9 +209,13 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
       tags: (row.tags ?? []).join(", "), ...queryStats(row.queryXml),
       lastResultCount: row.lastResultCount == null ? "" : String(row.lastResultCount),
       lastNewCount: row.lastNewCount == null ? "" : String(row.lastNewCount),
-    }))).then(markup => { if (current) setHtml(markup); }).catch(err => { if (current) setError(err instanceof Error ? err.message : "Rendering failed"); });
+    }))).then(markup => {
+      if (!current) return;
+      setHtml(markup);
+      setRenderedSignature(contentSignature);
+    }).catch(err => { if (current) setError(err instanceof Error ? err.message : "Rendering failed"); });
     return () => { current = false; };
-  }, [collection, visible, selected, appbarButtons, kind]);
+  }, [collection, visible, selected, appbarButtons, kind, contentSignature, scopeIsReady]);
   // The saved bookmark link is never silently rewritten. Offer an explicit
   // same-app navigation option only when its HTTP(S) origin differs from ours.
   // Insert into the already-sanitized XSLT card so this works with previously
@@ -216,7 +246,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
       .map(element => ({ element, icon: element.dataset.perspectiveAppbarIcon ?? "" }))
       .filter((item): item is IconSlot => validAppbarIcons.has(item.icon));
     setIconSlots(slots);
-  }, [html, active]);
+  }, [html, renderedSignature, contentSignature, scopeIsReady, active]);
   const remove = useCallback(async (ids: string[]) => {
     if (!kind || !ids.length || !window.confirm(`Delete ${ids.length} ${kind === "history" ? "history" : "bookmark"} entr${ids.length === 1 ? "y" : "ies"}?`)) return;
     setLoading(true);
@@ -261,11 +291,12 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
     </div>
     {error && <ErrorDetails prefix="Perspective" error={error} className="mx-4 my-2" />}
     {notLoggedIn ? <p className="p-5 text-sm text-muted-foreground">Log in to your personal graph server to view History and Bookmarks.</p>
-      : loading ? <p className="p-5 text-sm text-muted-foreground">Loading {kind}…</p>
+      : loading && !collection ? <p className="p-5 text-sm text-muted-foreground">Loading {kind}…</p>
       : !collection ? <p className="p-5 text-sm text-muted-foreground">No perspective data loaded.</p>
-      : <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
-        <p className="mb-1 text-xs text-muted-foreground">{scopeLoading ? "Filtering by current query…" : `${filtered.length} matching entries`}{!scopeLoading && filtered.length === 500 ? " (first 500)" : ""}</p>
-        <div ref={resultsRef} className="maestro-discovered-view" onClick={event => {
+      : <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1" aria-busy={loading || scopeLoading}>
+        <p className="mb-1 text-xs text-muted-foreground">{!scopeIsReady ? (scopeLoading ? "Filtering by current query…" : "Current query scope unavailable") : `${filtered.length} matching entries`}{!scopeLoading && filtered.length === 500 ? " (first 500)" : ""}</p>
+        {!scopeIsReady && <p role="status" className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">{scopeLoading ? "Checking saved entries against the current FCT query…" : "Cannot establish which saved entries match this query. See the error above and retry."}</p>}
+        <div ref={resultsRef} aria-busy={!scopeIsReady || renderedSignature !== contentSignature} className="maestro-discovered-view" onClick={event => {
           const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-perspective-id]");
           if (!button) return;
           const id = button.dataset.perspectiveId ?? "";
@@ -280,14 +311,14 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml }: { 
           else if (button.dataset.perspectiveOpen === "true") open(id);
           else if (button.dataset.perspectiveDelete === "true") void remove([id]);
           else if (button.dataset.perspectiveSelect === "true") setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
-        }} dangerouslySetInnerHTML={{ __html: html }}/>
+        }} dangerouslySetInnerHTML={{ __html: scopeIsReady && renderedSignature === contentSignature ? html : "" }}/>
         {iconSlots.map(slot => createPortal(
           <DynamicIcon name={slot.icon} className="size-4 text-muted-foreground" aria-hidden="true" />,
           slot.element,
         ))}
       </div>}
     <Dialog open={Boolean(appbarCandidate)} onOpenChange={open => {if (!open && !appbarBusy) setAppbarCandidate("");}}>
-      <DialogContent><DialogHeader><DialogTitle>Pin bookmark to appbar</DialogTitle><DialogDescription>Choose the button tooltip and Lucide icon name. Maximum three bookmark buttons.</DialogDescription></DialogHeader>
+      <DialogContent><DialogHeader><DialogTitle>Pin bookmark to appbar</DialogTitle><DialogDescription>Choose the button tooltip and Lucide icon name. Maximum five bookmark buttons.</DialogDescription></DialogHeader>
         <label className="block text-sm">Tooltip<Input value={appbarTooltip} maxLength={120} onChange={e=>setAppbarTooltip(e.target.value)}/></label>
         <label className="block text-sm">Lucide icon name<Input value={appbarIcon} placeholder="bookmark" onChange={e=>setAppbarIcon(e.target.value)}/></label>
         <div className="flex justify-end gap-2"><Button variant="outline" onClick={()=>setAppbarCandidate("")} disabled={appbarBusy}>Cancel</Button><Button disabled={appbarBusy || !appbarTooltip.trim() || !validAppbarIcons.has(appbarIcon.trim())} onClick={()=>void editAppbar("add",appbarCandidate)}>Pin to appbar</Button></div>

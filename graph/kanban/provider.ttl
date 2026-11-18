@@ -1,0 +1,50 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix vfct: <https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# General-purpose FCT result perspective. Applicability is the current
+# validated History query RDF, not a hard-coded data class. A user must still
+# approve the provider (directly or through the curated provider list).
+<gttp://ggg.maestro.ui/provider/kanban> a mui:Provider ;
+  rdfs:label "Kanban"@en ;
+  mui:icon "columns-3" ;
+  mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/kanban-input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/shacl/template#KanbanPerspective> .
+
+<gttp://ggg.maestro.ecosys/shacl/provider/kanban-input> a mui:InputShape, sh:NodeShape ;
+  sh:targetClass vfct:query .
+
+<gttp://ggg.maestro.ecosys/shacl/template#KanbanPerspective> a mui:PerspectiveWidget ;
+  rdfs:label "Kanban result cards and FCT group columns"@en ;
+  mui:templateContent """<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:output method="html" omit-xml-declaration="yes"/>
+  <xsl:key name="by-column" match="/results/result" use="@group"/>
+  <xsl:template match="/results">
+    <section data-view-title="Kanban" data-view-icon="layout-grid" class="flex min-h-0 w-full flex-col gap-3" aria-label="Kanban perspective">
+      <xsl:choose>
+        <xsl:when test="not(result)"><p class="rounded-lg border p-6 text-sm text-muted-foreground">No FCT results on this page.</p></xsl:when>
+        <xsl:otherwise>
+          <div class="flex min-w-0 gap-3 overflow-auto pb-3">
+            <xsl:for-each select="result[generate-id() = generate-id(key('by-column', string(@group))[1])]">
+              <xsl:sort select="@group"/>
+              <xsl:variable name="column" select="string(@group)"/>
+              <section class="flex w-64 min-w-64 flex-col gap-2 rounded-lg border bg-muted/30 p-3">
+                <header class="flex items-center justify-between gap-2 border-b pb-2">
+                  <h3 class="truncate text-sm font-semibold"><xsl:choose><xsl:when test="$column != ''"><xsl:value-of select="$column"/></xsl:when><xsl:otherwise>Ungrouped</xsl:otherwise></xsl:choose></h3>
+                  <small class="text-xs text-muted-foreground"><xsl:value-of select="count(key('by-column',$column))"/></small>
+                </header>
+                <xsl:for-each select="key('by-column',$column)">
+                  <article class="rounded-md border bg-card p-3 shadow-sm">
+                    <button type="button" class="w-full cursor-pointer break-words text-left text-sm font-medium hover:text-primary hover:underline" data-provider-open-uri="{@uri}" title="{@uri}"><xsl:value-of select="@label"/></button>
+                  </article>
+                </xsl:for-each>
+              </section>
+            </xsl:for-each>
+          </div>
+        </xsl:otherwise>
+      </xsl:choose>
+    </section>
+  </xsl:template>
+</xsl:stylesheet>""" .

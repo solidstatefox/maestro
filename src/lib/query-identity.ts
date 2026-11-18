@@ -18,7 +18,9 @@ const parser = new XMLParser({
 });
 
 const PAGING = new Set(["limit", "offset", "timeout", "pageSize", "page"]);
-const IGNORED = new Set(["id", "ctr", "uctr"]);
+// Allocation counters are metadata, not query semantics. Keep rid/pid:
+// derived facets use their relationship association to determine bindings.
+const IGNORED = new Set(["id", "ctr", "uctr", "rctr"]);
 const UNORDERED_SCOPES = new Set(["query", "property", "property-of"]);
 
 type CanonicalNode = {

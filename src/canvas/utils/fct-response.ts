@@ -1,6 +1,7 @@
 "use client";
 import { resolveFacetIri } from "@/lib/fct-facet-iri";
 import { browserLog } from "@/lib/maestro-client-logging";
+import { normalizeFctFacetItems } from "@/lib/fct-facet-normalization";
 
 
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
@@ -56,9 +57,6 @@ export type FctResult = {
   columns?: FctResponseColumn[];
   matches: FctMatch[];
   scopeValues?: ScopeValue[];
-  // URI anchor projected in the same FCT SELECT as a blank-node focus.
-  // Not a display badge and not dependent on list-values enrichment.
-  recordAnchor?: { parent: string; predicate: string; direction?: "forward" | "reverse"; depth?: number };
   termType?: "uri" | "literal" | "bnode";
   datatype?: string;
   lang?: string;
@@ -185,9 +183,15 @@ const dbActivity = getText("db-activity");
     const isCountColumn = (column: FctResponseColumn) =>
       column.attributes?.var === "ct" || column.attributes?.var === "n"
       || /#(?:integer|int|long|short|nonNegativeInteger|positiveInteger|unsignedInt|unsignedLong)$/.test(column.datatype ?? "");
+    // Auxiliary SPARQL projections (sampled subjects, ancestor paths, group
+    // counts) are not labels. In particular, a ?sampleSubject URI must never
+    // replace the title of the actual c1 value in a property-focused list.
+    const isDisplayLabel = (column: FctResponseColumn) =>
+      !isCountColumn(column) && column.termType === "literal" &&
+      !/^(sampleSubject|recordAncestor\d*|bestRank|score)$/i.test(column.attributes?.var ?? "");
     const labelColumn = isText ? undefined : (
-      columns.slice(1).find((column) => column.attributes?.var === "c2")
-      ?? columns.slice(1).find((column) => column.attributes?.recordParent !== "yes" && !isCountColumn(column))
+      columns.slice(1).find((column) => column.attributes?.var === "c2" && isDisplayLabel(column))
+      ?? columns.slice(1).find(isDisplayLabel)
     );
     const title = first.termType === "uri"
       ? (first.label || labelColumn?.value || toLabel(first.value))
@@ -217,24 +221,11 @@ const dbActivity = getText("db-activity");
           ...(column.datatype ? { datatype: column.datatype } : {}),
           ...(column.lang ? { lang: column.lang } : {}),
         };
-        if (!scopeVal.values.some((v) => v.value === nextTerm.value)) {
+        if (!scopeVal.values.some((v) => fctTermKey(v.value, v.datatype ?? (v.type === "uri" ? "uri" : v.lang ? undefined : "string"), v.lang) === fctTermKey(nextTerm.value, nextTerm.datatype ?? (nextTerm.type === "uri" ? "uri" : nextTerm.lang ? undefined : "string"), nextTerm.lang))) {
           scopeVal.values.push(nextTerm);
         }
       }
     }
-    // Inspect every structural path ancestor (not display badges). Prefer the
-    // nearest URI ancestor, even when the immediate parent is another b-node.
-    const structuralParent = first.termType === "bnode"
-      ? columns.filter((column) => column.attributes?.recordParent === "yes" && column.termType === "uri"
-          && column.value && column.attributes.recordPredicate)
-        .sort((a, b) => Number(b.attributes.recordDepth ?? -1) - Number(a.attributes.recordDepth ?? -1))[0]
-      : undefined;
-    const structuralDepth = structuralParent ? Number(structuralParent.attributes.recordDepth) : NaN;
-    const recordAnchor = structuralParent
-      ? { parent: structuralParent.value, predicate: structuralParent.attributes.recordPredicate,
-          direction: structuralParent.attributes.recordDirection === "reverse" ? "reverse" as const : "forward" as const,
-          ...(Number.isSafeInteger(structuralDepth) && structuralDepth >= 0 ? { depth: structuralDepth } : {}) }
-      : undefined;
     const item: FctResult = {
       uri: first.value,
       title,
@@ -246,12 +237,10 @@ const dbActivity = getText("db-activity");
       matches: excerpt ? [{ excerpt, ...(isText && columns.find(column => column.attributes?.var === "matchPredicate")?.termType === "uri"
         ? { predicate: columns.find(column => column.attributes?.var === "matchPredicate")!.value } : {}), columns: columns.slice(1) }] : [],
       ...(parsedScopeValues.length > 0 ? { scopeValues: parsedScopeValues } : {}),
-      ...(recordAnchor ? { recordAnchor } : {}),
     };
     if (resultType === FCT_VIEW_TYPES.LIST_COUNT && second) item.columns = columns;
-    // In TEXT views c2 is the excerpt. Later columns can be independent
-    // structural Record-identity projections, not additional excerpts.
-    if (third && resultType === FCT_VIEW_TYPES.TEXT && second?.attributes?.var !== "c2" && third.attributes?.recordParent !== "yes" && !excerpt)
+    // In TEXT views c2 is the excerpt; other data columns are display-only.
+    if (third && resultType === FCT_VIEW_TYPES.TEXT && second?.attributes?.var !== "c2" && !excerpt)
       item.matches = [{ excerpt: third.value, columns: columns.slice(2) }];
     return [item];
   });
@@ -271,7 +260,8 @@ const dbActivity = getText("db-activity");
     return [{
       uri: value,
       label: columns[0].label || columns[0].shortform || toLabel(value, labelKind),
-      count: columns[1]?.value === undefined ? -1 : Number(columns[1].value),
+      count: columns[1]?.value === undefined || !Number.isFinite(Number(columns[1].value))
+        ? -1 : Number(columns[1].value),
       ...(resultType === FCT_VIEW_TYPES.CLASSES && columns[2]?.termType === "uri" && columns[2].value ? { parent: columns[2].value } : {}),
       ...(exampleColumn?.value ? { example: { uri: exampleColumn.value, label: exampleColumn.label || exampleColumn.shortform || (exampleColumn.termType === "uri" ? toLabel(exampleColumn.value, "Class") : exampleColumn.value), termType: exampleColumn.termType } } : {}),
     }];
@@ -314,16 +304,17 @@ const dbActivity = getText("db-activity");
       resultType === FCT_VIEW_TYPES.LIST_SUBJECTS ||
       resultType === FCT_VIEW_TYPES.LIST_OBJECTS
     ) ? results : [],
-    properties: resultType === FCT_VIEW_TYPES.PROPERTIES ? facetItems : [],
-    classes: resultType === FCT_VIEW_TYPES.CLASSES ? facetItems : [],
-    roles: resultType === FCT_VIEW_TYPES.PROPERTIES_IN ? facetItems : [],
-    graphs: resultType === FCT_VIEW_TYPES.GRAPHS ? rowColumns.flatMap((columns) => columns[0] ? [{
+    properties: resultType === FCT_VIEW_TYPES.PROPERTIES ? normalizeFctFacetItems(facetItems) : [],
+    classes: resultType === FCT_VIEW_TYPES.CLASSES ? normalizeFctFacetItems(facetItems, true) : [],
+    roles: resultType === FCT_VIEW_TYPES.PROPERTIES_IN ? normalizeFctFacetItems(facetItems) : [],
+    graphs: resultType === FCT_VIEW_TYPES.GRAPHS ? normalizeFctFacetItems(rowColumns.flatMap((columns) => columns[0] ? [{
       uri: columns[0].value,
       // Graph SELECT projects c1=graph, n=distinct matches, bestRank=ranking.
       // The second column is NOT a graph label, and the third is NOT a count.
       label: columns[0].label || columns[0].shortform || toLabel(columns[0].value),
-      count: columns[1]?.value === undefined ? -1 : Number(columns[1].value),
-    }] : []) : [],
+      count: columns[1]?.value === undefined || !Number.isFinite(Number(columns[1].value))
+        ? -1 : Number(columns[1].value),
+    }] : [])) : [],
     describe: resultType === FCT_VIEW_TYPES.DESCRIBE ? describe : [],
     count: (resultType === "count" || resultType === FCT_VIEW_TYPES.COUNT_DISTINCT) ? Number(rowColumns[0]?.[0]?.value ?? 0) : undefined,
     shortforms: Array.from(uris, ([uri, metadata]) => ({ uri, ...metadata })),
@@ -364,6 +355,34 @@ export async function readFctResponse(response: Response): Promise<ParsedFctResp
   return data;
 }
 
+/** The FCT server may return multiple rows for one facet term (for example
+ * multiple labels or joins). Facet widgets are SETS of RDF terms, never a
+ * list of raw SELECT rows. Keep the first result in server order and enrich
+ * only absent display metadata. A grouped count is an aggregate of the term,
+ * NOT a per-row contribution: summing duplicated counts invents members.
+ *
+ * Do not apply this to ordinary Browse Results: several text matches for one
+ * resource can be independent results. This function belongs at the boundary
+ * of each derived facet value query and is safe for both direct/role facets.
+ */
+export function distinctFacetValues(values: readonly FctResult[]): FctResult[] {
+  const byTerm = new Map<string, FctResult>();
+  for (const value of values) {
+    const key = facetValueKey(value);
+    const existing = byTerm.get(key);
+    if (!existing) {
+      byTerm.set(key, value);
+      continue;
+    }
+    // Prefer an actual label if a later row supplies one. Keep the original
+    // first-seen order and do not concatenate counts from repeated SELECT rows.
+    if ((existing.title === existing.uri || !existing.title) && value.title && value.title !== value.uri) {
+      byTerm.set(key, { ...existing, title: value.title, ...(value.label ? { label: value.label } : {}) });
+    }
+  }
+  return [...byTerm.values()];
+}
+
 export function groupValueKey(value: FctResult): string {
   return JSON.stringify([value.uri, value.termType ?? "uri", value.datatype ?? "", value.lang ?? ""]);
 }
@@ -372,7 +391,11 @@ export function fctTermKey(text: string, datatype?: string, lang?: string): stri
   // RDF 1.1 plain literals and xsd:string literals have the same term identity.
   // The FCT response may spell out xsd:string while the FCT <value> uses
   // datatype="string". Their keys must match when reconciling selected values.
-  const normalizedDatatype = datatype === "http://www.w3.org/2001/XMLSchema#string" ||
+  // RDF 1.1 language-tagged literals always have rdf:langString as their
+  // datatype. Some FCT projections omit it while others spell it out;
+  // both represent the same RDF term, provided xml:lang is present.
+  const normalizedDatatype = lang && datatype === "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
+    ? "" : datatype === "http://www.w3.org/2001/XMLSchema#string" ||
     datatype === "http://www.openlinksw.com/schemas/facets/dtp/plainstring" ? "string" : datatype;
   return JSON.stringify([text, normalizedDatatype ?? (lang ? "" : "uri"), lang?.toLowerCase() ?? ""]);
 }

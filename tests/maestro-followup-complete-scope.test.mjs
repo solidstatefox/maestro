@@ -18,8 +18,8 @@ test('URI editor uses shadcn input group and state-colored icon, with no text ba
   const s = read('src/canvas/utils/workspace-controller.tsx');
   assert.doesNotMatch(s, /<InputGroup aria-label="Root search input"/);
   assert.match(s, /<InputGroupAddon align="inline-start"/);
-  assert.match(s, /rootUriGateStatus === "rejected" \? "text-destructive"/);
-  assert.match(s, /text-green-600 dark:text-green-400/);
+  assert.match(s, /gateStatus=\{rootUriGateStatus\}/);
+  assert.match(read('src/canvas/top/root-autocomplete-query-inspector.tsx'), /text-green-600 dark:text-green-400/);
   assert.match(s, /modeAtClick !== "uri"\) return/);
   const c = read('src/canvas/top/root-uri-autocomplete.tsx');
   assert.match(c, /onDraft\(selected.uri\);onCommit\(selected.uri, selected.label\)/);
@@ -30,8 +30,8 @@ test('URI editor uses shadcn input group and state-colored icon, with no text ba
 test('label lookup is a one-character-capable SPARQL URI/label SELECT', () => {
   const q = read('src/lib/uri-autocomplete-query.ts');
   assert.match(q, /text.length < 1/);
-  assert.match(q, /SELECT DISTINCT \?uri \?label/);
-  assert.match(q, /\?label bif:contains/);
+  assert.match(q, /SELECT \?uri \?label \?type/);
+  assert.match(q, /\?matchedLabel bif:contains/);
   assert.doesNotMatch(q, /\?uri \?property \?text/);
   const p = read('src/lib/root-uri-policy.ts');
   assert.doesNotMatch(p, /prefix\.startsWith\(lower\)/);

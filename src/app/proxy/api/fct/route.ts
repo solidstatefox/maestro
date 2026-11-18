@@ -18,7 +18,8 @@ import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
-import { compileFctXmlToSparql, type SparqlJsonResults, type SparqlBindingTerm } from "@/lib/fct-sparql-translator";
+import { compileFctXmlToSparql as compileFctXmlBase, type SparqlJsonResults, type SparqlBindingTerm } from "@/lib/fct-sparql-translator";
+import { validMaestroLanguage } from "@/lib/maestro-language";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getConfiguredFctEndpoints, getPersonalSession, personalSparqlHeaders, personalSparqlUrl, normalizeGraphServerUri, resolveConfiguredFctEndpoint } from "@/lib/personal-sparql";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
@@ -298,8 +299,6 @@ function fctResponseXml(args: {
   labels?: Map<string, string>; error?: string;
   datatypeEvidence?: Array<{ datatype: string; originalDatatype?: string; count: number }>;
   badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse" }>;
-  recordParent?: { colName: string; predicate: string; direction: "forward" | "reverse" };
-  recordAncestors?: Array<{ colName: string; predicate: string; direction: "forward" | "reverse"; depth: number }>;
   sqlState?: string; sqlMessage?: string; execMilliseconds?: string; execDbActivity?: string;
 }): string {
   const { query, view, limit, offset, elapsedMs, complete, sqlState, sqlMessage, execMilliseconds, execDbActivity } = args;
@@ -317,17 +316,8 @@ function fctResponseXml(args: {
     }
     return `<fct:row>${vars.map((name) => {
       const badgeInfo = badgeMap.get(name);
-      const parentInfo = args.recordAncestors?.find((entry) => entry.colName === name)
-        ?? (args.recordParent?.colName === name ? args.recordParent : undefined);
       const extraAttrs: Record<string, string> = { var: name };
-      if (parentInfo) {
-        extraAttrs.recordParent = "yes";
-        extraAttrs.recordPredicate = parentInfo.predicate;
-        extraAttrs.recordDirection = parentInfo.direction;
-        if ("depth" in parentInfo && typeof parentInfo.depth === "number") {
-          extraAttrs.recordDepth = String(parentInfo.depth);
-        }
-      } else if (badgeInfo) {
+      if (badgeInfo) {
         extraAttrs.property = badgeInfo.property;
         extraAttrs.direction = badgeInfo.direction;
       }
@@ -630,6 +620,14 @@ export async function GET(request: Request) {
 }
 
 async function handlePost(request: Request) {
+  // Request-scoped language; never keep a cross-user server preference.
+  const effectiveLanguage = validMaestroLanguage(request.headers.get("x-maestro-language")) ?? "en";
+  // Display-label selection obeys the same effective Sheet/URL language as FCT
+  // execution. For 'all', preserve normal browser Accept-Language fallback.
+  const labelAcceptLanguage = effectiveLanguage === "all"
+    ? request.headers.get("accept-language") : effectiveLanguage;
+  const compileFctXmlToSparql = (...args: Parameters<typeof compileFctXmlBase>) =>
+    compileFctXmlBase(args[0], args[1], args[2], args[3], args[4], args[5], args[6], effectiveLanguage);
   logProxyCaller(request, "fct.POST");
   let stage: "compile" | "execute" = "compile";
   try {
@@ -861,7 +859,7 @@ async function handlePost(request: Request) {
       // into the current grouped, rank-ordered Graphs pagination format.
       compiled.graphOnly ? "fct-response-graphs-v2" : "fct-response",
       endpoint.url,
-      JSON.stringify([queryXml, view ?? null, graphOnly, countOnly, valueColumns, request.headers.get("accept-language") ?? ""]),
+      JSON.stringify([queryXml, view ?? null, graphOnly, countOnly, valueColumns, labelAcceptLanguage ?? ""]),
     );
     // A client that already has its paginated Results page may supply exactly
     // those resources. This is the second stage of list-values, not a second
@@ -1017,7 +1015,7 @@ async function handlePost(request: Request) {
       // A literal Record can be returned promptly without a second network
       // query merely to decorate the subjects of its incoming Roles.
       const labels = compiled.describeLiteral || compiled.describeExpanded ? new Map<string, string>()
-        : await resolveFctLabels(endpoint.url, bindings, request.headers.get("accept-language"), compiled.timeoutMs);
+        : await resolveFctLabels(endpoint.url, bindings, labelAcceptLanguage, compiled.timeoutMs);
       const labelFor = (term: SparqlBindingTerm | undefined) => term?.type === "uri" ? labels.get(term.value) : undefined;
       const describeRows = bindings.map((binding) => `<fct:row>${fctColumn(binding.s, labelFor(binding.s))}${fctColumn(binding.p, labelFor(binding.p))}${fctColumn(binding.o, labelFor(binding.o))}</fct:row>`).join("");
       const describeComplete = !partial;
@@ -1058,14 +1056,8 @@ async function handlePost(request: Request) {
     const labels = countOnly || compiled.view === FCT_VIEW_TYPES.VALIDATE || compiled.view === FCT_VIEW_TYPES.LIST_VALUES ||
       (compiled.graphOnly && compiled.view === FCT_VIEW_TYPES.GRAPHS && /<view\b[^>]*\brecord=["']yes["']/i.test(queryXml))
       ? new Map<string, string>()
-      : await resolveFctLabels(endpoint.url,
-          // Record identity is not a display column: it must not add parent
-          // URIs to the label-enrichment query or its bandwidth cost.
-          compiled.recordAncestors?.length
-            ? bindings.map((row) => Object.fromEntries(Object.entries(row).filter(([name]) =>
-                !compiled.recordAncestors!.some((ancestor) => ancestor.colName === name))))
-            : compiled.recordParent ? bindings.map(({ recordParent: _parent, ...visible }) => visible) : bindings,
-          request.headers.get("accept-language"), compiled.timeoutMs);
+      : await resolveFctLabels(endpoint.url, bindings,
+          labelAcceptLanguage, compiled.timeoutMs);
     if (compiled.view === FCT_VIEW_TYPES.LIST_VALUES && !countOnly && !graphOnly) {
       const address = queryXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
       const graph = unscopedGraph(address.includes("@") ? address.slice(0, address.indexOf("@")) : "");
@@ -1130,8 +1122,6 @@ async function handlePost(request: Request) {
       query: activeQuery, view: compiled.view, limit: compiled.limit, offset: compiled.offset,
       bindings, vars, elapsedMs: Date.now() - startedAt, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly, labels,
       badgeColumns: compiled.badgeColumns,
-      recordParent: compiled.recordParent,
-      recordAncestors: compiled.recordAncestors,
       sqlState: anytime ? "S1TAT" : sqlState,
       sqlMessage: anytime ? virtuosoAnytimeMessage(response, text) : sqlMessage,
       execMilliseconds,

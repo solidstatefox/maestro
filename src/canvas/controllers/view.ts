@@ -10,7 +10,7 @@ export function useViewState() {
   const [selectedViewUri, setSelectedViewUri] = useState("");
   const [viewDiscoveryLoading, setViewDiscoveryLoading] = useState(false);
   const [viewDiscoveryError, setViewDiscoveryError] = useState("");
-  const [viewPanel, setViewPanel] = useState<"trail" | "perspectives" | "providers">("providers");
+  const [viewPanel, setViewPanel] = useState<"trail" | "perspectives" | "providers">("perspectives");
   const [viewProvider, setViewProvider] = useState<ProviderKind | null>(null);
   const [viewDiscoveryController] = useState(createMaestroViewDiscoveryController);
   const viewDiscoverySnapshot = useSyncExternalStore(viewDiscoveryController.subscribe, viewDiscoveryController.getSnapshot, viewDiscoveryController.getSnapshot);

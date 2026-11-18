@@ -47,7 +47,7 @@ export async function readClientRecordPage(uris: readonly string[], signal?: Abo
   // not turn the entire Record viewer into an error if a remote policy graph
   // has not yet been populated. Writes still fail closed in the Status writer.
   const machines = await loadClientStatusMachines(signal);
-  const resourceMachines = machines.filter(machine => machine.targetClasses.has(`${STATUS_RDFS}Resource`));
+  const resourceMachines = machines.filter(machine => machine?.targetClasses instanceof Set && machine.targetClasses.has(`${STATUS_RDFS}Resource`));
   if (resourceMachines.length === 1) {
     const machine = machineForTarget(resourceMachines, `${STATUS_RDFS}Resource`);
     for (const resource of unique) {

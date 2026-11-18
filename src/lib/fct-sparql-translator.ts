@@ -6,6 +6,7 @@ import { normalizeFctValue } from "./fct-value-policy";
 import { NUMERIC_LEXICAL_PATTERN } from "./virtuoso-numeric-coercion";
 import { buildVirtuosoFullTextExpression } from "./virtuoso-full-text";
 import { ALL_GRAPHS } from "./graph-address-mode";
+import { effectiveMaestroLanguage, validMaestroLanguage } from "./maestro-language";
 
 type XmlNode = {
   name: string;
@@ -37,10 +38,6 @@ export type CompiledFctQuery = {
   describeExpanded?: boolean;
   describeMaxTriples?: number;
   badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse" }>;
-  /** URI parent of a focused relationship, projected in the same Results SELECT. */
-  recordParent?: { colName: string; predicate: string; direction: "forward" | "reverse" };
-  /** Project all structural ancestors in the same SELECT, nearest URI wins. */
-  recordAncestors?: Array<{ colName: string; predicate: string; direction: "forward" | "reverse"; depth: number }>;
 };
 
 /*
@@ -198,8 +195,8 @@ function serializeSparqlQuery(document: SparqlDocument): string {
   const query = document.query;
   const lines = query.directives.map((directive) => `DEFINE ${directive.name} ${serializeTerm(literalTerm(directive.value))}`);
   // SPARQL 1.1 requires parenthesized SELECT expressions with AS aliases.
-  // In particular, SAMPLE(...) AS ?recordParent must remain valid inside
-  // the FCT-derived blank-node Record subquery.
+  // SAMPLE(...) aggregates remain supported for explicit badge projections;
+  // ordinary FCT lists no longer add ancestry aggregation.
   const projection = query.projections.map((item) => item.as
     ? `(${serializeExpression(item.expression)} AS ${serializeTerm(item.as)})`
     : serializeExpression(item.expression)).join("\n       ");
@@ -315,7 +312,7 @@ function compileConstraints(
   subject: SparqlTerm,
   patterns: SparqlPattern[],
   errors: string[],
-  state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null; focusParent?: { term: SparqlTerm; predicate: string; direction: "forward" | "reverse" }; focusAncestors?: SparqlTerm[]; statusBindings: Array<{ variable: string; uri: string; addr?: string }>; badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }>; grouping: Array<{ subject: SparqlTerm; predicate: SparqlTerm; direction: "forward" | "reverse" }> },
+  state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null; focusParent?: { term: SparqlTerm; predicate: string; direction: "forward" | "reverse" }; focusAncestors?: SparqlTerm[]; statusBindings: Array<{ variable: string; uri: string; addr?: string }>; badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }>; grouping: Array<{ subject: SparqlTerm; predicate: SparqlTerm; direction: "forward" | "reverse" }>; relationBindings: Map<string, SparqlTerm> },
   isViewScope = true,
   ancestors: SparqlTerm[] = [variable("s1")],
 ): void {
@@ -344,6 +341,7 @@ function compileConstraints(
         const branchState = { ...state, next,
           statusBindings: [...state.statusBindings],
           grouping: [...state.grouping],
+          relationBindings: new Map(state.relationBindings),
           ...(state.badgeColumns ? { badgeColumns: [...state.badgeColumns] } : {}) };
         compileConstraints([{ ...alternative, attributes: Object.fromEntries(Object.entries(alternative.attributes).filter(([key]) => key !== "uid")) }],
           subject, branch, errors, branchState, isViewScope, ancestors);
@@ -366,6 +364,32 @@ function compileConstraints(
     } else if (node.name === "text") {
       continue;
     } else if (node.name === "property" || node.name === "property-of") {
+      // Provider-generated facets compute a binding from an already bound
+      // sibling, never an invented RDF predicate. pid references the spawning
+      // relationship's rid; the structure determines the shared query scope.
+      if (node.attributes.derive === "regex") {
+        const parentId = node.attributes.pid || "";
+        const source = state.relationBindings.get(parentId);
+        const pattern = node.attributes.pattern || "";
+        const capture = node.attributes.capture || "";
+        if (!source || !pattern || pattern.length > 2000 ||
+          !/^[1-9]$/.test(capture)) {
+          errors.push("Malformed derived regex facet: a preceding source rid, pattern, and capture group (1–9) are required.");
+          continue;
+        }
+        const related = variable(`s${state.next++}`);
+        const lexical: SparqlExpression = { kind: "function", name: "STR", args: [termExpr(source)] };
+        patterns.push({kind: "filter", expression: {kind: "function", name: "REGEX", args: [lexical, termExpr(literalTerm(pattern))]}});
+        patterns.push({kind: "bind", expression: {kind: "function", name: "REPLACE", args: [lexical, termExpr(literalTerm(pattern)), termExpr(literalTerm(`$${capture}`))]}, as: related});
+        if (node.attributes.rid) state.relationBindings.set(node.attributes.rid, related);
+        if (node.children.some(child => child.name === "view")) {
+          state.targetParent = subject;
+          state.focusParent = {term: subject, predicate: node.attributes.iri || "", direction: "forward"};
+        }
+        compileConstraints(node.children, related, patterns, errors, state,
+          node.children.some(child => child.name === "view"), [...ancestors, related]);
+        continue;
+      }
       // Every relationship is an FCT constraint, regardless of who added it.
       const predicate = iri(node.attributes.iri ?? "");
       if (!predicate) {
@@ -386,6 +410,7 @@ function compileConstraints(
         state.grouping.push({ subject, predicate, direction: node.name === "property" ? "forward" : "reverse" });
       }
       const related = variable(`s${state.next++}`);
+      if (node.attributes.rid) state.relationBindings.set(node.attributes.rid, related);
       const options: SparqlDirective[] = [];
       const inference = node.attributes.inference?.trim();
       if (inference) options.push({ name: "input:inference", value: inference });
@@ -403,10 +428,11 @@ function compileConstraints(
       // predicate. Two values on one relationship mean A AND B, not that one
       // ?value variable must simultaneously equal two different terms.
       // Preserve the first binding as the view-bearing/badge variable.
-      const valueChildren = node.children.filter((child) => child.name === "value");
+      const valueChildren = node.children.filter((child) => child.name === "value" && child.attributes.enabled !== "false");
       const primaryValue = valueChildren[0];
-      const primaryChildren = valueChildren.length < 2 ? node.children : node.children.filter(
-        (child) => child.name !== "value" || child === primaryValue);
+      const primaryChildren = valueChildren.length < 2
+        ? node.children.filter(child => child.name !== "value" || child.attributes.enabled !== "false")
+        : node.children.filter(child => child.name !== "value" || child === primaryValue);
       const appendOtherValueMatches = (destination: SparqlPattern[], innerState: typeof state) => {
         for (const otherValue of valueChildren.slice(1)) {
           const otherRelated = variable(`s${innerState.next++}`);
@@ -477,6 +503,8 @@ function compileConstraints(
       }
       compileConstraints(node.children, subject, patterns, errors, state, true, ancestors);
     } else if (node.name === "value") {
+      // Keep named saved regexes in FCT XML without filtering until checked.
+      if (node.attributes.enabled === "false") continue;
       const op = (node.attributes.op ?? "=").trim().toLowerCase();
       const start = node.attributes.rangeStart?.trim();
       const end = node.attributes.rangeEnd?.trim();
@@ -574,11 +602,11 @@ function buildSelectQuery(args: {
 }
 
 const DEFAULT_INDEX_LABEL = "http://www.w3.org/2000/01/rdf-schema#label";
-// Language is a view-level attribute so shared URLs and server-side queries
-// use the same alphabet semantics as the preferred-language Sheet setting.
-function indexLanguage(view: XmlNode | null): string {
-  const language = (view?.attributes.indexLang || "en").toLowerCase();
-  if (language !== "all" && !/^[a-z]{2,3}$/.test(language)) throw new Error("Invalid alphabet language code.");
+// The Sheet (or temporary URL override) is the sole language setting.
+// A restored <view> never carries a language preference.
+function indexLanguage(_view: XmlNode | null, effectiveLanguage = effectiveMaestroLanguage()): string {
+  const language = validMaestroLanguage(effectiveLanguage);
+  if (!language) throw new Error("Invalid preferred language code.");
   return language;
 }
 /** Maestro RDF language policy (all list, facet, alphabet, and count views):
@@ -618,8 +646,8 @@ function indexLanguageFilter(value: SparqlTerm, language: string): Extract<Sparq
  * A neutral literal, an IRI, or a blank node is always eligible.
  * These FILTERs run in SPARQL before ORDER BY, LIMIT, aggregation and counts.
  */
-function preferredValueLanguageFilter(value: SparqlTerm, view: XmlNode | null, viewParent: XmlNode | null): SparqlPattern[] {
-  const language = indexLanguage(view);
+function preferredValueLanguageFilter(value: SparqlTerm, view: XmlNode | null, viewParent: XmlNode | null, effectiveLanguage: string): SparqlPattern[] {
+  const language = indexLanguage(view, effectiveLanguage);
   if (language === "all" || viewParent?.children.some((child) =>
     child.name === "value" && !!(child.attributes["xml:lang"] || child.attributes.lang))) return [];
   // Only rdf:langString is language-filtered; typed neutral literals survive.
@@ -649,7 +677,7 @@ export type FctFederationContext = {
   providerOtcGraph?: string;
 };
 
-export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false, discoverGraph: boolean | "first" = false, countFreeFacet = false, federation?: FctFederationContext): CompiledFctQuery {
+export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false, discoverGraph: boolean | "first" = false, countFreeFacet = false, federation?: FctFederationContext, preferredLanguage = effectiveMaestroLanguage()): CompiledFctQuery {
   if (!xml.trim()) throw new Error("The FCT query XML is empty.");
   const validation = XMLValidator.validate(xml);
   if (validation !== true) {
@@ -725,12 +753,14 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     statusBindings: Array<{ variable: string; uri: string; addr?: string }>;
     badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }>;
   grouping: Array<{ subject: SparqlTerm; predicate: SparqlTerm; direction: "forward" | "reverse" }>;
+    relationBindings: Map<string, SparqlTerm>;
   } = {
     next: 2,
     target: null,
     targetParent: null,
     statusBindings: [],
     grouping: [],
+    relationBindings: new Map(),
     badgeColumns: badgesEnabled ? [] : undefined,
   };
   // A generated FCT resource-set query may carry several root URI values.
@@ -746,24 +776,8 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     variable("s1"), constraints, errors, state);
   if (errors.length) throw new Error(errors.join(" "));
   const target = state.target ?? variable("s1");
-  // A blank node returned from <property><view/> needs its structural URI
-  // parent. Project it in this same FCT SELECT, not via optional badges or a
-  // second query (a response-local _: label cannot be rebound independently).
-  const recordParent = state.focusParent && (view === FCT_VIEW_TYPES.LIST || view === FCT_VIEW_TYPES.TEXT)
-    ? state.focusParent : undefined;
-  // Every ancestor is part of the original FCT path. When the immediate
-  // parent is a blank node, a higher URI ancestor can still anchor its Record.
-  // Never reuse a response-local blank-node label in a second query.
-  const recordAncestors = recordParent && state.focusAncestors
-    ? state.focusAncestors.slice(0, -1).map((term, depth, candidates) => ({
-        colName: depth === candidates.length - 1 ? "recordParent" : `recordAncestor${depth}`,
-        term, depth, predicate: recordParent.predicate, direction: recordParent.direction,
-      }))
-    : [];
-  const recordParentProjection: SparqlProjection[] = recordAncestors.map(({ term, colName }) => ({
-    expression: { kind: "aggregate", name: "SAMPLE", distinct: false, expression: termExpr(term) },
-    as: variable(colName),
-  }));
+  // Normal FCT results contain only normal value projections. Blank-node
+  // Records are handled on demand using the existing RDF term type.
   const rootLiteralNode = root.children.find((node) => node.name === "value" &&
     node.attributes.datatype !== "uri" && !isBlankNodeTerm(node.attributes.datatype));
   const describeBounds = view === FCT_VIEW_TYPES.DESCRIBE ? bnodeDescribeBounds(viewNode?.attributes ?? {}) : null;
@@ -915,7 +929,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
           { kind: "triple", subject: target, predicate, object: name },
           { kind: "filter", expression: { kind: "in", value: termExpr(predicate), options: predicates.map(iriTerm) } },
           { kind: "filter", expression: beginsWith(name, letter) },
-          indexLanguageFilter(name, indexLanguage(viewNode)),
+          indexLanguageFilter(name, indexLanguage(viewNode, preferredLanguage)),
         ];
         const branches: SparqlPattern[][] = [];
         for (const selected of selections) {
@@ -953,8 +967,8 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       }
       const indexedPatterns = indexedWhere[0]?.kind === "graph" ? indexedWhere[0].patterns : indexedWhere;
       indexedWhere = graphTerm
-        ? [{ kind: "graph", graph: graphTerm, patterns: [...indexedPatterns, ...preferredValueLanguageFilter(target, viewNode, viewParent)] }]
-        : [...indexedPatterns, ...preferredValueLanguageFilter(target, viewNode, viewParent)];
+        ? [{ kind: "graph", graph: graphTerm, patterns: [...indexedPatterns, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)] }]
+        : [...indexedPatterns, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)];
     return indexedWhere;
   };
   let query: string;
@@ -985,8 +999,8 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       termExpr(iriTerm("http://www.w3.org/2001/XMLSchema#anyURI")),
     ] };
     const scopedValues = graphTerm ? [{ kind: "graph", graph: graphTerm,
-      patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)] } satisfies SparqlPattern]
-      : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)];
+      patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)] } satisfies SparqlPattern]
+      : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)];
     datatypeEvidenceQuery = buildStatusSelect({ directives,
       projections: [
         { expression: inferred, as: variable("datatype") },
@@ -1000,7 +1014,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     // graph that supplies each result. Never rank graph IRIs or preselect an
     // unscoped focus resource whose matching triples are elsewhere.
     const discoveryWhere = view === FCT_VIEW_TYPES.TEXT ? buildIndexedTextWhere() :
-      [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)];
+      [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)];
     if (view === FCT_VIEW_TYPES.PROPERTIES) {
       discoveryWhere.push({ kind: "triple", subject: target, predicate: variable("p"), object: variable("o") });
       discoveryWhere.push({ kind: "filter", expression: binary("!=", termExpr(variable("p")), termExpr(iriTerm(RDF_TYPE))) });
@@ -1156,8 +1170,8 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     // never carried across requests. The inner candidate ceiling is separate
     // from the number of distinct graph results.
     const candidatesRaw = Number(viewNode.attributes.candidates ?? 100);
-    if (!Number.isSafeInteger(candidatesRaw) || candidatesRaw < 1 || candidatesRaw > 10000 || offset !== 0 || limit > 500)
-      throw new Error("Record graph projection requires candidates=1–10000, offset=0 and limit<=500.");
+    if (!Number.isSafeInteger(candidatesRaw) || candidatesRaw < 1 || candidatesRaw > 10000 || offset > 1000000 || limit > 500)
+      throw new Error("Record graph projection requires candidates=1–10000, offset=0–1000000 and limit<=500.");
     const focus = variable("recordFocus");
     const graphName = variable("recordGraph");
     const candidateOffset = Number(viewNode.attributes.candidateOffset ?? 0);
@@ -1192,7 +1206,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       directives, distinct: true,
       projections: [{ expression: termExpr(graphName), as: variable("c1") }],
       where: [{ kind: "subquery", query: focusQuery }, ...membership],
-      limit, offset: 0,
+      limit, offset,
     });
   } else if (graphOnly) {
     // The Graphs view is the live view's result-set WHERE, evaluated per named
@@ -1228,7 +1242,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       counted = variable("p");
       countWhere = scopeWith([{ kind: "triple", subject: target, predicate: variable("p"), object: variable("o") },
         { kind: "filter", expression: binary("!=", termExpr(variable("p")), termExpr(iriTerm(RDF_TYPE))) },
-        ...preferredValueLanguageFilter(variable("o"), viewNode, viewParent),
+        ...preferredValueLanguageFilter(variable("o"), viewNode, viewParent, preferredLanguage),
         ...recordObjectKindFilter(viewNode?.attributes.kind, variable("o"))]);
     } else if (view === FCT_VIEW_TYPES.CLASSES) {
       counted = variable("c");
@@ -1242,8 +1256,8 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       countWhere = view === FCT_VIEW_TYPES.COUNT_DISTINCT && viewNode?.attributes.index
         ? buildIndexedTextWhere()
         : graphTerm
-          ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)] }]
-          : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)];
+          ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)] }]
+          : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)];
     }
     query = buildStatusSelect({ directives, projections: [countProjection(counted)], where: countWhere });
   } else if (view === FCT_VIEW_TYPES.PROPERTIES || view === FCT_VIEW_TYPES.CLASSES || view === FCT_VIEW_TYPES.PROPERTIES_IN) {
@@ -1277,7 +1291,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
             // rdf:type belongs to Categories. It is not an available forward property.
             ...(view === FCT_VIEW_TYPES.PROPERTIES ? [
               { kind: "filter", expression: binary("!=", termExpr(facet), termExpr(iriTerm(RDF_TYPE))) } satisfies SparqlPattern,
-              ...preferredValueLanguageFilter(variable("o"), viewNode, viewParent),
+              ...preferredValueLanguageFilter(variable("o"), viewNode, viewParent, preferredLanguage),
               ...recordObjectKindFilter(viewNode?.attributes.kind, variable("o")),
             ] : []),
             ...(view === FCT_VIEW_TYPES.PROPERTIES_IN ? recordObjectKindFilter(viewNode?.attributes.kind, target) : []),
@@ -1345,7 +1359,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       offset,
     });
   } else if (view === FCT_VIEW_TYPES.LIST_COUNT) {
-    const valueLanguageWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)] } satisfies SparqlPattern] : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)];
+    const valueLanguageWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)] } satisfies SparqlPattern] : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)];
     query = buildStatusSelect({ directives, projections: [
       { expression: termExpr(target), as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: false, expression: { kind: "term", term: { kind: "raw-term", value: "*" } } }, as: variable("n") },
@@ -1356,7 +1370,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     // faster expression-based grouping without UCASE or ORDER BY; the client
     // normalizes letters and displays A-Z in a fixed sequence.
     // Use rdfs:label alone to avoid expensive predicate-variable joins.
-    // Both grouped counts and active-letter results honor indexLang and include
+    // Both grouped counts and active-letter results honor the effective Sheet language and include
     // language-neutral labels so their populations stay consistent.
     const name = variable("maestroLabel");
     const labelPredicate = iriTerm(DEFAULT_INDEX_LABEL);
@@ -1367,7 +1381,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     ] };
     const labelPatterns: SparqlPattern[] = [
       { kind: "triple", subject: target, predicate: labelPredicate, object: name },
-      indexLanguageFilter(name, indexLanguage(viewNode)),
+      indexLanguageFilter(name, indexLanguage(viewNode, preferredLanguage)),
       { kind: "filter", expression: { kind: "function", name: "REGEX", args: [
         letter, termExpr(literalTerm("^[A-Za-z]$")),
       ] } },
@@ -1392,8 +1406,8 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       { expression: bucket, as: variable("c1") },
       { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(variable("s1")) }, as: variable("n") },
     ], where: graphTerm
-      ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)] }]
-      : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)], groupBy: [bucket], orderBy: shouldOrder ? [{ expression: bucket, direction: "ASC" }] : undefined, limit, offset });
+      ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)] }]
+      : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)], groupBy: [bucket], orderBy: shouldOrder ? [{ expression: bucket, direction: "ASC" }] : undefined, limit, offset });
   } else if (view === FCT_VIEW_TYPES.GEO) {
     const lat = variable("lat"); const long = variable("long");
     const geoWhere: SparqlPattern[] = [...scopedWhere,
@@ -1500,9 +1514,6 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       // through the existing FCT TEXT row without an extra query.
       projections.push({ expression: termExpr(variable("txtp1")), as: variable("matchPredicate") });
     }
-    // The parent is identity metadata, not a Results badge. SAMPLE keeps
-    // one row per focus without multiplying paginated blank-node results.
-    projections.push(...recordParentProjection);
     if (badgesEnabled && state.badgeColumns?.length) {
       for (const badgeCol of state.badgeColumns) {
         // A focus can have several URI parents. SAMPLE chooses one anchor
@@ -1514,13 +1525,13 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       ? [entityRankOrder(target)]
       : undefined;
     query = buildStatusSelect({ directives, distinct: true, projections, where: indexedWhere, orderBy: orderByList,
-      ...((recordParent || (badgesEnabled && state.badgeColumns?.length)) ? { groupBy: [termExpr(target),
+      ...((badgesEnabled && state.badgeColumns?.length) ? { groupBy: [termExpr(target),
         ...(searchText && textPatterns ? [termExpr(variable("txt1")),termExpr(variable("txtp1"))] : [])] } : {}),
       limit, offset });
   } else if (view === FCT_VIEW_TYPES.LIST_STATUS) {
     const focusWhere = graphTerm
-      ? [{kind:"graph" as const,graph:graphTerm,patterns:[...where,...preferredValueLanguageFilter(target,viewNode,viewParent)]}]
-      : [...where,...preferredValueLanguageFilter(target,viewNode,viewParent)];
+      ? [{kind:"graph" as const,graph:graphTerm,patterns:[...where,...preferredValueLanguageFilter(target,viewNode,viewParent, preferredLanguage)]}]
+      : [...where,...preferredValueLanguageFilter(target,viewNode,viewParent, preferredLanguage)];
     if (federation) {
       // The derived Status view groups the VERIFIED bookmarked selection. Its
       // source status assertion is represented by the configured status graph.
@@ -1572,7 +1583,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     // distinct counterpart terms, not a misleading count of property IRIs.
     const countSorted = viewNode?.attributes.sort === "count";
     const counterpart = view === FCT_VIEW_TYPES.LIST_SUBJECTS ? usageObject : usageSubject;
-    const usageWhere = scopeWith([...traversal, ...preferredValueLanguageFilter(projected, viewNode, viewParent)]);
+    const usageWhere = scopeWith([...traversal, ...preferredValueLanguageFilter(projected, viewNode, viewParent, preferredLanguage)]);
     const countExpression: SparqlExpression = { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(counterpart) };
     const sorted: SparqlOrder[] | undefined = countSorted && shouldOrder
       ? [{ expression: countExpression, direction: "DESC" }, { expression: { kind: "function", name: "STR", args: [termExpr(projected)] }, direction: "ASC" }]
@@ -1594,8 +1605,8 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     const groupEdge: SparqlPattern = edges.length === 1 ? edges[0][0] : { kind: "union", branches: edges };
     const groupWhere: SparqlPattern[] = graphTerm
       ? [{ kind: "graph", graph: graphTerm,
-          patterns: [...where, groupEdge, ...preferredValueLanguageFilter(groupedTerm, viewNode, viewParent)] }]
-      : [...where, groupEdge, ...preferredValueLanguageFilter(groupedTerm, viewNode, viewParent)];
+          patterns: [...where, groupEdge, ...preferredValueLanguageFilter(groupedTerm, viewNode, viewParent, preferredLanguage)] }]
+      : [...where, groupEdge, ...preferredValueLanguageFilter(groupedTerm, viewNode, viewParent, preferredLanguage)];
     const groupCount: SparqlExpression = { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(target) };
     const bucket = (viewNode?.attributes.bucket ?? "").trim();
     const lexical = (viewNode?.attributes.lexical ?? "").trim() === "yes";
@@ -1631,7 +1642,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       groupBy: bucket === "weekday-hour" ? [termExpr(variable("weekday")), termExpr(variable("hour"))] : [termExpr(groupKey)],
       orderBy, limit, offset });
   } else if (view === FCT_VIEW_TYPES.LIST || view === FCT_VIEW_TYPES.LIST_VALUES) {
-    const valueLanguageWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)] } satisfies SparqlPattern] : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent)];
+    const valueLanguageWhere = graphTerm ? [{ kind: "graph", graph: graphTerm, patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)] } satisfies SparqlPattern] : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)];
     // Virtuoso FCT list view selects the RDF term. Its SQL/XML response
     // wrapper resolves the human-readable label; do not call the SQL-only
     // fct_label procedure from inside SPARQL. For an explicitly count-sorted
@@ -1643,7 +1654,6 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       projections: [
         { expression: termExpr(target), as: variable("c1") },
         ...(isCountSorted ? [{ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(subjectTerm) }, as: variable("ct") } as SparqlProjection] : []),
-        ...recordParentProjection,
       ],
       where: valueLanguageWhere,
       ...(isCountSorted
@@ -1658,9 +1668,7 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
                 }
               : {}),
           }
-        : recordParent
-          ? { groupBy: [termExpr(target)], ...(shouldOrder ? { orderBy: [entityRankOrder(target)] } : {}) }
-          : shouldOrder
+        : shouldOrder
             ? { orderBy: [entityRankOrder(target)] }
             : {}),
       limit,
@@ -1685,8 +1693,6 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
     describeExpanded,
     ...(describeBounds ? { describeMaxTriples: describeBounds.maxTriples } : kindFilteredDescribe ? { describeMaxTriples: limit } : {}),
     badgeColumns: state.badgeColumns?.map(({ colName, property, direction }) => ({ colName, property, direction })),
-    ...(recordParent ? { recordParent: { colName: "recordParent", predicate: recordParent.predicate, direction: recordParent.direction } } : {}),
-    ...(recordAncestors.length ? { recordAncestors: recordAncestors.map(({ colName, depth, predicate, direction }) => ({ colName, depth, predicate, direction })) } : {}),
   };
 }
 

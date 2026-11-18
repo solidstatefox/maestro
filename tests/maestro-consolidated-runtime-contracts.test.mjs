@@ -19,10 +19,10 @@ const make = module.exports.createRootUriAutocompleteQuery;
 const addr = '@https://demo.openlinksw.com/sparql';
 test('one character and mixed-case input generate full-text indexed SPARQL, limit 10, rank',()=>{
   const q = make('F',addr,{limit:10,timeoutSeconds:5});
-  assert.match(q,/SELECT DISTINCT \?uri \?label WHERE/);
-  assert.match(q, /\?label bif:contains/);
-  assert.match(q,/LCASE\(STR\(\?label\)\), "f"/);
-  assert.match(q,/ORDER BY DESC \(<LONG::IRI_RANK> \(\?uri\)\) LIMIT 10/);
+  assert.match(q,/SELECT \?uri \?label \?type WHERE/);
+  assert.match(q, /\?matchedLabel bif:contains/);
+  assert.match(q,/FILTER\(LCASE\(STR\(\?matchedLabel\)\) = "f"\)/);
+  assert.match(q,/ORDER BY DESC \(<LONG::IRI_RANK> \(\?uri\)\) ASC\(STR\(\?uri\)\)\s+LIMIT 10/);
   assert.doesNotMatch(q,/\?uri \?predicate \?value/);
 });
 test('a complete scheme introducer or URL never generates suggestions',()=>{
@@ -32,7 +32,7 @@ test('a complete scheme introducer or URL never generates suggestions',()=>{
 test('all compatible SPARQL servers require ranked output, bounded limit from Sheet',()=>{
   const q=make('AlAbAmA','@https://other.example.net/sparql',{limit:5,timeoutSeconds:1});
   assert.match(q,/"alabama"/);
-  assert.match(q,/ORDER BY DESC \(<LONG::IRI_RANK> \(\?uri\)\) LIMIT 5/);
+  assert.match(q,/ORDER BY DESC \(<LONG::IRI_RANK> \(\?uri\)\) ASC\(STR\(\?uri\)\)\s+LIMIT 5/);
 });
 test('browser URI and kind workflows never invoke SHACL UI on login',()=>{
   const loader=read('src/lib/client-kinds.ts');

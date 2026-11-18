@@ -24,6 +24,8 @@ export interface ViewPageProps {
   viewDiscoveryLoading: boolean;
   viewDiscoveryError: string;
   selectedView: ViewChoice | undefined;
+  selectedViewUri?: string;
+  viewSelectionPending?: boolean;
   viewRenderError: string;
   viewHtml: string;
   onSelectEndpoint: (id: string) => void;
@@ -32,7 +34,7 @@ export interface ViewPageProps {
   onOpenResource?: (uri: string) => void;
   onSelectProvider?: (uri: string, selected: boolean) => void;
 }
-export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider, viewProviderLoading, viewProviderError, viewProviderCount, viewProviderHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, viewRenderError, viewHtml, onSelectEndpoint, onRefreshEndpoint, onPolicyAction, onOpenResource, onSelectProvider }: ViewPageProps) {
+export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider, viewProviderLoading, viewProviderError, viewProviderCount, viewProviderHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, selectedViewUri = "", viewSelectionPending = false, viewRenderError, viewHtml, onSelectEndpoint, onRefreshEndpoint, onPolicyAction, onOpenResource, onSelectProvider }: ViewPageProps) {
   const [policyCode, setPolicyCode] = useState<{ uri: string; code: string; query: string; loading: boolean; error: string } | null>(null);
   useEffect(() => { setPolicyCode(null); }, [viewProvider, viewProviderHtml]);
   async function openPolicyCode(uri: string) {
@@ -73,14 +75,23 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
                       }} dangerouslySetInnerHTML={{ __html: viewProviderHtml }}/>)
                     : viewDiscoveryLoading ? <p className="text-sm text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></p>
                     : viewDiscoveryError ? <ErrorDetails prefix="View discovery" error={viewDiscoveryError} />
-                    : !selectedView ? <div className="mx-auto max-w-lg rounded-lg border border-dashed p-8 text-center">
+                    : !selectedView ? <div role={selectedViewUri ? "status" : undefined} aria-busy={viewSelectionPending} className="mx-auto max-w-lg rounded-lg border border-dashed p-8 text-center">
                         <Network className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden="true"/>
-                        <h3 className="font-medium">No views found</h3>
-                        <p className="mt-2 text-sm text-muted-foreground">No views match the classes at this breadcrumb scope.</p>
+                        <h3 className="font-medium">{selectedViewUri ? viewSelectionPending ? "Checking selected Perspective…" : "Selected Perspective unavailable" : "No views found"}</h3>
+                        <p className="mt-2 text-sm text-muted-foreground">{selectedViewUri ? viewSelectionPending
+                          ? "The saved selection is retained while provider discovery and SHACL validation complete."
+                          : "The selected provider was not returned for this query context. The selection has not been discarded."
+                          : "No views match the classes at this breadcrumb scope."}</p>
                       </div>
                     : viewRenderError ? <ErrorDetails prefix="View rendering" error={viewRenderError} />
                     : <div className="maestro-discovered-view" onClick={(event) => {
                         const target = event.target as HTMLElement;
+                        const resource = target.closest<HTMLButtonElement>("button[data-provider-open-uri]");
+                        if (resource) {
+                          const uri = resource.getAttribute("data-provider-open-uri") ?? "";
+                          if (/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(uri)) onOpenResource?.(uri);
+                          return;
+                        }
                         const select = target.closest<HTMLButtonElement>("button[data-endpoint-select]");
                         if (select) {
                           if (select.dataset.endpointSelect) onSelectEndpoint(select.dataset.endpointSelect);

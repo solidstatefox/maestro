@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 const root = new URL('../src/', import.meta.url);
 const read = path => readFileSync(new URL(path, root), 'utf8');
-test('radial labels use shadcn LabelList geometry and fixed 250px chart', () => {
+test('radial labels use shadcn LabelList geometry and one true 360-degree sweep', () => {
   const s=read('canvas/tab/view/overview.tsx');
   assert.match(s, /<RadialBar dataKey="percentage"/);
   assert.match(s, /<LabelList position="insideStart" dataKey="predicate"/);
-  assert.match(s, /startAngle=\{-90\} endAngle=\{380\} innerRadius=\{30\} outerRadius=\{110\}/);
+  assert.match(s, /startAngle=\{-90\} endAngle=\{270\} innerRadius=\{30\} outerRadius=\{110\}/);
 });
 test('Overview is first Analyze ribbon button and not in View ribbon', () => {
   const s=read('canvas/tab/analyze/ribbon.tsx');

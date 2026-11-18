@@ -41,13 +41,12 @@ test("canonical identity ignores IDs, counter, and sibling constraint order", ()
   assert.notEqual(canonicalQueryIdentityXml(one), canonicalQueryIdentityXml(two.replace('iri="urn:a"', 'iri="urn:b"')));
 });
 
-test("Providers policies use first-class FCT Status filters, never a regex value", () => {
+test("Providers policies list policy definitions independently of approval Status", () => {
   const base = { name: "query" as const, attributes: { xmlns: ns }, children: [] };
   const policies = providerFctQuery(base, "policies", "urn:policy-graph", "https://example.org/sparql", 30);
-  assert.deepEqual(policies.children.filter(node => node.name === "status").map(node => node.text), [
-    "gttp://ggg.maestro.ecosys/ns/ui#Pending", "gttp://ggg.maestro.ecosys/ns/ui#Approved",
-  ]);
-  assert.ok(policies.children.some(node => node.name === "property" && node.attributes.iri.endsWith("#lastRequestComponent")));
+  assert.deepEqual(policies.children.filter(node => node.name === "status"), []);
+  assert.ok(policies.children.some(node => node.name === "class" && node.attributes.iri.endsWith("#ClassPolicy")));
+  assert.ok(policies.children.some(node => node.name === "view" && node.attributes.type === "list"));
   assert.ok(!policies.children.some(node => node.name === "value"));
   assert.ok(!policies.children.some(node => node.name === "property" && node.attributes.iri.endsWith("#status")));
 });

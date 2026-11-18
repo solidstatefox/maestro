@@ -20,6 +20,9 @@ export function StatusFacetWidget<T extends string>({ names, selected, counts, t
   names: readonly T[]; selected: ReadonlySet<T>; counts: Partial<Record<T, number>> | null;
   toggle: (name: T) => void; query?: string; countQuery?: string; fctQuery?: string; loading?: boolean; error?: string; filename?: string; labels?: Partial<Record<T,string>>; onNavigate?: () => void;
 }) {
+  // Don't present a conspicuous "0" badge for an otherwise empty Status facet.
+  // Checked statuses stay visible and removable even when their count is zero.
+  const showCounts = counts !== null && names.some(name => (counts[name] ?? 0) > 0);
   return <article className="flex min-w-0 flex-col" aria-label="Status">
     <header className="group/header flex items-start justify-between gap-2 border-b px-2 py-2">
       <div className="flex min-w-0 items-center gap-1">{onNavigate ? <button type="button" className="cursor-pointer text-sm font-semibold hover:underline underline-offset-2" title="Navigate to mui:status of the current focus" onClick={onNavigate}>Status</button> : <h2 className="text-sm font-semibold">Status</h2>}
@@ -32,7 +35,7 @@ export function StatusFacetWidget<T extends string>({ names, selected, counts, t
       </div>
       <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
         {loading && <ElapsedStatus label="" category="personal" clockScope="statuses" />}
-        {shortenCount(counts === null ? names.length : names.reduce((total, name) => total + (counts[name] ?? 0), 0))}
+        {showCounts && shortenCount(names.reduce((total, name) => total + (counts?.[name] ?? 0), 0))}
       </span>
     </header>
     <div className={FACET_ITEM_GAP_CLASS}>
@@ -40,7 +43,7 @@ export function StatusFacetWidget<T extends string>({ names, selected, counts, t
         <input type="checkbox" checked={selected.has(name)} onChange={() => toggle(name)}
           className="size-4 shrink-0 accent-primary" aria-label={`Filter by ${name}`} />
         <span className="min-w-0 flex-1 truncate">{labels?.[name] ?? name}</span>
-        <span className="shrink-0 text-xs text-muted-foreground">{counts === null || counts[name] === undefined ? "—" : shortenCount(counts[name])}</span>
+        {showCounts && <span className="shrink-0 text-xs text-muted-foreground">{counts?.[name] === undefined ? "—" : shortenCount(counts?.[name] ?? 0)}</span>}
       </label>)}
     </div>
     {error && <ErrorDetails error={error} prefix="Status" className="mx-2 my-1" />}
@@ -62,6 +65,10 @@ export function LiveQueryStatusWidget({ tree, toggle, revision, queryXml, onNavi
   tree: FctQueryTree; toggle: (uri: string) => void; revision: number; queryXml: string; onNavigate?: () => void;
 }) {
   const [entries, setEntries] = useState<Array<{uri: string; count: number}>>([]);
+  // A previous bookmark/query's Status counts must not be presented as the
+  // current query's counts during an asynchronous scope change. Keep valid
+  // same-scope counts mounted while a refresh is in flight.
+  const [entriesScope, setEntriesScope] = useState("");
   const [fctQuery, setFctQuery] = useState("");
   const [countQuery, setCountQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -85,17 +92,22 @@ export function LiveQueryStatusWidget({ tree, toggle, revision, queryXml, onNavi
     setLoading(true); setError("");
     void fctStatusFacet(queryXml, controller.signal)
       .then(data => { if (!controller.signal.aborted) {
-        setEntries(data.entries); setFctQuery(data.fctQuery); setCountQuery(data.sparql);
+        setEntries(data.entries); setEntriesScope(queryXml); setFctQuery(data.fctQuery); setCountQuery(data.sparql);
       } }).catch(reason => { if (!controller.signal.aborted) {
-        setEntries([]); setFctQuery(""); setCountQuery("");
+        setEntries([]); setEntriesScope(""); setFctQuery(""); setCountQuery("");
         setError(reason instanceof Error ? reason.message : "Status list unavailable");
       } }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [revision, queryXml]);
-  const names = [...new Set([...entries.map(entry => entry.uri), ...selected])];
-  const counts = Object.fromEntries(entries.map(entry => [entry.uri, entry.count]));
+  const scopedEntries = entriesScope === queryXml ? entries : [];
+  const names = [...new Set([...scopedEntries.map(entry => entry.uri), ...selected])];
+  const counts = entriesScope === queryXml
+    ? Object.fromEntries(scopedEntries.map(entry => [entry.uri, entry.count])) : null;
   const labels = Object.fromEntries(names.map(uri => [uri, uri === `${MUI}Unseen` ? "New" : toLabel(uri)]));
   return <StatusFacetWidget names={names} selected={selected} counts={counts} labels={labels}
-    toggle={toggle} onNavigate={onNavigate} query={countQuery} countQuery={countQuery} fctQuery={fctQuery}
-    filename="list-status.sparql" loading={loading} error={error} />;
+    toggle={toggle} onNavigate={onNavigate}
+    query={entriesScope === queryXml ? countQuery : ""}
+    countQuery={entriesScope === queryXml ? countQuery : ""}
+    fctQuery={entriesScope === queryXml ? fctQuery : ""}
+    filename="list-status.sparql" loading={loading || (!error && entriesScope !== queryXml)} error={error} />;
 }

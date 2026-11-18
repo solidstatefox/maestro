@@ -97,6 +97,7 @@ const TEXT_SEARCH_NAME_PROPERTIES = [
 
 import { useWorkspaceController } from "@/canvas/utils/workspace-controller";
 import { createBreadcrumbRenderers } from "@/canvas/top/breadcrumb-renderers";
+import { RootAutocompleteQueryInspector } from "@/canvas/top/root-autocomplete-query-inspector";
 import { AppBarSection } from "@/canvas/top/appbar-pane";
 import { LeftCanvasPanel } from "@/canvas/left/pane";
 import { CenterCanvasPanel } from "@/canvas/center/pane";
@@ -677,7 +678,7 @@ export function MaestroWorkspace() {
   };
   collectQueryClasses(queryTree.children);
   // Use the identical live ribbon in both ready and loading layouts.
-  const workspaceRibbon = !urlStateInitialized ? <RibbonLoadingSkeleton /> : (!workspace.accessCapabilities.canUsePersonalStore || workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewProvider={viewProvider} setViewProvider={setViewProvider} onSelectProvider={workspace.selectViewProvider} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setViewPanel("perspectives"); setSelectedViewUri(uri); setViewProvider(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <MaestroHoverExpand active={analyzeRibbonPanel} onChange={(panel) => {
+  const workspaceRibbon = !urlStateInitialized ? <RibbonLoadingSkeleton /> : (!workspace.accessCapabilities.canUsePersonalStore || workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewProvider={viewProvider} setViewProvider={setViewProvider} onSelectProvider={workspace.selectViewProvider} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setViewPanel("perspectives"); setSelectedViewUri(uri); setViewProvider(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} queryMatchedProviders={workspace.queryMatchedProviders} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <MaestroHoverExpand active={analyzeRibbonPanel} onChange={(panel) => {
     if (panel === "analytics" || panel === "trail") setAnalyzeRibbonPanel(panel);
   }} panels={[{ id: "trail", label: "Trail", content: <nav aria-label="Analyze breadcrumbs" className="flex w-max min-w-full flex-nowrap items-start gap-2">{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb,index)=>renderPathBreadcrumb(crumb,index))}</nav> }, { id: "analytics", label: "Analytics", content: <AnalyzeRibbon analysisDefinitions={analysisDefinitions} selectedAnalysisUri={selectedAnalysisUri} analyzeHistogram={analyzeHistogram} isCompareAnalysis={isCompareAnalysis} firstBreadcrumbLabel={tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : undefined} firstResultTitle={visibleResultsPage[0]?.title} onSelectAnalysis={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(false); }} onSelectHistogram={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(true); }} /> }]} />);
   return (
@@ -893,17 +894,26 @@ export function MaestroWorkspace() {
                 onConfigureProperties={() => { workspace.setFocusListOrder("Properties"); setDefaultLeftTab("facets"); }}
                 onConfigureRoles={() => { workspace.setFocusListOrder("Roles"); setDefaultLeftTab("facets"); }} />
               : <LeftCanvasPanel workspace={workspace} />}
-            <ResizableHandle withHandle className="!w-px !min-w-px !max-w-px shrink-0" />
+            <ResizableHandle withHandle className="shrink-0" />
             {skeletons.results === "loading" ? <ResultsLoadingSkeleton wide={urlStateInitialized && workspaceTab !== "browse"} />
               : skeletons.results === "degraded" ? <GraphUnavailableResults wide={urlStateInitialized && workspaceTab !== "browse"} />
               : <CenterCanvasPanel workspace={workspace} />}
-            {(!urlStateInitialized || workspaceTab === "browse") && <ResizableHandle withHandle className="!w-px !min-w-px !max-w-px shrink-0" />}
+            {(!urlStateInitialized || workspaceTab === "browse") && <ResizableHandle withHandle className="shrink-0" />}
             {(!urlStateInitialized || workspaceTab === "browse") && (skeletons.record === "loading"
               ? <RecordLoadingSkeleton /> : skeletons.record === "degraded"
               ? <GraphUnavailableRecord /> : <RightCanvasPanel workspace={workspace} />)}
           </ResizablePanelGroup>
 
       </div>
+      {/* This lives in the durable workspace root, not the hover-unfurled
+          breadcrumb editor. Mouse movement cannot unmount the Code Block. */}
+      <RootAutocompleteQueryInspector
+        open={workspace.rootAutocompleteInspectorOpen}
+        onOpenChange={workspace.setRootAutocompleteInspectorOpen}
+        query={workspace.rootAutocompleteInspection?.query ?? null}
+        input={workspace.rootAutocompleteInspection?.input ?? ""}
+        addr={workspace.rootAutocompleteInspection?.addr ?? ""}
+      />
       <Dialog open={bookmarkQueryDebugOpen} onOpenChange={setBookmarkQueryDebugOpen}>
         <DialogContent className="flex max-h-[85vh] max-w-5xl flex-col overflow-hidden">
           <DialogHeader><DialogTitle>Bookmark query Code Block</DialogTitle><DialogDescription>Inspect the bounded FCT query, the SPARQL returned by Virtuoso FCT, and both raw responses.</DialogDescription></DialogHeader>

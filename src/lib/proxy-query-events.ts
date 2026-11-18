@@ -1,7 +1,9 @@
 /** One request-scoped notification sink; survives await and proxy scheduler queueing. */
 import { AsyncLocalStorage } from "node:async_hooks";
 
-type Sink = (event: "dispatched" | "completed", data: { queryId: number; elapsedMs?: number }) => void;
+type Sink = (event: "dispatched" | "completed" | "queue-position", data: {
+  queryId: number; elapsedMs?: number; queueIndex?: number; server?: string;
+}) => void;
 const storage = new AsyncLocalStorage<{ sink: Sink; sequence: number }>();
 
 export function withProxyQueryEventSink<T>(sink: Sink, run: () => Promise<T>): Promise<T> {
@@ -17,4 +19,13 @@ export async function traceVirtuosoDispatch<T>(work: () => Promise<T>): Promise<
   context.sink("dispatched", { queryId });
   try { return await work(); }
   finally { context.sink("completed", { queryId, elapsedMs: Math.max(0, performance.now() - started) }); }
+}
+
+/** Capture the existing SSE request sink at scheduler enqueue time. A queued
+ * task may move between lanes as quotas change; send its current server-side
+ * position on each real scheduler reorder. No new endpoint or polling. */
+export function proxyQueuePositionNotifier(): ((index: number, server: string) => void) | undefined {
+  const context = storage.getStore();
+  if (!context) return undefined;
+  return (index, server) => context.sink("queue-position", { queryId: 0, queueIndex: index, server });
 }

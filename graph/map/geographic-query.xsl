@@ -26,8 +26,14 @@
   <query-request timeout="{mctx:compiled/@timeout}" valid="{boolean($or-list != '' and count(mctx:shape/s:sparql/s:results/s:result[s:binding[@name='p']/s:uri=concat($rdf,'first')]) &gt; 0)}">
    <sparql>
     <xsl:value-of select="mctx:compiled/mctx:prefix"/>
-    <xsl:text>SELECT DISTINCT </xsl:text><xsl:choose><xsl:when test="$focus = '?c1'"><xsl:text>?c1</xsl:text></xsl:when><xsl:otherwise><xsl:text>(</xsl:text><xsl:value-of select="$focus"/><xsl:text> AS ?c1)</xsl:text></xsl:otherwise></xsl:choose><xsl:text> ?lat ?lng ?point ?wkt ?title WHERE {&#10; { SELECT DISTINCT </xsl:text><xsl:value-of select="$focus"/>
-    <xsl:text> WHERE {&#10;</xsl:text><xsl:value-of select="mctx:compiled/mctx:where"/><xsl:text>&#10;} }&#10;</xsl:text>
+    <!-- The earlier unbounded SELECT DISTINCT subquery materialized the entire
+         FCT focus population before applying geographic constraints. Large
+         Book/Person populations timed out even for LIMIT 1 eligibility probes.
+         Apply the exact same compiled selection in this SELECT's WHERE so the
+         graph server can optimize geographic joins and stop at the provider
+         output cap. The outer DISTINCT retains set semantics. -->
+    <xsl:text>SELECT DISTINCT </xsl:text><xsl:choose><xsl:when test="$focus = '?c1'"><xsl:text>?c1</xsl:text></xsl:when><xsl:otherwise><xsl:text>(</xsl:text><xsl:value-of select="$focus"/><xsl:text> AS ?c1)</xsl:text></xsl:otherwise></xsl:choose><xsl:text> ?lat ?lng ?point ?wkt ?title WHERE {&#10;</xsl:text>
+    <xsl:value-of select="mctx:compiled/mctx:where"/><xsl:text>&#10;</xsl:text>
     <xsl:if test="contains($graph,':') and not(starts-with($graph,'$'))">
       <xsl:text>GRAPH &lt;</xsl:text><xsl:value-of select="$graph"/><xsl:text>&gt; {&#10;</xsl:text>
     </xsl:if>

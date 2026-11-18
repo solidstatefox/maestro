@@ -3,9 +3,14 @@
  * Server-wide ceiling protects multi-client traffic in this Node process.
  */
 import { currentProxyClient, getProxyClientPreferences } from "./maestro-proxy-client-preferences";
+import { proxyQueuePositionNotifier } from "./proxy-query-events";
 export type QueryPriority = "autocomplete" | "interactive" | "facet" | "count";
 export type QueryWeight = "light" | "heavy";
-type Task = { priority: QueryPriority; weight: QueryWeight; client: string; order: number; start: () => void; cancel: () => void };
+type Task = { priority: QueryPriority; weight: QueryWeight; client: string; order: number;
+  start: () => void; cancel: () => void;
+  queuePosition?: (index: number, server: string) => void;
+  lastQueuePosition: number;
+};
 type ClientUsage = { total: number; heavy: number };
 type ServerQueue = {
   active: number;
@@ -19,6 +24,53 @@ const queues = new Map<string, ServerQueue>();
 let sequence = 0;
 const SERVER_SAFETY_CEILING = 24;
 const ranks: Record<QueryPriority, number> = { autocomplete: -1, interactive: 0, facet: 1, count: 2 };
+/** Compute queue indexes from the SAME server-side heavy/light scheduler that
+ * dispatches the tasks. Merge equal-priority lanes using its alternation
+ * rule; do not number the two physical arrays independently. Endpoint queue
+ * projections are subsequently merged into one unique pending ordinal. */
+function projectedQueueOrder(queue: ServerQueue): Task[] {
+  const byPriority = (a: Task, b: Task) => ranks[a.priority] - ranks[b.priority] || a.order - b.order;
+  const light = [...queue.pendingLight].sort(byPriority);
+  const heavy = [...queue.pendingHeavy].sort(byPriority);
+  let lane = queue.nextLane;
+  const ordered: Task[] = [];
+  while (light.length || heavy.length) {
+    // Prefer the first currently dispatchable task, exactly as drain does.
+    // Once all remaining tasks are quota-blocked, their relative future
+    // readiness is unknowable; retain priority/FIFO, never pretend an
+    // ineligible heavy job is running.
+    const li = light.findIndex(task => canDispatch(queue, task));
+    const hi = heavy.findIndex(task => canDispatch(queue, task));
+    const l = li >= 0 ? li : light.length ? 0 : -1;
+    const h = hi >= 0 ? hi : heavy.length ? 0 : -1;
+    const choose: QueryWeight = l < 0 ? "heavy" : h < 0 ? "light"
+      : li < 0 && hi >= 0 ? "heavy" : hi < 0 && li >= 0 ? "light"
+      : ranks[light[l].priority] < ranks[heavy[h].priority] ? "light"
+      : ranks[light[l].priority] > ranks[heavy[h].priority] ? "heavy" : lane;
+    const item = choose === "light" ? light.splice(l, 1)[0] : heavy.splice(h, 1)[0];
+    ordered.push(item);
+    lane = choose === "light" ? "heavy" : "light";
+  }
+  return ordered;
+}
+function reportQueuePositions(): void {
+  // Per-endpoint queues can dispatch concurrently. Produce one unique
+  // proxy-wide waiting ordinal while preserving every endpoint's internal
+  // heavy/light order; equal projected positions tie-break by enqueue order.
+  // The ordinal describes current waiting work, not a guarantee about which
+  // independently available endpoint will complete first.
+  const all = [...queues.entries()].flatMap(([server, queue]) =>
+    projectedQueueOrder(queue).map((task, localIndex) => ({ task, server, localIndex })));
+  all.sort((a, b) => a.localIndex - b.localIndex || a.task.order - b.task.order);
+  all.forEach(({ task, server }, i) => {
+    const index = i + 1;
+    if (index !== task.lastQueuePosition) {
+      task.lastQueuePosition = index;
+      task.queuePosition?.(index, server);
+    }
+  });
+}
+
 function canDispatch(queue: ServerQueue, task: Task): boolean {
   const preference = getProxyClientPreferences(task.client);
   const usage = queue.clients.get(task.client) ?? { total: 0, heavy: 0 };
@@ -51,6 +103,11 @@ function drain(server: string, queue: ServerQueue): void {
     const list = lane === "light" ? queue.pendingLight : queue.pendingHeavy;
     const index = lane === "light" ? lightIndex : heavyIndex;
     const [task] = list.splice(index, 1);
+    if (task.lastQueuePosition !== 0) {
+      task.lastQueuePosition = 0;
+      task.queuePosition?.(0, server);
+    }
+    reportQueuePositions();
     const usage = queue.clients.get(task.client) ?? { total: 0, heavy: 0 };
     usage.total++;
     if (lane === "heavy") usage.heavy++;
@@ -60,6 +117,7 @@ function drain(server: string, queue: ServerQueue): void {
     task.start();
   }
   if (!queue.active && !queue.pendingLight.length && !queue.pendingHeavy.length) queues.delete(server);
+  reportQueuePositions();
 }
 export function classifyMaestroRequest(url: string, headers: Headers, body: string): QueryPriority | null {
   if (!/\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) return null;
@@ -103,6 +161,7 @@ export async function scheduleMaestroQuery<T>(server: string, priority: QueryPri
       const pending = weight === "heavy" ? queue.pendingHeavy : queue.pendingLight;
       const index = pending.indexOf(task);
       if (index >= 0) pending.splice(index, 1);
+      reportQueuePositions();
       signal?.removeEventListener("abort", onAbort);
       reject(new DOMException("Maestro request canceled", "AbortError"));
       drain(server, queue);
@@ -116,13 +175,15 @@ export async function scheduleMaestroQuery<T>(server: string, priority: QueryPri
       if (usage) { usage.total--; if (weight === "heavy") usage.heavy--; if (!usage.total) queue.clients.delete(client); }
       drain(server, queue);
     };
-    const task: Task = { priority, weight, client, order: sequence++, cancel: onAbort, start: () => {
+    const task: Task = { priority, weight, client, order: sequence++, cancel: onAbort,
+      queuePosition: proxyQueuePositionNotifier(), lastQueuePosition: -1, start: () => {
       running = true;
       if (signal?.aborted) { finish(); reject(new DOMException("Maestro request canceled", "AbortError")); return; }
       void work().then(resolve, reject).finally(finish);
     } };
     signal?.addEventListener("abort", onAbort, { once: true });
     (weight === "heavy" ? queue.pendingHeavy : queue.pendingLight).push(task);
+    reportQueuePositions();
     drain(server, queue);
   });
 }

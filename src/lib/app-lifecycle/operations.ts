@@ -113,8 +113,7 @@ function observeNavigation(
   // without changing the live query. A ribbon query is NEVER a return target.
   const newBrowse = event.tab === "browse" && !event.isProviderQuery && !event.restoringHistory;
   const providerCommitted = event.isProviderQuery && !event.restoringHistory &&
-    Boolean(context.pendingEntryUrl) && Boolean(context.browseQueryKey) &&
-    event.key !== context.browseQueryKey;
+    Boolean(context.pendingEntryUrl) && event.key !== context.key;
   // Leaving a displaced Browse query through an unrelated Browse navigation
   // abandons its Return entry. Ribbon-to-ribbon changes must not create one.
   const abandoned = newBrowse && Boolean(context.returnUrl) &&
@@ -151,22 +150,28 @@ const navigationMachine = setup({
       actions: assign(({ event }) => ({ returnUrl: event.fromUrl, pendingEntryUrl: "" })),
     },
     PROVIDERS_ENTRY_REQUESTED: {
-      // Only the original Browse live-query identity can own a Return. A tab
-      // label is not a query identity: View/Analyze may have been opened before
-      // the first provider was activated. Never capture a ribbon's own query.
-      guard: ({ context }) => !context.returnUrl && !context.pendingEntryUrl &&
-        !context.isProviderQuery && Boolean(context.browseUrl) &&
-        context.key === context.browseQueryKey,
-      actions: assign(({ context }) => ({ pendingEntryUrl: context.browseUrl })),
+      // A provider may displace a Bookmarks Perspective or an explicitly
+      // selected non-Browse query, not only a Browse query. Preserve an
+      // already-established Browse Return owner; otherwise capture the exact
+      // currently displayed share URL, including ribbon and endpoint state.
+      // The candidate becomes Return only after the replacement succeeds.
+      guard: ({ context, event }) => context.hydrated && !context.returnUrl &&
+        !context.pendingEntryUrl && !context.isProviderQuery && Boolean(event.fromUrl),
+      actions: assign(({ context, event }) => ({
+        pendingEntryUrl: context.key === context.browseQueryKey && context.browseUrl
+          ? context.browseUrl : event.fromUrl,
+      })),
     },
     PROVIDERS_ENTRY_CANCELLED: { actions: assign({ pendingEntryUrl: "" }) },
     BROWSE_QUERY_DISPLACED: {
-      // Do not wait for a post-commit NAVIGATION_OBSERVED effect. The Browse
-      // query still owns the actor here; only its actual displacement creates
-      // Return, and other View/Analyze queries cannot replace that target.
-      guard: ({ context, event }) => !context.returnUrl && Boolean(context.browseUrl) &&
-        context.browseQueryKey === event.sourceKey,
-      actions: assign(({ context }) => ({ returnUrl: context.browseUrl, pendingEntryUrl: "" })),
+      // Despite its historic event name this commits a displaced query of
+      // *any* tab, provided the pending candidate belongs to the observed
+      // source. Ribbon-to-ribbon transitions must not replace a Return owner.
+      guard: ({ context, event }) => !context.returnUrl &&
+        Boolean(context.pendingEntryUrl) && context.key === event.sourceKey,
+      actions: assign(({ context }) => ({
+        returnUrl: context.pendingEntryUrl, pendingEntryUrl: "",
+      })),
     },
     CONTEXT_RETURNED: { actions: assign({ returnUrl: "", pendingEntryUrl: "" }) },
     HISTORY_NAVIGATION_PENDING: { actions: assign(({ event }) => ({ historyPending: event.direction })) },
@@ -246,7 +251,9 @@ export function createMaestroOperationsController() {
       if (event.type === "GRAPH_OBSERVED") {
         // Graph readiness is owned by graphMachine; do not duplicate its
         // transition rules in the controller's send path.
-        graph?.send(event);
+        const phase: GraphPhase = !event.selected || !event.registryReady ? "checking"
+          : event.ready ? "ready" : event.failed ? "unavailable" : "checking";
+        if (graph && (snapshot.graph.key !== event.key || snapshot.graph.phase !== phase)) graph.send(event);
       } else if (event.type === "QUERY_OBSERVED") {
         if (query && (snapshot.query.key !== event.key || snapshot.query.hydrated !== event.hydrated || snapshot.query.graphReady !== event.graphReady)) query.send(event);
       } else if (event.type === "REQUEST_ACTIVITY") {

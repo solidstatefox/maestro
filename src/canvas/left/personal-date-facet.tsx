@@ -26,7 +26,7 @@ type Props = {
   properties: string[];
   scopeNodes: FctQueryNode[];
   queryXml: string;
-  onRangeChange: (property: string, start: string, end: string) => void;
+  onRangeChange: (property: string, start: string, end: string, selection?: { resolution: Resolution; cell: string }) => void;
 };
 const DAY_MS = 86400000;
 const iso = (date: Date) => date.toISOString().slice(0, 10);
@@ -118,7 +118,22 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
     (node.attributes.rangeStart !== undefined || node.attributes.rangeEnd !== undefined));
   const savedStart = range?.attributes.rangeStart ?? "";
   const savedEnd = range?.attributes.rangeEnd ?? "";
-  useEffect(() => { setFrom(localDate(savedStart)); setTo(localDate(savedEnd)); }, [savedStart, savedEnd]);
+  const savedResolution = range?.attributes.uiResolution ?? "";
+  const savedCell = range?.attributes.uiCell ?? "";
+  // Committed selectors are hydrated only from the active FCT <value>. A
+  // historical or shared query must never inherit the prior calendar's tab.
+  useEffect(() => {
+    setFrom(localDate(savedStart)); setTo(localDate(savedEnd));
+    setSelectedCalendarCell(savedCell);
+    setResolution(["years", "months", "weeks", "days"].includes(savedResolution)
+      ? savedResolution as Resolution : "years");
+    const focus = savedStart && Number.isFinite(Date.parse(savedStart)) ? new Date(savedStart) : null;
+    if (focus) {
+      setYear(focus.getUTCFullYear());
+      setMonth(focus.getUTCMonth());
+      setWeekStart(new Date(focus.getTime() - ((focus.getUTCDay() + 6) % 7) * DAY_MS));
+    }
+  }, [savedStart, savedEnd, savedResolution, savedCell]);
   const domainRequest = useMemo(() => temporalDomainQuery(queryXml, provider.property), [queryXml, provider.property]);
   useEffect(() => {
     const controller = new AbortController();
@@ -141,15 +156,19 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
           const first = new Date(`${min}T00:00:00Z`);
           // Keep the visible page if it is in range; otherwise start at the
           // earliest available month, so navigation is never stranded.
-          setYear(current => current < first.getUTCFullYear() || current > Number(max.slice(0, 4)) ? first.getUTCFullYear() : current);
-          setMonth(current => {
-            const month = String(current+1).padStart(2, "0");
-            const candidate = `${year}-${month}`;
-            return candidate < min.slice(0,7) || candidate > max.slice(0,7)
-              ? first.getUTCMonth() : current;
-          });
-          setWeekStart(current => iso(current) < min || iso(current) > max
-            ? first : current); }
+          // Year/month form one logical calendar page. Updating them through
+          // independent state setters previously mixed a *new* year with the
+          // *old* month in the month updater, leaving the page out of range.
+          const visibleMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
+          if (visibleMonth < min.slice(0, 7) || visibleMonth > max.slice(0, 7)) {
+            setYear(first.getUTCFullYear());
+            setMonth(first.getUTCMonth());
+          }
+          setWeekStart(current => {
+            const weekEnd = iso(new Date(current.getTime() + 6 * DAY_MS));
+            if (iso(current) <= max && weekEnd >= min) return current;
+            return new Date(first.getTime() - ((first.getUTCDay() + 6) % 7) * DAY_MS);
+          }); }
       } catch (cause) {
         if (!controller.signal.aborted) { setDomainError(cause instanceof Error ? cause.message : "Date domain unavailable"); setDomain(null); }
       } finally { if (!controller.signal.aborted) setDomainLoading(false); }
@@ -205,7 +224,7 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
     setSelectedCalendarCell("");
     setFrom(nextFrom); setTo(nextTo);
     const fits = (value: string) => !value || !effectiveDomain || (value.slice(0,10) >= effectiveDomain.min && value.slice(0,10) <= effectiveDomain.max);
-    if (nextFrom && nextTo && nextFrom <= nextTo && fits(nextFrom) && fits(nextTo)) onRangeChange(provider.property, utcDate(nextFrom), utcDate(nextTo));
+    if (nextFrom && nextTo && nextFrom <= nextTo && fits(nextFrom) && fits(nextTo)) onRangeChange(provider.property, utcDate(nextFrom), utcDate(nextTo), { resolution, cell: "" });
   };
   const invalid = Boolean(from && to && from > to);
   const outside = (date: string) => Boolean(effectiveDomain && (date < effectiveDomain.min || date > effectiveDomain.max));
@@ -218,7 +237,7 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
     if (!intersects(start, end)) return;
     const [a,b] = selectionBounds(clampStart(start),clampEnd(end));
     setFrom(localDate(a)); setTo(localDate(b));
-    onRangeChange(provider.property,a,b);
+    onRangeChange(provider.property,a,b, { resolution, cell: cellKey });
   };
   const monthLabel = new Intl.DateTimeFormat(undefined,{month:"long",timeZone:"UTC"}).format(dateAt(year,month));
   const countFor = (date: Date) => counts.get(normalizedBucket(iso(date), bucketView)) ?? 0;
@@ -271,7 +290,11 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
       </div>
       <div className="mt-2 flex flex-col gap-2 border-t pt-2" aria-label="Temporal calendar">
         <ButtonGroup aria-label="Calendar resolution" className="w-full">
-          <ToggleGroup type="single" value={resolution} onValueChange={value=>{ if(value) setResolution(value as Resolution); }} className="w-full">
+          <ToggleGroup type="single" value={resolution} onValueChange={value=>{ if(value) {
+            setResolution(value as Resolution);
+            if (savedStart && savedEnd) onRangeChange(provider.property, savedStart, savedEnd,
+              { resolution: value as Resolution, cell: selectedCalendarCell });
+          } }} className="w-full">
             {([ ["years","Year"],["months","Month"],["weeks","Week"],["days","Day"] ] as const).map(([value,label])=><ToggleGroupItem key={value} value={value} className="flex-1">{label}</ToggleGroupItem>)}
           </ToggleGroup>
         </ButtonGroup>
@@ -324,7 +347,10 @@ export function usePersonalFacetProviders(
     if (!scope) { registry.send({ type: "DISCOVERY_INACTIVE" }); return; }
     const controller = new AbortController();
     registry.send({ type: "DISCOVERY_STARTED", requestKey: scope, applicabilityKey, evidenceKey });
-    void discoverClientFacetProviders({properties:key.split("\n"),queryXml,datatypeEvidence:JSON.parse(evidenceKey)},controller.signal)
+    void discoverClientFacetProviders({properties:key.split("\n"),queryXml,datatypeEvidence:JSON.parse(evidenceKey)},controller.signal,
+      (tags) => {
+        if (!controller.signal.aborted) registry.send({ type: "DISCOVERY_TAGS_RESOLVED", requestKey: scope, tags });
+      })
       .then(matches => {
         if(!controller.signal.aborted)registry.send({type:"DISCOVERY_RESOLVED",requestKey:scope,matches,evidenceKey});
       }).catch(cause=>{

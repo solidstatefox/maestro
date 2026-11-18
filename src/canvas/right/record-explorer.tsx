@@ -9,7 +9,7 @@ import { Breadcrumb, BreadcrumbList, BreadcrumbItem, BreadcrumbSeparator } from 
 import { useFctQuery } from "@/lib/fct-query-api";
 import { buildWandQuery, type RecordTrailEdge, type WandedRecordEdge } from "@/lib/record-explorer-query";
 import { toLabel } from "@/lib/uri-labels";
-import { blankNodeRecordListValuesQuery, extendBlankNodeRecordQuery } from "@/lib/bnode-dom";
+import { blankNodeRecordListValuesQuery, extendBlankNodeRecordQuery, unanchoredBlankNodeRecordQuery } from "@/lib/bnode-dom";
 import { RecordSessionsController, type RecordSessionDescriptor, type RecordSessionIdentity, type RecordSessionsSnapshot } from "@/canvas/controllers/record-session-model";
 import { useRecordPivotWorkspace } from "@/canvas/controllers/record-session-controller";
 import { RightCanvasPanel, type RecordRdfaAction } from "@/canvas/right/pane";
@@ -60,8 +60,8 @@ function makePivotIdentity(source: RecordSessionDescriptor, binding: RecordState
     identity.bnodeQueryXml = blankNodeRecordListValuesQuery(source.identity.queryXml,
       binding.predicate, source.identity.value, limit, true,
       binding.direction === "property-of" ? "reverse" : "forward");
-  } else if (source.identity.termType === "bnode" && source.identity.bnodeAnchor && source.identity.bnodeQueryXml) {
-    identity.bnodeAnchor = source.identity.bnodeAnchor;
+  } else if (source.identity.termType === "bnode" && source.identity.bnodeQueryXml) {
+    if (source.identity.bnodeAnchor) identity.bnodeAnchor = source.identity.bnodeAnchor;
     identity.bnodeQueryXml = extendBlankNodeRecordQuery(source.identity.bnodeQueryXml,
       binding.predicate, binding.direction === "property-of" ? "reverse" : "forward", limit);
   } else {
@@ -82,6 +82,7 @@ export function RecordExplorer({ workspace, onClose }: Props) {
     queryXml,
     ...(first?.datatype ? { datatype: first.datatype } : {}),
     ...(first?.lang ? { lang: first.lang } : {}),
+    ...(workspace.selectedRecordTermType === "bnode" ? { bnodeQueryXml: unanchoredBlankNodeRecordQuery(queryXml, workspace.recordDescriptionQueryLimit) } : {}),
   };
   const controllerRef = useRef<RecordSessionsController | null>(null);
   if (!controllerRef.current) controllerRef.current = new RecordSessionsController(rootIdentity);
@@ -149,7 +150,13 @@ export function RecordExplorer({ workspace, onClose }: Props) {
     setSnapshot(controller.snapshot());
   };
   const close = () => {
-    if (marked.length) replaceTree(buildWandQuery(queryTree, trail, marked));
+    // Shrink is presentation-only; it must never commit queued wand edits.
+    controller.shrink();
+    onClose();
+  };
+  const setQueryAndClose = () => {
+    if (!marked.length) return;
+    replaceTree(buildWandQuery(queryTree, trail, marked));
     controller.shrink();
     onClose();
   };
@@ -166,8 +173,13 @@ export function RecordExplorer({ workspace, onClose }: Props) {
       </ToggleGroup>
       {marked.length > 0 && <span className="text-xs text-muted-foreground">{marked.length} queued properties</span>}
       {error && <span role="alert" className="max-w-md truncate text-xs text-destructive" title={error}>{error}</span>}
-      <button type="button" onClick={close} title="Shrink to normal Record" aria-label="Shrink Record explorer"
-        className="ml-auto rounded-md border p-2 hover:bg-accent"><Shrink className="size-4" /></button>
+      <button type="button" onClick={setQueryAndClose} disabled={!marked.length}
+        title="Set live FCT query from queued Record properties and shrink" aria-label="Set query"
+        className="ml-auto inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40">
+        <WandSparkles className="size-4" /> Set query
+      </button>
+      <button type="button" onClick={close} title="Shrink to normal Record without changing query" aria-label="Shrink Record explorer"
+        className="rounded-md border p-2 hover:bg-accent"><Shrink className="size-4" /></button>
     </header>
     <Breadcrumb className="shrink-0 border-b px-3 py-2">
       <BreadcrumbList>

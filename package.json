@@ -7,8 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "prebuild": "node src/scripts/migration/round5-static-graph-seed.mjs && node src/scripts/migration/round3-publish-maplibre-assets.mjs",
-    "predev": "node src/scripts/migration/round5-static-graph-seed.mjs && node src/scripts/migration/round3-publish-maplibre-assets.mjs"
+    "prebuild": "node src/scripts/migration/round5-static-graph-seed.mjs && node src/scripts/migration/round3-publish-maplibre-assets.mjs && npm run test",
+    "predev": "node src/scripts/migration/round5-static-graph-seed.mjs && node src/scripts/migration/round3-publish-maplibre-assets.mjs",
+    "test": "node tools/run-tests.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

@@ -17,7 +17,7 @@ import { setMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 import { shortenCount } from "@/lib/utils";
 import { useFctQuery, serializeFctQuery, createPropertyWidgetQuery, createPersonalRoleValuesQuery, createGroupValuesQuery, createDistinctCountQuery, setQueryViewAttributes } from "@/lib/fct-query-api";
 import type { FctQueryTree, FctQueryNode, DistinctCountKind } from "@/lib/fct-query-api";
-import { readFctResponse, presentServerError, groupValueBinding, fctTermKey, facetValueKey, type FctResult, type RelationshipDirection } from "@/canvas/utils/fct-response";
+import { readFctResponse, presentServerError, groupValueBinding, fctTermKey, facetValueKey, distinctFacetValues, type FctResult, type RelationshipDirection } from "@/canvas/utils/fct-response";
 
 
 export type FacetItem = {
@@ -348,7 +348,7 @@ export function DistinctCount({
  */
 export function getActiveViewPropertyFilters(tree: FctQueryTree): FctQueryNode[] {
   function findViewSiblings(nodes: FctQueryNode[]): FctQueryNode[] | null {
-    if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) return nodes;
+    if (nodes.some((node) => node.name === "view")) return nodes;
     for (const node of nodes) {
       const nested = findViewSiblings(node.children);
       if (nested) return nested;
@@ -372,14 +372,14 @@ export function getActiveViewPropertyFilters(tree: FctQueryTree): FctQueryNode[]
 export function getActiveViewRoleFilters(tree: FctQueryTree): FctQueryNode[] {
   function findViewScope(nodes: FctQueryNode[]): FctQueryNode[] | null {
     for (const node of nodes) {
-      if (node.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"))) {
+      if (node.children.some((child) => child.name === "view")) {
         return node.children;
       }
       const nested = findViewScope(node.children);
       if (nested) return nested;
     }
     // The active view can be at the root.
-    if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) return nodes;
+    if (nodes.some((node) => node.name === "view")) return nodes;
     return null;
   }
   const scope = findViewScope(tree.children) ?? [];
@@ -402,7 +402,7 @@ function getRoleSelectionNodes(tree: FctQueryTree, uri: string): FctQueryNode[] 
   const facets = getActiveViewRoleFilters(tree).filter(node => node.attributes.iri === uri);
   const findCarrier = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
     for (const node of nodes) {
-      if (node.children.some(child => (child.uiKey === "query-view" || child.id === "query-view") || child.name === "view")) return node;
+      if (node.children.some(child => child.name === "view" || child.name === "view")) return node;
       const nested = findCarrier(node.children);
       if (nested) return nested;
     }
@@ -419,7 +419,7 @@ function getRoleSelectionNodes(tree: FctQueryTree, uri: string): FctQueryNode[] 
 export function getActiveViewPropertyCarrier(tree: FctQueryTree): FctQueryNode | null {
   const visit = (nodes: FctQueryNode[]): FctQueryNode | null => {
     for (const node of nodes) {
-      if (node.children.some(child => child.name === "view" || child.id === "query-view" || child.uiKey === "query-view")) return node;
+      if (node.children.some(child => child.name === "view")) return node;
       const found = visit(node.children);
       if (found) return found;
     }
@@ -515,9 +515,9 @@ export function PersonalWidgetQueryListener({
         if (!response.ok)
           throw new Error(data.error ?? `Failed to load ${propertyUri}.`);
         if (!cancelled) setMaestroIncompleteResults(`personal:${propertyUri}`, { incomplete: data.incomplete, requestId: "", message: data.warning || data.sqlMessage || "" });
-        const fetchedValues: FctResult[] = Array.isArray(data.results)
+        const fetchedValues = distinctFacetValues(Array.isArray(data.results)
           ? data.results
-          : [];
+          : []);
         // The derived FCT query retains the value constraints on this
         // relationship and the FCT server has *already* applied them. Do not
         // filter valid server rows a second time by an inferred RDF datatype:
@@ -629,14 +629,14 @@ export function PersonalRoleWidget({
   const selectedValueNodes = roleSelectionNodes.flatMap((node) =>
     node.children.filter((child) => child.name === "value" && Boolean(child.text)));
   const selectedValueNodesByKey = new Map(selectedValueNodes.map((node) =>
-    [fctTermKey(node.text ?? "", node.attributes.datatype, node.attributes["xml:lang"]), node] as const));
+    [fctTermKey(node.text ?? "", node.attributes.datatype ?? (node.attributes["xml:lang"] ? undefined : "string"), node.attributes["xml:lang"]), node] as const));
   const selectedKeys = [...selectedValueNodesByKey.keys()];
   const selectedValuesFromQuery: FctResult[] = [...selectedValueNodesByKey.values()].map((node) => {
     const term = node.text ?? "";
     const datatype = node.attributes.datatype;
     const lang = node.attributes["xml:lang"];
     const endpointValue = values.find((value) => fctTermKey(groupValueBinding(value).text, groupValueBinding(value).datatype, groupValueBinding(value).lang) ===
-      fctTermKey(term, datatype, lang));
+      fctTermKey(term, datatype ?? (lang ? undefined : "string"), lang));
     return endpointValue ?? { uri: term, title: term, termType: datatype === "uri" ? "uri" : "literal", ...(datatype ? { datatype } : {}), ...(lang ? { lang } : {}), matches: [] };
   });
 
@@ -671,7 +671,7 @@ export function PersonalRoleWidget({
         rememberShortforms(data?.shortforms);
         if (!response.ok) throw new Error(data.error ?? `Failed to load role values for ${uri}.`);
         if (!cancelled) setMaestroIncompleteResults(`personal-role:${uri}`, { incomplete: data.incomplete, requestId: "", message: data.warning || data.sqlMessage || "" });
-        const fetchedRaw = Array.isArray(data.results) ? data.results as FctResult[] : [];
+        const fetchedRaw = distinctFacetValues(Array.isArray(data.results) ? data.results as FctResult[] : []);
         const fetched = roleOrderLikeGroups ? fetchedRaw.slice().sort(compareGroupValues) : fetchedRaw;
         if (cancelled) return;
         setValues((current) => current.length === fetched.length && current.every((item, index) => item.uri === fetched[index]?.uri && item.datatype === fetched[index]?.datatype && item.lang === fetched[index]?.lang) ? current : fetched);
@@ -685,7 +685,11 @@ export function PersonalRoleWidget({
     }
     void loadValues();
     return () => { cancelled = true; controller.abort(); };
-  }, [uri, widgetQueryXml, tree, roleOrderLikeGroups, endpointReady, refreshRevision]);
+  // widgetQueryXml already encodes the entire current FCT tree, role binding,
+  // page limit, and group-by state. Depending on the *object identity* of tree
+  // additionally re-dispatches an identical request when parent UI state
+  // reconstructs an equivalent tree (and can hide a ready Role list).
+  }, [uri, widgetQueryXml, roleOrderLikeGroups, endpointReady, refreshRevision]);
 
   const visibleValues = values.filter((value) => {
     const binding = groupValueBinding(value);
@@ -716,9 +720,9 @@ export function PersonalRoleWidget({
         <div className="mb-2 rounded-md border border-input bg-background p-2" aria-label="Selected role values">
           <div className="mb-1 text-xs font-medium text-muted-foreground">Selected</div>
           <div className={FACET_ITEM_GAP_CLASS}>
-            {selectedValuesFromQuery.map((value, index) => {
+            {selectedValuesFromQuery.map((value) => {
               const binding = groupValueBinding(value);
-              return <label key={`${binding.text}:${binding.datatype ?? ""}:${binding.lang ?? ""}:${index}`} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50">
+              return <label key={facetValueKey(value)} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50">
                 <input type="checkbox" checked onChange={() => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, false)}
                   className="mt-0.5 size-4 shrink-0 accent-current" aria-label={`Remove selected role value ${value.title || value.uri}`} />
                 <FacetItemDecoration direction="reverse" iri={uri} value={facetValueKey(value)}/>
@@ -732,10 +736,14 @@ export function PersonalRoleWidget({
         {pageValues.map((value, valueIndex) => {
           const binding = groupValueBinding(value);
           const valueKey = fctTermKey(binding.text, binding.datatype, binding.lang);
-          const countQuery = distinctCountQueryFor(tree, "value", value.uri, uri, value, { direction: "reverse", nodeId: roleNode.id });
-          const isZeroCount = candidateCounts[countQuery] === 0;
+          const countQuery = isGroupByRole ? "" : distinctCountQueryFor(tree, "value", value.uri, uri, value, { direction: "reverse", nodeId: roleNode.id });
+          const groupedCount = Number(value.columns?.[1]?.value);
+          const hasGroupedCount = Number.isSafeInteger(groupedCount) && groupedCount >= 0;
+          const isZeroCount = isGroupByRole
+            ? hasGroupedCount && groupedCount === 0
+            : candidateCounts[countQuery] === 0;
           return (
-            <div key={`${value.uri}:${value.datatype ?? ""}:${value.lang ?? ""}`} className={`flex w-full items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50 ${isGroupByRole ? "" : "cursor-pointer"}`}>
+            <div key={facetValueKey(value)} className={`flex w-full items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50 ${isGroupByRole ? "" : "cursor-pointer"}`}>
               <input id={`personal-role-value-${roleNode.id}-${valueIndex}`} type="checkbox" disabled={loading} checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}`} />
               <FacetItemDecoration direction="reverse" iri={uri} value={facetValueKey(value)}/>
               {isGroupByRole ? (
@@ -745,20 +753,26 @@ export function PersonalRoleWidget({
                   {value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}
                 </label>
               )}
-              <DistinctCount
-                enabled={endpointReady}
-                tree={tree}
-                kind="value"
-                uri={value.uri}
-                propertyUri={uri}
-                candidateValue={value}
-                valueRelationship={{ direction: "reverse", nodeId: roleNode.id }}
-                onCountChange={(query, count) =>
-                  setCandidateCounts((current) =>
-                    current[query] === count ? current : { ...current, [query]: count },
-                  )
-                }
-              />
+              {isGroupByRole ? (
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums" aria-label="Members in group">
+                  {hasGroupedCount ? shortenCount(groupedCount) : "—"}
+                </span>
+              ) : (
+                <DistinctCount
+                  enabled={endpointReady}
+                  tree={tree}
+                  kind="value"
+                  uri={value.uri}
+                  propertyUri={uri}
+                  candidateValue={value}
+                  valueRelationship={{ direction: "reverse", nodeId: roleNode.id }}
+                  onCountChange={(query, count) =>
+                    setCandidateCounts((current) =>
+                      current[query] === count ? current : { ...current, [query]: count },
+                    )
+                  }
+                />
+              )}
             </div>
           );
         })}

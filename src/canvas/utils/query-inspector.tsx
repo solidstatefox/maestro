@@ -1,10 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Code2, X } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { CodeBlock } from "@/components/ui/code-block";
+
+const displayedQueryIdentity = (query: string, extra: { id: string; query: string }[]) =>
+  `${query}\u0000${extra.map(item => `${item.id}:${item.query}`).join("\u0000")}`;
 
 /** Hover-only query inspector for any widget backed by an FCT or SPARQL request. */
 export function QueryInspectorButton({
@@ -18,6 +21,7 @@ export function QueryInspectorButton({
   headerTone = false,
   toolbarButton = false,
   primaryTabLabel,
+  addr,
 }: {
   query: string;
   language?: "xml" | "sparql";
@@ -29,9 +33,27 @@ export function QueryInspectorButton({
   headerTone?: boolean;
   toolbarButton?: boolean;
   primaryTabLabel?: string;
+  addr?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("widget");
+  const [execution, setExecution] = useState<{ code: string; error: string; loading: boolean }>({ code: "", error: "", loading: false });
+  useEffect(() => { setExecution({ code: "", error: "", loading: false }); }, [activeTab, displayedQueryIdentity(query, extraQueries)]);
+  const execute = async () => {
+    if (!addr || !displayedCode.trim() || displayedLanguage !== "sparql") return;
+    const operation = new AbortController();
+    setExecution({ code: "", error: "", loading: true });
+    try {
+      const response = await fetch("/proxy/api/sparql", { method: "POST", cache: "no-store",
+        headers: { "Content-Type": "application/json" }, signal: operation.signal,
+        body: JSON.stringify({ query: displayedCode, addr }) });
+      const value = await response.json();
+      if (!response.ok) throw new Error(typeof value.error === "string" ? value.error : `SPARQL HTTP ${response.status}`);
+      setExecution({ code: JSON.stringify(value, null, 2), error: "", loading: false });
+    } catch (error) {
+      setExecution({ code: "", error: error instanceof Error ? error.message : String(error), loading: false });
+    }
+  };
   if (!query.trim()) return null;
   const showingCount = Boolean(countQuery?.trim()) && activeTab === "count";
   const selectedExtraQuery = extraQueries.find((item) => item.id === activeTab);
@@ -77,7 +99,13 @@ export function QueryInspectorButton({
                 {extraQueries.map((item) => <button key={item.id} type="button" role="tab" aria-selected={activeTab === item.id} onClick={() => setActiveTab(item.id)} className={`rounded-t-md px-3 py-2 text-sm ${activeTab === item.id ? "border border-b-0 bg-background font-medium" : "text-muted-foreground hover:bg-accent/50"}`}>{item.label}</button>)}
               </div>
             )}
-            <p className="mb-2 text-xs text-muted-foreground">{displayedFilename} · {displayedLanguage.toUpperCase()}</p>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>{displayedFilename} · {displayedLanguage.toUpperCase()}</span>
+              {displayedLanguage === "sparql" && addr && <button type="button" onClick={() => void execute()} disabled={execution.loading || !/\b(?:SELECT|ASK)\b/i.test(displayedCode)}
+                className="rounded border border-input px-3 py-1 text-foreground hover:bg-accent disabled:opacity-50">{execution.loading ? "Executing…" : "Execute"}</button>}
+            </div>
+            {execution.error && <p role="alert" className="text-xs text-destructive">{execution.error}</p>}
+            {execution.code && <div className="max-h-44 overflow-auto rounded border p-2"><pre className="whitespace-pre-wrap break-all text-xs">{execution.code}</pre></div>}
             <CodeBlock className="min-h-0 flex-1" code={displayedCode} language={displayedLanguage} filename={displayedFilename} />
         </DialogContent>
       </Dialog>

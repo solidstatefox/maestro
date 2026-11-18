@@ -1,11 +1,12 @@
 "use client";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Dispatch, type SetStateAction } from "react";
+import { createMaestroPerspectiveSelectionController } from "@/lib/app-lifecycle/perspective-selection";
 import { pendingApprovalController, selectPendingApprovalBadge } from "@/lib/app-lifecycle/pending-approvals";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
 import { Server, Database, Globe, LayoutGrid, Filter, Network, ShieldCheck, FileCode2, ArrowLeftRight, Landmark, Blocks, Bookmark, History, Route, Regex, Telescope, ChartNoAxesCombined } from "lucide-react";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
-import { useMapProviderDefinition } from "@/lib/map-provider-discovery";
+import { useMapProviderDiscovery } from "@/lib/map-provider-discovery";
 import type { ProviderKind } from "@/lib/provider-catalog-xslt";
 import { discoverMatchedClientPerspectives } from "@/lib/client-personal-perspectives";
 import { PERSONAL_PERSPECTIVE_URI, personalPerspectiveFromUri, type PersonalPerspectiveKind } from "@/lib/personal-perspective-ids";
@@ -23,40 +24,82 @@ export interface ViewRibbonProps {
   onSelectView: (uri: string) => void;
   viewDiscoveryLoading: boolean;
   queryClassUris: string[];
+  queryMatchedProviders?: string[];
   queryXml: string;
   triggerUri: string;
   historyUri?: string;
 }
-export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredViews, viewProvider, setViewProvider, onSelectProvider, selectedViewUri, onSelectView, viewDiscoveryLoading, queryClassUris, queryXml, triggerUri, historyUri }: ViewRibbonProps) {
-  const mapProvider = useMapProviderDefinition(viewPanel === "perspectives", queryXml);
+export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredViews, viewProvider, setViewProvider, onSelectProvider, selectedViewUri, onSelectView, viewDiscoveryLoading, queryClassUris, queryMatchedProviders = [], queryXml, triggerUri, historyUri }: ViewRibbonProps) {
+  const mapDiscovery = useMapProviderDiscovery(viewPanel === "perspectives", queryXml);
+  const mapProvider = mapDiscovery.provider;
   const approvalSnapshot = useSyncExternalStore(pendingApprovalController.subscribe,
     pendingApprovalController.getSnapshot,pendingApprovalController.getSnapshot);
   const pendingByProvider = selectPendingApprovalBadge(approvalSnapshot).providersByKind;
-  const [personalProviders, setPersonalProviders] = useState<{ kind: PersonalPerspectiveKind; label: string; uri: string }[]>([]);
+  // Discovery results belong to their exact FCT/History scope. A provider
+  // approved for the previous query must not be offered for a different query
+  // while its own SHACL validation is pending.
+  const [personalDiscovery, setPersonalDiscovery] = useState<{
+    key: string; providers: { kind: PersonalPerspectiveKind; label: string; uri: string }[];
+  }>({ key: "", providers: [] });
   const [personalDiscoveryPending, setPersonalDiscoveryPending] = useState(false);
   const classKey = useMemo(() => [...new Set(queryClassUris)].sort().join("\n"), [queryClassUris]);
+  // The query-context machine has already validated contextual SHACL targets
+  // for this exact History visit. Use that existing result, including when
+  // the query has no root class. No timers or extra population probes.
+  const contextualKey = useMemo(() => [...new Set(queryMatchedProviders)].sort().join("\n"), [queryMatchedProviders]);
+  const discoveryKey = [queryXml, triggerUri, historyUri ?? "", classKey, contextualKey].join("\u0000");
+  const personalProviders = personalDiscovery.key === discoveryKey ? personalDiscovery.providers : [];
   useEffect(() => {
     const controller = new AbortController();
-    // Keep the last confirmed buttons while a new ASK/discovery is pending.
-    // Clearing on every query mutation makes Bookmarks/History flicker.
-    if (!classKey) {
+    if (!classKey && !contextualKey) {
       setPersonalDiscoveryPending(false);
-      // Avoid a one-frame disappearance while Configure is resetting, but
-      // clear buttons if this genuinely is a class-free query.
-      const clear = window.setTimeout(() => {
-        if (!controller.signal.aborted) setPersonalProviders([]);
-      }, 400);
-      return () => { controller.abort(); window.clearTimeout(clear); };
+      return () => controller.abort();
     }
     setPersonalDiscoveryPending(true);
-    void discoverMatchedClientPerspectives(classKey.split("\n"), queryXml, triggerUri, historyUri, controller.signal)
+    void discoverMatchedClientPerspectives(classKey ? classKey.split("\n") : [],
+      queryXml, triggerUri, historyUri, controller.signal,
+      contextualKey ? contextualKey.split("\n") : [])
       .then(providers => {
-        if (!controller.signal.aborted) setPersonalProviders(providers);
+        if (!controller.signal.aborted) setPersonalDiscovery({ key: discoveryKey, providers });
       })
-      .catch(() => { /* Retain last matched buttons if graph discovery fails. */ })
+      .catch(() => { /* Retain the last confirmed provider set on transient errors. */ })
       .finally(() => { if (!controller.signal.aborted) setPersonalDiscoveryPending(false); });
     return () => controller.abort();
-  }, [classKey, queryXml, triggerUri, historyUri]);
+  }, [classKey, contextualKey, queryXml, triggerUri, historyUri, discoveryKey]);
+  // While contextual validation is still resolving, show only the retained
+  // explicit selection, not providers discovered for an unrelated query.
+  // Even if an asynchronous SHACL refresh temporarily omits the selected
+  // Personal provider, its ribbon selection remains visible and owned by the
+  // user's explicit selection/share URL. Eligibility is a separate concern.
+  const personalToRender = [...personalProviders];
+  const retainedPersonalKind = personalPerspectiveFromUri(selectedViewUri);
+  if (retainedPersonalKind && !personalToRender.some(item => item.uri === selectedViewUri)) {
+    personalToRender.push({ uri: selectedViewUri, kind: retainedPersonalKind,
+      label: retainedPersonalKind === "bookmarks" ? "Bookmarks" : "History" });
+  }
+  const firstAvailableUri = discoveredViews[0]?.uri ?? mapProvider?.uri ?? personalProviders[0]?.uri ?? "";
+  const [selectionController] = useState(createMaestroPerspectiveSelectionController);
+  const selectionSnapshot = useSyncExternalStore(selectionController.subscribe,
+    selectionController.getSnapshot, selectionController.getSnapshot);
+  const onSelectRef = useRef(onSelectView);
+  onSelectRef.current = onSelectView;
+  useEffect(() => { selectionController.start(); return () => selectionController.stop(); }, [selectionController]);
+  // A different authoritative FCT query re-arms initial selection; late
+  // provider validation for the previous query must never own this transition.
+  useEffect(() => { selectionController.send({ type: "QUERY_CHANGED" }); }, [selectionController, queryXml]);
+  useEffect(() => {
+    selectionController.send({ type: "RIBBON_OBSERVED", panel: viewPanel,
+      loading: viewDiscoveryLoading || personalDiscoveryPending,
+      firstUri: firstAvailableUri, selectedUri: selectedViewUri });
+  }, [selectionController, viewPanel, viewDiscoveryLoading, personalDiscoveryPending, firstAvailableUri, selectedViewUri]);
+  useEffect(() => {
+    if (!selectionSnapshot.matches("proposed") || selectedViewUri || viewPanel !== "perspectives" ||
+      viewDiscoveryLoading || personalDiscoveryPending) return;
+    const uri = selectionSnapshot.context.proposedUri;
+    if (!uri || uri !== firstAvailableUri) return;
+    selectionController.send({ type: "AUTO_APPLIED", uri });
+    onSelectRef.current(uri);
+  }, [selectionController, selectionSnapshot, selectedViewUri, viewPanel, viewDiscoveryLoading, personalDiscoveryPending, firstAvailableUri]);
   // On an explicit accordion change, activate the first actual button.
   // Do not run this on mount: a URL-restored provider selection has priority.
   const onRibbonPanelChange = (panel: "trail" | "perspectives" | "providers") => {
@@ -93,14 +136,15 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
                 <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{title}
               </button>;
             })}
+            {mapDiscovery.error && <span role="status" title={mapDiscovery.error} className="max-w-64 truncate px-3 py-2 text-xs text-destructive">Maps discovery: {mapDiscovery.error}</span>}
             {mapProvider && <button type="button" aria-pressed={!viewProvider && selectedViewUri === mapProvider.uri}
               onClick={() => onSelectView(mapProvider.uri)}
               className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${!viewProvider && selectedViewUri === mapProvider.uri ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
               <DynamicIcon name={(availableProviderIcons.has(mapProvider.icon) ? mapProvider.icon : "layout-grid") as IconName} className="size-7" strokeWidth={1} aria-hidden="true" />{mapProvider.label}
             </button>}
-            {personalProviders.filter(provider => !discoveredViews.some(view => view.uri === provider.uri) && provider.uri !== mapProvider?.uri).map(provider => {
+            {personalToRender.filter(provider => !discoveredViews.some(view => view.uri === provider.uri) && provider.uri !== mapProvider?.uri).map(provider => {
               const uri = provider.uri;
-              const active = selectedViewUri === uri;
+              const active = !viewProvider && selectedViewUri === uri;
               const Icon = provider.kind === "bookmarks" ? Bookmark : History;
               return <button type="button" key={uri} aria-pressed={active}
                 onClick={() => onSelectView(uri)}

@@ -469,7 +469,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               if (centralTab === "groups") setCentralTab("results");
               setSearchPipelineRun((current) => current + 1);
             }} aria-label="Reset query to home" className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground"><Home className="size-4" aria-hidden="true" /></Button>} /><TooltipContent>Reset query</TooltipContent></Tooltip>
-            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onClick={() => { if (showCancel) cancelMaestroPage(); else void refreshMaestroPage(); }} aria-label={showCancel ? "Cancel pending queries" : "Refresh current query"} className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground">{showCancel ? <X className="size-4" aria-hidden="true" /> : <RotateCw className="size-4" aria-hidden="true" />}</Button>} /><TooltipContent className={showCancel ? "!max-w-none max-w-[min(32rem,calc(100vw-1rem))] p-2" : ""}>{showCancel ? <div className="w-[min(29rem,calc(100vw-2rem))]"><div className="px-1 pb-2 text-xs font-semibold">Pending queries</div><div className="max-h-64 overflow-y-auto">{pendingQueryDetails.length ? pendingQueryDetails.map((query) => <div key={query.id} className="flex items-center gap-2 border-t border-border/40 px-1 py-1.5"><span className="min-w-0 flex-1 truncate text-xs" title={query.label}>{query.label}</span><button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded hover:bg-accent" aria-label={`Cancel ${query.label}`} title={`Cancel ${query.label}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); cancelIndividualMaestroQuery(query.id); }}><X className="size-3.5" aria-hidden="true" /></button></div>) : <span className="px-1 text-xs text-muted-foreground">Loading before dispatch</span>}</div></div> : "Refresh query (check selected graph server only if not green)"}</TooltipContent></Tooltip>
+            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onClick={() => { if (showCancel) cancelMaestroPage(); else void refreshMaestroPage(); }} aria-label={showCancel ? "Cancel pending queries" : "Refresh current query"} className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground">{showCancel ? <X className="size-4" aria-hidden="true" /> : <RotateCw className="size-4" aria-hidden="true" />}</Button>} /><TooltipContent className={showCancel ? "!max-w-none max-w-[min(32rem,calc(100vw-1rem))] p-2" : ""}>{showCancel ? <div className="w-[min(29rem,calc(100vw-2rem))]"><div className="px-1 pb-2 text-xs font-semibold">Pending queries</div><div className="max-h-64 overflow-y-auto">{pendingQueryDetails.length ? pendingQueryDetails.map((query) => <div key={query.id} className="flex items-center gap-2 border-t border-border/40 px-1 py-1.5"><span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground" aria-label={query.queueIndex > 0 ? `Queue position ${query.queueIndex}` : "Active or awaiting dispatch"}>{query.queueIndex > 0 ? `${query.queueIndex}.` : "—"}</span><span className="min-w-0 flex-1 truncate text-xs" title={query.label}>{query.label}</span><button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded hover:bg-accent" aria-label={`Cancel ${query.label}`} title={`Cancel ${query.label}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); cancelIndividualMaestroQuery(query.id); }}><X className="size-3.5" aria-hidden="true" /></button></div>) : <span className="px-1 text-xs text-muted-foreground">Loading before dispatch</span>}</div></div> : "Refresh query (check selected graph server only if not green)"}</TooltipContent></Tooltip>
           </ButtonGroup>
 
           {/* One address: [graph]@[graph server], with no gap around the at-sign. */}
@@ -580,8 +580,9 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                           <Skeleton className="size-4 rounded-full" /><Skeleton className="h-4 w-24" />
                         </div>
                     ) : <DropdownMenu>
-                      <Tooltip><TooltipTrigger render={<DropdownMenuTrigger asChild><button
+                      <DropdownMenuTrigger asChild><button
                         id="fct-endpoint"
+                        title="Choose which FCT endpoint receives queries"
                         type="button"
                         disabled={isCheckingEndpoints || fctEndpoints.length === 0}
                         aria-label="Choose graph server"
@@ -590,7 +591,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                         <EndpointStatusIcon status={displayedEndpointStatus} />
                         <span className="min-w-0 truncate whitespace-nowrap">{fctEndpoints.find((endpoint) => endpoint.id === displayedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
                         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-                      </button></DropdownMenuTrigger>} /><TooltipContent>{"Choose which FCT endpoint receives queries"}</TooltipContent></Tooltip>
+                      </button></DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="z-50 w-max min-w-max max-w-[calc(100vw-2rem)]">
                         {fctEndpoints.length === 0 ? <DropdownMenuLabel>{isCheckingEndpoints ? "Loading endpoints…" : "No endpoints configured"}</DropdownMenuLabel> : [...new Set(fctEndpoints.map((endpoint) => endpoint.group || "Endpoints"))].map((group) => (
                           <Fragment key={group}>
@@ -706,8 +707,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                 // metadata for the current query. Otherwise a fast click after
                 // editing can race the visit and leave the dialog at "Saved query".
                 await historyWriteQueueRef.current;
-                let currentHistoryId = historyVisitQueryRef.current === queryXml ? historyVisitIdRef.current : "";
-                if (!currentHistoryId && historyBookmarkId && historyVisitQueryRef.current === queryXml) currentHistoryId = historyBookmarkId;
+                const currentHistoryId = await workspace.ensureHistoryVisitForBookmark();
                 const metadataId = currentHistoryId || matchingBookmarkId;
                 setBookmarkTitle(metadataId ? metadataId.slice(metadataId.lastIndexOf("#") + 1) : "");
                 setBookmarkDescription("");
@@ -782,8 +782,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   // Serialize against pending query visits so a save never races
                   // the RDF insert for the current query's History item.
                   await historyWriteQueueRef.current;
-                  let currentHistoryId = historyVisitQueryRef.current === queryXml ? historyVisitIdRef.current : "";
-                  if (!currentHistoryId && historyBookmarkId && historyVisitQueryRef.current === queryXml) currentHistoryId = historyBookmarkId;
+                  const currentHistoryId = await workspace.ensureHistoryVisitForBookmark();
                   const targetHistoryId = currentHistoryId || matchingBookmarkId;
                   if (!targetHistoryId) throw new Error("The current query's History item could not be resolved. Please wait for History to synchronize and retry.");
                   const tags = bookmarkTags.split(/[,;\n]/u).map((tag) => tag.trim()).filter(Boolean);

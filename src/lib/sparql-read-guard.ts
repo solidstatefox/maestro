@@ -7,8 +7,20 @@
  */
 export function isBoundedReadOnlySparql(query: string, maximumQueryLength: number): boolean {
   const trimmed = query.trim();
-  if (!trimmed || trimmed.length > maximumQueryLength ||
-      !/^(?:PREFIX\s+[^\n]+\s*)*(?:SELECT|ASK)\b/i.test(trimmed)) return false;
+  if (!trimmed || trimmed.length > maximumQueryLength) return false;
+  // The FCT and Count compilers emit standard Virtuoso DEFINE input options.
+  // Permit ONLY these two quoted, generated directives before SELECT/ASK;
+  // never allow arbitrary DEFINE sql:... or update/federation operations.
+  // Parse only complete PREFIX declarations (prefix name + IRI). An older
+  // line-based matcher swallowed SELECT whenever a query wrote PREFIX and
+  // SELECT on the SAME line, as History query SHACL discovery does. SPARQL
+  // permits arbitrary whitespace between declarations and the query verb.
+  // Keep the DEFINE allowlist unchanged: never accept arbitrary directives.
+  const withoutSafeDirectives = trimmed.replace(
+    /^(?:(?:DEFINE\s+input:(?:inference|same-as)\s+"(?:\\.|[^"\\])*"\s*)|(?:PREFIX\s+(?:[A-Za-z_][\w.-]*)?:\s*<[^<>\s]*>\s*))+/i,
+    "",
+  );
+  if (!/^(?:SELECT|ASK)\b/i.test(withoutSafeDirectives)) return false;
 
   // Strings and IRI references are data, not SPARQL operators.
   const executable = trimmed.replace(/<[^>]*>|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");

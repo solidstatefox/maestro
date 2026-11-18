@@ -37,9 +37,8 @@ export function LeftWidgetButtonTray({ actions, threshold = 3 }: {
   return <div data-left-widget-button-tray className="inline-flex shrink-0 items-center gap-1">
     {visible.map(action => <span key={action.id} data-tray-action={action.id} className="inline-flex shrink-0">{button(action)}</span>)}
     {hidden.length > 0 && <DropdownMenu>
-      <Tooltip><TooltipTrigger render={<DropdownMenuTrigger asChild><button type="button" aria-label="More widget actions"
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Ellipsis className="size-4" aria-hidden="true" /></button></DropdownMenuTrigger>} />
-        <TooltipContent>More widget actions</TooltipContent></Tooltip>
+      <DropdownMenuTrigger asChild><button type="button" aria-label="More widget actions" title="More widget actions"
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Ellipsis className="size-4" aria-hidden="true" /></button></DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {hidden.map(action => <DropdownMenuItem key={action.id} disabled={action.disabled} onSelect={() => {
           if (action.onSelect) action.onSelect();

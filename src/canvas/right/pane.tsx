@@ -7,6 +7,7 @@ import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 import { classifyRecordValue, RECORD_VALUE_KINDS, type RecordValueKind } from "@/lib/record-explorer-query";
 import { normalizeMaestroKind } from "@/lib/maestro-kinds";
+import { buildRecordKindsInspectorSparql } from "@/lib/record-kinds-inspector";
 import dynamic from "next/dynamic";
 const RecordExplorer = dynamic(() => import("@/canvas/right/record-explorer").then(module => module.RecordExplorer), { ssr: false });
 import { decorateFollowedRecordSource, decorateWandedRecordProperties, resolveRecordInteraction, type RecordStatement } from "@/canvas/controllers/record-rdfa-decoration";
@@ -214,6 +215,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     selectedUri,
     recordSelectionCleared,
     setActiveBlankNodeTab,
+    chooseBlankNodeCandidate,
     setDescribedRecord,
     setExplicitBlankNodeAnchor,
     setFormattedRecordButtonsHtml,
@@ -236,6 +238,10 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
   } = workspace;
   // Record description values have already been fetched; scanning them is
   // exact for the currently loaded page and avoids redundant endpoint ASKs.
+  const recordKindsScopeXml = `${recordRootDebugQuery}\n<!-- Kinds filter: ${recordKindFilter}. Record Kinds are classified over fetched RDF values in the browser; no separate FCT Kinds request is executed. -->`;
+  const recordKindsDiagnosticSparql = buildRecordKindsInspectorSparql(
+    selectedUri, selectedRecordTermType, queryTree.attributes.addr ?? "", selectedRecordGraph, recordKindFilter,
+  );
   const existingKinds = new Set([...describedPropertyRows, ...describedRoleRows]
     .flatMap(item => item.values.map(value => classifyRecordValue(value.value, value.termType, value.datatype))));
   const availableRecordKinds = RECORD_VALUE_KINDS.filter(kind => existingKinds.has(kind) || kind === recordKindFilter);
@@ -382,6 +388,8 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                       query={selectedRecordTermType === "bnode" ? (recordDebug.xml || "A blank-node Record request has not executed yet.") : recordRootDebugQuery}
                       filename="record-describe.xml" label="Record queries" toolbarButton
                       extraQueries={[
+                        { id: "record-kinds-xml", label: "Kinds XML", query: recordKindsScopeXml, filename: "record-kinds-scope.xml", language: "xml" },
+                        { id: "record-kinds-sparql", label: "Kinds SPARQL", query: recordKindsDiagnosticSparql, filename: "record-kinds-preview.sparql", language: "sparql" },
                         { id: "record-describe-sparql", label: "Record SELECT SPARQL", query: recordDebug.sparql || "Record SELECT has not executed.", filename: "record-select.sparql", language: "sparql" },
                         { id: "formatter-describe-xml", label: "Shared Record DESCRIBE XML", query: recordDebug.formatterXml || "The formatter DESCRIBE has not run for this record.", filename: "record-formatter-describe.xml", language: "xml" },
                         { id: "formatter-describe-sparql", label: "Shared Record DESCRIBE SPARQL", query: recordDebug.formatterSparql || "The formatter DESCRIBE SPARQL is not yet available.", filename: "record-formatter-describe.sparql", language: "sparql" },
@@ -456,13 +464,13 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                   {recordPolicy && <>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild><button type="button" disabled={isValidatingRecord} title="Validate record" aria-label="Validate record" className="inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50">{isValidatingRecord ? <LoaderCircle className="size-4 animate-spin" aria-label="Validating record" /> : <ClipboardCheck className="size-4" aria-hidden="true" />}<span>Validate</span>{recordPolicies.length > 1 && <ChevronDown className="size-3.5" />}</button></DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-72">
+                      <DropdownMenuContent align="start" className={fullscreenPane ? "z-[120] w-72" : "w-72"}>
                         {recordPolicies.map((policy) => <DropdownMenuItem key={policy.uri} onSelect={() => { const templateUri = policy.templates[0]?.uri ?? ""; manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(templateUri); setRecordValidation(null); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(templateUri, templateKey); } catch (error) { browserLog.warn("record.policy.persist-failed", error); } void validateSelectedRecord(policy); }}>{policy.label}</DropdownMenuItem>)}
                       </DropdownMenuContent>
                     </DropdownMenu>
                     <DropdownMenu open={recordFormatMenuOpen} onOpenChange={setRecordFormatMenuOpen}>
                       <DropdownMenuTrigger asChild><button type="button" aria-pressed={recordFormatEnabled} disabled={!recordFormatPreferenceLoaded} className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`} title="Format record" aria-label="Format record"><Eye className="size-4" aria-hidden="true" /><span>Format</span><ChevronDown className="size-3.5" /></button></DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-80">
+                      <DropdownMenuContent align="start" className={fullscreenPane ? "z-[120] w-80" : "w-80"}>
                         <DropdownMenuItem onSelect={() => {
                           setRecordFormatEnabled(false);
                           setSelectedRecordTemplateUri("");
@@ -576,10 +584,14 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                 {sessionIndex === 0 && recordSelectionCleared && !selectedUri && <p className="mb-3 text-xs text-muted-foreground">Virtual Record · properties and RDF values shared by every matching member of the active FCT result set.</p>}
                 {selectedRecordTermType === "bnode" && blankNodeRecords.length > 0 && (
                   <div className="mb-4" aria-label="Sibling blank-node records">
-                    <Tabs value={String(activeBlankNodeTab)} onValueChange={(value) => {
+                    {activeBlankNodeTab < 0 && <p role="status" className="mb-2 text-sm text-muted-foreground">
+                      This structural path matches {recordDescribeIncomplete ? "at least " : ""}{blankNodeRecords.length} blank {blankNodeRecords.length === 1 ? "node" : "nodes"}. Their labels are response-local; select a node below to inspect it. Maestro cannot infer which was selected in a previous request.
+                    </p>}
+                    <Tabs value={activeBlankNodeTab < 0 ? "" : String(activeBlankNodeTab)} onValueChange={(value) => {
                       const index = Number(value);
                       const node = blankNodeRecords[index];
                       if (!node) return;
+                      if (!chooseBlankNodeCandidate(index)) return;
                       setActiveBlankNodeTab(index);
                       setDescribedRecord(node.rows);
                       setRecordDescriptionPage(0);

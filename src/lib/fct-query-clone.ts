@@ -7,6 +7,7 @@ export type FctClonePlane = "exact" | "data";
 /** Clone an individual node without retaining ephemeral UI results. */
 export function cloneFctQueryNode(node: FctQueryNode, plane: FctClonePlane = "exact"): FctQueryNode {
   const attributes = { ...node.attributes };
+  if (node.name === "view") delete attributes.indexLang;
   if (plane === "data") {
     // Grouping describes the viewer, not the resource selection.
     delete attributes.group;
@@ -61,6 +62,7 @@ export function snapshotFctQueryXml(xml: string, plane: FctClonePlane = "data"):
   const walk = (entries: FctXmlNode[]) => {
     for (const node of entries) {
       const attributes = node[":@"] as Record<string, string> | undefined;
+      if (attributes && Object.keys(node).some(key => key === "view" || key.endsWith(":view"))) delete attributes["@_indexLang"];
       if (plane === "data" && attributes) {
         delete attributes["@_group"];
         if (Object.keys(node).some(key => key === "view" || key.endsWith(":view"))) {

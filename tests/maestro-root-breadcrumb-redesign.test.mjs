@@ -16,7 +16,7 @@ test('the root has exactly one persistent shadcn InputGroup and preserves inheri
   assert.match(root,/rootSearchExpanded \? searchInputGroup/);
   assert.match(root,/rootConstraints\.length > 0 && <BreadcrumbNodeMinus/);
   assert.ok(root.indexOf('searchInputGroup')<root.indexOf('<BreadcrumbNodeMinus'));
-  assert.ok(root.indexOf('<BreadcrumbNodeMinus')<root.indexOf('data-maestro-signal-region'));
+  assert.ok(root.indexOf('<BreadcrumbNodeMinus')<root.indexOf('<InputGroupAddon align="inline-end" data-maestro-signal-region'));
   assert.match(root,/deleteNode\(rootConstraints\[rootConstraints\.length - 1\]\.id\)/);
   assert.doesNotMatch(editor,/<InputGroup aria-label="Root search input"/);
   assert.match(read('src/canvas/top/breadcrumb.tsx'), /export function BreadcrumbNodeMinus/);
@@ -32,7 +32,7 @@ test('ordinary breadcrumb height and original example badge anchoring are preser
   assert.match(path,/<InputGroupAddon align="inline-start"[\s\S]*?<OrUidIcon/);
   assert.match(path,/absolute left-\[calc\(100%\+15px\)\] top-full -translate-x-1\/2 pt-1/);
   assert.doesNotMatch(path,/className="ml-5 inline-flex max-w-full pt-1"/);
-  assert.match(render,/className="relative flex min-w-0 shrink-0 items-center"/);
+  assert.match(render,/className="relative flex min-w-0 max-w-full shrink-0 items-center"/);
 });
 
 test('input label and signal unfurl use separate XState parallel regions and events',()=>{
@@ -63,7 +63,7 @@ test('signal icons keep exactly the agreed five-to-one bar meanings',()=>{
 test('URI suggestions are indexed, proxy-priority-safe, and strictly ranked',()=>{
   const q=read('src/lib/uri-autocomplete-query.ts');
   assert.match(q,/bif:contains/);
-  assert.match(q,/FILTER\(CONTAINS\(LCASE\(STR\(\?label\)\)/);
+  assert.match(q,/FILTER\(LCASE\(STR\(\?matchedLabel\)\) =/);
   assert.match(q,/ORDER BY DESC \(<LONG::IRI_RANK> \(\?uri\)\)/);
   assert.doesNotMatch(q,/ORDER BY LCASE/);
   const c=read('src/canvas/top/root-uri-autocomplete.tsx');
@@ -77,7 +77,7 @@ test('URI suggestions are indexed, proxy-priority-safe, and strictly ranked',()=
 test('View hover diagnostics are read-only and distinguish missing SHACL reports',()=>{
   const d=read('src/canvas/top/view-diagnostics-hover.tsx');
   const p=read('src/lib/client-provider-diagnostics.ts');
-  assert.match(d,/onMouseEnter=\{\(\) => setHovered\(true\)\}/);
+  assert.match(d,/openOnHover delay=\{100\} closeDelay=\{250\}/);
   assert.match(d,/mui:Providers/);
   assert.match(d,/Caller:/);
   assert.match(p,/sh:ValidationReport/);

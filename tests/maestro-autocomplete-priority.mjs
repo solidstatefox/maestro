@@ -31,25 +31,33 @@ const query = loadTs("src/lib/uri-autocomplete-query.ts", {
 });
 const addr = "http://example.net/people@https://example.net/sparql";
 const q = query.createRootUriAutocompleteQuery("York", addr, {limit: 10,timeoutSeconds:5});
-assert.match(q, /FILTER\(CONTAINS\(LCASE\(STR\(\?label\)\), "york"\)\)/);
+assert.match(q, /FILTER\(LCASE\(STR\(\?matchedLabel\)\) = "york"\)/);
 assert.match(q, /GRAPH <http:\/\/example.net\/people>/);
-assert.match(q, /LIMIT 10$/);
-assert.match(q, /IRI_RANK/);
-assert.match(q, /\?label bif:contains/);
-assert.doesNotMatch(q, /ORDER BY LCASE/);
+assert.match(q, /SAMPLE\(\?matchedLabel\) AS \?label/);
+assert.match(q, /GROUP BY \?uri/);
+assert.match(q, /LIMIT 10[\s\S]*OPTIONAL/);
+assert.match(q, /<LONG::IRI_RANK>/);
+assert.match(q, /\?matchedLabel bif:contains/);
+assert.match(q, /FILTER NOT EXISTS/);
+assert.match(q, /subClassOf>\+/);
+assert.doesNotMatch(q, /WATER\*/i);
+assert.doesNotMatch(q, /CONTAINS\(LCASE/);
 assert.equal(query.createRootUriAutocompleteQuery("https://example.org",addr,{limit:10,timeoutSeconds:5}),null);
 assert.equal(query.createRootUriAutocompleteQuery("http:",addr,{limit:10,timeoutSeconds:5}),null);
-assert.match(query.createRootUriAutocompleteQuery("A",addr,{limit:5,timeoutSeconds:5}), /LIMIT 5$/);
+assert.match(query.createRootUriAutocompleteQuery("A",addr,{limit:5,timeoutSeconds:5}), /LIMIT 5[\s\S]*OPTIONAL/);
 for (const draft of ["Ford", "Tim"]) {
   const dbpedia = query.createRootUriAutocompleteQuery(draft, "$ALL$@https://dbpedia.org/sparql", {limit:10,timeoutSeconds:15});
-  assert.match(dbpedia, /\?label bif:contains/);
-  assert.match(dbpedia, /ORDER BY DESC \(<LONG::IRI_RANK> \(\?uri\)\) LIMIT 10$/);
+  assert.match(dbpedia, /\?matchedLabel bif:contains/);
+  assert.match(dbpedia, /ORDER BY DESC \(<LONG::IRI_RANK> \(\?uri\)\) ASC\(STR\(\?uri\)\)/);
   assert.doesNotMatch(dbpedia, /GRAPH <\$ALL\$>/);
-  assert.ok(dbpedia.length <= 1600);
+  assert.ok(dbpedia.length <= 4000);
 }
-assert.ok(q.length <= 1600, "Must satisfy bounded autocomplete proxy priority limit");
-assert.match(q, /^SELECT DISTINCT \?uri \?label WHERE \{[\s\S]*\} ORDER BY DESC \(\<LONG::IRI_RANK\> \(\?uri\)\) LIMIT (?:[1-9]|10)$/i);
-console.log("PASS URI full-text indexed candidates, substring match, rank and proxy priority shape");
+assert.ok(q.length <= 4000, "Merged autocomplete must satisfy bounded priority limit");
+assert.match(q, /^SELECT \?uri \?label \?type WHERE \{/i);
+// Resource ranking/limit MUST appear before optional type/class enrichment.
+assert.ok(q.indexOf('LIMIT 10') < q.indexOf('OPTIONAL'));
+assert.match(q, /\?matchedPredicate IN \(\<http:\/\/www\.w3\.org\/2000\/01\/rdf-schema#label\>\)/);
+console.log("PASS signal-high exact indexed autocomplete, top-N resources before single-query class enrichment");
 
 const calls = [];
 let unlock;

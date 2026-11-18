@@ -135,6 +135,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     pendingRecordDescriptionLimit,
     personalSparqlEndpoint,
     preferredAlphabetLanguage,
+    languageOverride, addLanguageToShareUrl, removeLanguageFromShareUrl,
     prefixSource,
     prefixStatus,
     queryTree,
@@ -323,18 +324,25 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                 </div>
               </div>
               <div className="flex flex-col gap-2 rounded-md border p-3">
-                <Label htmlFor="maestro-alphabet-language">Preferred language</Label>
+                {languageOverride !== null && <div className="flex items-center justify-between gap-2 rounded-md bg-accent/50 px-3 py-2" aria-label="Language override from share URL">
+                  <div className="min-w-0 text-xs"><div className="font-medium">Share URL language override</div><div className="break-words">{languageOverride}</div></div>
+                  <Button type="button" size="sm" variant="outline" onClick={removeLanguageFromShareUrl}>Remove</Button>
+                </div>}
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="maestro-alphabet-language">Preferred language</Label>
+                  <Button type="button" size="sm" variant="outline" onClick={addLanguageToShareUrl} disabled={languageOverride !== null}>Add to Share URL</Button>
+                </div>
                 <select id="maestro-alphabet-language" className="rounded-md border bg-background px-2 py-1.5 text-sm" value={preferredAlphabetLanguage}
                   onChange={(event) => {
                     const next = event.target.value;
                     if (!(next === "all" || MAESTRO_ALPHABET_LANGUAGES.some((option) => option.code === next))) return;
                     setPreferredAlphabetLanguage(next);
-                    void maestroStorageSet("maestro-alphabet-preferred-language", next);
+                    if (languageOverride === null) void maestroStorageSet("maestro-alphabet-preferred-language", next);
                   }}>
                   <option value="all">All languages</option>
                   {MAESTRO_ALPHABET_LANGUAGES.map(({ code, name }) => <option key={code} value={code}>{name} ({code})</option>)}
                 </select>
-                <p className="text-xs text-muted-foreground">The selected language (plus language-neutral literals) applies to Personal facet values, Results, and alphabet filtering. All languages removes the language restriction.</p>
+                <p className="text-xs text-muted-foreground">The effective language applies to FCT Results, facets, counts and Alphabet. A Share URL override takes precedence until removed; it is not saved to Sheet preferences.</p>
               </div>
               <div className="flex flex-col gap-2 rounded-md border p-3">
                 <Label htmlFor="maestro-prefix-source">Namespace prefixes (CURIEs shown for IRIs without labels)</Label>
@@ -466,7 +474,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                     <Slider id="maestro-root-hover-delay" aria-label="Root breadcrumb editor hover delay in seconds"
                       min={250} max={3000} step={250} value={[rootHoverDelayMs]}
                       onValueChange={(values) => {
-                        const value = values[0] ?? 1000;
+                        const value = values[0] ?? 2000;
                         setRootHoverDelayMs(value);
                         writeRootHoverDelayMs(value);
                       }} />

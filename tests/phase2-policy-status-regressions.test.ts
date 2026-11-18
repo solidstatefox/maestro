@@ -68,11 +68,13 @@ test("Statuses render through the common fixture and Bookmark animates its glyph
 });
 
 test("Numeric literal evidence discovers a pending policy without bypassing approval", () => {
-  const endpoint = read("src/app/proxy/api/service/handlers/personal-facet-providers.ts");
+  const endpoint = read("src/lib/client-facet-providers.ts");
   const card = read("src/canvas/left/personal-widget-cards.tsx");
-  assert.match(endpoint, /discoverPolicyApprovals\(/);
-  assert.match(endpoint, /isCoercibleNumericLexical/);
-  assert.match(endpoint, /approved\.has\(provider\.uri\)/);
+  assert.match(endpoint, /validateClientShaclRows\(/);
+  assert.match(endpoint, /datatypeEvidence/);
+  assert.match(endpoint, /readClientPolicyApprovals\(/);
+  assert.match(endpoint, /eligibleNumeric\.filter\(p=>approved\.has\(p\.uri\)\)/);
+  assert.ok(!endpoint.includes('src/app/proxy/api/service/handlers'));
   assert.match(card, /isCoercibleNumericLexical\(value\.uri\)/);
   assert.ok(isCoercibleNumericLexical("-12.5"));
   assert.ok(isCoercibleNumericLexical("1.5e-3"));

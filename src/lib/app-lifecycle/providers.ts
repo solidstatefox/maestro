@@ -33,6 +33,7 @@ export type ProviderDiscoveryEvent =
   | { type: "DISCOVERY_INACTIVE" }
   | { type: "DISCOVERY_STARTED"; requestKey: string; applicabilityKey: string; evidenceKey: string }
   | { type: "DISCOVERY_RESOLVED"; requestKey: string; matches: ProviderMatches; evidenceKey: string }
+  | { type: "DISCOVERY_TAGS_RESOLVED"; requestKey: string; tags: TagProviderMatch[] }
   | { type: "DISCOVERY_FAILED"; requestKey: string; error: string };
 const empty: DiscoveryContext = {
   requestKey: "", applicabilityKey: "", matches: noMatches(), validatedKey: "", validatedEvidenceKey: "", error: "",
@@ -79,6 +80,16 @@ export const maestroProviderDiscoveryMachine = setup({
       validatedEvidenceKey: context.validatedKey === event.applicabilityKey ? context.validatedEvidenceKey : "",
       error: "",
     })) },
+    // Tag clouds depend on the selected predicate and provider approval, not
+    // numeric/date datatype probing. Publish them independently while optional
+    // Calendar/Numeric discovery continues in its own async work.
+    DISCOVERY_TAGS_RESOLVED: {
+      guard: ({ context, event }) => context.requestKey === event.requestKey,
+      actions: assign(({ context, event }) => ({
+        matches: { ...context.matches, tags: event.tags },
+        validatedKey: context.applicabilityKey,
+      })),
+    },
     DISCOVERY_RESOLVED: [
       { guard: ({ context, event }) => context.requestKey === event.requestKey &&
           (() => { const matches = settleMatches(context, event); return matches.temporal.length + matches.numeric.length + matches.tags.length > 0; })(),
@@ -134,10 +145,16 @@ export function selectProviderMatches(
     snapshot.context.requestKey === requestKey ? snapshot.value as ProviderDiscoveryPhase : "discovering";
   const verified = Boolean(applicabilityKey) && snapshot.context.applicabilityKey === applicabilityKey &&
     snapshot.context.validatedKey === applicabilityKey &&
-    (phase === "discovering" || phase === "failed" ||
-      (phase === "ready" && compatibleEvidence(evidenceKey, snapshot.context.validatedEvidenceKey)));
+    (phase === "discovering" || phase === "failed" || phase === "ready") &&
+    compatibleEvidence(evidenceKey, snapshot.context.validatedEvidenceKey);
   const matches = verified ? snapshot.context.matches : noMatches();
-  return { ...matches, phase, error: phase === "failed" ? snapshot.context.error : "" };
+  // Independent tag discovery has no datatype-evidence prerequisite. The
+  // numeric/temporal compatibility check may invalidate their projections,
+  // but must not make an already approved Tag Cloud disappear in that gap.
+  const tags = snapshot.context.applicabilityKey === applicabilityKey &&
+    snapshot.context.validatedKey === applicabilityKey && phase !== "inactive" && phase !== "empty"
+    ? snapshot.context.matches.tags : [];
+  return { ...matches, tags, phase, error: phase === "failed" ? snapshot.context.error : "" };
 }
 
 /** FCT scope identity for provider metadata. Selected literal/range values
@@ -152,7 +169,13 @@ export function facetProviderApplicabilityKey(queryXml: string, propertyIris: st
   const nodes = Array.from(doc.getElementsByTagName("*"));
   for (const node of nodes) {
     // XML node and query ids are internal mutation counters, never scope.
-    node.removeAttribute("id"); node.removeAttribute("uid"); node.removeAttribute("ctr");
+    // Allocation counters, provenance IDs, and viewer-only grouping are not
+    // SHACL applicability constraints. A revisit can allocate new IDs while
+    // preserving the identical facet population and approved Tag Cloud.
+    for (const attribute of ["id", "uid", "ctr", "uctr", "rid", "rctr", "pid", "group"]) node.removeAttribute(attribute);
+    if (node.localName === "value") {
+      node.removeAttribute("uiResolution"); node.removeAttribute("uiCell");
+    }
     if (node.localName === "view") {
       node.removeAttribute("offset"); node.removeAttribute("limit");
     }

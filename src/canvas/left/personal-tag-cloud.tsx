@@ -6,7 +6,7 @@ import { serializeFctQuery } from "@/lib/fct-query-api";
 import { createCooccurringPropertyWidgetQuery } from "@/lib/fct-query-derived";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { toLabel } from "@/lib/uri-labels";
-import { facetValueKey, groupValueBinding, type FctResult } from "@/canvas/utils/fct-response";
+import { facetValueKey, groupValueBinding, distinctFacetValues, type FctResult } from "@/canvas/utils/fct-response";
 import { DistinctCount, distinctCountQueryFor } from "@/canvas/left/filter";
 import { fctTermKey } from "@/canvas/utils/fct-response";
 import type { FctQueryTree, FctQueryNode } from "@/lib/fct-query-api";
@@ -23,11 +23,17 @@ export function PersonalTagCloud({ property, values, tree, selected, counts, ena
   const projectionXml = useMemo(() => selected?.children.some(node => node.name === "value")
     ? serializeFctQuery(createCooccurringPropertyWidgetQuery(tree, property, selected.id)) : "",
     [tree, property, selected]);
-  const [cooccurring, setCooccurring] = useState<FctResult[] | null>(null);
+  const [cooccurrence, setCooccurrence] = useState<{ key: string; values: FctResult[] | null; error: string }>(
+    { key: "", values: null, error: "" });
+  const cooccurrenceKey = enabled ? projectionXml : "";
   useEffect(() => {
-    if (!projectionXml || !enabled) { setCooccurring(null); return; }
+    if (!cooccurrenceKey) return;
     const controller = new AbortController();
-    setCooccurring(null);
+    // Revisiting the same query must not erase tags already loaded for that
+    // exact scope. A new scope is hidden synchronously by the keyed projection.
+    setCooccurrence(current => current.key === cooccurrenceKey
+      ? { ...current, error: "" }
+      : { key: cooccurrenceKey, values: null, error: "" });
     void (async () => {
       try {
         const response = await cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store",
@@ -35,12 +41,27 @@ export function PersonalTagCloud({ property, values, tree, selected, counts, ena
           body: projectionXml, signal: controller.signal });
         const data = await readFctResponse(response);
         if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-        if (!controller.signal.aborted) setCooccurring(data.results ?? []);
-      } catch { /* Keep the previously available facet values on transport failure. */ }
+        if (!controller.signal.aborted) setCooccurrence({ key: cooccurrenceKey, values: data.results ?? [], error: "" });
+      } catch (error) {
+        if (!controller.signal.aborted) setCooccurrence(current => current.key === cooccurrenceKey
+          ? { ...current, error: error instanceof Error ? error.message : "Co-occurring tags request failed" }
+          : current);
+        // Retain the ordinary facet value list as a usable fallback.
+      }
     })();
     return () => controller.abort();
-  }, [projectionXml, enabled]);
-  const shownValues = cooccurring ?? values;
+  }, [cooccurrenceKey]);
+  const cooccurring = cooccurrence.key === cooccurrenceKey ? cooccurrence.values : null;
+  const cooccurringError = cooccurrence.key === cooccurrenceKey ? cooccurrence.error : "";
+  // A co-occurrence query with no projected values must not erase the normal
+  // facet. The selected term is still actionable and should remain visible
+  // when a server cannot project additional tags for this query scope.
+  // Co-occurring values extend the ordinary facet set; they never replace
+  // it.  Asynchronous projection pages must not make existing tags vanish.
+  // Distinct RDF-term identity keeps the result stable through refresh/reentry.
+  const shownValues = useMemo(() => distinctFacetValues([
+    ...values, ...(cooccurring ?? []),
+  ]), [cooccurring, values]);
   const selectedKeys = new Set((selected?.children ?? []).filter(node => node.name === "value" && Boolean(node.text))
     .map(node => fctTermKey(node.text ?? "", node.attributes.datatype ?? (node.attributes["xml:lang"] ? undefined : "string"), node.attributes["xml:lang"])));
   const items = shownValues.map(value => {
@@ -52,6 +73,10 @@ export function PersonalTagCloud({ property, values, tree, selected, counts, ena
   const largest = known.length ? Math.max(...known) : 1;
   const classes = ["text-xs", "text-sm", "text-base", "text-lg"] as const;
   return <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 p-1" aria-label="Tag cloud" aria-busy={busy}>
+    {cooccurringError && <span role="status" title={cooccurringError} className="w-full text-center text-xs text-destructive">Co-occurring tags unavailable; showing facet values.</span>}
+    {items.length === 0 && <span className="text-xs text-muted-foreground" role="status">
+      {busy ? "Loading tags…" : "No tag values in the current facet scope"}
+    </span>}
     {items.map(({ value, query, count, selected: checked }) => {
       const label = value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri;
       const rank = typeof count === "number" && count > 0 && largest > smallest

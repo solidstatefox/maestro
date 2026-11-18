@@ -8,7 +8,7 @@ test('radial names use the shadcn labeled 250px rings without a custom SVG label
   const ui=read('src/canvas/tab/view/overview.tsx');
   const labeled=ui.slice(ui.indexOf('function LabeledRings'),ui.indexOf('function RankedPercent'));
   assert.match(labeled,/LabelList position="insideStart" dataKey="predicate"/);
-  assert.match(labeled,/endAngle=\{380\} innerRadius=\{30\} outerRadius=\{110\}/);
+  assert.match(labeled,/startAngle=\{-90\} endAngle=\{270\} innerRadius=\{30\} outerRadius=\{110\}/);
   assert.match(labeled,/max-h-\[250px\]/);
   assert.match(labeled,/\.sort\(\(a,b\)=>b\.percentage-a\.percentage/);
   assert.doesNotMatch(labeled,/<text x=|ringShape|<Legend/);

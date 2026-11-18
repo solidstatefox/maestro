@@ -26,7 +26,7 @@ import { categoryTreeNodeKey, type CategoryTreeNode } from "@/canvas/left/filter
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 
 import { toLabel } from "@/lib/uri-labels";
-import { selectedFacetCount, selectedFacetLabel } from "@/lib/selected-facet-presentation";
+import { selectedFacetCount } from "@/lib/selected-facet-presentation";
 
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
@@ -272,7 +272,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                               <div className={FACET_ITEM_GAP_CLASS}>
                                 {selectedClassDisplayFacets.map((item) => {
                                   const count = selectedFacetCount(classFacets.find((facet) => facet.uri === item.uri)?.count);
-                                  const label = selectedFacetLabel(item.uri, "Class", classFacets.find(facet => facet.uri === item.uri)?.label ?? item.label);
+                                  const label = toLabel(item.uri, "Class");
                                   return (
                                     <div key={item.uri} className="flex w-full items-center gap-2 rounded-md px-2 py-0.5 text-sm">
                                       <input

@@ -1,7 +1,7 @@
 "use client";
 
 import { FCT_VIEW_TYPES } from "./fct-view-types";
-import { findGroupCarrier, ungroupForMembers, markFctGroup } from "./fct-groups-carrier";
+import { ungroupForMembers } from "./fct-groups-carrier";
 import { isBlankNodeTerm } from "./bnode";
 import { attachViewToPropertyInQueryTree } from "./fct-query";
 import { fctQueryTreeApi, cloneFctQueryNode } from "./fct-query-api";
@@ -57,6 +57,13 @@ function groupValueBinding(value: QueryResultValue): { text: string; datatype?: 
           : { datatype: "string" }),
     ...(value.lang ? { lang: value.lang } : {}),
   };
+}
+
+function treeNodeContainsView(nodes: FctQueryNode[], ancestorId: string): boolean {
+  const hasView = (node:FctQueryNode):boolean => node.name === "view" || node.children.some(hasView);
+  const visit = (node:FctQueryNode):boolean => (node.id === ancestorId || node.uiKey === ancestorId)
+    ? hasView(node) : node.children.some(visit);
+  return nodes.some(visit);
 }
 
 function treeNodeContainsId(nodes: FctQueryNode[], ancestorId: string, targetId: string): boolean {
@@ -133,7 +140,7 @@ export function createPropertyWidgetQuery(
   if (forPersonalFacet) tree = ungroupForMembers(tree);
   const copyNode = (node: FctQueryNode): FctQueryNode => cloneFctQueryNode(node, "data");
   const selectedRoleIsAncestor = direction === "reverse" && Boolean(selectedNodeId) &&
-    treeNodeContainsId(tree.children, selectedNodeId!, "query-view");
+    treeNodeContainsView(tree.children, selectedNodeId!);
 
   // When the active view is already carried by the target relationship, that
   // relationship is the facet binding. Reuse it rather than adding a duplicate
@@ -141,11 +148,21 @@ export function createPropertyWidgetQuery(
   // facet return no values. Keep its constraints and only normalize the view.
   if (forPersonalFacet) {
     const relationshipName = direction === "forward" ? "property" : "property-of";
+    // Structural facet identity: the immediate siblings of <view> are the
+    // current focus's facets. A same-IRI ancestor is NOT the same occurrence.
+    // This works even for FCT documents without Maestro @id attributes.
+    const hasMatchingSibling = (nodes: FctQueryNode[]): boolean => nodes.some((node) => {
+      if (node.children.some(child => child.name === "view")) {
+        return node.children.some(child => child.name === relationshipName && child.attributes.iri === propertyUri);
+      }
+      return hasMatchingSibling(node.children);
+    }) || (nodes.some(node => node.name === "view") &&
+      nodes.some(node => node.name === relationshipName && node.attributes.iri === propertyUri));
     let reusedCarrier = false;
     const reuseCarrier = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => {
-      const isCarrier = !reusedCarrier && node.name === relationshipName &&
+      const isCarrier = !hasMatchingSibling(tree.children) && !reusedCarrier && node.name === relationshipName &&
         node.attributes.iri === propertyUri &&
-        node.children.some((child) => (child.uiKey === "query-view" || child.id === "query-view"));
+        node.children.some((child) => (child.name === "view"));
       if (isCarrier) {
         reusedCarrier = true;
         const attributes = { ...node.attributes };
@@ -153,7 +170,7 @@ export function createPropertyWidgetQuery(
         return {
           ...node,
           attributes,
-          children: node.children.map((child) => (child.uiKey === "query-view" || child.id === "query-view")
+          children: node.children.map((child) => (child.name === "view")
             ? { ...copyNode(child), attributes: { ...child.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0" }, children: [] }
             : copyNode(child)),
         };
@@ -193,7 +210,7 @@ export function createPropertyWidgetQuery(
     // relationship. The exclusion remains untouched in the authoritative query;
     // remove it only from this derived widget query so the edge can bind values.
     const clearWidgetExclusion = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map((node) => {
-      const containsView = treeNodeContainsId([node], node.id, "query-view");
+      const containsView = treeNodeContainsView([node], node.id);
       const isTargetRelationship = node.name === (direction === "forward" ? "property" : "property-of") &&
         node.attributes.iri === propertyUri && containsView;
       const attributes = { ...node.attributes };
@@ -206,7 +223,7 @@ export function createPropertyWidgetQuery(
   // For a reverse-role ancestor, the selected role already encloses the view;
   // retain that ancestor and enumerate its values without adding another edge.
   const wrapAncestor = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap((node) => {
-    if ((node.uiKey === "query-view" || node.id === "query-view")) {
+    if (node.name === "view") {
       const ephemeralView: FctQueryNode = {
         ...copyNode(node),
         attributes: { ...node.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0" },
@@ -225,7 +242,7 @@ export function createPropertyWidgetQuery(
 
 function findQueryView(nodes: FctQueryNode[]): FctQueryNode | null {
   for (const node of nodes) {
-    if ((node.uiKey === "query-view" || node.id === "query-view")) return node;
+    if (node.name === "view") return node;
     const nested = findQueryView(node.children);
     if (nested) return nested;
   }
@@ -253,17 +270,34 @@ export function createGroupValuesQuery(
   option: GroupByOption,
   paging: { limit: number; offset: number } = { limit: 30, offset: 0 },
 ): FctQueryTree {
+  // Preserve the committed `group="true"` in the live query, but enumerate
+  // headings with the *same derived FCT query* as the corresponding Personal
+  // facet. This is the working pre-grouped-LIST contract: the value/count
+  // pairs on the left and in the center are the same population.
   const clean = ungroupForMembers(sourceTree);
-  const marked = markFctGroup(clean, {
-    id: findQueryNode(clean.children, option.nodeId)?.id,
-    name: option.direction === "reverse" ? "property-of" : "property",
-    iri: option.uri,
-  });
-  return setQueryViewAttributes(marked, {
-    type: FCT_VIEW_TYPES.LIST,
+  const selected = findQueryNode(clean.children, option.nodeId);
+  let groups: FctQueryTree;
+  if (option.direction === "forward" && option.uri === RDF_TYPE_URI) {
+    // Category groups are the same classes view as the Categories widget.
+    groups = setQueryViewAttributes(clean, { type: FCT_VIEW_TYPES.CLASSES });
+  } else if (option.direction === "reverse" && selected?.name === "property-of") {
+    // A selected role's bound <value> filters must not hide other candidate
+    // role values from the groups list.
+    groups = createPersonalRoleValuesQuery(clean, selected);
+  } else {
+    groups = createPropertyWidgetQuery(clean, option.uri, option.direction, option.nodeId, true);
+  }
+  // Match the original Group-by facet contract exactly: sort="count" is
+  // semantic here, not just presentation. For list queries the SPARQL compiler
+  // projects COUNT(DISTINCT focus) as column two only with this attribute.
+  // Only a real COUNT projection may stand for group membership. Additional
+  // value/badge projections are not group counts.
+  return setQueryViewAttributes(groups, {
+    type: option.direction === "forward" && option.uri === RDF_TYPE_URI
+      ? FCT_VIEW_TYPES.CLASSES : FCT_VIEW_TYPES.LIST,
+    sort: "count",
     limit: String(paging.limit),
     offset: String(paging.offset),
-    order: "yes",
   });
 }
 
@@ -285,7 +319,7 @@ export function createGroupMemberQuery(
     tree = createPropertyWidgetQuery(tree, option.uri, option.direction, option.nodeId);
     const findBindingNode = (nodes: FctQueryNode[]): FctQueryNode | null => {
       for (const node of nodes) {
-        if ((node.name === "property" || node.name === "property-of") && node.attributes.iri === option.uri && treeNodeContainsId([node], node.id, "query-view")) return node;
+        if ((node.name === "property" || node.name === "property-of") && node.attributes.iri === option.uri && treeNodeContainsView([node], node.id)) return node;
         const nested = findBindingNode(node.children);
         if (nested) return nested;
       }
@@ -305,7 +339,7 @@ export function createGroupMemberQuery(
   if (option.direction === "reverse" && option.ancestorRole) {
     let movedView: FctQueryNode | undefined;
     const extractView = (node: FctQueryNode): FctQueryNode | undefined => {
-      if ((node.uiKey === "query-view" || node.id === "query-view")) return node;
+      if (node.name === "view") return node;
       for (const child of node.children) {
         const found = extractView(child);
         if (found) return found;
@@ -423,7 +457,7 @@ export function createDistinctCountQuery(
     nodes: FctQueryNode[],
     update: (siblings: FctQueryNode[]) => FctQueryNode[],
   ): { nodes: FctQueryNode[]; updated: boolean } => {
-    if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) {
+    if (nodes.some((node) => node.name === "view")) {
       return { nodes: update(nodes), updated: true };
     }
     let updated = false;
@@ -465,7 +499,7 @@ export function createDistinctCountQuery(
           return { ...node, attributes };
         });
       }
-      const viewIndex = siblings.findIndex((node) => (node.uiKey === "query-view" || node.id === "query-view"));
+      const viewIndex = siblings.findIndex((node) => node.name === "view");
       const next = [...siblings];
       next.splice(viewIndex + 1, 0, relationshipNode);
       return next;
@@ -488,7 +522,7 @@ export function createDistinctCountQuery(
           return { ...node, attributes };
         });
       }
-      const viewIndex = siblings.findIndex((node) => (node.uiKey === "query-view" || node.id === "query-view"));
+      const viewIndex = siblings.findIndex((node) => node.name === "view");
       const next = [...siblings];
       next.splice(viewIndex + 1, 0, classNode);
       return next;
@@ -537,7 +571,7 @@ export function createDistinctCountQuery(
       nodes: FctQueryNode[],
       parent: FctQueryNode | null = null,
     ): FctQueryNode | null => {
-      if (nodes.some((node) => (node.uiKey === "query-view" || node.id === "query-view"))) {
+      if (nodes.some((node) => node.name === "view")) {
         return nodes.find(matches) ?? (parent && matches(parent) ? parent : null);
       }
       for (const node of nodes) {
@@ -588,7 +622,7 @@ export function createDistinctCountQuery(
 
   const setCountView = (nodes: FctQueryNode[]): FctQueryNode[] =>
     nodes.map((node) => {
-      if ((node.uiKey === "query-view" || node.id === "query-view")) {
+      if (node.name === "view") {
         const attributes = { ...node.attributes };
         delete attributes.order;
         delete attributes["order-results"];
@@ -635,10 +669,11 @@ export function setQueryViewAttributes(
   const tree = fctQueryTreeApi.getDataTree(sourceTree);
   return {
     ...tree,
-    children: updateQueryNode(tree.children, "query-view", (node) => ({
-      ...node,
-      attributes: { ...node.attributes, ...attributes },
-    })),
+    children: (function updateViews(nodes: FctQueryNode[]): FctQueryNode[] {
+      return nodes.map(node => node.name === "view"
+        ? {...node, attributes: {...node.attributes,...attributes}}
+        : {...node, children:updateViews(node.children)});
+    })(tree.children),
   };
 }
 

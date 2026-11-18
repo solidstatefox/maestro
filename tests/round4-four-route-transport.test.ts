@@ -8,19 +8,18 @@ test("Only the four approved Maestro HTTP proxy transports remain after cleanup"
   assert.deepEqual(routes, ["fct", "observations", "service", "sparql"]);
 });
 
-test("The remaining trusted service operations are allowlisted; OTC streaming is preserved", () => {
-  const source = readFileSync("src/app/proxy/api/service/operations.ts", "utf8");
-  for (const operation of operations) {
-    assert.ok(source.includes(`'${operation}': {`));
-    assert.ok(existsSync(`src/app/proxy/api/service/handlers/${operation}.ts`));
-  }
-  assert.match(source, /dispatchMaestroService/);
-  assert.doesNotMatch(source, /'appbar-buttons':\s*\{/);
-  assert.match(readFileSync("src/lib/client-appbar-buttons.ts", "utf8"), /manageAppbarButtons/);
-  assert.match(readFileSync("src/lib/client-otc-discovery.ts", "utf8"), /clientListChatSurveys/);
-  assert.match(source, /origin !== url.origin/);
-  const chat = readFileSync("src/components/ai-elements/basic-chat.tsx", "utf8");
-  assert.match(chat, /xhr\.open\("POST", "\/proxy\/api\/service\?service=maestro&operationId=otc-chat"\)/);
-  assert.match(chat, /xhr\.send\(form\)/);
-  assert.match(readFileSync("src/app/proxy/api/service/route.ts", "utf8"), /maxDuration = 300/);
+test("Service exposes only registered OpenAPI operations; Chat SSE remains bounded", () => {
+  const source = readFileSync("src/app/proxy/api/service/route.ts", "utf8");
+  const registry = readFileSync("src/lib/openapi-registry.ts", "utf8");
+  assert.match(source, /resolveOpenApiOperation\(/);
+  assert.match(source, /if \(!operation\)/);
+  assert.match(source, /origin !== new URL\(request\.url\)\.origin/);
+  assert.match(source, /new TransformStream<Uint8Array, Uint8Array>/);
+  assert.match(source, /text\/event-stream/);
+  assert.match(source, /maxDuration = 300/);
+  assert.match(source, /Maestro application operations now execute in the browser/);
+  assert.match(registry, /iteracompute/);
+  assert.match(registry, /createChatCompletion/);
+  assert.ok(!existsSync("src/app/proxy/api/service/operations.ts"));
+  assert.ok(!existsSync("src/app/proxy/api/service/handlers"));
 });

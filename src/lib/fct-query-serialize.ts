@@ -20,6 +20,7 @@ function serializeNode(node: FctQueryNode): string {
   if (node.name === "text" && !(node.text ?? "").trim() && node.children.length === 0) return "";
 
   const attributes = Object.entries({ ...node.attributes, id: node.id })
+    .filter(([name]) => !(node.name === "view" && name === "indexLang"))
     .map(([name, value]) => ` ${name}="${escapeXml(value)}"`)
     .join("");
 

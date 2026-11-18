@@ -4,19 +4,23 @@ import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { OrUidLabel } from "@/components/ui/or-uid-label";
 import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
 import { NumericFacetContent } from "@/canvas/left/personal-numeric-facet";
+import { NamedRegexCreateButton, NamedRegexList } from "@/canvas/left/named-regex-facet";
+import { DerivedFacetButton } from "@/canvas/left/derived-facet-button";
 import { PersonalTagCloud } from "@/canvas/left/personal-tag-cloud";
-import { formatNumericFacetLabels, isNumericFacetLexical } from "@/lib/numeric-facet-format";
+import { formatNumericFacetLabels } from "@/lib/numeric-facet-format";
+import { isCoercibleNumericLexical } from "@/lib/virtuoso-numeric-coercion";
 import { TemporalFacetContent, type TemporalFacetProvider, type NumericFacetProvider, type TagCloudFacetProvider } from "@/canvas/left/personal-date-facet";
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
-import { fctTermKey, facetValueKey, groupValueBinding, type FctResult } from "@/canvas/utils/fct-response";
+import { fctTermKey, facetValueKey, groupValueBinding, distinctFacetValues, type FctResult } from "@/canvas/utils/fct-response";
 import { DistinctCount, distinctCountQueryFor, personalFacetInspectorQueries } from "@/canvas/left/filter";
 import { GROUP_BY_FACET_HIGHLIGHT_CLASSES } from "@/canvas/utils/query-controller";
 
 import maestroLanguages from "@/data/maestro-languages.json";
 
 import { toLabel } from "@/lib/uri-labels";
+import { shortenCount } from "@/lib/utils";
 import { facetPropertyLabel } from "@/lib/facet-property-label";
 import { dynamicUiComponentUrn } from "@/lib/maestro-ui-component-ids";
 
@@ -24,7 +28,7 @@ import type { ReactNode } from "react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Bot, CircleSlash, Trash2, UsersRound, Code2, Palette } from "lucide-react";
+import { Bot, CircleSlash, Trash2, UsersRound, Code2, Palette, Regex, Braces } from "lucide-react";
 
 import hljs from "highlight.js/lib/core";
 import xmlLanguage from "highlight.js/lib/languages/xml";
@@ -103,7 +107,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
   providers: Map<string, TemporalFacetProvider>;
   scopeNodes: FctQueryNode[];
   queryXml: string;
-  onRangeChange: (property: string, start: string, end: string) => void;
+  onRangeChange: (property: string, start: string, end: string, selection?: { resolution: "years" | "months" | "weeks" | "days"; cell: string }) => void;
   numericProviders?: NumericFacetProvider[];
   tagCloudProviders?: Map<string, TagCloudFacetProvider>;
   onNumericRangeChange?: (property: string, start: string, end: string) => void;
@@ -123,6 +127,9 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
           // have no query node and must not fabricate one.
           const boundNode = activePropertyFilters.find(node => node.name === "property" && node.attributes.iri === widget.uri);
           const componentId = boundNode ? dynamicUiComponentUrn("property", boundNode.id) : undefined;
+          const isStringFacet = (boundNode?.children ?? []).some(node => node.name === "value" && node.attributes.op === "regex") ||
+            widget.values.some(value => value.termType === "literal" &&
+              !/((?:integer|decimal|double|float|long|int|short|byte|date|time|gYear|boolean))$/i.test(value.datatype ?? ""));
           const isGroupByFacet = workspaceTab === "browse" && groupedPersonalFacetUri === widget.uri;
           const canGroupByFacet = workspaceTab === "browse" && groupByOptions.some((option) => option.key === `forward:${widget.uri}`);
           const inspectorXml = isGroupByFacet
@@ -148,15 +155,17 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     onMouseLeave={clearTutorialPreview}
                     onClick={() => {
                       clearTutorialPreview();
-                      const existingPath = findPropertyPathNode(widget.uri);
-                      if (existingPath) navigateToPropertyPath(existingPath.id);
+                      // Navigate the exact relationship occurrence beside the active <view>.
+                      // Looking up an IRI globally can accidentally select an ancestor
+                      // when nested facets repeat the same predicate (skos:broader).
+                      if (boundNode) navigateToPropertyPath(boundNode.id);
                       else navigateIntoRelationship(widget.uri, "forward");
                     }}
                   >
                     <IncompleteWidgetIndicator source={`personal:${widget.uri}`} />
                     {isGroupByFacet && <UsersRound className="inline size-4 shrink-0" aria-label="Group by" />}
                     {widget.excluded && <CircleSlash className="inline size-3.5 shrink-0" aria-label="Excluded" />}
-                    <OrUidLabel uid={boundNode?.attributes.uid}>{facetPropertyLabel(widget.uri)}</OrUidLabel>
+                    <OrUidLabel uid={boundNode?.attributes.uid}>{boundNode?.attributes.label || facetPropertyLabel(widget.uri)}</OrUidLabel>
                   </button>} /><TooltipContent>{`Navigate to ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} scope`}</TooltipContent></Tooltip>
                   {autoConfiguredFacetKeys.has(`property::${widget.uri}`) && (
                     <Bot className="size-3.5 text-muted-foreground" aria-label="Auto-configured" />
@@ -194,6 +203,10 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                       >
                         <UsersRound className="size-4" aria-hidden="true" />
                       </button>} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${facetPropertyLabel(widget.uri)}` : canGroupByFacet ? `Group results by ${facetPropertyLabel(widget.uri)}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip> },
+                    { id: "regex", label: "Create named regex filter", icon: <Regex className="size-4"/>, when: isStringFacet,
+                      render: <NamedRegexCreateButton relationship={boundNode} propertyUri={widget.uri} /> },
+                    { id: "derived", label: "Extract approved derived facets", icon: <Braces className="size-4"/>, when: Boolean(boundNode),
+                      render: boundNode ? <DerivedFacetButton source={boundNode} /> : null },
                     { id: "decoration", label: "Provider decoration", icon: <Palette className="size-4"/>, render: <FacetDecorationControl direction="forward" iri={widget.uri}/> },
                     { id: "remove", label: `Remove ${facetPropertyLabel(widget.uri)} facet`, icon: <Trash2 className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
                       type="button"
@@ -220,7 +233,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
               </span>} /><TooltipContent>{widget.error || undefined}</TooltipContent></Tooltip>
             </header>
             <div className="min-h-0 flex-1 overflow-auto p-2">
-              {temporal?.tagCloudProviders?.has(widget.uri) && widget.values.length > 0 ? (
+              {temporal?.tagCloudProviders?.has(widget.uri) ? (
                 <PersonalTagCloud property={widget.uri} values={widget.values} tree={queryTree}
                   selected={activePropertyFilters.find(node => node.name === "property" && node.attributes.iri === widget.uri)}
                   counts={facetCandidateCounts} busy={widget.loading} enabled={endpointReadyForQuery}
@@ -236,19 +249,6 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     queryXml={temporal.queryXml}
                     onRangeChange={temporal.onRangeChange}
                   />
-                  {widget.values.length > FACET_PAGE_SIZE && (
-                    <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-                      <button type="button" className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40"
-                        disabled={widget.page <= 0}
-                        onClick={() => setPersonalWidgets(items => items.map(item =>
-                          item.uri === widget.uri ? { ...item, page: Math.max(0, item.page - 1) } : item))}>Previous</button>
-                      <span className="text-muted-foreground">{Math.min(widget.page + 1, Math.ceil(widget.values.length / FACET_PAGE_SIZE))}/{Math.ceil(widget.values.length / FACET_PAGE_SIZE)}</span>
-                      <button type="button" className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40"
-                        disabled={widget.page >= Math.ceil(widget.values.length / FACET_PAGE_SIZE) - 1}
-                        onClick={() => setPersonalWidgets(items => items.map(item =>
-                          item.uri === widget.uri ? { ...item, page: Math.min(Math.ceil(item.values.length / FACET_PAGE_SIZE) - 1, item.page + 1) } : item))}>Next</button>
-                    </div>
-                  )}
                 </>
               ) : (
                 <>
@@ -270,7 +270,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     (node) => node.attributes.iri === widget.uri,
                   );
                   const checkedValueNodes = (queryFilter?.children ?? [])
-                    .filter((child) => child.name === "value" && Boolean(child.text));
+                    .filter((child) => child.name === "value" && child.attributes.op !== "regex" && Boolean(child.text));
                   const queryValueKey = (node: FctQueryNode) => {
                     const datatype = node.attributes.datatype;
                     const lang = node.attributes["xml:lang"];
@@ -278,11 +278,12 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     return fctTermKey(node.text ?? "", effectiveDatatype, lang);
                   };
                   const checkedValueKeys = new Set(checkedValueNodes.map(queryValueKey));
-                  const endpointValueKeys = new Set(widget.values.map(facetValueKey));
+                  const normalizedValues = distinctFacetValues(widget.values);
+                  const endpointValueKeys = new Set(normalizedValues.map(facetValueKey));
                   // Place query-selected values first in query order. Do not sort
                   // endpoint results: all unchecked values retain proxy order.
                   const endpointValuesByKey = new Map(
-                    widget.values.map((value) => [facetValueKey(value), value] as const),
+                    normalizedValues.map((value) => [facetValueKey(value), value] as const),
                   );
                   const checkedValuesFromQuery: FctResult[] = checkedValueNodes.map((node) => {
                     const key = queryValueKey(node);
@@ -300,10 +301,10 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                       matches: [],
                     };
                   });
-                  const orderedValues = [
+                  const orderedValues = distinctFacetValues([
                     ...checkedValuesFromQuery,
-                    ...widget.values.filter((value) => !checkedValueKeys.has(facetValueKey(value))),
-                  ].filter((value) => {
+                    ...normalizedValues.filter((value) => !checkedValueKeys.has(facetValueKey(value))),
+                  ]).filter((value) => {
                     // Keep explicitly selected values; hide non-selected values
                     // only after their count is confirmed to be zero.
                     if (checkedValueKeys.has(facetValueKey(value))) return true;
@@ -326,15 +327,23 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     provider.eligibleProperties?.includes(widget.uri) &&
                     provider.projections.some(p => p.alias === "min") &&
                     provider.projections.some(p => p.alias === "max"));
+                  // Only an approved numeric provider may turn a literal into a
+                  // numeric presentation choice. Mirror the FCT/SPARQL coercion
+                  // guard: a syntactically numeric but non-finite lexical value
+                  // must remain an ordinary RDF literal in the checkbox list.
+                  const numericValues = numericProvider
+                    ? orderedValues.filter(value => value.termType === "literal" && isCoercibleNumericLexical(value.uri))
+                    : [];
                   const numericLabels = numericProvider
-                    ? formatNumericFacetLabels(orderedValues.filter(value => value.termType === "literal" && isNumericFacetLexical(value.uri)).map(value => value.uri),
+                    ? formatNumericFacetLabels(numericValues.map(value => value.uri),
                         typeof navigator !== "undefined" ? navigator.language : "en-US")
                     : [];
-                  const numericLabelByLexical = new Map(orderedValues.filter(value => value.termType === "literal" && isNumericFacetLexical(value.uri))
+                  const numericLabelByLexical = new Map(numericValues
                     .map((value, index) => [value.uri, numericLabels[index]] as const));
                   return (
                     <>
-                      {widget.values.length > FACET_PAGE_SIZE && (
+                      {queryFilter && <NamedRegexList relationship={queryFilter} />}
+                      {orderedValues.length > FACET_PAGE_SIZE && (
                         <div className="mb-2 flex items-center justify-between gap-2 px-1 text-xs">
                           <button
                             type="button"
@@ -396,14 +405,22 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                         )}
                         <div className={`${FACET_ITEM_GAP_CLASS} min-w-0 flex-1`}>
                         {pageValues.map((value, valueIndex) => {
-                          const countQuery = distinctCountQueryFor(queryTree, "value", value.uri, widget.uri, value, { direction: "forward" });
-                          const isZeroCount = facetCandidateCounts[countQuery] === 0;
+                          const countQuery = isGroupByFacet ? "" : distinctCountQueryFor(queryTree, "value", value.uri, widget.uri, value, { direction: "forward" });
+                          // The grouped facet and the center groups use the SAME
+                          // count-sorted FCT value-list query. Never run a separate
+                          // per-value count request for grouped rows: it can race
+                          // and produce red error badges for otherwise valid groups.
+                          const groupedCount = Number(value.columns?.[1]?.value);
+                          const hasGroupedCount = Number.isSafeInteger(groupedCount) && groupedCount >= 0;
+                          const isZeroCount = isGroupByFacet
+                            ? hasGroupedCount && groupedCount === 0
+                            : facetCandidateCounts[countQuery] === 0;
                           const valueInputId = `personal-facet-value-${personalWidgets.indexOf(widget)}-${valueIndex}`;
                           const valueLabel = numericLabelByLexical.get(value.uri) || (value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri);
                           const numericFormatted = numericLabelByLexical.has(value.uri) && valueLabel !== value.uri;
                           return (
                           <div
-                            key={`${facetValueKey(value)}-${valueIndex}`}
+                            key={facetValueKey(value)}
                             aria-disabled={widget.loading || undefined}
                             className={`flex w-full items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50 ${isGroupByFacet ? "" : "cursor-pointer"} ${widget.loading ? "opacity-45" : ""}`}
                           >
@@ -448,20 +465,26 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                                 </label>
                               )
                             )}
-                            <DistinctCount
-                              enabled={endpointReadyForQuery}
-                              tree={queryTree}
-                              kind="value"
-                              uri={value.uri}
-                              propertyUri={widget.uri}
-                              candidateValue={value}
-                              valueRelationship={{ direction: "forward" }}
-                              onCountChange={(query, count) =>
-                                setFacetCandidateCounts((current) =>
-                                  current[query] === count ? current : { ...current, [query]: count },
-                                )
-                              }
-                            />
+                            {isGroupByFacet ? (
+                              <span className="shrink-0 text-xs text-muted-foreground tabular-nums" aria-label="Members in group">
+                                {hasGroupedCount ? shortenCount(groupedCount) : "—"}
+                              </span>
+                            ) : (
+                              <DistinctCount
+                                enabled={endpointReadyForQuery}
+                                tree={queryTree}
+                                kind="value"
+                                uri={value.uri}
+                                propertyUri={widget.uri}
+                                candidateValue={value}
+                                valueRelationship={{ direction: "forward" }}
+                                onCountChange={(query, count) =>
+                                  setFacetCandidateCounts((current) =>
+                                    current[query] === count ? current : { ...current, [query]: count },
+                                  )
+                                }
+                              />
+                            )}
                           </div>
                           );
                         })}

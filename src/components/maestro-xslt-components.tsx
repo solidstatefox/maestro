@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import type { ReactPortal } from "react";
 import * as maplibregl from "maplibre-gl";
 import { maestroComponentRegistry } from "@/components/generated/maestro-component-registry";
+import { RecordValuePages } from "@/components/ui/record-value-pages";
 
 const SCALAR_NUMBERS = new Set([
   "zoom", "longitude", "latitude", "minZoom", "maxZoom", "bearing", "pitch",
@@ -32,6 +33,15 @@ const PROP_ALIASES: Record<string,string> = {
   showzoom: "showZoom", showcompass: "showCompass", showfullscreen: "showFullscreen",
   closebutton: "closeButton", defaultopen: "defaultOpen", defaultchecked: "defaultChecked",
   readonly: "readOnly", autofocus: "autoFocus", aschild: "asChild",
+  // SVG names are dashed in XML/XSLT but must be camelCase when React owns
+  // the rendered element. This normalization applies only at the React host;
+  // the RDF stylesheet and DOM serialization keep valid SVG names.
+  "stroke-width": "strokeWidth", "stroke-linecap": "strokeLinecap",
+  "stroke-linejoin": "strokeLinejoin", "stroke-dasharray": "strokeDasharray",
+  "stroke-dashoffset": "strokeDashoffset", "stroke-miterlimit": "strokeMiterlimit",
+  "fill-rule": "fillRule", "clip-rule": "clipRule", "clip-path": "clipPath",
+  "stop-color": "stopColor", "stop-opacity": "stopOpacity",
+  "fill-opacity": "fillOpacity", "stroke-opacity": "strokeOpacity",
 };
 
 function safeProperty(name: string, value: string): [string, unknown] | null {
@@ -57,6 +67,10 @@ function safeProperty(name: string, value: string): [string, unknown] | null {
 }
 
 function componentFor(node: Element) {
+  // Record values are primary content, not a decorative async widget. Mount
+  // their lightweight renderer immediately: an unresolved dynamic import left
+  // the XSLT portal host blank after its original child nodes were removed.
+  if (node.localName.toLowerCase() === "recordvaluepages") return RecordValuePages;
   return maestroComponentRegistry[node.localName.toLowerCase()] ?? null;
 }
 

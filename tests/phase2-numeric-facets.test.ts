@@ -59,7 +59,9 @@ test("Numeric provider extends scalar count without removing the count or breaki
 test("Numeric UI uses shadcn vertical range slider beside checkbox list and writes FCT bounds", () => {
   const ui=read("src/canvas/left/personal-numeric-facet.tsx");
   assert.match(ui,/orientation="vertical"/);
-  assert.match(ui,/h-52/);
+  assert.match(ui,/h-56/);
+  assert.match(ui,/disabled=\{refreshing \|\| Boolean\(error\)\}/);
+  assert.match(ui,/aria-busy=\{refreshing\}/);
   assert.match(ui,/onValueCommit/);
   assert.match(ui,/buildFctCountSparql/);
   const cards=read("src/canvas/left/personal-widget-cards.tsx");

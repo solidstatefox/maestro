@@ -34,3 +34,18 @@ test("Read guard retains the existing SELECT/ASK and maximum-size requirements",
   assert.equal(isBoundedReadOnlySparql("CONSTRUCT WHERE { ?s ?p ?o }", 100), false);
   assert.equal(isBoundedReadOnlySparql("", 100), false);
 });
+
+
+test("read guard accepts same-line PREFIX declarations without consuming SELECT", () => {
+  const historyData = `PREFIX vfct: <urn:vfct:> PREFIX bookmark: <http://www.w3.org/2002/01/bookmark#> SELECT ?s ?p ?o WHERE {
+    GRAPH <urn:personal:history> { <urn:visit> bookmark:recalls <urn:root> . <urn:root> (vfct:child|vfct:attribute)* ?s . ?s ?p ?o . }
+  } LIMIT 10001`;
+  assert.equal(isBoundedReadOnlySparql(historyData, 10000), true);
+  assert.equal(isBoundedReadOnlySparql('PREFIX ex: <urn:> SELECT ?s WHERE { ?s ex:p ?o } LIMIT 1', 10000), true);
+  assert.equal(isBoundedReadOnlySparql('PREFIX ex: <urn:> ASK WHERE { ?s ex:p ?o }', 10000), true);
+  assert.equal(isBoundedReadOnlySparql('PREFIX ex: <urn:> DEFINE input:inference "" SELECT ?s WHERE { ?s ex:p ?o } LIMIT 1', 10000), true);
+  assert.equal(isBoundedReadOnlySparql('PREFIX ex: <urn:> DELETE WHERE { ?s ex:p ?o }', 10000), false);
+  assert.equal(isBoundedReadOnlySparql('PREFIX ex: <urn:> SELECT ?s WHERE { SERVICE <urn:remote> { ?s ?p ?o } } LIMIT 1', 10000), false);
+  assert.equal(isBoundedReadOnlySparql('PREFIX ex: <urn:> DEFINE sql:log-enable 2 SELECT ?s WHERE { ?s ex:p ?o } LIMIT 1', 10000), false);
+  assert.equal(isBoundedReadOnlySparql('PREFIX ex: <urn:> SELECT ?s WHERE { ?s ?p ?o } DELETE { ?s ?p ?o }', 10000), false);
+});

@@ -1,6 +1,7 @@
 "use client";
 import { MAESTRO_KIND_IDS, getMaestroKindsRevision, subscribeMaestroKinds } from "@/lib/maestro-kinds";
 import { browserLog } from "@/lib/maestro-client-logging";
+import { ErrorDetails } from "@/components/ui/error-details";
 
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { readMaestroWidgetTimeouts } from "@/lib/maestro-query-timeouts";
@@ -19,19 +20,22 @@ import { CONFIGURE_HEADER_BACKGROUND_COLOR, CONFIGURE_HEADER_BORDER_COLOR } from
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 
 import { toLabel } from "@/lib/uri-labels";
+import { fctExamplePrefix } from "@/lib/fct-example-prefix";
 import { selectedFacetCount, selectedFacetLabel } from "@/lib/selected-facet-presentation";
 
 import { buildFctCountSparql, buildFctKindAvailabilitySparql } from "@/lib/fct-count-sparql";
 
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
-import { useFctQuery, fctQueryTreeApi } from "@/lib/fct-query-api";
+import { useFctQuery, fctQueryTreeApi, type FctQueryTree } from "@/lib/fct-query-api";
 import { OrUidLabel } from "@/components/ui/or-uid-label";
+import { allocateLetterLeadingFctId } from "@/lib/fct-node-identity";
 import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
 import { maestroQueryFetch } from "@/lib/client-query-cache";
 import { serializeFctQuery } from "@/lib/fct-query-api";
+import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Bot, SquarePlus, SquareX, SquareCheck, Split, Code2 } from "lucide-react";
+import { Bot, SquarePlus, SquareX, SquareCheck, Split, Code2, RotateCw } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 
@@ -40,6 +44,45 @@ import type { DistinctCountKind } from "@/lib/fct-query-api";
 import type { ConfigurePaneWorkspace } from "@/canvas/controllers/workspace-interfaces";
 import { createMaestroConfigureController, selectConfigure } from "@/lib/app-lifecycle/configure";
 import { createMaestroKindDiscoveryController, selectKinds } from "@/lib/app-lifecycle/kind-discovery";
+
+/** The Configure Kinds request is a SPARQL projection over this exact FCT
+ * scope, not a separate FCT view type. Show both without inventing one. */
+function configureKindsInspectorTabs(tree: FctQueryTree, direction: "property" | "role") {
+  const sourceXml = serializeFctQuery(tree);
+  const query = buildFctKindAvailabilitySparql(tree, direction);
+  return [
+    {
+      id: `configure-${direction}-kinds-xml`, label: "Kinds XML",
+      query: `${sourceXml}\n<!-- FCT source scope for Configure ${direction} Kinds. Classification is generated as SPARQL; no separate FCT Kinds view executes. -->`,
+      filename: `configure-${direction}-kinds-scope.xml`, language: "xml" as const,
+    },
+    {
+      id: `configure-${direction}-kinds-sparql`, label: "Kinds SPARQL",
+      query: query ?? "# The current FCT scope cannot be compiled into a Kinds availability query.",
+      filename: `configure-${direction}-kinds.sparql`, language: "sparql" as const,
+    },
+  ];
+}
+
+
+/** Show the actual FCT projection and corresponding compiled SPARQL. A
+ * distinct count is bound to the first discovered predicate, not fabricated
+ * as the number of facet descriptors. */
+function configureInspectorTabs(tree: FctQueryTree, valuesXml: string, direction: "property" | "role", firstIri?: string) {
+  const type = direction === "property" ? FCT_VIEW_TYPES.PROPERTIES : FCT_VIEW_TYPES.PROPERTIES_IN;
+  let compiled: string;
+  try { compiled = compileFctXmlToSparql(valuesXml).query; }
+  catch (error) { compiled = `# Compilation failed: ${error instanceof Error ? error.message : String(error)}`; }
+  const countTree = firstIri ? createDistinctCountQuery(tree, direction, firstIri, undefined, undefined, type) : null;
+  const countXml = countTree ? serializeFctQuery(countTree) : "<!-- No predicate has been discovered; a predicate-specific count is unavailable. -->";
+  const countSparql = countTree ? buildFctCountSparql(countTree) : null;
+  return [
+    { id: `${direction}-values-sparql`, label: `${direction === "property" ? "Properties" : "Roles"} SPARQL`, query: compiled, filename: `${direction}-values.sparql`, language: "sparql" as const },
+    { id: `${direction}-count-xml`, label: "Count XML (first predicate)", query: countXml, filename: `${direction}-first-count.xml`, language: "xml" as const },
+    { id: `${direction}-count-sparql`, label: "Count SPARQL (first predicate)", query: countSparql || "# No predicate-specific count query is available.", filename: `${direction}-first-count.sparql`, language: "sparql" as const },
+    ...configureKindsInspectorTabs(tree, direction),
+  ];
+}
 
 export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigurePaneWorkspace }) {
   const { tree: liveQuery, replaceTree: replaceLiveQuery } = useFctQuery();
@@ -62,12 +105,13 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
   useLayoutEffect(() => {
     configureController.send({ type: "SOURCE_CHANGED", sourceKey });
   }, [configureController, sourceKey]);
-  const orCounter = liveQuery.attributes.uctr || "a";
-  const orQuotaExceeded = parseInt(orCounter, 36) > 36;
+  const orQuotaExceeded = false; // Letter-leading base-36 IDs roll over beyond z.
   // Draft OR selections are intentionally isolated from the authoritative FCT tree.
   // A single replaceTree on Update preserves one query revision/History entry.
   const existingOrGroups = [...new Set([...workspace.activePropertyFilters, ...workspace.activeRoleFilters]
     .map(node => node.attributes.uid).filter((uid): uid is string => Boolean(uid)))].sort();
+  const freshOrGroup = allocateLetterLeadingFctId(liveQuery.attributes.uctr, "base36", new Set(existingOrGroups));
+  const orCounter = freshOrGroup.id;
   const selectedOrNode = (group: "Properties" | "Roles", iri: string) =>
     (group === "Properties" ? workspace.activePropertyFilters : workspace.activeRoleFilters)
       .find(node => node.name === (group === "Properties" ? "property" : "property-of") && node.attributes.iri === iri);
@@ -144,7 +188,9 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
     });
     const newIdUsed = Object.values(changes).includes(orCounter);
     replaceLiveQuery({ ...next,
-      attributes: { ...next.attributes, uctr: (parseInt(orCounter, 36) + (newIdUsed ? 1 : 0)).toString(36) },
+      attributes: { ...next.attributes, uctr: newIdUsed
+        ? freshOrGroup.counter
+        : orCounter },
       children: apply(next.children),
     });
     configureController.send({ type: "COMMITTED" });
@@ -214,6 +260,9 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
   const kindKey = defaultLeftTab === "facets" ? `${kindScopeXml}::patterns-${kindsRevision}::retry-${kindRetry}` : "";
   const kindState = selectKinds(kindSnapshot, kindKey);
   const checkingKinds = kindState.loading;
+  useEffect(() => {
+    if (kindState.error) browserLog.error("configure.kinds.failed", { error: kindState.error });
+  }, [kindState.error]);
   const kindAvailability = kindState.availability;
   useEffect(() => { kindController.start(); return () => kindController.stop(); }, [kindController]);
   useEffect(() => {
@@ -272,7 +321,7 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
     const known = MAESTRO_KIND_IDS;
     const found = kindAvailability?.[direction];
     // Keep any selected kind visible until the user changes it.
-    return known.filter(kind => !found || found.includes(kind) || kind === selected);
+    return known.filter(kind => (Array.isArray(found) && found.includes(kind)) || kind === selected);
   };
   return <>
 {defaultLeftTab === "facets" && (
@@ -441,7 +490,13 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                               </button>
                             </div>
                             {(group === "Properties" || group === "Roles") && checkingKinds && <span role="status" className="shrink-0 text-xs text-white/90"><ElapsedStatus label="Kinds" category="kinds" /></span>}
-                            {(group === "Properties" || group === "Roles") && kindState.error && !checkingKinds && <button type="button" className="rounded border border-white/50 px-2 py-1 text-xs text-white" title={kindState.error} onClick={() => setKindRetry(value => value + 1)}>Kinds unavailable</button>}
+                            {(group === "Properties" || group === "Roles") && kindState.error && !checkingKinds &&
+                              <span className="inline-flex items-center gap-1 rounded border border-white/40 bg-background px-1.5 py-0.5">
+                                <ErrorDetails prefix="Kinds unavailable" error={kindState.error} />
+                                <button type="button" className="inline-flex size-6 items-center justify-center rounded text-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Retry ${group} Kinds discovery`} title="Retry Kinds discovery" onClick={() => setKindRetry(value => value + 1)}>
+                                  <RotateCw className="size-3.5" aria-hidden="true" />
+                                </button>
+                              </span>}
                             {(group === "Properties" || group === "Roles") && kindState.ready && !checkingKinds && <select
                               aria-label={`${group} object kind`}
                               aria-busy={false}
@@ -458,12 +513,13 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                             }, {
                               id: "inspect-properties", label: "Inspect Properties query", icon: <Code2 className="size-4" />,
                               render: <QueryInspectorButton
-                                query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES)}\n<!-- FCT API option: view=properties -->`}
+                                query={queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES)}
                                 filename="properties-fct-query.xml"
                                 label="View Properties widget query"
                                 headerTone
-                                countQuery={propertyFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "property", propertyFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.PROPERTIES)) : undefined}
-                                countFilename="properties-first-item-count.sparql"
+                                primaryTabLabel="Properties XML"
+                                addr={queryTree.attributes.addr}
+                                extraQueries={configureInspectorTabs(queryTree, queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES), "property", propertyFacets[0]?.uri)}
                               />,
                               }]} />}
                             {group === "Roles" && <LeftWidgetButtonTray threshold={3} actions={[{
@@ -473,12 +529,13 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                             }, {
                               id: "inspect-roles", label: "Inspect Roles query", icon: <Code2 className="size-4" />,
                               render: <QueryInspectorButton
-                                query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES_IN)}\n<!-- FCT API option: view=properties-in -->`}
+                                query={queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES_IN)}
                                 filename="roles-fct-query.xml"
                                 label="View Roles widget query"
                                 headerTone
-                                countQuery={roleFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "role", roleFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.PROPERTIES_IN)) : undefined}
-                                countFilename="roles-first-item-count.sparql"
+                                primaryTabLabel="Roles XML"
+                                addr={queryTree.attributes.addr}
+                                extraQueries={configureInspectorTabs(queryTree, queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES_IN), "role", roleFacets[0]?.uri)}
                               />,
                               }]} />}
                             <Tooltip><TooltipTrigger render={<span
@@ -772,7 +829,7 @@ onMouseLeave={() => {
                                 ) : (
                                   <span className="min-w-0 flex-1 break-all">{item.label}</span>
                                 )}
-                                {(group === "Properties" || group === "Roles") && itemExample && <button type="button" title={itemExample.label} disabled={facetListStale || itemExample.termType !== "uri"} onClick={() => showClassResults(itemExample.uri, activeLeafId)} className="max-w-full break-words text-left text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>{(group === "Properties" ? activePropertyFilters : activeRoleFilters).some((node) => node.attributes.iri === item.key && node.children.some((child) => child.name === "value")) ? "i.e." : "e.g."}</em> {ellipsize(itemExample.label)}</button>}
+                                {(group === "Properties" || group === "Roles") && itemExample && <button type="button" title={itemExample.label} disabled={facetListStale || itemExample.termType !== "uri"} onClick={() => showClassResults(itemExample.uri, activeLeafId)} className="max-w-full break-words text-left text-[10px] leading-4 text-muted-foreground italic hover:text-foreground hover:underline disabled:cursor-not-allowed"><em>{fctExamplePrefix((group === "Properties" ? activePropertyFilters : activeRoleFilters).filter(node => node.attributes.iri === item.key).flatMap(node => node.children.filter(child => child.name === "value")))}</em> {ellipsize(itemExample.label)}</button>}
 								</div>
                                 {(group === "Properties" ||
                                   group === "Roles") && (

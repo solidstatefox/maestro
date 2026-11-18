@@ -10,6 +10,7 @@ import { streamProxyQuery, MAESTRO_EVENT_HEADER } from "@/lib/proxy-query-stream
 import { traceVirtuosoDispatch } from "@/lib/proxy-query-events";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
+import { validMaestroLanguage } from "@/lib/maestro-language";
 import { NextResponse } from "next/server";
 import { withGraphServerSlot } from "@/lib/server-query-scheduler";
 import { virtuosoRankFailure } from "@/lib/virtuoso-query-fallbacks";
@@ -19,6 +20,7 @@ import { describeUpstreamError } from "@/lib/upstream-error";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
 import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
 import { isBoundedReadOnlySparql } from "@/lib/sparql-read-guard";
+import { inspectPersonalUpdateGraphs } from "@/lib/personal-update-graph-guard";
 
 function isSafeIri(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 &&
@@ -326,14 +328,13 @@ async function handlePost(request: Request) {
       if (denied) return denied;
       const update = body.update.trim();
       const base = getUserGraph(request);
-      const clean = update.replace(/<[^>]*>|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
-      const graphs = [...update.matchAll(/\bGRAPH\s*<([^>]+)>/gi)].map(match => match[1]);
+      const { clean, graphs, hasImplicitGraph } = inspectPersonalUpdateGraphs(update);
       // Ordinary SPARQL LOAD is supported only for an authenticated user's
       // personal graph and a credential-free HTTP(S) source URL. This replaces
       // the old /rdf-loader route without allowing arbitrary update programs.
       const isLoad = /^LOAD\s+<([^<>]+)>\s+INTO\s+GRAPH\s+<([^<>]+)>$/i.exec(update);
       if (/^LOAD\b/i.test(update)) {
-        if (!isLoad || isLoad[1].length > 4096 || isLoad[2].length > 4096 ||
+        if (!isLoad || hasImplicitGraph || isLoad[1].length > 4096 || isLoad[2].length > 4096 ||
             isLoad[2] !== graphs[0] || graphs.length !== 1) {
           return NextResponse.json({error: "Expected LOAD <HTTP(S) RDF URL> INTO GRAPH <personal graph>."}, {status:400});
         }
@@ -352,11 +353,15 @@ async function handlePost(request: Request) {
       // limit. Large RDF archive imports must remain a single operation so that
       // blank-node labels refer to the same resources across triples.
       const maxUpdateLength = /^INSERT\s+DATA\s*\{/i.test(update) ? 2_000_000 : 100_000;
-      if (!update || update.length > maxUpdateLength || graphs.length === 0 ||
+      if (!update || update.length > maxUpdateLength || hasImplicitGraph || graphs.length === 0 ||
           !graphs.every(uri => uri.startsWith(`${base}/`) || uri.startsWith(`${base}#`)) ||
           /\b(?:SERVICE|LOAD|CREATE|DROP|MOVE|COPY|ADD|WITH|USING|FROM)\b/i.test(clean) ||
           !/^(?:INSERT|DELETE|CLEAR)\b/i.test(update)) {
-        return NextResponse.json({ error: "SPARQL Update may affect only explicit named graphs in the authenticated personal namespace." }, { status: 400 });
+        const reason = hasImplicitGraph ? "Variable or implicit graph targets are not permitted."
+          : graphs.some(uri => !(uri.startsWith(`${base}/`) || uri.startsWith(`${base}#`)))
+            ? "The update references a graph outside the authenticated personal namespace."
+            : "Only bounded INSERT, DELETE and CLEAR operations on explicit personal named graphs are permitted.";
+        return NextResponse.json({ error: `SPARQL Update rejected: ${reason}` }, { status: 400 });
       }
       // Bookmark authorization applies to writes to the actual personal Status
       // graph, never to declarations of the RDF vocabulary in /shacl/policies.
@@ -397,11 +402,24 @@ async function handlePost(request: Request) {
       // Scheduler-only priority hint, not a Maestro domain query operation.
       // An untrusted client cannot mark an arbitrary expensive SELECT as urgent.
       const autocomplete = body?.requestClass === "autocomplete";
-      if (autocomplete && (query.length > 1600 ||
-          !/^SELECT DISTINCT \?uri \?label WHERE \{[\s\S]*\} (?:ORDER BY DESC \(\<LONG::IRI_RANK\> \(\?uri\)\)|ORDER BY LCASE\(STR\(\?label\)\)) LIMIT (?:[1-9]|10)$/i.test(query) ||
-          !/\bCONTAINS\s*\(/i.test(query) ||
-          /\b(?:SERVICE|GROUP\s+BY|COUNT\s*\(|OPTION|UNION|VALUES|CONSTRUCT|DESCRIBE)\b/i.test(query))) {
-        return NextResponse.json({error:"Autocomplete priority is restricted to bounded rdfs:label lookups."},{status:400});
+      // A priority autocomplete request is a bounded ranked *resource* lookup.
+      // The single-query form now enriches only the inner top N URIs with
+      // OPTIONAL rdf:type and removes asserted superclasses. Do not reject
+      // legitimate GROUP BY / OPTIONAL merely because class metadata is in the
+      // same request, and do not promote arbitrary read-only SPARQL to priority.
+      const candidateLimits = [...query.matchAll(/\bLIMIT\s+(\d+)\b/gi)].map(match => Number(match[1]));
+      const mergedRankedAutocomplete = /^SELECT\s+\?uri\s+\?label\s+\?type\s+WHERE\s*\{\s*\{\s*SELECT\s+\?uri\s+\(SAMPLE\(\?matchedLabel\)\s+AS\s+\?label\)/i.test(query) &&
+        /GROUP\s+BY\s+\?uri\s+ORDER\s+BY\s+DESC\s*\(\s*<LONG::IRI_RANK>\s*\(\?uri\)\s*\)/i.test(query) &&
+        /\?matchedLabel\s+bif:contains\s+/i.test(query) &&
+        /FILTER\(LCASE\(STR\(\?matchedLabel\)\)\s*=\s*/i.test(query) &&
+        /OPTIONAL\s*\{[\s\S]*\?uri\s+<http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#type>\s+\?type/i.test(query) &&
+        /FILTER\s+NOT\s+EXISTS\s*\{/i.test(query) &&
+        /<http:\/\/www\.w3\.org\/2000\/01\/rdf-schema#subClassOf>\+\s+\?type/i.test(query) &&
+        /ORDER\s+BY\s+DESC\s*\(\s*<LONG::IRI_RANK>\s*\(\?uri\)\s*\)[\s\S]*$/.test(query);
+      if (autocomplete && (query.length > 4000 || !mergedRankedAutocomplete ||
+          candidateLimits.length !== 1 || candidateLimits[0] < 1 || candidateLimits[0] > 10 ||
+          /\b(?:SERVICE|UNION|VALUES|CONSTRUCT|DESCRIBE|INSERT|DELETE|LOAD|CLEAR|DROP|CREATE)\b/i.test(query))) {
+        return NextResponse.json({error:"Autocomplete priority requires an indexed, ranked, bounded URI lookup with optional class enrichment."},{status:400});
       }
       diagnosticOperation = autocomplete ? "priority URI autocomplete" : "generic read-only SPARQL";
       diagnosticQuery = query;
@@ -477,24 +495,27 @@ async function handlePost(request: Request) {
     // The Record properties are projected inside the SAME request so that
     // blank-node identity is never compared between independent result sets.
     if (body?.recordBlankNodes && typeof body.recordBlankNodes === "object") {
-      const { queryXml, parent, predicate, root, preferredLanguage, limit, graphs } = body.recordBlankNodes as {
-        queryXml?: unknown; parent?: unknown; predicate?: unknown; root?: unknown;
+      const { queryXml, parent, predicate, root, unanchored, preferredLanguage, limit, graphs } = body.recordBlankNodes as {
+        queryXml?: unknown; parent?: unknown; predicate?: unknown; root?: unknown; unanchored?: unknown;
         preferredLanguage?: unknown; limit?: unknown; graphs?: unknown;
       };
       const namedGraphs = graphs === undefined ? [] : uniqueIris(graphs, 500);
       const rootFocus = root === true;
-      if ((!rootFocus && (!isSafeIri(parent) || !isSafeIri(predicate))) ||
-          (rootFocus && (parent !== undefined || predicate !== undefined)) || !namedGraphs ||
+      const unanchoredFocus = unanchored === true;
+      if ((!rootFocus && !unanchoredFocus && (!isSafeIri(parent) || !isSafeIri(predicate))) ||
+          ((rootFocus || unanchoredFocus) && (parent !== undefined || predicate !== undefined)) ||
+          (rootFocus && unanchoredFocus) || !namedGraphs ||
           typeof queryXml !== "string" || queryXml.length > 100_000 ||
           typeof preferredLanguage !== "string" || (preferredLanguage !== "all" && !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/.test(preferredLanguage)) ||
           typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 10000) {
-        return NextResponse.json({ error: "A scoped list-values FCT query, URI parent, predicate, preferred language, limit (1–10000), and valid graph list are required." }, { status: 400 });
+        return NextResponse.json({ error: "A bounded list-values FCT query, URI anchor or explicit unanchored selection, preferred language, limit (1–10000), and valid graph list are required." }, { status: 400 });
       }
       let compiled;
       try {
-        compiled = compileFctXmlToSparql(queryXml);
+        compiled = compileFctXmlToSparql(queryXml, undefined, false, false, false, false, undefined, validMaestroLanguage(request.headers.get("x-maestro-language")) ?? "en");
         if (compiled.view !== "list-values" || compiled.limit > limit ||
-            (!rootFocus && (compiled.offset !== 0 || !queryXml.includes(parent as string) || !queryXml.includes(predicate as string)))) {
+            (!rootFocus && !unanchoredFocus && (compiled.offset !== 0 ||
+              !queryXml.includes(parent as string) || !queryXml.includes(predicate as string)))) {
           throw new Error("The blank-node Record query must be a bounded, scoped list-values query.");
         }
         if (rootFocus && compiled.target !== "?s1") {

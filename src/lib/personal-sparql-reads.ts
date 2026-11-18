@@ -73,51 +73,48 @@ export async function discoverAnalyses(classes: string[], signal?: AbortSignal, 
 }
 
 export type DiscoveredViewProvider = {uri: string; label: string; icon?: string; template: string; matchedClass: string; stylesheet: string};
-/** Preserve the existing SHACL class-join and dual Approved requirement. */
+/** A Perspective is an effectively approved provider whose declared SHACL
+ * input applies to the active FCT population (or whose contextual query shape
+ * has already matched). SHACL shapes are not independent approval subjects.
+ * The caller supplies actual population classes, not just syntactic FCT class
+ * constraints, so a query of EntryPoint resources remains eligible without a
+ * hand-authored <class> filter. */
 export async function discoverViews(classes: string[], signal?: AbortSignal, queryProviders: string[] = []): Promise<DiscoveredViewProvider[]> {
-  const requested = [...new Set(classes.filter(safeIri))].slice(0, 50);
-  const extra = [...new Set(queryProviders.filter(safeIri))].slice(0,100);
-  if (!requested.length && !extra.length) return [];
-  const rows = requested.length ? await personalSelect(({shapes, status}) => `PREFIX sh: <${SH}>
-PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
-SELECT DISTINCT ?policy ?class ?label ?template ?stylesheet WHERE {
+  const requested = [...new Set(classes.filter(safeIri))].slice(0, 70);
+  const contextual = [...new Set(queryProviders.filter(safeIri))].slice(0, 100);
+  if (!requested.length && !contextual.length) return [];
+  const classBranch = requested.length ? `{
+      VALUES ?matchedClass { ${requested.map(iri => `<${iri}>`).join(" ")} }
+      ?inputShape (sh:class|sh:targetClass) ?matchedClass .
+    }` : "";
+  // Contextual providers are identifiers already accepted by the current
+  // query's validated SHACL History context. They still require approval.
+  const contextualBranch = contextual.length ? `{
+      VALUES ?provider { ${contextual.map(iri => `<${iri}>`).join(" ")} }
+    }` : "";
+  const branches = [classBranch, contextualBranch].filter(Boolean).join(" UNION ");
+  const rows = await personalSelect(({ shapes }) => `PREFIX sh: <${SH}> PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
+SELECT DISTINCT ?provider ?matchedClass ?label ?template ?stylesheet WHERE {
   GRAPH <${shapes}> {
-    VALUES ?class { ${requested.map(iri => `<${iri}>`).join(" ")} }
-    ?policy sh:targetClass ?class ; mui:widget ?widgetClass .
     ?provider a mui:Provider ; mui:widget ?template ; mui:accepts ?inputShape .
-    ?inputShape a mui:InputShape ; sh:class ?class .
-    ?template rdf:type/rdfs:subClassOf* ?widgetClass .
-    OPTIONAL { ?policy rdfs:label ?label }
-    ?template (rdf:value|mui:templateContent) ?stylesheet .
+    ?template a mui:PerspectiveWidget ; (rdf:value|mui:templateContent) ?stylesheet .
+    OPTIONAL { ?provider rdfs:label ?label }
+    ${branches}
     FILTER(CONTAINS(STR(?stylesheet), 'xsl:stylesheet') || CONTAINS(STR(?stylesheet), 'xsl:transform'))
   }
-  GRAPH <${status}> { ?policy mui:status mui:Approved }
-  GRAPH <${shapes}> { ?curator a mui:CurationProvider ; mui:widget/rdf:rest*/rdf:first ?provider .
-    ?provider mui:implementationDigest ?version }
-  GRAPH <${status}> { ?curator mui:status mui:Approved ; mui:approvedDigest ?grant .
-    ?grant mui:forProvider ?provider ; mui:implementationDigest ?version }
-
-} ORDER BY ?label LIMIT 50`, signal) : [];
-  const resultViews = rows.map(row => ({uri:get(row,"policy"),matchedClass:get(row,"class"),
-    label:get(row,"label") || get(row,"policy") || "View",template:get(row,"template"),
-    stylesheet:get(row,"stylesheet")}))
-    .filter(row => row.uri && row.template && row.stylesheet && row.stylesheet.length <= 250000);
-  if (!extra.length) return resultViews;
-  const queryViews = await personalSelect(({shapes}) => `PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
-SELECT DISTINCT ?provider ?label ?template ?stylesheet WHERE { GRAPH <${shapes}> {
-  VALUES ?provider { ${extra.map(uri=>`<${uri}>`).join(" ")} }
-  ?provider a mui:Provider ; mui:widget ?template .
-  ?template a mui:PerspectiveWidget ; (rdf:value|mui:templateContent) ?stylesheet .
-  OPTIONAL { ?provider rdfs:label ?label }
-} } LIMIT 100`, signal);
-  // Query-target providers have already passed SHACL Core. Effective approval
-  // is still checked independently against the user's RDF approval status.
+} LIMIT 100`, signal);
+  const byProvider = new Map<string, DiscoveredViewProvider>();
+  for (const row of rows) {
+    const uri = get(row, "provider"), template = get(row, "template"), stylesheet = get(row, "stylesheet");
+    if (!safeIri(uri) || !safeIri(template) || !stylesheet || stylesheet.length > 250000) continue;
+    if (!byProvider.has(uri)) byProvider.set(uri, {
+      uri, matchedClass: get(row, "matchedClass"), label: get(row, "label") || uri,
+      template, stylesheet,
+    });
+  }
+  if (!byProvider.size) return [];
   const { readClientPolicyApprovals } = await import("@/lib/client-policy-approvals");
-  const decisions=await readClientPolicyApprovals(queryViews.map(row=>get(row,"provider")),signal);
-  const approved=new Set(decisions.filter(d=>d.status==="Approved").map(d=>d.uri));
-  const extraViews=queryViews.filter(row=>approved.has(get(row,"provider"))).map(row=>({
-    uri:get(row,"provider"),matchedClass:"",label:get(row,"label")||get(row,"provider"),
-    template:get(row,"template"),stylesheet:get(row,"stylesheet")
-  })).filter(row=>row.uri&&row.template&&row.stylesheet&&row.stylesheet.length<=250000);
-  return [...new Map([...resultViews,...extraViews].map(view=>[view.uri,view])).values()];
+  const decisions = await readClientPolicyApprovals([...byProvider.keys()], signal);
+  const approved = new Set(decisions.filter(decision => decision.status === "Approved").map(decision => decision.uri));
+  return [...byProvider.values()].filter(view => approved.has(view.uri));
 }

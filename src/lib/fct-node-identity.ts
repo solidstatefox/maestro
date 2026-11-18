@@ -33,9 +33,30 @@ export function isValidFctNodeId(id: string | undefined): id is string {
   return Number.isSafeInteger(n) && n >= 10 && n.toString(36) === id && nextLetterLeadingFctCounter(n) === n;
 }
 
+/** All FCT-generated identifiers share one allocator. Counter *storage* remains
+ * compatible: ctr is decimal, uctr/rctr are base-36 next-to-allocate offsets. */
+export type FctCounterEncoding = "decimal" | "base36";
+export function parseFctIdCounter(value: string | undefined, encoding: FctCounterEncoding): number {
+  if (!value || !(encoding === "decimal" ? /^\d+$/ : /^[0-9a-z]+$/).test(value)) return 10;
+  const n = Number.parseInt(value, encoding === "decimal" ? 10 : 36);
+  return Number.isSafeInteger(n) && n >= 10 ? nextLetterLeadingFctCounter(n) : 10;
+}
+export function serializeFctIdCounter(n: number, encoding: FctCounterEncoding): string {
+  return nextLetterLeadingFctCounter(n).toString(encoding === "decimal" ? 10 : 36);
+}
+export function allocateLetterLeadingFctId(
+  counter: string | undefined, encoding: FctCounterEncoding,
+  reserved: ReadonlySet<string> = new Set(),
+): { id: string; counter: string } {
+  let next = parseFctIdCounter(counter, encoding);
+  let id: string;
+  do { id = next.toString(36); next = nextLetterLeadingFctCounter(next + 1); }
+  while (reserved.has(id));
+  return { id, counter: serializeFctIdCounter(next, encoding) };
+}
+
 function offset(value: string | undefined): number {
-  const n = Number(value);
-  return nextLetterLeadingFctCounter(value !== undefined && Number.isSafeInteger(n) && n >= 10 ? n : 10);
+  return parseFctIdCounter(value, "decimal");
 }
 
 /** XML @id is a base-36 numeral allocated from the monotonic ctr (decimal).
@@ -57,14 +78,10 @@ export function ensureFctQueryIds<T extends IdentifiedQueryNode>(tree: Identifie
   let counter = nextLetterLeadingFctCounter(Math.max(offset(tree.attributes.ctr), highestId + 1));
   const used = new Set<string>();
   const allocate = (): string => {
-    let candidate: string;
-    do {
-      counter = nextLetterLeadingFctCounter(counter);
-      candidate = counter.toString(36);
-      counter = nextLetterLeadingFctCounter(counter + 1);
-    } while (reserved.has(candidate) || used.has(candidate));
-    used.add(candidate);
-    return candidate;
+    const allocated = allocateLetterLeadingFctId(String(counter), "decimal", new Set([...reserved, ...used]));
+    counter = parseFctIdCounter(allocated.counter, "decimal");
+    used.add(allocated.id);
+    return allocated.id;
   };
   const take = (requested?: string): string => {
     if (compact(requested) && !used.has(requested)) {
@@ -83,7 +100,60 @@ export function ensureFctQueryIds<T extends IdentifiedQueryNode>(tree: Identifie
     return { ...node, id, ...(uiKey ? { uiKey } : {}), attributes, children: node.children.map(child => update(child as T)) };
   };
   const children = tree.children.map(update);
-  return { ...tree, attributes: { ...tree.attributes, id: rootId, ctr: String(counter), uctr: /^[0-9a-z]+$/.test(tree.attributes.uctr ?? "") && parseInt(tree.attributes.uctr, 36) >= 10 ? tree.attributes.uctr : "a" }, children };
+
+  // A UID identifies a shared OR group (several nodes may carry the same UID),
+  // while an RID identifies one relationship occurrence. Both are independent
+  // of @id and share its letter-leading base-36 allocation policy.
+  const groupMapping = new Map<string, string>();
+  const allGroupIds = new Set<string>();
+  const allRids = new Set<string>();
+  let nextGroup = parseFctIdCounter(tree.attributes.uctr, "base36");
+  let nextRelation = parseFctIdCounter(tree.attributes.rctr, "base36");
+  const reserveExisting = (nodes: T[]): void => {
+    for (const node of nodes) {
+      if (isValidFctNodeId(node.attributes.uid)) {
+        allGroupIds.add(node.attributes.uid);
+        nextGroup = Math.max(nextGroup, Number.parseInt(node.attributes.uid, 36) + 1);
+      }
+      if ((node.name === "property" || node.name === "property-of") && isValidFctNodeId(node.attributes.rid)) {
+        allRids.add(node.attributes.rid);
+        nextRelation = Math.max(nextRelation, Number.parseInt(node.attributes.rid, 36) + 1);
+      }
+      reserveExisting(node.children as T[]);
+    }
+  };
+  reserveExisting(children);
+  nextGroup = nextLetterLeadingFctCounter(nextGroup);
+  nextRelation = nextLetterLeadingFctCounter(nextRelation);
+  const assignedRids = new Set<string>();
+  const ensureRelations = (nodes: T[]): T[] => nodes.map((node) => {
+    const attributes = { ...node.attributes };
+    if (node.name === "property" || node.name === "property-of") {
+      if (!isValidFctNodeId(attributes.rid) || assignedRids.has(attributes.rid)) {
+        const next = allocateLetterLeadingFctId(serializeFctIdCounter(nextRelation, "base36"), "base36", new Set([...allRids, ...assignedRids]));
+        attributes.rid = next.id;
+        nextRelation = parseFctIdCounter(next.counter, "base36");
+      }
+      assignedRids.add(attributes.rid);
+    }
+    // Numeric-leading legacy group identities are migrated *as groups*, not
+    // separately per member; preserve valid existing group IDs unchanged.
+    if (attributes.uid && !isValidFctNodeId(attributes.uid)) {
+      const legacy = attributes.uid;
+      if (!groupMapping.has(legacy)) {
+        const next = allocateLetterLeadingFctId(serializeFctIdCounter(nextGroup, "base36"), "base36", allGroupIds);
+        groupMapping.set(legacy, next.id);
+        allGroupIds.add(next.id);
+        nextGroup = parseFctIdCounter(next.counter, "base36");
+      }
+      attributes.uid = groupMapping.get(legacy)!;
+    }
+    return { ...node, attributes, children: ensureRelations(node.children as T[]) };
+  });
+  const relatedChildren = ensureRelations(children);
+  return { ...tree, attributes: { ...tree.attributes, id: rootId,
+    ctr: String(counter), uctr: serializeFctIdCounter(nextGroup, "base36"),
+    rctr: serializeFctIdCounter(nextRelation, "base36") }, children: relatedChildren };
 }
 
 /** Allocate a compact ID when building a new FCT node. Returns a new tree
@@ -93,12 +163,6 @@ export function nextFctQueryId<T extends IdentifiedQueryNode>(tree: IdentifiedQu
   const ids = new Set<string>([normalized.attributes.id]);
   const visit = (node: T): void => { ids.add(node.id); node.children.forEach(child => visit(child as T)); };
   normalized.children.forEach(visit);
-  let counter = offset(normalized.attributes.ctr);
-  let id: string;
-  do {
-    counter = nextLetterLeadingFctCounter(counter);
-    id = counter.toString(36);
-    counter = nextLetterLeadingFctCounter(counter + 1);
-  } while (ids.has(id));
-  return { id, ctr: String(counter) };
+  const allocated = allocateLetterLeadingFctId(normalized.attributes.ctr, "decimal", ids);
+  return { id: allocated.id, ctr: allocated.counter };
 }

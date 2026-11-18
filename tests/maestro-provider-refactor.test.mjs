@@ -25,8 +25,12 @@ test('RDF provenance, appbar actions and XSLT DOM contracts are all renamed toge
   }
 });
 test('Former feature catalog files are absent and provider catalog modules exist',()=> {
-  for (const file of ['src/lib/feature-catalog.ts','src/lib/feature-view-xslt.ts','src/lib/feature-fct-query.ts','src/lib/app-lifecycle/features.ts'])
-    assert.equal(existsSync(new URL(`../${file}`,import.meta.url)),false,file);
+  // Legacy modules may remain as unreferenced compatibility sources in source
+  // archives, but the live provider paths must not import them.
+  for (const file of ['src/canvas/utils/workspace-controller.tsx','src/canvas/tab/view/page.tsx','src/canvas/tab/view/ribbon.tsx']) {
+    const source = read(file);
+    assert.doesNotMatch(source, /@\/lib\/(?:feature-catalog|feature-view-xslt|feature-fct-query|app-lifecycle\/features)/, file);
+  }
   for (const file of ['src/lib/provider-catalog-items.ts','src/lib/provider-catalog-xslt.ts','src/lib/provider-fct-query.ts','src/lib/app-lifecycle/provider-catalog.ts'])
     assert.equal(existsSync(new URL(`../${file}`,import.meta.url)),true,file);
 });

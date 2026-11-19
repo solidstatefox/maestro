@@ -21,3 +21,4 @@ export function personalWriteEndpoint(session: {graphStore:string;authType?:stri
   read.pathname = read.pathname.replace(/\/sparql\/?$/i, `/${session.authType}`);
   return read.toString();
 }
+

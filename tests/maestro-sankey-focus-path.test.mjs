@@ -10,11 +10,13 @@ test('Sankey scope node uses focus breadcrumb path, not generic FCT page',()=>{
   assert.match(canvas,/projectSankeyCoverage\(axes,resources,focusPath\)/);
   assert.doesNotMatch(project,/name:"FCT page"/);
 });
-test('prebuild removes only retired Sunburst component after ZIP overlay',()=>{
+test('prebuild removes retired Sunburst and unused chart kit without touching provider RDF',()=>{
   const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));
   const cleaner=fs.readFileSync('tools/clean-obsolete-sunburst.mjs','utf8');
   assert.match(pkg.scripts.prebuild,/clean-obsolete-sunburst/);
   assert.match(pkg.scripts.pretest,/clean-obsolete-sunburst/);
   assert.match(cleaner,/category-sunburst\.tsx/);
-  assert.doesNotMatch(cleaner,/rmSync|rmdirSync/);
+  assert.match(cleaner,/rmSync\(obsoleteDirectory, \{ recursive: true, force: true \}\)/);
+  assert.match(cleaner,/src\/components\/ui\/charts/);
+  assert.doesNotMatch(cleaner,/rmSync\([^)]*graph\//);
 });

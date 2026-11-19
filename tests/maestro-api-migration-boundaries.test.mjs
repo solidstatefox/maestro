@@ -33,11 +33,12 @@ test('IteraCompute key stays in IndexedDB, not URL, FCT query or server registry
   const client=read('src/lib/iteracompute-credential.ts');
   const sheet=read('src/canvas/sheet/settings-pane.tsx');
   const transport=read('src/app/proxy/api/service/route.ts');
-  const survey=read('src/lib/otc-runtime.ts');
+  const otc=read('src/lib/client-otc-runner.ts');
   assert.match(client,/maestroStorageSet\(ITERACOMPUTE_KEY_STORAGE, key\)/);
   assert.doesNotMatch(client,/(?:localStorage|window\.location|URLSearchParams)/);
   assert.match(sheet,/htmlFor="maestro-iteracompute-key"/);
   assert.match(transport,/const secret = suppliedKey/);
   assert.doesNotMatch(transport,/process\.env\.ITERACOMPUTE_API_KEY|operation\.secretEnv/);
-  assert.match(survey,/request\.headers\.get\("x-maestro-iteracompute-key"\)/);
+  assert.match(transport,/request\.headers\.get\("x-maestro-iteracompute-key"\)/);
+  assert.match(otc,/callOpenAiChatCompletions\(payload,signal\)/);
 });

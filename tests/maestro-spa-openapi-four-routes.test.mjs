@@ -39,7 +39,7 @@ test('no fifth route; no active legacy server operations after cleanup',()=>{
 });
 test('browser-side providers and OTC workflows no longer invoke Maestro RPC',()=>{
   const paths=['src/canvas/controllers/authentication.ts','src/canvas/tab/view/ribbon.tsx',
-    'src/components/otc-workbench.tsx','src/components/ai-elements/basic-chat.tsx',
+    'src/lib/client-otc-runner.ts','src/components/ai-elements/basic-chat.tsx',
     'src/canvas/utils/workspace-controller.tsx'];
   for(const path of paths){const code=read(path);assert.doesNotMatch(code,/\/proxy\/api\/forward|service\?service=maestro/,path);}
 });

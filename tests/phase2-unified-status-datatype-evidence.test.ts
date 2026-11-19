@@ -44,9 +44,10 @@ test('Bookmark animation applies to its button and both inspectors have executab
 
 
 test('one personal status graph is authoritative; no legacy migration or compatibility scan', () => {
-  const server = read('src/lib/personal-status-server.ts');
-  assert.doesNotMatch(server, /migrateLegacyStatuses|legacyStatusMigrationComplete|oldApprovals|oldHide/);
-  assert.match(server, /getPersonalStatusGraph/);
+  const graph = read('src/lib/personal-status-graph.ts');
+  assert.doesNotMatch(graph, /migrateLegacyStatuses|legacyStatusMigrationComplete|oldApprovals|oldHide/);
+  assert.match(graph, /getPersonalStatusGraph/);
+  assert.match(graph, /\$\{getUserGraph\(request\)\}\/status/);
   const policy = read('src/lib/policy-approval-store.ts');
   assert.match(policy, /statusGraph\(request\)/);
 });

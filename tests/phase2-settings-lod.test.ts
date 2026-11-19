@@ -47,18 +47,12 @@ test("query src provenance drives the blue Return control through the controller
   assert.match(header, /returnButtonVisible/);
 });
 
-test("Categories ingest RDF into one personal ontology graph and dedupe source namespaces in the browser", () => {
-  const importer = read("src/lib/client-ontology-ingest.ts");
-  assert.match(importer, /parseClientRdf/);
-  assert.match(importer, /clientRdfInsert/);
-  assert.match(importer, /updatePersonal\(/);
-  assert.match(importer, /personalContext\(/);
-  assert.match(importer, /const graph=`\$\{ctx\.base\}\/ontology`/);
-  assert.match(importer, /const namespaces=new Map/);
-  assert.match(importer, /namespaceOf/);
-  assert.match(importer, /OWL_IMPORTS/);
-  assert.match(importer, /RDFS_IS_DEFINED_BY/);
-  assert.match(importer, /const seen=new Set/);
-  assert.match(importer, /MAX_DOCUMENTS/);
+test("Categories metadata is read-only, scoped to personal ontology/cache graphs, without implicit RDF import", () => {
+  const metadata = read("src/lib/client-ontology-metadata.ts");
+  assert.match(metadata, /selectPersonal\(/);
+  assert.match(metadata, /const ctx=await personalContext\(\)/);
+  assert.match(metadata, /ontology-cache/);
+  assert.match(metadata, /VALUES \?g/);
+  assert.doesNotMatch(metadata, /updatePersonal\(|LOAD <|await fetch\(/);
   assert.ok(!read("src/app/proxy/api/service/route.ts").includes('ingestOntologyDocuments'));
 });

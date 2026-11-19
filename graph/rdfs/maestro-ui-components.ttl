@@ -35,8 +35,6 @@ mui:matchedRecord a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ; rdfs
 <gttp://ggg.maestro.ui/component/canvas-tab-browse-page> a mui:UIComponent ; rdfs:label "canvas tab browse page" .
 <gttp://ggg.maestro.ui/component/canvas-tab-browse-results-view> a mui:UIComponent ; rdfs:label "canvas tab browse results view" .
 <gttp://ggg.maestro.ui/component/canvas-tab-browse-ribbon> a mui:UIComponent ; rdfs:label "canvas tab browse ribbon" .
-<gttp://ggg.maestro.ui/component/canvas-tab-publish-page> a mui:UIComponent ; rdfs:label "canvas tab publish page" .
-<gttp://ggg.maestro.ui/component/canvas-tab-publish-ribbon> a mui:UIComponent ; rdfs:label "canvas tab publish ribbon" .
 <gttp://ggg.maestro.ui/component/canvas-tab-view-map-perspective> a mui:UIComponent ; rdfs:label "canvas tab view map perspective" .
 <gttp://ggg.maestro.ui/component/canvas-tab-view-page> a mui:UIComponent ; rdfs:label "canvas tab view page" .
 <gttp://ggg.maestro.ui/component/canvas-tab-view-personal-perspectives> a mui:UIComponent ; rdfs:label "canvas tab view personal perspectives" .
@@ -54,12 +52,9 @@ mui:matchedRecord a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ; rdfs
 <gttp://ggg.maestro.ui/component/canvas-workspace-skeleton> a mui:UIComponent ; rdfs:label "canvas workspace skeleton" .
 <gttp://ggg.maestro.ui/component/components-ai-elements-basic-chat> a mui:UIComponent ; rdfs:label "components ai elements basic chat" .
 <gttp://ggg.maestro.ui/component/components-ai-elements-prompt-input> a mui:UIComponent ; rdfs:label "components ai elements prompt input" .
-<gttp://ggg.maestro.ui/component/components-ai-elements-task> a mui:UIComponent ; rdfs:label "components ai elements task" .
 <gttp://ggg.maestro.ui/component/components-generated-maestro-component-registry> a mui:UIComponent ; rdfs:label "components generated maestro component registry" .
 <gttp://ggg.maestro.ui/component/components-maestro-analysis-data-table> a mui:UIComponent ; rdfs:label "components maestro analysis data table" .
 <gttp://ggg.maestro.ui/component/components-maestro-xslt-components> a mui:UIComponent ; rdfs:label "components maestro xslt components" .
-<gttp://ggg.maestro.ui/component/components-otc-workbench> a mui:UIComponent ; rdfs:label "components otc workbench" .
-<gttp://ggg.maestro.ui/component/components-path-explorer> a mui:UIComponent ; rdfs:label "components path explorer" .
 <gttp://ggg.maestro.ui/component/components-theme-provider> a mui:UIComponent ; rdfs:label "components theme provider" .
 <gttp://ggg.maestro.ui/component/components-theme-toggle> a mui:UIComponent ; rdfs:label "components theme toggle" .
 <gttp://ggg.maestro.ui/component/components-ui-alert> a mui:UIComponent ; rdfs:label "components ui alert" .

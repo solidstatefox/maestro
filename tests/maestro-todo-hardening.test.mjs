@@ -46,7 +46,7 @@ test('URI autocomplete uses high priority bounded proxy transport and invoked ca
   assert.match(read('src/canvas/top/root-uri-autocomplete.tsx'),/requestClass:"autocomplete"/);
 });
 test('IteraCompute has no server environment key fallback',()=>{
-  for(const filename of ['src/lib/otc-runtime.ts','src/lib/openapi-registry.ts','src/app/proxy/api/service/route.ts'])
+  for(const filename of ['src/lib/client-otc-runner.ts','src/lib/openapi-registry.ts','src/app/proxy/api/service/route.ts'])
     assert.doesNotMatch(read(filename),/ITERACOMPUTE_API_KEY|secretEnv/);
   assert.match(read('src/lib/openapi-registry.ts'),/createChatCompletion/);
 });

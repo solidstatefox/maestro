@@ -33,38 +33,18 @@ test('effective provider approval considers direct status or curator implementat
   assert.match(source,/category: !known\?null:present\("isClassPolicy"\)\?"Policy":"Provider"/);
 });
 
-test('URI suggestion type enrichment is optional, bounded, hierarchy-aware and never changes rank',()=>{
-  const typeSource=read('src/lib/uri-autocomplete-type.ts');
-  assert.match(typeSource,/rdfs:subClassOf/);
-  assert.match(typeSource,/FILTER NOT EXISTS/);
-  assert.match(typeSource,/VALUES \?uri/);
-  assert.match(typeSource,/\.slice\(0, 10\)/);
-  assert.match(typeSource,/LIMIT 150/);
+test('URI autocomplete enriches the existing ranked result without a second request',()=>{
   const component=read('src/canvas/top/root-uri-autocomplete.tsx');
-  assert.match(component,/return \[\.\.\.unique\.values\(\)\]\.slice\(0,settings\.limit\)/);
+  const query=read('src/lib/uri-autocomplete-query.ts');
   const lifecycle=read('src/lib/app-lifecycle/uri-autocomplete.ts');
-  assert.match(lifecycle,/type Enricher/);
-  assert.match(lifecycle,/target: "complete"/);
-  assert.match(lifecycle,/items: context.items.map\(item =>/);
+  assert.match(component,/createRootUriAutocompleteQuery\(prefix, addr, settings, propertyUris\)/);
   assert.match(component,/const incomingType = row\.type\?\.type === "uri"/);
-  assert.match(component,/rdfType\??/);
-  assert.match(read('src/lib/uri-autocomplete-query.ts'),/ORDER BY DESC \(<LONG::IRI_RANK>/);
-  const transpiled=ts.transpileModule(typeSource,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
-  const sandbox={module:{exports:{}},exports:null};sandbox.exports=sandbox.module.exports;
-  vm.runInNewContext(transpiled,sandbox);
-  const {selectAutocompleteTypes,createAutocompleteTypeQuery}=sandbox.module.exports;
-  const uris=['https://dbpedia.org/resource/Tim_Berners-Lee','https://dbpedia.org/resource/Ford'];
-  const rows=[
-    {uri:{type:'uri',value:uris[0]},type:{type:'uri',value:'https://schema.org/Person'}},
-    {uri:{type:'uri',value:uris[0]},type:{type:'uri',value:'http://dbpedia.org/ontology/Person'}},
-    {uri:{type:'uri',value:uris[1]},type:{type:'uri',value:'http://dbpedia.org/ontology/Company'}},
-  ];
-  const values=selectAutocompleteTypes(rows,uris);
-  assert.deepEqual([...values.keys()],uris);
-  assert.equal(values.get(uris[0]),'http://dbpedia.org/ontology/Person');
-  const query=createAutocompleteTypeQuery(uris,'$ALL$@https://dbpedia.org/sparql');
-  assert.match(query,/FILTER NOT EXISTS/);
-  assert.match(query,/ORDER BY \?uri \?type LIMIT 150/);
+  assert.match(component,/rdfType/);
+  assert.match(component,/return \[\.\.\.unique\.values\(\)\]\.slice\(0,settings\.limit\)/);
+  assert.match(component,/One query returns ranked suggestions and their pruned class types/);
+  assert.match(query,/ORDER BY DESC \(<LONG::IRI_RANK>/);
+  assert.match(lifecycle,/target: "complete"/);
+  assert.doesNotMatch(component,/createAutocompleteTypeQuery|selectAutocompleteTypes/);
 });
 
 test('Tag provider discovery must match SHACL-declared property, live FCT scope, and approval',()=>{
@@ -85,7 +65,7 @@ test('an Analysis button exists on View > Providers and uses real FCT plus XSLT'
 
 test('all new/modified TypeScript syntax parses and generic proxy routes remain absent from patch delta',()=>{
   for(const filename of [
-    'src/lib/app-lifecycle/pending-approvals.ts','src/lib/uri-autocomplete-type.ts',
+    'src/lib/app-lifecycle/pending-approvals.ts','src/lib/uri-autocomplete-query.ts',
     'src/canvas/top/root-uri-autocomplete.tsx','src/canvas/top/appbar-pane.tsx',
     'src/lib/client-policy-approvals.ts','src/lib/client-provider-provenance.ts',
     'src/lib/client-facet-providers.ts','src/canvas/top/view-diagnostics-hover.tsx',

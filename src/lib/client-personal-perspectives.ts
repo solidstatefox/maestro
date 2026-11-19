@@ -13,6 +13,41 @@ const SH = "http://www.w3.org/ns/shacl#";
 const safe = (v: string) => v.length < 4096 && /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(v);
 export type ClientPerspective = { uri: string; kind: PersonalPerspectiveKind; label: string };
 
+/** Follow the cached ontology as ordinary, bounded one-hop graph reads.
+ * Virtuoso cannot reliably evaluate ?class rdfs:subClassOf+ ?target when
+ * neither endpoint of the transitive path has a fixed start (TR... error).
+ * All reads remain on the user's ODS personal /sparql transport. */
+async function acceptedPerspectiveClasses(
+  ctx: Awaited<ReturnType<typeof personalContext>>, ontology: string,
+  classes: readonly string[], signal?: AbortSignal,
+): Promise<string[]> {
+  const visited = new Set(classes);
+  let frontier = [...visited];
+  const maxClasses = 1000;
+  for (let depth = 0; frontier.length; depth++) {
+    if (depth >= 32 || visited.size > maxClasses)
+      throw new Error("Personal ontology hierarchy exceeds the bounded Perspective discovery traversal.");
+    const parents = new Set<string>();
+    for (let index = 0; index < frontier.length; index += 100) {
+      const batch = frontier.slice(index, index + 100);
+      const rows = await selectPersonal(`PREFIX rdfs: <${RDFS}>
+        SELECT DISTINCT ?child ?parent WHERE {
+          VALUES ?child { ${batch.map(uri => `<${uri}>`).join(" ")} }
+          GRAPH <${ontology}> { ?child rdfs:subClassOf ?parent }
+        } LIMIT 1001`, ctx, signal);
+      if (rows.length >= 1001)
+        throw new Error("Personal ontology subclass expansion was truncated; cannot safely discover Perspectives.");
+      for (const row of rows) {
+        const uri = row.parent?.value ?? "";
+        if (safe(uri) && !visited.has(uri)) parents.add(uri);
+      }
+    }
+    frontier = [...parents];
+    for (const uri of frontier) visited.add(uri);
+  }
+  return [...visited];
+}
+
 /** Browser-owned, read-only catalog projection. The /sparql route is the
  * authenticated transport. Only approved providers are shown; approval and
  * matched-record discovery attestations remain server-authorized. */
@@ -22,6 +57,7 @@ export async function discoverClientPerspectives(classes: string[], signal?: Abo
   if (!requested.length && !additional.length) return [];
   const ctx = await personalContext();
   const shapes = `${ctx.base}/shacl/policies`, ontology = `${ctx.base}/ontology-cache`;
+  const accepted = requested.length ? await acceptedPerspectiveClasses(ctx, ontology, requested, signal) : [];
   const rows = await selectPersonal(`PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
     SELECT DISTINCT ?provider ?kind ?label ?stylesheet WHERE {
       GRAPH <${shapes}> {
@@ -30,9 +66,8 @@ export async function discoverClientPerspectives(classes: string[], signal?: Abo
         OPTIONAL { ?input <${SH}class> ?target }
         OPTIONAL { ?provider rdfs:label ?label }
       }
-      ${requested.length ? `OPTIONAL { VALUES ?queryClass { ${requested.map(iri=>`<${iri}>`).join(" ")} } }` : ""}
-      FILTER((BOUND(?target) && BOUND(?queryClass) && (?queryClass = ?target || EXISTS { GRAPH <${ontology}> { ?queryClass rdfs:subClassOf+ ?target } }))
-        ${additional.length ? ` || ?provider IN (${additional.map(uri=>`<${uri}>`).join(",")})` : ""})
+      FILTER(${accepted.length ? `?target IN (${accepted.map(uri=>`<${uri}>`).join(", ")})` : "false"}
+        ${additional.length ? ` || ?provider IN (${additional.map(uri=>`<${uri}>`).join(", ")})` : ""})
     } ORDER BY ?label LIMIT 20`, ctx, signal);
   const possible = [...new Map(rows.map(row => ({
     uri: row.provider?.value ?? "", kind: row.kind?.value ?? "",
@@ -60,14 +95,14 @@ export async function discoverMatchedClientPerspectives(
   if (!requested.length && !contextual.length) return [];
   const ctx = await personalContext();
   const shapes = `${ctx.base}/shacl/policies`, ontology = `${ctx.base}/ontology-cache`;
+  const accepted = requested.length ? await acceptedPerspectiveClasses(ctx, ontology, requested, signal) : [];
   const candidates = requested.length ? await selectPersonal(`PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
     SELECT DISTINCT ?provider ?kind ?target ?stylesheet WHERE { GRAPH <${shapes}> {
       ?provider a mui:Provider ; mui:perspectiveKind ?kind ; mui:widget ?template ; mui:accepts ?input .
       ?input <${SH}class> ?target .
       ?template a mui:PerspectiveWidget ; (mui:templateContent|rdf:value) ?stylesheet .
     }
-    VALUES ?queryClass { ${requested.map(uri=>`<${uri}>`).join(" ")} }
-    FILTER(?queryClass = ?target || EXISTS { GRAPH <${ontology}> { ?queryClass rdfs:subClassOf+ ?target } })
+    FILTER(?target IN (${accepted.map(uri => `<${uri}>`).join(", ")}))
     } LIMIT 100`,ctx,signal) : [];
   const providers = candidates.map(row=>({
     uri:row.provider?.value??"",kind:row.kind?.value??"",target:row.target?.value??"",stylesheet:row.stylesheet?.value??"",
@@ -86,12 +121,16 @@ export async function discoverMatchedClientPerspectives(
         const endpoint = new URL(target);
         if(["https:","http:"].includes(endpoint.protocol)){
           const validGraph = graph && graph!=="$ALL$" && safe(graph);
-          const pairValues = [...new Set(providers.map(item=>`(<${item.uri}> <${item.target}>)`))].join(" ");
+          // A matched Record must assert a class from the actual live-query
+          // class scope. Provider targets were already checked against that
+          // class and its cached superclasses on ODS, so no unanchored + path
+          // is needed on the remote server either.
+          const providerValues = [...new Set(providers.map(item=>`<${item.uri}>`))].join(" ");
           const pattern = `<${record}> a ?recordClass .`;
-          const query = `PREFIX rdfs: <${RDFS}> SELECT DISTINCT ?provider WHERE {
-            VALUES (?provider ?target) { ${pairValues} }
+          const query = `SELECT DISTINCT ?provider WHERE {
+            VALUES ?provider { ${providerValues} }
             ${validGraph ? `GRAPH <${graph}> { ${pattern} }` : pattern}
-            FILTER(?recordClass = ?target || EXISTS { ?recordClass rdfs:subClassOf+ ?target }) }`;
+            FILTER(?recordClass IN (${requested.map(uri => `<${uri}>`).join(", ")})) }`;
           const response=await fetch("/proxy/api/sparql",{method:"POST",credentials:"same-origin",cache:"no-store",signal,
             headers:{"Content-Type":"application/json"},body:JSON.stringify({addr:address,query})});
           if(response.ok){

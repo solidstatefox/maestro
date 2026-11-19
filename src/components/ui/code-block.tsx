@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import xmlFormat from "xml-formatter";
 import hljs from "highlight.js/lib/core";
 import xml from "highlight.js/lib/languages/xml";
 import sql from "highlight.js/lib/languages/sql";
@@ -30,13 +31,15 @@ if (!hljs.getLanguage("turtle")) {
   }));
 }
 import { Check, Copy, Download, WrapText, Play } from "lucide-react";
-import { useFctQuery } from "@/lib/fct-query";
+import { sparqlEditorUrl } from "@/lib/fct-execution-address";
 import type { HTMLAttributes } from "react";
 
 type CodeBlockProps = Omit<HTMLAttributes<HTMLDivElement>, "children"> & {
   code: string;
   language?: "xml" | "sparql" | string;
   filename?: string;
+  /** Graph@endpoint of this particular displayed query; never inferred from Browse. */
+  executionAddr?: string;
 };
 
 /** Read-only, line-numbered source viewer with syntax highlighting and copy/download actions. */
@@ -45,28 +48,22 @@ export function CodeBlock({
   code,
   language = "xml",
   filename = "query.txt",
+  executionAddr,
   ...props
 }: CodeBlockProps) {
-  const { tree } = useFctQuery();
-  const address = tree.attributes.addr ?? "";
-  const endpointAddress = address.includes("@") ? address.slice(address.indexOf("@") + 1) : "";
-  const editorUrl = useMemo(() => {
-    if (language.toLowerCase() !== "sparql" || !endpointAddress) return null;
-    try {
-      const endpoint = new URL(endpointAddress);
-      // The Virtuoso query editor is served on /sparql. Do not treat other
-      // endpoint families as Virtuoso or invent query-editor routes for them.
-      if (!/^https?:$/.test(endpoint.protocol) || !/\/sparql\/?$/i.test(endpoint.pathname)) return null;
-      endpoint.search = "";
-      endpoint.hash = "";
-      endpoint.searchParams.set("qtxt", code);
-      return endpoint.toString();
-    } catch { return null; }
-  }, [endpointAddress, language, code]);
+  const editorUrl = useMemo(() => language.trim().toLowerCase() === "sparql"
+    ? sparqlEditorUrl(executionAddr, code) : null, [executionAddr, language, code]);
   const [copied, setCopied] = useState(false);
   const [wrap, setWrap] = useState(false);
+  // Use the same xml-formatter settings as the center pane for every XML CodeBlock.
+  // Non-XML (including SPARQL) and incomplete/error text are left untouched.
+  const displayedCode = useMemo(() => {
+    if (language.trim().toLowerCase() !== "xml") return code;
+    try { return xmlFormat(code, { indentation: "  " }); }
+    catch { return code; }
+  }, [code, language]);
   const lines = useMemo(() => {
-    const sourceLines = code.replace(/\r\n?/g, "\n").split("\n");
+    const sourceLines = displayedCode.replace(/\r\n?/g, "\n").split("\n");
     const languageName = language.trim().toLowerCase();
     const supported = Boolean(hljs.getLanguage(languageName));
     const escapeText = (text:string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -77,11 +74,11 @@ export function CodeBlock({
         return hljs.highlight(line, { language: languageName, ignoreIllegals: true }).value;
       } catch { return escapeText(line); }
     });
-  }, [code, language]);
+  }, [displayedCode, language]);
 
   async function copyCode() {
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(displayedCode);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2500);
     } catch {
@@ -90,7 +87,7 @@ export function CodeBlock({
   }
 
   function downloadCode() {
-    const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([displayedCode], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;

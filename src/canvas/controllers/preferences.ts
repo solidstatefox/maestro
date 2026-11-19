@@ -63,7 +63,7 @@ export function usePreferencesState() {
     languageActor.current?.send({ type: "REMOVE" });
     changeUrlLanguage(null);
   };
-  const [prefixSource, setPrefixSource] = useState<"prefixcc" | "zazuko" | "builtin">("prefixcc");
+  const [prefixSource, setPrefixSource] = useState<"prefixcc" | "zazuko" | "builtin">("builtin");
   const [prefixStatus, setPrefixStatus] = useState("Built-in prefixes");
   const [centralTab, setCentralTab] = useState<"results" | "groups" | "query-tree" | "view-query" | "chat">("results");
   const [workspaceTab, setWorkspaceTab] = useState<"browse" | "view" | "analyze">("browse");

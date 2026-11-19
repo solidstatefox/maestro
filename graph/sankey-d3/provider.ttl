@@ -1,0 +1,36 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix ma: <gttp://ggg.maestro.ecosys/ns/analyze#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# Generic, query-contextual Analyze provider. This is a coverage visualization,
+# not a new RDF datatype, class policy, or graph server capability.
+<gttp://ggg.maestro.ecosys/analyze/sankey-d3> a mui:Provider, ma:Analysis, sh:NodeShape ;
+  rdfs:label "Sankey (D3)"@en ; ma:lucideIcon "workflow" ; ma:order 6 ;
+  mui:accepts <gttp://ggg.maestro.ecosys/analyze/sankey-d3/input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/analyze/sankey-d3/widget> ;
+  ma:stylesheet <gttp://ggg.maestro.ecosys/analyze/sankey-d3#xslt> .
+
+<gttp://ggg.maestro.ecosys/analyze/sankey-d3/input> a mui:InputShape, sh:NodeShape ;
+  sh:property [ sh:path mui:query ; sh:minCount 1 ; sh:maxCount 1 ] ;
+  sh:property [ sh:path mui:focus ; sh:minCount 1 ; sh:maxCount 1 ] .
+
+<gttp://ggg.maestro.ecosys/analyze/sankey-d3/widget> a mui:AnalysisWidget ;
+  rdfs:label "Interactive D3 Sankey relationship coverage"@en ;
+  rdfs:comment "Predicate-presence percentages of the current FCT page, projected with list-values; D3 Sankey is the host renderer with interactive node and link layout controls."@en .
+
+# Provider describes eligible FCT axes and the projection contract. The
+# existing browser FCT transport produces the batched value data and the host
+# visualizes the resulting directed flow. No server-side domain logic.
+<gttp://ggg.maestro.ecosys/analyze/sankey-d3#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/context#" exclude-result-prefixes="fct m">
+  <xsl:output method="xml" omit-xml-declaration="yes"/>
+  <xsl:mode name="query" on-no-match="shallow-copy"/>
+  <xsl:template match="/m:context"><analysis kind="sankey" measure="predicate-coverage" renderer="d3-sankey">
+    <axes><xsl:for-each select="m:query/fct:query//fct:view/../*[self::fct:property or self::fct:property-of]">
+      <axis iri="{@iri}" direction="{if (self::fct:property-of) then 'reverse' else 'forward'}"/>
+    </xsl:for-each></axes>
+    <fct-query><xsl:apply-templates select="m:query/fct:query" mode="query"/></fct-query>
+  </analysis></xsl:template>
+  <xsl:template match="fct:view" mode="query"><xsl:copy><xsl:copy-of select="@* except (@type)"/><xsl:attribute name="type">list-values</xsl:attribute></xsl:copy></xsl:template>
+</xsl:stylesheet>""" .

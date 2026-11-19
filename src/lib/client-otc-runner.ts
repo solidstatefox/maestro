@@ -333,7 +333,7 @@ export async function runClientTranscoder(input:ClientOtcOptions):Promise<Client
     for(const graph of staging.reverse()){
       try{progress({step:"cleanup",status:"running",detail:"Removing temporary OTC graph"});await updatePersonal(`CLEAR GRAPH ${iri(graph)}`);
         progress({step:"cleanup",status:"success",detail:"Temporary OTC graph removed"});}
-      catch{progress({step:"cleanup",status:"error",detail:"Could not remove temporary OTC graph. Clean up manually."});}
+      catch(error){progress({step:"cleanup",status:"error",detail:`Could not remove temporary OTC graph. Clean up manually: ${error instanceof Error ? error.message : String(error)}`});}
     }
     if(activity.length)await appendAssistantActivity(activity).catch(()=>{});
   }

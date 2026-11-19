@@ -15,6 +15,7 @@ function signedIn() {
   controller.start();
   controller.send({ type: "SESSION_OBSERVED", restored: true, sessionKey: session });
   controller.send({ type: "QUERY_CHANGED", queryKey: a });
+  controller.send({ type: "POLICY_STATUS_OBSERVED", sessionKey: session, stage: "ready" });
   return controller;
 }
 
@@ -42,6 +43,8 @@ test("restoration and sign-out deny all personal UI without credentials", () => 
   assert.equal(c.getSnapshot().value, "signedOut");
   assert.equal(caps(c).canMutatePersonalStore, false);
   c.send({ type: "SESSION_OBSERVED", restored: true, sessionKey: session });
+  assert.equal(caps(c).canUsePersonalStore, false, "signed-in is not enough before graph seeding");
+  c.send({ type: "POLICY_STATUS_OBSERVED", sessionKey: session, stage: "ready" });
   assert.equal(caps(c).canUsePersonalStore, true);
   assert.equal(caps(c).canShowStatusFacet, false);
   c.stop();

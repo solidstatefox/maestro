@@ -7,11 +7,11 @@ const code = ts.transpileModule(readFileSync("src/lib/client-personal-sparql.ts"
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}
 }).outputText;
 const seen=[];
-const session = { graphStore:"https://user.example/sparql-auth", graphPrefix:"gttp://maestro.example/user", authHeader:"Basic redacted" };
+const session = { graphStore:"https://user.example/sparql", graphPrefix:"gttp://maestro.example/user", authHeader:"Basic redacted" };
 const clientExports = {};
 vm.runInNewContext(code, {exports:clientExports,require(name) {
   assert.equal(name,"@/lib/personal-auth");
-  return {loadPersonalAuthSession:async()=>session,graphForPrefix:(p)=>`${p}/query`};
+  return {loadPersonalAuthSession:async()=>session,graphForPrefix:(p)=>`${p}/query`,personalReadEndpoint:(session)=>session.graphStore};
 },fetch:async (url,opts)=> {
   seen.push({url,body:JSON.parse(opts.body),opts});
   if(seen.length===2)return {ok:true, status:204,headers:{get:()=>null},text:async()=>""};
@@ -30,5 +30,5 @@ vm.runInNewContext(code, {exports:clientExports,require(name) {
   assert.equal(seen[1].body.update.includes("INSERT DATA"),true);
   assert.equal(seen[0].opts.credentials,"same-origin");
   assert.ok(!JSON.stringify(seen).includes("Basic redacted"),"Credentials must never be copied into JSON payloads");
-  console.log("PASS: client SPARQL URL normalization, JSON SELECT, authenticated UPDATE envelope");
+  console.log("PASS: client SPARQL read-only endpoint, JSON SELECT, login-authenticated UPDATE envelope");
 })().catch(e=>{console.error(e);process.exitCode=1});

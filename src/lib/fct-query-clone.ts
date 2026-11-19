@@ -1,6 +1,7 @@
 /** Pure query snapshots. The live store is never passed to consumers by this API. */
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
 import { XMLBuilder, XMLParser, XMLValidator } from "fast-xml-parser";
+import { requireFctExecutionAddress } from "./fct-execution-address";
 
 export type FctClonePlane = "exact" | "data";
 
@@ -28,12 +29,16 @@ export function cloneFctQueryNode(node: FctQueryNode, plane: FctClonePlane = "ex
 }
 
 /** Exact snapshots are for editing/history; data snapshots are for derived reads. */
-export function cloneFctQueryTree(tree: FctQueryTree, plane: FctClonePlane = "exact"): FctQueryTree {
+export function cloneFctQueryTree(tree: FctQueryTree, plane: FctClonePlane = "exact", executionAddr?: string): FctQueryTree {
   const copy: FctQueryTree = {
     ...tree,
-    attributes: { ...tree.attributes },
+    attributes: { ...tree.attributes, ...(executionAddr === undefined ? {} : { addr: executionAddr }) },
     children: tree.children.filter(node => plane !== "data" || node.name !== "a").map(node => cloneFctQueryNode(node, plane)),
   };
+  if (executionAddr !== undefined) {
+    const target = requireFctExecutionAddress(executionAddr);
+    if ("graph" in copy.attributes) copy.attributes.graph = target.graph;
+  }
   delete copy.uiResultSummary;
   return copy;
 }
@@ -55,8 +60,31 @@ export function serializeFctQuerySnapshot(nodes: FctXmlNode[]): string {
   return new XMLBuilder({ ...fctXmlOptions, suppressEmptyNode: true }).build(nodes);
 }
 
+/** Detach and readdress any cloned XML query when its execution graph or
+ * endpoint differs from the source. The original XML is never mutated. */
+export function withFctQueryExecutionAddress(xml: string, executionAddr: string): string {
+  const { graph } = requireFctExecutionAddress(executionAddr);
+  const nodes = parseFctQuerySnapshot(xml);
+  const root = nodes.find(node => Object.keys(node).some(key => key === "query" || key.endsWith(":query")));
+  if (!root) throw new Error("The FCT clone requires a query root.");
+  const attributes = { ...(root[":@"] as Record<string, string> | undefined), "@_addr": executionAddr };
+  if ("@_graph" in attributes) attributes["@_graph"] = graph;
+  root[":@"] = attributes;
+  return serializeFctQuerySnapshot(nodes);
+}
+
+/** Get the address of the displayed FCT XML, not the unrelated live query. */
+export function fctQueryExecutionAddress(xml: string): string | undefined {
+  try {
+    const nodes = parseFctQuerySnapshot(xml);
+    const root = nodes.find(node => Object.keys(node).some(key => key === "query" || key.endsWith(":query")));
+    const address = (root?.[":@"] as Record<string, string> | undefined)?.["@_addr"];
+    return address && requireFctExecutionAddress(address) ? address : undefined;
+  } catch { return undefined; }
+}
+
 /** An XML query snapshot, shared by the browser XSLT host and Node proxy. */
-export function snapshotFctQueryXml(xml: string, plane: FctClonePlane = "data"): string {
+export function snapshotFctQueryXml(xml: string, plane: FctClonePlane = "data", executionAddr?: string): string {
   // Parsing builds a fully detached representation; the live tree is never exposed.
   const nodes = parseFctQuerySnapshot(xml);
   const walk = (entries: FctXmlNode[]) => {
@@ -75,5 +103,6 @@ export function snapshotFctQueryXml(xml: string, plane: FctClonePlane = "data"):
     }
   };
   walk(nodes);
-  return serializeFctQuerySnapshot(nodes);
+  const cloned = serializeFctQuerySnapshot(nodes);
+  return executionAddr === undefined ? cloned : withFctQueryExecutionAddress(cloned, executionAddr);
 }

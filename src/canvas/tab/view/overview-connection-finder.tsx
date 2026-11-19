@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 import { Activity, ArrowLeftRight, Info } from "lucide-react";
@@ -76,7 +77,7 @@ export function OverviewConnectionFinder({population,endpoint,graph,scopeKey,dis
       <button type="button" disabled={!canFind||snapshot.phase==="finding"} onClick={()=>controller.find({source,target,endpoint,graph,predicate:predicate.trim()||undefined,maxHops:hops})} className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"><Activity className="size-3.5"/>{snapshot.phase==="finding"?"Searching…":"Find connections"}</button>
     </div>
     <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground"><Info className="mt-0.5 size-3.5 shrink-0"/>Virtuoso verified paths, bounded to {hops} hops; non-type relationships are prioritized. The endpoints come from the first {population.length} URI matches in the active FCT query; intermediate nodes may be outside that population. Relationships follow the selected graph scope. Empty results do not imply the resources are unrelated across every graph.</p>
-    {snapshot.phase==="failed"&&<p role="alert" className="text-xs text-amber-700 dark:text-amber-400">{snapshot.error}</p>}
+    {snapshot.phase==="failed"&&<ErrorDetails prefix="Overview connections" error={snapshot.error} />}
     {snapshot.phase==="complete"&&!paths.length&&<p role="status" className="text-xs text-muted-foreground">No connection was found within the selected graph and hop limit.</p>}
     {!!paths.length&&mindMap&&<>
       <p className="text-xs text-blue-700 dark:text-sky-400">{paths.length} verified path{paths.length===1?"":"s"} discovered. Arrows indicate RDF statement direction, not traversal direction. An unavailable predicate is explicitly marked.</p>

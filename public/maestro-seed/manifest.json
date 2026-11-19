@@ -135,9 +135,29 @@
     "asset": "b6edd7f852f31243388bf7ec69f5c9deef3d19c9d2ad8cc492cc01f09e6f4447.json"
   },
   {
+    "file": "sankey-d3/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "2916ad94d318aff19902775f418f2cf27930c745f6ffcda5b8737f8b0e237964.json"
+  },
+  {
+    "file": "sankey/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "f4442bf8ff0232121ccf386299cbf0f141e121df65b5ae77d8a64353ebfff0b6.json"
+  },
+  {
     "file": "spider/provider.ttl",
     "destination": "/shacl/policies",
     "asset": "8f7e38150f3302eb47f50e94e52ed08b2ea1f49bf2c62346635f4d4bb07959fb.json"
+  },
+  {
+    "file": "sunburst-chartkit/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "5da6e2e83148fc10f14a71f0de285ad6411318ed5771234d1c08c7893e24a7d9.json"
+  },
+  {
+    "file": "sunburst/provider.ttl",
+    "destination": "/shacl/policies",
+    "asset": "433feb40e16c5d4c7d134a80ce6245baf5ae3b2a1a72a366500ad1fdc3254140.json"
   },
   {
     "file": "tag-cloud/provider.ttl",

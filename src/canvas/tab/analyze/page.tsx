@@ -1,5 +1,6 @@
 "use client";
 import { ErrorDetails } from "@/components/ui/error-details";
+import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { createBreadcrumbRenderers } from "@/canvas/top/breadcrumb-renderers";
 import { RESULTS_PAGE_SIZE_STORAGE_KEY } from "@/canvas/sheet/settings";
@@ -19,6 +20,9 @@ import { NODE_ANALYTICS_ANALYSIS_URI } from "@/lib/overview-analytics-ids";
 import { OVERVIEW_PERSPECTIVE_URI } from "@/lib/overview-metrics";
 import { OverviewPerspective } from "@/canvas/tab/view/overview";
 import { AnalyzeSpider } from "@/canvas/tab/analyze/spider";
+import { AnalyzeSankey } from "@/canvas/tab/analyze/sankey";
+import { D3_SANKEY_ANALYSIS_URI } from "@/lib/d3-sankey-id";
+import { SANKEY_ANALYSIS_URI } from "@/lib/sankey-coverage";
 import { SPIDER_ANALYSIS_URI } from "@/lib/spider-numeric-policy";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 import { shortenCount } from "@/lib/utils";
@@ -33,6 +37,8 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
  const nodeAnalyticsSelected = selectedAnalysisUri===NODE_ANALYTICS_ANALYSIS_URI;
  const overviewSelected = selectedAnalysisUri===OVERVIEW_PERSPECTIVE_URI;
  const spiderSelected = selectedAnalysisUri===SPIDER_ANALYSIS_URI;
+ const sankeySelected = selectedAnalysisUri===SANKEY_ANALYSIS_URI;
+ const d3SankeySelected = selectedAnalysisUri===D3_SANKEY_ANALYSIS_URI;
  const [populationState,setPopulationState]=useState<{key:string;items:OverviewPopulation[];error:string}|null>(null);
  const populationKey=workspace.queryXml;
  useEffect(()=>{
@@ -46,6 +52,8 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
  const populationCurrent=populationState?.key===populationKey?populationState:null;
  if(workspaceTab === "analyze" && overviewSelected) return <OverviewPerspective workspace={workspace}/>;
  if(workspaceTab === "analyze" && spiderSelected) return <AnalyzeSpider workspace={workspace}/>;
+ if(workspaceTab === "analyze" && sankeySelected) return <AnalyzeSankey workspace={workspace}/>;
+ if(workspaceTab === "analyze" && d3SankeySelected) return <AnalyzeSankey workspace={workspace} renderer="d3"/>;
  if(workspaceTab === "analyze" && nodeAnalyticsSelected) return <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Analyze Node Analytics canvas">
    <div className="min-h-0 flex-1 overflow-auto p-4">
      {populationCurrent?.error && <ErrorDetails prefix="Node analytics population" error={populationCurrent.error}/>}
@@ -67,9 +75,10 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                 {analysisValuesError && <ErrorDetails prefix="Analysis facet values" error={analysisValuesError} className="m-3" />}
                 {analysisLoading && !analysisTable && !isBookmarkAnalysis(selectedAnalysisUri) && <p className="p-3 text-xs text-muted-foreground"><ElapsedStatus label="Building analysis" category="other" clockScope="analysis" /></p>}
                 <div className="min-h-0 flex-1 overflow-auto">
-                  {isBookmarkAnalysis(selectedAnalysisUri) && <BookmarkCharts queryXml={workspace.queryXml} providerUri={selectedAnalysisUri} stylesheet={workspace.analysisDefinitions.find((definition) => definition.uri === selectedAnalysisUri)?.stylesheet ?? ""} />}
+                  {isBookmarkAnalysis(selectedAnalysisUri) && <BookmarkCharts onBrowse={() => setWorkspaceTab("browse")} queryXml={workspace.queryXml} providerUri={selectedAnalysisUri} stylesheet={workspace.analysisDefinitions.find((definition) => definition.uri === selectedAnalysisUri)?.stylesheet ?? ""} />}
                   {!nodeAnalyticsSelected && analysisTable && isCompareAnalysis && analyzeHistogram && <AnalyzeHistogram histogramColumns={histogramColumns} visibleCount={analysisTable.rows.length} />}
-                  {!nodeAnalyticsSelected && analysisTable && !(isCompareAnalysis && analyzeHistogram) && <MaestroAnalysisDataTable
+                  {!nodeAnalyticsSelected && analysisTable && analysisTable.rows.length === 0 && <MaestroEmptyResults onBrowse={() => setWorkspaceTab("browse")} title="No analysis results" description="No records match this analysis. Try the default Browse perspective."/>}
+                  {!nodeAnalyticsSelected && analysisTable && analysisTable.rows.length > 0 && !(isCompareAnalysis && analyzeHistogram) && <MaestroAnalysisDataTable
                     label={isCompareAnalysis ? "Compare Table" : "Table"}
                     tableStyle={analysisTable.tableStyle} headerStyle={analysisTable.headerStyle} cellStyle={analysisTable.cellStyle}
                     selectedKeys={analysisSelectedKeys}
@@ -105,7 +114,7 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                         })],
                     }))}
                   />}
-                  {!nodeAnalyticsSelected && !isBookmarkAnalysis(selectedAnalysisUri) && !analysisLoading && !analysisTable && !analysisError && <p className="p-3 text-sm text-muted-foreground">Choose an analysis from the ribbon.</p>}
+                  {!nodeAnalyticsSelected && !isBookmarkAnalysis(selectedAnalysisUri) && !analysisLoading && !analysisTable && !analysisError && <MaestroEmptyResults onBrowse={() => setWorkspaceTab("browse")} title="No analysis to display" description="Choose an analysis from the ribbon or try the default Browse perspective."/>}
                 </div>
                 <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-3 py-2 text-xs">
                   <span className="text-muted-foreground">{formatPagePosition(resultsUiPage, effectiveResultsTotalCount === null ? null : Math.max(1, Math.ceil(effectiveResultsTotalCount / resultsPageSize)))}{effectiveResultsTotalCount !== null ? ` · ${shortenCount(effectiveResultsTotalCount)} results` : " · many results"}</span>

@@ -21,6 +21,7 @@ import { TransportedPersonalFacets } from "@/canvas/left/transported-facet";
 import { personalFacetInspectorQueries, PersonalRoleWidget } from "@/canvas/left/filter";
 import { RDF_TYPE_URI, GROUP_BY_FACET_HIGHLIGHT_CLASSES } from "@/canvas/utils/query-controller";
 
+import { useFacetPresentation, FacetPresentationButton, FacetPresentationSurface } from "@/canvas/left/facet-presentation";
 import { categoryTreeNodeKey, type CategoryTreeNode } from "@/canvas/left/filter";
 
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
@@ -102,6 +103,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
     categoriesWidgetRef,
     categoryPageCount,
     categoryTreeAllCollapsed,
+    categoryTreeRoots,
     categoryTreePages,
     categoryTreeParentKeys,
     centralTab,
@@ -187,6 +189,12 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
     workspace.reportProviderLifecycle(personalFacetProviders.phase);
     return () => workspace.reportProviderLifecycle("unobserved");
   }, [workspace.reportProviderLifecycle, personalFacetProviders.phase]);
+  const classPresentation = useFacetPresentation({
+    direction: "class", predicate: RDF_TYPE_URI,
+    enabled: workspace.accessCapabilities.canUsePersonalStore,
+    approvalRevision: workspace.policyApprovalRevision,
+    sessionKey: workspace.accessController.getSnapshot().context.sessionKey,
+  });
   const sortedGraphFacets = useMemo(() => [...graphFacets].sort((a, b) => {
     const comparison = (a.label || a.uri).localeCompare(b.label || b.uri);
     return graphSort === "label-desc" ? -comparison : comparison;
@@ -212,9 +220,10 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       className={`flex min-w-0 flex-col ${!isLoadingClasses && !isLoadingCategoryTree && !classFacetError && !categoriesIncomplete && visibleClassDisplayFacets.length === 0 && selectedClassDisplayFacets.length === 0 ? "!hidden" : ""} ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
                       <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
                         <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><button type="button" className="cursor-pointer text-sm font-semibold hover:underline underline-offset-2" onClick={() => workspace.navigateFacetHeaderToProperty(RDF_TYPE_URI)} title="Navigate to rdf:type of the current focus">Categories</button>
-                          <LeftWidgetButtonTray threshold={3} actions={[
+                          <LeftWidgetButtonTray threshold={4} actions={[
                             { id: "search", label: "Search categories by name", icon: <Search className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button type="button" onClick={startCategoryNameSearch} aria-label="Search for categories by name" className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Search className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Start a new search for resources by Category name</TooltipContent></Tooltip> },
                             { id: "inspector", label: "Inspect Categories query", icon: <Code2 className="size-4"/>, render: <QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.CLASSES)) : undefined} countFilename="categories-first-item-count.sparql" primaryTabLabel="XML" extraQueries={facetQueryInspectorTabs(queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false), "categories")} /> },
+                            { id: "facet-presentation", label: "Facet provider presentation", when: Boolean(classPresentation.provider), icon: <Network className="size-4"/>, render: <FacetPresentationButton presentation={classPresentation}/> },
                             { id: "tree", label: "Toggle category tree", icon: <Network className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
                           type="button"
                           aria-pressed={categoriesTreeMode}
@@ -332,7 +341,14 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                             </div>
                           )}
                           <div className={FACET_ITEM_GAP_CLASS}>
-                            {categoriesTreeMode ? (
+                            {classPresentation.active ? (
+                              <FacetPresentationSurface presentation={classPresentation}
+                                tree={categoryTreeRoots}
+                                items={[...selectedClassDisplayFacets, ...visibleClassDisplayFacets]
+                                  .filter((item, index, items) => items.findIndex(value => value.uri === item.uri) === index)
+                                  .map(item => ({ uri: item.uri, count: item.count, label: toLabel(item.uri, "Class"), selected: selectedClasses.has(item.uri) }))}
+                                onToggle={toggleClass}/>
+                            ) : categoriesTreeMode ? (
                               <div className={FACET_ITEM_GAP_CLASS}>
                                   {(() => {
                                     const renderTreeNode = (node: CategoryTreeNode, depth: number, parentKey: string): ReactNode => {
@@ -423,7 +439,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                 {autoConfiguredFacetKeys.has(`property-in::${uri}`) && (
                                   <Bot className="size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                                 )}
-                                <LeftWidgetButtonTray threshold={3} actions={[
+                                <LeftWidgetButtonTray threshold={4} actions={[
                                   { id: "inspector", label: "Inspect role query", icon: <Code2 className="size-4"/>, render: <QueryInspectorButton
                                     query={roleInspectorXml}
                                     filename="personal-role-values-fct-query.xml"
@@ -497,7 +513,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       <header className="group/header flex items-center gap-2 px-2 py-2">
                         <div className="flex min-w-0 flex-1 items-center gap-1">
                           <IncompleteWidgetIndicator source="graphs" /><h2 className="text-sm font-semibold">Graphs</h2>
-                          <LeftWidgetButtonTray threshold={3} actions={[
+                          <LeftWidgetButtonTray threshold={4} actions={[
                             { id: "inspector", label: "Inspect Graphs query", icon: <Code2 className="size-4"/>, render: <QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.GRAPHS)}\n<!-- FCT API option: graphOnly=true -->`} filename="graphs-fct-query.xml" primaryTabLabel="XML" extraQueries={[...facetQueryInspectorTabs(queryWithoutPagingXml(FCT_VIEW_TYPES.GRAPHS), "graphs"), { id: "graph-list-sparql", label: "Executed graph-list SPARQL", query: graphListSparql || "# Graph list SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" as const }]} /> },
                             { id: "tree", label: graphTreeMode ? "Flat graph list" : "Graph URI tree", icon: <Network className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
                             type="button" aria-pressed={graphTreeMode}

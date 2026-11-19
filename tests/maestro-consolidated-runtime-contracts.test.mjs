@@ -66,7 +66,23 @@ test('Kind, Record and Personal facet regression gates',()=>{
   assert.match(read('src/lib/status-machine-runtime.ts'),/if \(!grouped\.size\) return \[\]/);
   assert.match(read('src/canvas/left/filter.tsx'),/getActiveViewPropertyCarrier/);
   assert.match(read('src/canvas/right/pane.tsx'),/Try narrowing the query by applying more filters/);
-  assert.match(read('src/canvas/right/pane.tsx'),/fullscreenPane && onRdfaAction/);
+  // The fullscreen presentation handles actions before Browse handlers.
+  // The former callback-presence gate is intentionally gone: clicking a
+  // property in fullscreen must not mutate the authoritative Browse query.
+  const recordPane = read('src/canvas/right/pane.tsx');
+  const fullscreenBlock = recordPane.split('if (fullscreenPane) {')[1]?.split('// Browse keeps its existing behavior')[0] || '';
+  assert.ok(fullscreenBlock, 'fullscreen click capture must be present');
+  assert.match(fullscreenBlock, /event\.preventDefault\(\);\s*event\.stopPropagation\(\)/);
+  assert.match(fullscreenBlock, /resolveFullscreenRecordTarget\(target, rows\)/);
+  assert.match(fullscreenBlock, /if \(!onRdfaAction\) return/);
+  assert.match(fullscreenBlock, /interactionMode === "wand"/);
+  assert.match(fullscreenBlock, /onRdfaAction\(\{ sessionIndex, statement: picked\.statement, intent: "wand", kind: picked\.kind \}\)/);
+  assert.match(fullscreenBlock, /picked\.kind === "value" && picked\.statement\.value/);
+  assert.match(fullscreenBlock, /intent: "pivot", kind: "value"/);
+  assert.doesNotMatch(fullscreenBlock, /event\.shiftKey &&/);
+  assert.doesNotMatch(fullscreenBlock, /openRecordPropertyUri\(|navigateResultBadge\(|applyRecordAsRootValue\(/);
+  // Browse retains its own property action exclusively outside fullscreen.
+  assert.match(recordPane, /if \(!fullscreenPane\) openRecordPropertyUri\(item\.property\)/);
 });
 test('URI clipboard pastes only a valid single URI and root field closes on mouseout',()=>{
   const w=read('src/canvas/utils/workspace-controller.tsx');

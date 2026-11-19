@@ -1,13 +1,15 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useEffect, useState } from "react";
 import { Code2, X } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { CodeBlock } from "@/components/ui/code-block";
+import { fctQueryExecutionAddress, withFctQueryExecutionAddress } from "@/lib/fct-query-clone";
 
-const displayedQueryIdentity = (query: string, extra: { id: string; query: string }[]) =>
-  `${query}\u0000${extra.map(item => `${item.id}:${item.query}`).join("\u0000")}`;
+const displayedQueryIdentity = (query: string, extra: { id: string; query: string; addr?: string }[], addr?: string, countAddr?: string) =>
+  `${addr ?? ""}\u0000${countAddr ?? ""}\u0000${query}\u0000${extra.map(item => `${item.id}:${item.query}:${item.addr ?? ""}`).join("\u0000")}`;
 
 /** Hover-only query inspector for any widget backed by an FCT or SPARQL request. */
 export function QueryInspectorButton({
@@ -17,6 +19,7 @@ export function QueryInspectorButton({
   label = "View query",
   countQuery,
   countFilename,
+  countAddr,
   extraQueries = [],
   headerTone = false,
   toolbarButton = false,
@@ -29,7 +32,8 @@ export function QueryInspectorButton({
   label?: string;
   countQuery?: string | null;
   countFilename?: string;
-  extraQueries?: { id: string; label: string; query: string; filename: string; language?: "xml" | "sparql" }[];
+  countAddr?: string;
+  extraQueries?: { id: string; label: string; query: string; filename: string; language?: "xml" | "sparql"; addr?: string }[];
   headerTone?: boolean;
   toolbarButton?: boolean;
   primaryTabLabel?: string;
@@ -38,15 +42,29 @@ export function QueryInspectorButton({
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("widget");
   const [execution, setExecution] = useState<{ code: string; error: string; loading: boolean }>({ code: "", error: "", loading: false });
-  useEffect(() => { setExecution({ code: "", error: "", loading: false }); }, [activeTab, displayedQueryIdentity(query, extraQueries)]);
+  useEffect(() => { setExecution({ code: "", error: "", loading: false }); }, [activeTab, displayedQueryIdentity(query, extraQueries, addr, countAddr)]);
+  const sourceAddr = language === "xml" ? fctQueryExecutionAddress(query) : undefined;
+  // Each tab may have its own execution target. Never borrow the Browse query's.
+  const selectedExtraQuery = extraQueries.find((item) => item.id === activeTab);
+  const showingCount = Boolean(countQuery?.trim()) && activeTab === "count";
+  const displayedExecutionAddr = (showingCount ? countAddr : selectedExtraQuery?.addr) ?? addr ?? sourceAddr;
+  const selectedCode = showingCount ? countQuery! : selectedExtraQuery?.query ?? query;
+  const displayedLanguage = showingCount ? "sparql" : selectedExtraQuery?.language ?? language;
+  // A derived XML inspector and its SPARQL Execute action share one address.
+  const displayedCode = (() => {
+    if (displayedLanguage !== "xml" || !displayedExecutionAddr) return selectedCode;
+    try { return withFctQueryExecutionAddress(selectedCode, displayedExecutionAddr); }
+    catch { return selectedCode; } // Non-FCT XML/debug text is not a query clone.
+  })();
+  const displayedFilename = showingCount ? (countFilename ?? "first-item-count.sparql").replace(/\.xml$/i, ".sparql") : selectedExtraQuery?.filename ?? filename;
   const execute = async () => {
-    if (!addr || !displayedCode.trim() || displayedLanguage !== "sparql") return;
+    if (!displayedExecutionAddr || !displayedCode.trim() || displayedLanguage !== "sparql") return;
     const operation = new AbortController();
     setExecution({ code: "", error: "", loading: true });
     try {
       const response = await fetch("/proxy/api/sparql", { method: "POST", cache: "no-store",
         headers: { "Content-Type": "application/json" }, signal: operation.signal,
-        body: JSON.stringify({ query: displayedCode, addr }) });
+        body: JSON.stringify({ query: displayedCode, addr: displayedExecutionAddr }) });
       const value = await response.json();
       if (!response.ok) throw new Error(typeof value.error === "string" ? value.error : `SPARQL HTTP ${response.status}`);
       setExecution({ code: JSON.stringify(value, null, 2), error: "", loading: false });
@@ -55,11 +73,6 @@ export function QueryInspectorButton({
     }
   };
   if (!query.trim()) return null;
-  const showingCount = Boolean(countQuery?.trim()) && activeTab === "count";
-  const selectedExtraQuery = extraQueries.find((item) => item.id === activeTab);
-  const displayedCode = showingCount ? countQuery! : selectedExtraQuery?.query ?? query;
-  const displayedFilename = showingCount ? (countFilename ?? "first-item-count.sparql").replace(/\.xml$/i, ".sparql") : selectedExtraQuery?.filename ?? filename;
-  const displayedLanguage = showingCount || selectedExtraQuery ? selectedExtraQuery?.language ?? "sparql" : language;
   const inspectorButton = (
     <button
       type="button"
@@ -101,12 +114,12 @@ export function QueryInspectorButton({
             )}
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>{displayedFilename} · {displayedLanguage.toUpperCase()}</span>
-              {displayedLanguage === "sparql" && addr && <button type="button" onClick={() => void execute()} disabled={execution.loading || !/\b(?:SELECT|ASK)\b/i.test(displayedCode)}
+              {displayedLanguage === "sparql" && displayedExecutionAddr && <button type="button" onClick={() => void execute()} disabled={execution.loading || !/\b(?:SELECT|ASK)\b/i.test(displayedCode)}
                 className="rounded border border-input px-3 py-1 text-foreground hover:bg-accent disabled:opacity-50">{execution.loading ? "Executing…" : "Execute"}</button>}
             </div>
-            {execution.error && <p role="alert" className="text-xs text-destructive">{execution.error}</p>}
+            {execution.error && <ErrorDetails prefix="Query execution" error={execution.error} />}
             {execution.code && <div className="max-h-44 overflow-auto rounded border p-2"><pre className="whitespace-pre-wrap break-all text-xs">{execution.code}</pre></div>}
-            <CodeBlock className="min-h-0 flex-1" code={displayedCode} language={displayedLanguage} filename={displayedFilename} />
+            <CodeBlock className="min-h-0 flex-1" code={displayedCode} language={displayedLanguage} filename={displayedFilename} executionAddr={displayedExecutionAddr} />
         </DialogContent>
       </Dialog>
     </>

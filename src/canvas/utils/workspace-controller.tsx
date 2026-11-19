@@ -1,4 +1,6 @@
 "use client";
+import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
+import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { rootPointerIsNear } from "@/lib/app-lifecycle/root-proximity";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { invokeClientRecordService } from "@/lib/client-record-service-invocation";
@@ -33,6 +35,7 @@ import { providerItemsFromFct } from "@/lib/provider-catalog-items";
 import { readRecordGraphAuthors } from "@/lib/record-authors";
 import { discoverAnalyses, discoverViews } from "@/lib/personal-sparql-reads";
 import { providerCatalogGraph, historyGraph } from "@/lib/graph-context";
+import { PERSONAL_PERSPECTIVE_URI, personalPerspectiveMatchesQuery } from "@/lib/personal-perspective-ids";
 
 
 import { callOpenApiService } from "@/lib/service-client";
@@ -121,6 +124,8 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTool
 import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
 import { PROVIDER_CATALOG_XSLT, type ProviderKind, type ProviderCatalogItem } from "@/lib/provider-catalog-xslt";
 import { SPIDER_ANALYSIS_URI } from "@/lib/spider-numeric-policy";
+import { SANKEY_ANALYSIS_URI } from "@/lib/sankey-coverage";
+import { D3_SANKEY_ANALYSIS_URI } from "@/lib/d3-sankey-id";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -151,6 +156,7 @@ import { shortenCount } from "@/lib/utils";
 import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
 import { graphAutoFillAllowsQuery } from "@/lib/app-lifecycle/graph-autofill";
+import { PERSONAL_SPARQL_HEALTH_EVENT } from "@/lib/client-personal-sparql";
 import { MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, abortPendingMaestroQueries, stopPendingMaestroQueries, resumePendingMaestroQueries, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
@@ -300,7 +306,7 @@ export function useWorkspaceController() {
   } = useGraphScopeState();
   const {
     selectedUri, setSelectedUri, urlStateInitialized, setUrlStateInitialized,
-    querySourceFormat, setQuerySourceFormat, sparqlQuery, setSparqlQuery,
+    querySourceFormat, setQuerySourceFormat, sparqlQuery, setSparqlQuery, sparqlExecutionAddr, setSparqlExecutionAddr,
     breadcrumbTrail, setBreadcrumbTrail, ancestorGhostRetainedRef, previousActiveGhostPathRef,
     previousScopeRelationshipsRef, rootBreadcrumb, signalPickerExpanded, setSignalPickerExpanded, rootSearchExpanded,
     setRootSearchExpanded, rootUriLabelCacheRef, namePropertyMenuOpen, setNamePropertyMenuOpen,
@@ -494,9 +500,9 @@ export function useWorkspaceController() {
       return () => { active = false; };
     }
     setPrefixStatus("Loading namespace prefixes…");
+    // An explicitly selected community registry is an optional enrichment.
+    // Never cascade an upstream 502 into a second failing remote service call.
     callOpenApiService<Record<string, unknown>>(prefixSource === "zazuko" ? "zazuko" : "prefixcc", "getPrefixes")
-      .catch((error) => prefixSource === "prefixcc"
-        ? callOpenApiService<Record<string, unknown>>("zazuko", "getPrefixes") : Promise.reject(error))
       .then((result) => {
         const context = result["@context"] && typeof result["@context"] === "object" ? result["@context"] as Record<string, unknown> : result;
         const prefixes: Record<string, string> = {};
@@ -511,7 +517,13 @@ export function useWorkspaceController() {
         setNamespacePrefixSource(data.prefixes ?? {});
         setPrefixStatus(`${data.count ?? 0} community prefixes · ${data.note ?? "Built-in fallback"}`);
       })
-      .catch(() => { if (active) { setNamespacePrefixSource({}); setPrefixStatus("Built-in prefixes (remote source unavailable)"); } });
+      .catch(error => { if (active) {
+        setNamespacePrefixSource({});
+        setPrefixStatus(`Built-in prefixes (remote registry unavailable: ${describeUpstreamError(error)})`);
+        // Avoid repeating a known upstream failure on every new workspace.
+        setPrefixSource("builtin");
+        void maestroStorageSet("maestro-namespace-prefix-source", "builtin");
+      } });
     return () => { active = false; };
   }, [prefixSource]);
   
@@ -554,6 +566,27 @@ export function useWorkspaceController() {
     window.addEventListener(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, onSuccess);
     return () => window.removeEventListener(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, onSuccess);
   }, [fctEndpoints, setEndpointStatuses, setEndpointHealthToast]);
+
+  // Personal SHACL/provider/status SPARQL operations use the same endpoint
+  // registry as normal graph queries. A 503 must not leave its dropdown icon
+  // green from an older health probe. Only 5xx gateway failures affect health;
+  // application-level SPARQL errors do not.
+  useEffect(() => {
+    const onPersonalHealth = (event: Event) => {
+      const {endpointUrl,status} = (event as CustomEvent<{endpointUrl?:string;status?:number}>).detail ?? {};
+      if (!endpointUrl || typeof status !== "number" || !Number.isInteger(status) || !(status === 200 || status === 401 || status >= 500)) return;
+      const endpoint = fctEndpoints.find(item => graphServerUrlMatches(item.url,endpointUrl,item.schemeInferred));
+      if (!endpoint) return;
+      setEndpointStatuses(current => {
+        const previous = current[endpoint.id];
+        const next: EndpointStatus = {id:endpoint.id,status,state:status >= 500 ? "server-error" : status === 401 ? "http-error" : "ok",testedUrl:endpointUrl};
+        return previous?.status === next.status && previous.state === next.state && previous.testedUrl === next.testedUrl
+          ? current : {...current,[endpoint.id]:next};
+      });
+    };
+    window.addEventListener(PERSONAL_SPARQL_HEALTH_EVENT,onPersonalHealth);
+    return () => window.removeEventListener(PERSONAL_SPARQL_HEALTH_EVENT,onPersonalHealth);
+  },[fctEndpoints,setEndpointStatuses]);
 
   const { selectedFacet, setSelectedFacet, propertiesPage, setPropertiesPage, classesPage, setClassesPage, graphsPage, setGraphsPage, graphSort, setGraphSort, graphSortPickerExpanded, setGraphSortPickerExpanded, graphListSparql, setGraphListSparql, graphText, setGraphText, graphAutoFill, setGraphAutoFill, graphFieldEditing, setGraphFieldEditing, graphNavigationHistory, setGraphNavigationHistory, graphNavigationIndex, setGraphNavigationIndex, findEndpointsEnabled, setFindEndpointsEnabled, lastManualGraphRef, restoredGraphTextRef } = useGraphScopeNavigation();
   
@@ -1552,14 +1585,22 @@ useEffect(() => {
         `/proxy/api/fct?health=1&endpointId=${encodeURIComponent(endpoint.id)}${endpoint.schemeInferred && endpoint.url.startsWith("https://") && testedUrl === endpoint.url ? "" : `&graphServerUrl=${encodeURIComponent(testedUrl)}`}`,
         { cache: "no-store", headers: proxyDebugHeaders("endpoint-health", `EndpointHealth:${endpoint.id}`) },
       );
-      const data = await response.json();
-      // A proxy/session/registry failure says nothing about the remote graph
-      // server's availability. Treat it as inconclusive, not unreachable.
-      status = response.ok && data.check
-        ? data.check as EndpointStatus
-        : { id: endpoint.id, status: null, state: "probe-error", testedUrl };
-    } catch {
-      status = { id: endpoint.id, status: null, state: "probe-error", testedUrl };
+      const body = await response.text();
+      let data: { check?: EndpointStatus; error?: string; details?: string } | null = null;
+      try { data = JSON.parse(body) as { check?: EndpointStatus; error?: string; details?: string }; }
+      catch (parseError) {
+        if (response.ok) throw new Error(`Health proxy HTTP ${response.status} returned invalid JSON: ${describeUpstreamError(parseError)}; body: ${sanitizeUpstreamDiagnostic(body)}`, { cause: parseError });
+      }
+      // Proxy/session/registry failure is inconclusive, not remote unreachability.
+      // Retain its status, message, and safe body for the endpoint details UI.
+      status = response.ok && data?.check
+        ? data.check
+        : { id: endpoint.id, status: response.status, state: "probe-error", testedUrl,
+            diagnostic: sanitizeUpstreamDiagnostic([`Proxy HTTP ${response.status} ${response.statusText}`,
+              data?.error, data?.details, body].filter(Boolean).join("\n")) };
+    } catch (error) {
+      status = { id: endpoint.id, status: null, state: "probe-error", testedUrl,
+        diagnostic: describeUpstreamError(error, "Health proxy request failed") };
     } finally {
       if (isCurrent()) {
         setCheckingEndpointIds((current) => ({ ...current, [endpoint.id]: false }));
@@ -1596,7 +1637,7 @@ useEffect(() => {
       // Query success can update the state before this queued update applies.
       if (previous?.state === "ok" && previous.status === 200 &&
           newerSuccessForThisUrl && (status.state !== "ok" || status.status !== 200)) return current;
-      if (previous?.status === status.status && previous.state === status.state && previous.testedUrl === status.testedUrl) return current;
+      if (previous?.status === status.status && previous.state === status.state && previous.testedUrl === status.testedUrl && previous.diagnostic === status.diagnostic && JSON.stringify(previous.attempts) === JSON.stringify(status.attempts)) return current;
       return { ...current, [endpoint.id]: status };
     });
     return status;
@@ -2699,8 +2740,7 @@ useEffect(() => {
         try { data = JSON.parse(text) as typeof data; } catch { /* A non-JSON error body is not a failed graph server. */ }
         if (!response.ok) {
           const timedOut = response.status === 504 || /timed? out|timeout|signal timed out/i.test(data.error ?? "");
-          throw new Error(timedOut ? "Graph discovery timed out" :
-            `Graph discovery unavailable (HTTP ${response.status})`);
+          throw new Error(`${timedOut ? "Graph discovery timed out" : "Graph discovery unavailable"} (HTTP ${response.status}): ${sanitizeUpstreamDiagnostic([data.error, text, response.statusText].filter(Boolean).join("; "))}`);
         }
         if (controller.signal.aborted) return;
         if (data.selection === "first-match") {
@@ -2724,7 +2764,7 @@ useEffect(() => {
             { status: timeout ? 504 : undefined, optional: true });
           // Do not block the live FCT pipeline: its unscoped/default-dataset
           // query is still valid when automatic graph selection is unavailable.
-          setGraphProbe({ identity: graphProbeIdentity, state: "error", error: timeout ? "Graph discovery timed out" : "Graph discovery unavailable" });
+          setGraphProbe({ identity: graphProbeIdentity, state: "error", error: `${timeout ? "Graph discovery timed out" : "Graph discovery unavailable"}: ${describeUpstreamError(error)}` });
         }
       }
     })();
@@ -2967,6 +3007,7 @@ useEffect(() => {
   setDescribedRecord([]);
   setRecordDescriptionPage(0);
   setSparqlQuery("");
+  setSparqlExecutionAddr("");
   setSearchError("");
 
   // Restart server-side paging at offset zero for the new query.
@@ -2995,6 +3036,7 @@ useEffect(() => {
     setIsSearching(endpointReadyForQuery);
     setSearchError("");
     setSparqlQuery("");
+  setSparqlExecutionAddr("");
     setSelectedUri("");
     setDescribedRecord([]);
     setIsDescribing(false);
@@ -3320,11 +3362,13 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     navigationKey: queryXml,
     navigationUrl: typeof window === "undefined" ? "" : buildCurrentShareUrl(),
     navigationTab: workspaceTab,
+    navigationViewPanel: viewPanel,
     navigationIsProvider: Boolean(querySourceAttribute(queryTree)?.startsWith("urn:maestro:providers:")),
     restoringHistory: historyRestoreInProgressRef.current,
   });
   const canExecuteMaestroQuery = operations.execution.canExecuteQuery;
   const returnShareUrl = operations.snapshot.navigation.returnUrl || null;
+  const returnButtonVisible = operations.snapshot.navigation.returnVisible;
   const historyNavigationPending = operations.snapshot.navigation.historyPending;
   const resultsCountRequestIdentity = `${selectedEndpointId}\u0000${resultsCountSparql ?? ""}`;
   const completeFirstResultsPage = resultsPageComplete && resultsOffset === 0 &&
@@ -3654,6 +3698,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         resultsLoadedQueryIdentityRef.current = requestQueryIdentity;
         operations.controller.send({ type: "RESULTS_SUCCEEDED", key: operationQueryKey });
         setSparqlQuery(data.sparql || "");
+        setSparqlExecutionAddr(data.executionAddr || "");
         setResultsPageMatchCount(nextResults.length);
         setResultsPageComplete(!data.incomplete && rawResults.length < resultsBatchSize);
         setMaestroIncompleteResults("results", { incomplete: data.incomplete, requestId: "", message: data.warning || "" });
@@ -4623,8 +4668,8 @@ setGraphFacets(graphs);
         if (!controller.signal.aborted) {
           const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
           setRecordGraphError(timedOut
-            ? "Graph discovery timed out. Record data can still load without graph metadata."
-            : error instanceof Error ? error.message : "Could not discover record graphs.");
+            ? `Graph discovery timed out. Record data can still load without graph metadata: ${describeUpstreamError(error)}`
+            : describeUpstreamError(error, "Could not discover record graphs."));
         }
       } finally {
         if (!controller.signal.aborted) setLoadingRecordGraphs(false);
@@ -5571,8 +5616,8 @@ setGraphFacets(graphs);
       // Templates may declare controls with mui:parent="<id>". Remove those controls
       // from the record body and render them into the matching application button bar.
       const templateButtonsByParent: Record<string, string[]> = {};
-      for (const button of Array.from(document.body.querySelectorAll("[mui\\:parent]"))) {
-        const parentId = (button.getAttribute("mui:parent") ?? "").trim();
+      for (const button of Array.from(document.body.querySelectorAll("[mui\\:parent], [id$='-record-heading-icon']"))) {
+        const parentId = (button.getAttribute("mui:parent") ?? (button.id.endsWith("-record-heading-icon") ? "record_title_icon" : "")).trim();
         button.removeAttribute("mui:parent");
         if (!parentId) throw new Error("A template control with mui:parent must name its target element id.");
         if (parentId === "record_title_icon" && (button.localName !== "svg" || button.namespaceURI !== "http://www.w3.org/2000/svg")) {
@@ -5850,7 +5895,7 @@ setGraphFacets(graphs);
         // publish any intermediate tree. Only the final replaceTree notifies
         // Maestro's FCT subscribers and causes a query to execute.
         const finalXml = liveSnapshots[liveSnapshots.length - 1];
-        if (authSession) {
+        if (authSession && personalStoreReady) {
           templateHistoryFlushRef.current = true;
           try {
             await historyWriteQueueRef.current;
@@ -6773,7 +6818,7 @@ useEffect(() => {
   }, [authSession]);
 
   const pagedUnselectedClasses = unselectedClassDisplayFacets.slice(classesPage * FACET_PAGE_SIZE, (classesPage + 1) * FACET_PAGE_SIZE);
-  const categoryTreeItems = categoriesTreeMode ? unselectedClassDisplayFacets : pagedUnselectedClasses;
+  const categoryTreeItems = [...selectedClassDisplayFacets, ...unselectedClassDisplayFacets].filter((item, index, all) => all.findIndex(other => other.uri === item.uri) === index);
   const categoryTreeRoots: CategoryTreeNode[] = (() => {
     // The hierarchy comes from the query itself (rdfs:subClassOf edges of the result-set classes up to the
     // root). A class with several parents is listed under each of them, with its own subtree repeated.
@@ -7282,6 +7327,8 @@ useEffect(() => {
   const providerNavigationSequenceRef = useRef(0);
   async function selectViewProvider(providerKind: ProviderKind | null) {
     if (!providerKind) { navigationTransactions.cancel(); operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" }); setViewProvider(null); return; }
+    // The graph-seeding XState capability is authoritative, not authSession.
+    if (!personalStoreReady) return;
     ++providerNavigationSequenceRef.current;
     // A ribbon click alone does not displace Browse. XState commits Return
     // atomically only after the replacement query has been restored.
@@ -7403,8 +7450,13 @@ useEffect(() => {
     return true;
   }
 
-  /** Switching between View and Analyze never creates or consumes Return.
-   * Re-entering Browse restores its displaced query if one is saved. */
+  /** Explicit View > Features entry activates a persistent Return session.
+   * The navigation actor owns the saved source and button visibility. */
+  function enterViewFeatures() {
+    operations.controller.send({ type: "FEATURES_ENTERED", fromUrl: buildCurrentShareUrl() });
+  }
+
+  /** Switching tabs does not dismiss Return. Only clicking Return does. */
   function navigateWorkspaceTab(tab: "browse" | "view" | "analyze") {
     // Leaving View cancels an in-flight Provider navigation before it can
     // replace a later Browse or Analyze query with a stale personal query.
@@ -7413,11 +7465,6 @@ useEffect(() => {
       ++providerNavigationSequenceRef.current;
       navigationTransactions.cancel();
       operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" });
-    }
-    // A saved Browse query remains recoverable even if a ribbon-generated
-    // Analyze query has since replaced the intermediate Providers query.
-    if (tab === "browse" && operations.controller.getSnapshot().navigation.returnUrl) {
-      if (returnToPreviousContext()) return;
     }
     if (tab !== "browse") {
       operations.controller.send({
@@ -7435,16 +7482,14 @@ useEffect(() => {
   }
 
   async function loadHistoryQuery(includeFavorites = false) {
-    if (isLoadingHistoryQuery) return;
+    if (!personalStoreReady || isLoadingHistoryQuery) return;
     // An explicit Show action invalidates an outstanding asynchronous Provider
     // navigation. A late provider load must never route back to Providers.
     ++providerNavigationSequenceRef.current;
     navigationTransactions.cancel();
     operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" });
-    setWorkspaceTab("browse");
-    setViewProvider(null);
-    setViewPanel("trail");
-    setSelectedViewUri("");
+    // Keep the current Browse/Return owner intact while resolving the personal
+    // endpoint. A failed Show must not navigate away or clear the ribbon.
     setIsLoadingHistoryQuery(true);
     try {
       // Use the server-resolved SITE_HISTORY graph rather than duplicating its
@@ -7498,18 +7543,24 @@ useEffect(() => {
         ],
       };
       const historyQueryXml = serializeFctQuery(historyTree);
+      // Sheet's Show actions enter an actual, SHACL-discovered Perspective.
+      // As with View ribbon entry, preserve the original Browse context once,
+      // before replacing the authoritative FCT query. A later ribbon action
+      // must not replace the already saved Browse Return owner.
+      if (workspaceTab === "browse") operations.controller.send({
+        type: "RIBBON_ENTRY_FROM_BROWSE", sourceKey: queryXml,
+        fromUrl: buildCurrentShareUrl(),
+      });
       if (!restoreQueryAndUiState(historyQueryXml, null)) {
         throw new Error("Could not restore the generated History query.");
       }
-      // History/Bookmarks are explicit Browse navigations, not ribbon hijacks.
-      // Never preserve the old query in Return for this action.
-      operations.controller.send({ type: "CONTEXT_RETURNED" });
-      // URL/live-query restoration can carry a tab snapshot. The explicit
-      // Show action always lands on Browse regardless of that snapshot.
-      setWorkspaceTab("browse");
+      // The current History/Bookmarks FCT query remains authoritative; only
+      // the presentation changes from Browse Results to its matching View
+      // Perspective. Reuse the exact provider URIs used by the ribbon/URL.
+      setWorkspaceTab("view");
       setViewProvider(null);
-      setViewPanel("trail");
-      setSelectedViewUri("");
+      setViewPanel("perspectives");
+      setSelectedViewUri(includeFavorites ? PERSONAL_PERSPECTIVE_URI.bookmarks : PERSONAL_PERSPECTIVE_URI.history);
 
       setSearchDraft("");
       setSavedSearchDraft("");
@@ -7518,8 +7569,8 @@ useEffect(() => {
       toast.add({
         title: includeFavorites ? "Bookmarks loaded" : "History loaded",
         description: includeFavorites
-          ? "Showing Bookmark records from your personal graph server."
-          : "Showing Query History Visit records from your personal graph server.",
+          ? "Showing Bookmarks in View → Perspectives."
+          : "Showing History in View → Perspectives.",
         type: "success",
       });
     } catch (error) {
@@ -8668,7 +8719,7 @@ useEffect(() => {
   const discoveredViews: DiscoveredView[] =
     workspaceTab === "view" && viewDiscoverySnapshot.context.key === viewDiscoveryScope &&
       viewDiscoverySnapshot.value === "ready"
-      ? viewDiscoverySnapshot.context.items : [];
+      ? viewDiscoverySnapshot.context.items.filter(view => personalPerspectiveMatchesQuery(view.uri, queryTree)) : [];
   useEffect(() => {
     if (workspaceTab !== "view") { viewDiscoveryController.inactive(); return; }
     const classes = JSON.parse(viewClassKey) as string[];
@@ -8818,29 +8869,44 @@ useEffect(() => {
   // The View XSLT projection depends on endpoint *values*, not transient
   // object identities. A health observer or provider discovery may hand React
   // fresh maps containing identical data; those must never restart rendering.
-  // Kanban uses the same FCT Group-by member rows already loaded for Browse.
-  // This is presentation metadata only; it does not run a second query or
-  // infer group membership from labels, object kinds, or the visible page.
-  const kanbanMembership = new Map<string, string[]>();
-  if (selectedGroupByOption && groupValues.length) {
-    for (const groupValue of groupValues) {
-      const key = `${selectedGroupByOption.key}::${groupValueKey(groupValue)}`;
-      const state = groupMembers[key];
-      if (!state || state.loading || state.error) continue;
-      const label = groupValue.title || groupValue.uri;
-      for (const member of state.results) {
-        const current = kanbanMembership.get(member.uri) ?? [];
-        if (!current.includes(label)) current.push(label);
-        kanbanMembership.set(member.uri, current);
-      }
-    }
-  }
-  const kanbanMembershipKey = JSON.stringify([...kanbanMembership.entries()].sort(([a], [b]) => a.localeCompare(b)));
+  // Kanban grouping is a *temporary presentation choice*. Never mutate the
+  // authoritative FCT group carrier, History, bookmarks or personal graph.
+  const [kanbanGroupChoice, setKanbanGroupChoice] = useState("auto");
+  const [kanbanMoves, setKanbanMoves] = useState<Record<string, { from: string; to: string }>>({});
+  const [kanbanColumnOrder, setKanbanColumnOrder] = useState<Record<string, string[]>>({});
+  useEffect(() => { setKanbanGroupChoice("auto"); setKanbanMoves({}); setKanbanColumnOrder({}); }, [queryXml]);
+  useEffect(() => { setKanbanMoves({}); setKanbanColumnOrder({}); }, [kanbanGroupChoice]);
+  const kanbanGroupingOptions = [
+    { key: "none", label: "Ungrouped" },
+    ...(verifiedQueryBookmarked ? [{ key: "status", label: "Status" }] : []),
+    ...groupByOptions.filter(option => option.key !== "").map(option => ({
+      key: option.key,
+      label: option.direction === "forward" && option.uri === RDF_TYPE_URI ? "Categories"
+        : option.label,
+    })),
+  ];
+  const kanbanGroupKey = kanbanGroupChoice === "auto"
+    ? verifiedQueryBookmarked ? "status" : "none"
+    : kanbanGroupingOptions.some(option => option.key === kanbanGroupChoice) ? kanbanGroupChoice : "none";
+  const kanbanMoveCard = (uri: string, from: string, to: string, beforeUri = "") => {
+    if (!visibleResultsPage.some(item => item.uri === uri)) return;
+    if (from !== to) setKanbanMoves(current => ({ ...current, [uri]: { from, to } }));
+    setKanbanColumnOrder(current => {
+      const origin = current[from] ?? visibleResultsPage.map(item => item.uri);
+      const destination = current[to] ?? visibleResultsPage.map(item => item.uri);
+      const ordered = destination.filter(item => item !== uri);
+      const index = beforeUri && beforeUri !== uri ? ordered.indexOf(beforeUri) : -1;
+      ordered.splice(index < 0 ? ordered.length : index, 0, uri);
+      return { ...current, [from]: origin.filter(item => item !== uri), [to]: ordered };
+    });
+  };
+  const kanbanMovesKey = JSON.stringify([kanbanMoves, kanbanColumnOrder]);
   const viewRenderInputKey = JSON.stringify([
     viewPageKey, selectedEndpointId, resultsUiPage, effectivePageSize,
     fctEndpoints, endpointStatuses, viewDomainRanks, viewServerSoftware,
     viewServerDescriptions, checkingEndpointIds,
-    kanbanMembershipKey,
+    kanbanGroupKey, kanbanMovesKey, verifiedQueryBookmarked, queryXml,
+    visibleResultsPage.map(item => [item.uri, item.title]),
   ]);
   useEffect(() => {
     if (workspaceTab !== "view" || !selectedView) { setViewHtml(current => current === "" ? current : ""); setViewRenderError(current => current === "" ? current : ""); return; }
@@ -8868,13 +8934,91 @@ useEffect(() => {
       });
       const start = resultsUiPage * effectivePageSize;
       const pageRows = rows.slice(start, start + effectivePageSize);
-      const displayRows = selectedView.uri === "gttp://ggg.maestro.ui/provider/kanban"
-        ? pageRows.flatMap(row => (kanbanMembership.get(row.uri) ?? [""]).map(group => ({ ...row, group })))
+      const isKanban = selectedView.uri === "gttp://ggg.maestro.ui/provider/kanban";
+      const kanbanPageRows = visibleResultsPage.map(row => ({ uri: row.uri, label: row.title, group: "" }));
+      const statusByUri = new Map<string, string[]>();
+      const memberships = new Map<string, string[]>();
+      if (isKanban && kanbanPageRows.length) {
+        const uris = [...new Set(kanbanPageRows.map(row => row.uri))]
+          .filter(uri => /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(uri)).slice(0, 150);
+        // Always retain the existing Status labels as card metadata. A failed
+        // personal read does not prevent rendering or clicking ordinary cards.
+        if (uris.length && verifiedQueryBookmarked) {
+          try {
+            const ctx = await personalContext();
+            const query = `SELECT ?resource ?status WHERE { VALUES ?resource { ${uris.map(uri => `<${uri}>`).join(" ")} } GRAPH <${ctx.base}/status> { ?resource <gttp://ggg.maestro.ecosys/ns/ui#status> ?status } }`;
+            const assertions = await selectPersonal(query, ctx);
+            for (const assertion of assertions) {
+              const uri = assertion.resource?.value ?? "", status = assertion.status?.value ?? "";
+              if (!uris.includes(uri) || !status) continue;
+              const values = statusByUri.get(uri) ?? [];
+              const label = status.split(/[/#]/).pop() ?? status;
+              if (!values.includes(label)) values.push(label);
+              statusByUri.set(uri, values);
+            }
+          } catch (error) {
+            if (!canceled) browserLog.warn("kanban.status-projection-unavailable", { error });
+          }
+        }
+        if (kanbanGroupKey === "status") {
+          for (const uri of uris) memberships.set(uri, statusByUri.get(uri) ?? []);
+        } else if (kanbanGroupKey !== "none") {
+          const option = groupByOptions.find(candidate => candidate.key === kanbanGroupKey);
+          if (option && uris.length) {
+            try {
+              const projectionXml = listValuesQueryClone(queryXml);
+              // This is an ordinary bounded FCT list-values projection over the
+              // existing page, not a persistent group="true" query edit.
+              const responses = await Promise.all(Array.from({ length: Math.ceil(uris.length / LIST_VALUES_MAX_RESOURCES) }, async (_, batch) => {
+                const resources = uris.slice(batch * LIST_VALUES_MAX_RESOURCES, (batch + 1) * LIST_VALUES_MAX_RESOURCES)
+                  .map(value => ({ value, type: "uri" as const }));
+                const response = await cachedFetchFct("/proxy/api/fct", {
+                  method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ queryXml: projectionXml, resources, projections: [{ property: option.uri, direction: option.direction }] }),
+                });
+                if (!response.ok) throw new Error(`Kanban facet projection HTTP ${response.status}`);
+                return parseListValuesXml(await response.text());
+              }));
+              for (const response of responses) for (const [uri, projections] of response) {
+                const values = projections.filter(projection => projection.property === option.uri && projection.direction === option.direction)
+                  .flatMap(projection => projection.values)
+                  .filter(term => term.value && term.value !== "-")
+                  .map(term => term.type === "uri" ? toLabel(term.value) : term.value);
+                memberships.set(uri, [...new Set(values)]);
+              }
+            } catch (error) {
+              if (!canceled) browserLog.warn("kanban.facet-projection-unavailable", { error });
+            }
+          }
+        }
+      }
+      if (canceled) return;
+      const displayRows = isKanban
+        ? kanbanPageRows.flatMap(row => {
+            const columns = memberships.get(row.uri)?.length ? memberships.get(row.uri)! : [""];
+            const move = kanbanMoves[row.uri];
+            const relocated = move && columns.includes(move.from)
+              ? [...columns.filter(column => column !== move.from), move.to] : columns;
+            return [...new Set(relocated)].map(group => ({ ...row, group,
+              status: (statusByUri.get(row.uri) ?? []).join(", ") }));
+          })
         : pageRows;
+      if (isKanban) displayRows.sort((a, b) => {
+        if (a.group !== b.group) return a.group.localeCompare(b.group);
+        const order = kanbanColumnOrder[a.group] ?? [];
+        const ai = order.indexOf(a.uri), bi = order.indexOf(b.uri);
+        if (ai >= 0 && bi >= 0) return ai - bi;
+        if (ai >= 0) return -1;
+        if (bi >= 0) return 1;
+        return 0;
+      });
       const html = await renderDiscoveredViewXslt(selectedView.stylesheet, displayRows, {
         availableRows: rows, page: resultsUiPage, pageSize: effectivePageSize,
       });
       const parsed = new DOMParser().parseFromString(html, "text/html");
+      if (selectedView.uri === "gttp://ggg.maestro.ui/provider/kanban" && displayRows.length > 0 && !parsed.querySelector("article")) {
+        throw new Error("Kanban transformation returned no cards for the populated FCT page.");
+      }
       const meta = parsed.querySelector("section[data-view-title], section[data-view-icon]");
       const icon = meta?.getAttribute("data-view-icon") ?? undefined;
       if (canceled) return;
@@ -8989,7 +9133,7 @@ useEffect(() => {
 
   useEffect(() => {
     if (workspaceTab !== "analyze") return;
-    if (selectedAnalysisUri === NODE_ANALYTICS_ANALYSIS_URI || selectedAnalysisUri === OVERVIEW_PERSPECTIVE_URI || selectedAnalysisUri === SPIDER_ANALYSIS_URI || selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-activity" ||
+    if (selectedAnalysisUri === NODE_ANALYTICS_ANALYSIS_URI || selectedAnalysisUri === OVERVIEW_PERSPECTIVE_URI || selectedAnalysisUri === SPIDER_ANALYSIS_URI || selectedAnalysisUri === SANKEY_ANALYSIS_URI || selectedAnalysisUri === D3_SANKEY_ANALYSIS_URI || selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-activity" ||
         selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-tags") {
       setAnalysisTable(null);
       setAnalysisLoading(false);
@@ -9130,7 +9274,9 @@ useEffect(() => {
   // They never compete with the existing query, cancellation or access gates.
   const appLifecycle = useAppLifecycleObserver({
     authRestored: authRestoreComplete,
-    signedIn: accessCapabilities.canUsePersonalStore,
+    // Authentication and graph readiness are separate XState facts: while the
+    // account is signed in but seeding, personal features remain unavailable.
+    signedIn: accessSnapshot.value === "signedIn" && Boolean(accessSnapshot.context.sessionKey),
     personalStoreReady,
     graphRegistryReady,
     selectedServerExists: Boolean(selectedEndpointId),
@@ -9149,7 +9295,7 @@ useEffect(() => {
     providerCatalogError: Boolean(viewProviderError),
     providerPhase: providerLifecyclePhase,
     configurePhase: configureLifecyclePhase,
-    returnAvailable: Boolean(returnShareUrl),
+    returnAvailable: returnButtonVisible,
     recordSelected: Boolean(selectedUri),
     recordPhase: (() => {
       const phases = recordLifecycle.getSnapshot().context.phases;
@@ -9179,6 +9325,7 @@ useEffect(() => {
     revokeQueryBookmark,
     buildCurrentShareUrl,
     returnShareUrl,
+    returnButtonVisible,
     queryActivityPending: isSearching || isCountingResults || isLoadingProperties || isLoadingRoles || isLoadingClasses || isLoadingCategoryTree || isLoadingGraphs || isLoadingAlphabet || groupValuesLoading || loadingRecordGraphs || loadingRecordAuthors || isLoadingRecordPolicy || isDescribing || viewDiscoveryLoading || viewProviderLoading || isValidatingRecord,
     FACET_PAGE_SIZE,
     RECORD_DESCRIPTION_PAGE_SIZE,
@@ -9241,6 +9388,7 @@ useEffect(() => {
     categoriesWidgetRef,
     categoryPageCount,
     categoryTreeAllCollapsed,
+    categoryTreeRoots,
     categoryTreePages,
     categoryTreeParentKeys,
     centralPaneRef,
@@ -9666,6 +9814,7 @@ useEffect(() => {
     showResultBadges,
     showRolesSpinner,
     sourceSparql,
+    sparqlExecutionAddr,
     startHistoryActionHover,
     stopHistoryActionHover,
     timeoutEditorOpen,
@@ -9679,6 +9828,7 @@ useEffect(() => {
     viewDiscoveryError,
     viewDiscoveryLoading,
     viewProvider,
+    enterViewFeatures,
     toggleLiveStatusFilter,
     togglePolicyStatusFilter,
     viewProviderCount,
@@ -9692,6 +9842,7 @@ useEffect(() => {
     queryContextError: queryContext.error,
     queryMatchedProviders: queryContext.matchedProviders,
     viewProviderLoading,
+    kanbanGroupingOptions, kanbanGroupKey, setKanbanGroupChoice, kanbanMoveCard,
     viewHtml,
     viewPanel,
     viewRenderError,

@@ -43,9 +43,18 @@ test('Clipboard age is checked before root click autofill without assuming arbit
   const controller=read('src/canvas/utils/workspace-controller.tsx');
   assert.ok(controller.indexOf('} = useAuthenticationState();') < controller.indexOf('if (!authSession) resetMaestroKinds()'), 'kinds reset hook must not reference authSession before initialization');
 });
-test('Architecture and XState migration report is present',()=>{
-  const source=read('src/lib/app-lifecycle/root-breadcrumb.ts');
-  assert.match(source,/createMachine/);
-  const report=read('PATCH_NOTES.md');
-  assert.match(report,/XState|root breadcrumb/i);
+test('Root breadcrumb XState owns the editor and signal lifecycles independently',()=>{
+  // Verify the implementation rather than a temporary release-note file.
+  // PATCH_NOTES.md is not part of Maestro's required runtime or build inputs.
+  const machine=read('src/lib/app-lifecycle/root-breadcrumb.ts');
+  const renderer=read('src/canvas/top/breadcrumb-renderers.tsx');
+  assert.match(machine,/createMachine\(\{/);
+  assert.match(machine,/type: "parallel"/);
+  assert.match(machine,/presentation: \{/);
+  assert.match(machine,/signal: \{/);
+  assert.match(machine,/rootHoverDelay: \(\) => readRootHoverDelayMs\(\)/);
+  assert.match(machine,/POINTER_AWAY: \{ target: "leaving"/);
+  assert.match(machine,/SIGNAL_SELECTED: "collapsed"/);
+  assert.match(renderer,/rootBreadcrumb\.send\(\{ type: "LABEL_ENTER" \}\)/);
+  assert.match(renderer,/rootBreadcrumb\.send\(\{ type: "SIGNAL_ENTER" \}\)/);
 });

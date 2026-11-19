@@ -29,7 +29,7 @@
 <h3 class="mb-1 mt-2 border-b pb-1 text-xs font-semibold text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 10"><xsl:value-of select="substring(@created,1,10)"/></xsl:when><xsl:otherwise>Undated</xsl:otherwise></xsl:choose></h3>
 </xsl:if>
 <article class="group flex items-center gap-2 rounded-sm border-b px-2 py-1.5 hover:bg-accent/40">
-<button type="button" class="shrink-0 rounded border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent" data-perspective-select="true" title="Select entry"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:choose><xsl:when test="@selected = 'true'">Selected</xsl:when><xsl:otherwise>Select</xsl:otherwise></xsl:choose></button>
+<span class="inline-flex shrink-0 self-start" data-perspective-action-slot="select"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute></span>
 <div class="flex min-w-0 flex-1 flex-col gap-0.5">
 <div class="flex min-w-0 items-center gap-1.5">
 <xsl:if test="@appbarAdded = 'true' and string-length(@appbarIcon) &gt; 0">
@@ -50,9 +50,9 @@ Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@av
 <small class="truncate text-xs text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 19"><xsl:value-of select="substring(@created,12,8)"/></xsl:when><xsl:otherwise><xsl:value-of select="@created"/></xsl:otherwise></xsl:choose></small>
 </div>
 <xsl:if test="@appbarAvailable = 'true'">
-<button type="button" class="rounded-md border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent" data-perspective-appbar="true"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:choose><xsl:when test="@appbarAdded = 'true'">Unpin</xsl:when><xsl:otherwise>Pin to appbar</xsl:otherwise></xsl:choose></button>
+<span class="inline-flex shrink-0" data-perspective-pin-slot="true"><xsl:attribute name="data-perspective-pin-id"><xsl:value-of select="@uri"/></xsl:attribute></span>
 </xsl:if>
-<button type="button" class="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-destructive/10 hover:text-destructive" data-perspective-delete="true" title="Delete entry"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute>Delete</button>
+<span class="inline-flex shrink-0 self-start" data-perspective-action-slot="delete"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute></span>
 </article>
 </xsl:template>
 </xsl:stylesheet>""" .
@@ -80,7 +80,7 @@ Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@av
 <h3 class="mb-1 mt-2 border-b pb-1 text-xs font-semibold text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 10"><xsl:value-of select="substring(@created,1,10)"/></xsl:when><xsl:otherwise>Undated</xsl:otherwise></xsl:choose></h3>
 </xsl:if>
 <article class="group flex items-center gap-2 rounded-sm border-b px-2 py-1.5 hover:bg-accent/40">
-<button type="button" class="shrink-0 rounded border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent" data-perspective-select="true" title="Select entry"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:choose><xsl:when test="@selected = 'true'">Selected</xsl:when><xsl:otherwise>Select</xsl:otherwise></xsl:choose></button>
+<span class="inline-flex shrink-0 self-start" data-perspective-action-slot="select"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute></span>
 <div class="flex min-w-0 flex-1 flex-col gap-0.5">
 <button type="button" class="cursor-pointer truncate text-left text-sm font-medium hover:underline" data-perspective-open="true"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute><xsl:value-of select="@label"/></button>
 <xsl:if test="string-length(@description) &gt; 0"><p class="truncate text-xs text-muted-foreground"><xsl:value-of select="@description"/></p></xsl:if>
@@ -95,7 +95,7 @@ Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@av
 </small>
 <small class="truncate text-xs text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 19"><xsl:value-of select="substring(@created,12,8)"/></xsl:when><xsl:otherwise><xsl:value-of select="@created"/></xsl:otherwise></xsl:choose></small>
 </div>
-<button type="button" class="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-destructive/10 hover:text-destructive" data-perspective-delete="true" title="Delete entry"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute>Delete</button>
+<span class="inline-flex shrink-0 self-start" data-perspective-action-slot="delete"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute></span>
 </article>
 </xsl:template>
 </xsl:stylesheet>""" .
@@ -104,7 +104,7 @@ Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@av
 # determines eligibility from the current FCT facet's observed RDF datatypes.
 # This complements the two explicitly path-bound temporal policies below.
 # Provider acceptance remains an independent user/curator decision.
-<gttp://ggg.maestro.ecosys/shacl/provider/temporal-inferred> a mui:Provider ;
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-inferred> a mui:Provider, mui:FacetProvider ;
   rdfs:label "Calendar (typed date/time)"@en ;
   mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/temporal-inferred-input> ;
   mui:widget <gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> .
@@ -120,7 +120,7 @@ Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@av
 # Reusable temporal Personal-facet formatter. Provider discovery is property-scoped;
 # SHACL accepts XML Schema temporal literals, from year-only to full dateTime.
 # For unknown rdfs:range metadata the provider can still inspect actual values.
-<gttp://ggg.maestro.ecosys/shacl/provider/temporal-created> a mui:Provider ;
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-created> a mui:Provider, mui:FacetProvider ;
   rdfs:label "Date/time"@en ;
   mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/temporal-created-input> ;
   mui:widget <gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> .
@@ -128,7 +128,7 @@ Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@av
   sh:path <http://purl.org/dc/terms/created> ;
   sh:or ( [ sh:datatype xsd:dateTime ] [ sh:datatype xsd:date ]
           [ sh:datatype xsd:gYearMonth ] [ sh:datatype xsd:gYear ] [ sh:datatype xsd:string ] ) .
-<gttp://ggg.maestro.ecosys/shacl/provider/temporal-history> a mui:Provider ;
+<gttp://ggg.maestro.ecosys/shacl/provider/temporal-history> a mui:Provider, mui:FacetProvider ;
   rdfs:label "Date/time"@en ;
   mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/temporal-history-input> ;
   mui:widget <gttp://ggg.maestro.ecosys/shacl/widget#TemporalFacet> .

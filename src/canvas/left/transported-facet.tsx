@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
@@ -64,7 +65,7 @@ function TransportedPersonalFacet({ alias, navigate, endpointReady }: {
       {loading ? <span className="text-xs text-muted-foreground">Loading…</span> : <span className="text-xs text-muted-foreground">{items.length}</span>}
       {query && <QueryInspectorButton query={query} filename={`transported-facet-${alias.href}.xml`} />}
     </header>
-    {error && <div role="alert" className="px-3 py-2 text-xs text-destructive">{error}</div>}
+    {error && <ErrorDetails prefix="Facet" error={error} />}
     <div className="max-h-72 overflow-auto px-2 py-1">
       {rendered.map((item,index) => <label key={`${item.uri}-${index}`} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-accent">
         <input type="checkbox" className="size-4" checked={checked(item)} onChange={event => toggle(item,event.target.checked)} />

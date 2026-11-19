@@ -65,6 +65,7 @@ type SparqlPattern =
   | { kind: "bind"; expression: SparqlExpression; as: SparqlTerm }
   | { kind: "full-text"; value: SparqlTerm; search: SparqlTerm }
   | { kind: "filter"; expression: SparqlExpression }
+  | { kind: "values"; variable: SparqlTerm; values: SparqlTerm[] }
   | { kind: "group"; patterns: SparqlPattern[] }
   | { kind: "union"; branches: SparqlPattern[][] }
   | { kind: "not-exists"; patterns: SparqlPattern[] }
@@ -180,6 +181,7 @@ function serializePattern(pattern: SparqlPattern, depth = 0): string {
     case "bind": return `${indent}BIND(${serializeExpression(pattern.expression)} AS ${serializeTerm(pattern.as)})`;
     case "full-text": return `${indent}${serializeTerm(pattern.value)} bif:contains ${serializeTerm(pattern.search)} .`;
     case "filter": return `${indent}FILTER ${serializeExpression(pattern.expression)}`;
+    case "values": return `${indent}VALUES ${serializeTerm(pattern.variable)} { ${pattern.values.map(serializeTerm).join(" ")} }`;
     case "group": return `${indent}{\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
     case "union": return pattern.branches.map((branch) => `${indent}{\n${branch.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`).join("\n" + indent + "UNION\n");
     case "not-exists": return `${indent}FILTER NOT EXISTS {\n${pattern.patterns.map((item) => serializePattern(item, depth + 1)).join("\n")}\n${indent}}`;
@@ -677,7 +679,7 @@ export type FctFederationContext = {
   providerOtcGraph?: string;
 };
 
-export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false, discoverGraph: boolean | "first" = false, countFreeFacet = false, federation?: FctFederationContext, preferredLanguage = effectiveMaestroLanguage()): CompiledFctQuery {
+export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false, discoverGraph: boolean | "first" = false, countFreeFacet = false, federation?: FctFederationContext, preferredLanguage = effectiveMaestroLanguage(), statusCandidateIris?: readonly string[]): CompiledFctQuery {
   if (!xml.trim()) throw new Error("The FCT query XML is empty.");
   const validation = XMLValidator.validate(xml);
   if (validation !== true) {
@@ -1556,8 +1558,19 @@ if (!hasBindingPattern && !viewSuppliesTriple) {
       ],where:[...source,...statusPatterns,{kind:"filter",expression:{kind:"function",name:"isIRI",args:[termExpr(target)]}}],
       groupBy:[termExpr(statusVariable)]});
     } else {
+      // The SPA can intersect personal Status subjects with the complete
+      // remote FCT population without Virtuoso SERVICE metadata registration.
+      // Keep the VALUES constraint inside the FCT AST so no SPARQL
+      // string rewriting or lossy approximation of its scope is required.
+      const candidateFilter: SparqlPattern[] = statusCandidateIris === undefined ? [] : [{
+        kind: "values", variable: target,
+        values: statusCandidateIris.map(uri => {
+          if (!iri(uri)) throw new Error("Invalid IRI in the Status candidate batch.");
+          return iriTerm(uri);
+        }),
+      }];
       query = buildSelectQuery({directives,distinct:true,
-        projections:[{expression:termExpr(target),as:variable("c1")}],where:focusWhere});
+        projections:[{expression:termExpr(target),as:variable("c1")}],where:[...candidateFilter, ...focusWhere]});
     }
   } else if (propertyUsageView) {
     // The current focus ?target is a *predicate resource*, proven by

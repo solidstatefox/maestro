@@ -58,9 +58,15 @@ export function useRecordPivotWorkspace(
     }).catch(error => { if (!request.signal.aborted) browserLog.warn("record.seen-transition.failed", error); });
     return () => { request.abort(); release(); };
   }, [session.id, identity.queryXml, selectedUri, recordTermType, browse.recordStatus.enabled, browse.authSession, controller]);
+  // Graph discovery is metadata, not a change to the Record SELECT scope.
+  // Refresh the description only when the user actually filters by a graph
+  // family/author and that filter's underlying graphs change.
+  const selectedGraphScope = own.selectedRecordAuthor ||
+    (own.selectedRecordGraph ? own.recordGraphs.filter(graph =>
+      graph.split("#", 1)[0] === own.selectedRecordGraph).join("\u0000") : "");
   const currentRecordDescriptionKey = [session.id, selectedUri, recordTermType,
     identity.datatype ?? "", identity.lang ?? "", identity.bnodeQueryXml ?? "",
-    own.selectedRecordGraph, own.selectedRecordAuthor,
+    own.selectedRecordGraph, own.selectedRecordAuthor, selectedGraphScope,
     browse.recordDescriptionQueryLimit, browse.preferredAlphabetLanguage].join("\u0000");
   useLayoutEffect(() => {
     own.recordLifecycle.selectRecord(currentRecordDescriptionKey);
@@ -161,7 +167,7 @@ export function useRecordPivotWorkspace(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, selectedUri, recordTermType, identity.bnodeQueryXml,
       identity.datatype, identity.lang, identity.queryXml, own.selectedRecordGraph,
-      own.selectedRecordAuthor, recordGraphs.join("\u0000"), browse.recordDescriptionQueryLimit,
+      own.selectedRecordAuthor, selectedGraphScope, browse.recordDescriptionQueryLimit,
       browse.preferredAlphabetLanguage]);
 
   // Discovered graphs are independent of DESCRIBE. A graph-discovery timeout

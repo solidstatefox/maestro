@@ -45,5 +45,5 @@ export function MaestroProviderHost({ providerUri, componentUrn, stylesheet, que
     };
   }, [providerUri, componentUrn, stylesheet, queryXml, resultXml, describeXml, approved, metadata, facetValues]);
 
-  return <div className="flex min-h-0 min-w-0 flex-1 flex-col" id={componentUrn} data-maestro-provider={providerUri} data-approved={approved ? "true" : "false"} />;
+  return <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col" id={componentUrn} data-maestro-provider={providerUri} data-approved={approved ? "true" : "false"} />;
 }

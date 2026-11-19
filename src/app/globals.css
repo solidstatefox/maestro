@@ -164,3 +164,18 @@
   cursor: not-allowed;
   opacity: 0.5;
 }
+/* Scrolling belongs to the workspace panels, not the browser document. */
+html, body { height: 100%; overflow: hidden; }
+/* Compact accessible scrollbars: Firefox + Chromium/WebKit. */
+.maestro-record-explorer *,
+[data-panel] *,
+[data-slot="scroll-area-viewport"] {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.maestro-record-explorer *::-webkit-scrollbar,
+[data-panel] *::-webkit-scrollbar,
+[data-slot="scroll-area-viewport"]::-webkit-scrollbar { width: 6px; height: 6px; }
+.maestro-record-explorer *::-webkit-scrollbar-thumb,
+[data-panel] *::-webkit-scrollbar-thumb,
+[data-slot="scroll-area-viewport"]::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }

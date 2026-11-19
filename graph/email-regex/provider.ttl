@@ -8,7 +8,7 @@
 
 # Extraction behavior is RDF policy, not a hard-coded table of email IRIs in TS.
 # The generic derived-regex FCT engine reads pid/rid and the projection attributes.
-<gttp://ggg.maestro.ui/provider/email-regex> a mui:Provider ;
+<gttp://ggg.maestro.ui/provider/email-regex> a mui:Provider, mui:FacetProvider ;
   rdfs:label "Email components"@en ;
   mui:accepts <gttp://ggg.maestro.ui/provider/email-regex-input> ;
   mui:widget <gttp://ggg.maestro.ui/widget/email-regex> ;

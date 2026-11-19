@@ -61,6 +61,7 @@ test('autocomplete portaled popup does not close on pointer exit and matching al
 });
 test('query hover menu never fabricates a zero queue position',()=>{
   const ui=source('src/canvas/top/appbar-pane.tsx');
-  assert.match(ui,/query\.queueIndex > 0 \? `\$\{query\.queueIndex\}\.\` : "—"/);
+  assert.match(ui,/query\.serverQueueLaneIndex/);
+  assert.match(ui,/query\.queueIndex > 0 \? `browser\.\$\{query\.queueIndex\}` : "—"/);
   assert.doesNotMatch(ui,/query\.queueIndex > 0 \? query\.queueIndex : "0"/);
 });

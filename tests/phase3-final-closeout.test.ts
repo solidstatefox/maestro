@@ -30,7 +30,11 @@ test("query inspector exposes actual XML/SPARQL pairs and uses read-only proxy",
   assert.match(configure, /Kinds XML/);
   assert.match(configure, /Kinds SPARQL/);
   assert.match(configure, /compileFctXmlToSparql\(valuesXml\)/);
-  assert.match(inspector, /JSON\.stringify\(\{ query: displayedCode, addr \}\)/);
+  // Execute must use the address of the displayed tab, not the active Browse query.
+  assert.match(inspector, /const displayedExecutionAddr = \(showingCount \? countAddr : selectedExtraQuery\?\.addr\) \?\? addr \?\? sourceAddr/);
+  assert.match(inspector, /JSON\.stringify\(\{ query: displayedCode, addr: displayedExecutionAddr \}\)/);
+  assert.match(inspector, /executionAddr=\{displayedExecutionAddr\}/);
+  assert.doesNotMatch(inspector, /JSON\.stringify\(\{ query: displayedCode, addr \}\)/);
   assert.match(inspector, /\/proxy\/api\/sparql/);
   assert.doesNotMatch(inspector, /\/proxy\/api\/execute/);
 });
@@ -62,5 +66,5 @@ test("Kanban is a seeded, curated Perspective provider using shared FCT grouping
   assert.match(ttl, /sh:targetClass vfct:query/);
   assert.match(ttl, /xsl:key name="by-column"/);
   assert.match(source("graph/maestro-curation-providers.ttl"), /gttp:\/\/ggg\.maestro\.ui\/provider\/kanban/);
-  assert.match(source("src/canvas/utils/workspace-controller.tsx"), /kanbanMembership/);
+  assert.match(source("src/canvas/utils/workspace-controller.tsx"), /kanbanGroupKey/);
 });

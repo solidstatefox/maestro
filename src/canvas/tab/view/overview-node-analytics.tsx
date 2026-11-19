@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { overviewInputResourcesQuery } from "@/lib/overview-resource-query";
 import { overviewPathQuestion } from "@/lib/overview-path-query";
 
@@ -91,7 +92,7 @@ export function OverviewNodeAnalytics({workspace,population,populationLoading}: 
       </div>
       {populationLoading && <p className="text-xs text-muted-foreground" role="status">Reading active FCT population…</p>}
       <p className="flex items-start gap-1.5 text-xs text-muted-foreground"><Info className="mt-0.5 size-3.5 shrink-0"/>Analysis is restricted to up to {population.length} URI members independently fetched from the active FCT query (first 120, not the current results page). Scores or communities describe the selected relationship in the queried graph, not the entire FCT population. The mind map lists ranked nodes; its branches are not RDF edges.</p>
-      {error && <p role="alert" className="text-xs text-amber-700 dark:text-amber-400">{error}</p>}
+      {error && <ErrorDetails prefix="Overview node analytics" error={error} />}
       {clustered && result.length>0 && <p className="text-xs text-blue-700 dark:text-sky-400">{clusters.length} {activeMetric==="wcc"?"weak components":activeMetric==="scc"?"strong components":"communities"} · largest group {Math.round(clusters[0][1].length/result.length*100)}% of scored sampled members</p>}
       {result.length>0 && result.every(item=>item.score===0) && <p className="text-xs text-muted-foreground">The sampled resources returned no matching URI relationships for this predicate and direction. Try another predicate or use Find connections.</p>}
       {result.some(item=>item.score>0) && <div className="relative h-[440px] overflow-hidden rounded-lg border"><MindMap data={mindmap} readonly compact><MindMapControls/></MindMap></div>}

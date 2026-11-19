@@ -1,4 +1,5 @@
 "use client";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { Ban, Telescope } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -13,7 +14,7 @@ import { facetValueKey, fctTermKey } from "@/canvas/utils/fct-response";
 import { PerspectiveProviderRuntime } from "@/canvas/tab/view/perspective-provider-runtime";
 import { useMapProviderDefinition } from "@/lib/map-provider-discovery";
 import { PersonalPerspectives } from "@/canvas/tab/view/personal-perspectives";
-import { personalPerspectiveFromUri } from "@/lib/personal-perspective-ids";
+import { personalPerspectiveFromUri, personalPerspectiveMatchesQuery } from "@/lib/personal-perspective-ids";
 
 import { Separator } from "@/components/ui/separator";
 
@@ -48,7 +49,7 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
    window.dispatchEvent(new CustomEvent("maestro:policy-bookmark-attention", { detail: { active: policyBookmarkNeeded } }));
    return () => { window.dispatchEvent(new CustomEvent("maestro:policy-bookmark-attention", { detail: { active: false } })); };
  }, [policyBookmarkNeeded]);
- const personalKind = personalPerspectiveFromUri(selectedViewUri);
+ const personalKind = personalPerspectiveMatchesQuery(selectedViewUri, workspace.queryTree) ? personalPerspectiveFromUri(selectedViewUri) : null;
  const mapProvider = useMapProviderDefinition(workspace.viewPanel === "perspectives", workspace.queryXml);
  const providerSelected = Boolean(mapProvider && selectedViewUri === mapProvider.uri && workspace.viewPanel === "perspectives");
  // Include the actual Personal facet values, not just geocoded marker values.
@@ -119,20 +120,20 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                 </div>;
  return <>
 {workspaceTab === "view" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Views">
-                {providerSelected && mapProvider ? <PerspectiveProviderRuntime provider={mapProvider} queryXml={workspace.queryXml} queryTree={workspace.queryTree} addr={workspace.queryTree.attributes.addr ?? ""} visibleFacetTerms={visibleFacetTerms} /> : personalKind && workspace.viewPanel === "perspectives" ? <PersonalPerspectives active={true} kind={personalKind} providerUri={selectedViewUri} queryXml={workspace.queryXml} /> : <>
+                {providerSelected && mapProvider ? <PerspectiveProviderRuntime provider={mapProvider} queryXml={workspace.queryXml} queryTree={workspace.queryTree} addr={workspace.queryTree.attributes.addr ?? ""} visibleFacetTerms={visibleFacetTerms} /> : personalKind && workspace.viewPanel === "perspectives" ? <PersonalPerspectives active={workspace.accessCapabilities.canUsePersonalStore} kind={personalKind} providerUri={selectedViewUri} queryXml={workspace.queryXml} onBrowse={() => workspace.setWorkspaceTab("browse")}/> : <>
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-4 py-3">
                   {viewProvider ? <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label={`Alphabet for ${viewProvider}`}>
-                    {providerLetters.map(([letter, count]) => <button key={letter} type="button" aria-label={`${letter}: ${count} ${viewProvider}; Shift-click excludes the letter`}
+                    <ToggleGroup type="multiple" value={parseAlphabetSelections(providerLetter).map(value => value.replace(/^!/, ""))} onValueChange={() => {}} className="flex flex-wrap items-center gap-1">{providerLetters.map(([letter, count]) => <ToggleGroupItem unstyled key={letter} value={letter} type="button" aria-label={`${letter}: ${count} ${viewProvider}; Shift-click excludes the letter`}
                       aria-pressed={parseAlphabetSelections(providerLetter).some((value) => value === letter || value === `!${letter}`)}
                       onClick={(event) => setProviderLetter((current) => toggleAlphabetSelection(current, letter, event.shiftKey))}
                       className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${parseAlphabetSelections(providerLetter).some((value) => value === letter || value === `!${letter}`) ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}>
                       <span>{parseAlphabetSelections(providerLetter).includes(`!${letter}`) ? <><span className="inline-flex items-center gap-1.5"><Ban aria-label="Excluded" className="size-3.5 shrink-0" />{letter}</span></> : letter}</span><Separator orientation="vertical" className="mx-1 h-4"/><span>{count}</span>
-                    </button>)}
-                  </div> : null}
+                    </ToggleGroupItem>)}
+                  </ToggleGroup></div> : null}
                   {!viewProvider && (alphabetPreflight === "available" || Boolean(alphabetIndex) || isLoadingAlphabet) && <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label="Alphabetical filter for View results">                    {!isLoadingAlphabet && <IncompleteWidgetIndicator source="alphabet" />}
                     {(alphabetPreflight === "available" || Boolean(alphabetIndex)) ? <>
-                      {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0 || parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)).map((letter) => (
-                        <button key={letter} type="button" title={`Letter ${letter}; Shift-click excludes it; multiple selections are OR`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)}
+                      <ToggleGroup type="multiple" value={parseAlphabetSelections(alphabetIndex).map(value => value.replace(/^!/, ""))} onValueChange={() => {}} className="flex flex-wrap items-center gap-1">{Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0 || parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)).map((letter) => (
+                        <ToggleGroupItem unstyled key={letter} value={letter} type="button" title={`Letter ${letter}; Shift-click excludes it; multiple selections are OR`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)}
                           disabled={isLoadingAlphabet || (!alphabetCounts[letter] && !parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`))}
                           className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
                           onClick={(event) => {
@@ -143,8 +144,8 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                           <span className="font-medium">{parseAlphabetSelections(alphabetIndex).includes(`!${letter}`) ? <><span className="inline-flex items-center gap-1.5"><Ban aria-label="Excluded" className="size-3.5 shrink-0" />{letter}</span></> : letter}</span>
                           <Separator orientation="vertical" className="mx-1 h-4 bg-current opacity-30 data-vertical:self-center" />
                           <span className={`tabular-nums font-normal ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
-                        </button>
-                      ))}
+                        </ToggleGroupItem>
+                      ))}</ToggleGroup>
                     </> : null}
                     {isLoadingAlphabet && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Fetching alphabet" category="alphabet" clockScope="alphabet" requestWaves={26} /></span>}
                     
@@ -164,7 +165,7 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                   <div className="ml-auto">{viewPagination}</div>
 
                 </div>}
-                <ViewPage queryXml={workspace.queryXml} requiresBookmark={policyBookmarkNeeded} viewProvider={viewProvider} viewProviderLoading={viewProviderLoading} viewProviderError={viewProviderError} viewProviderCount={visibleProviderCount} viewProviderHtml={visibleProviderHtml} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} selectedView={selectedView} selectedViewUri={selectedViewUri} viewSelectionPending={viewDiscoveryLoading || workspace.queryContextLoading} viewRenderError={viewRenderError} viewHtml={viewHtml} onSelectEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id); }} onRefreshEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (!endpoint || checkingEndpointIds[id]) return; void checkSelectedGraphServer(endpoint).catch((error) => { toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" }); }); }} onOpenResource={(uri) => {
+                <ViewPage onBrowse={() => workspace.setWorkspaceTab("browse")} queryXml={workspace.queryXml} requiresBookmark={policyBookmarkNeeded} viewProvider={viewProvider} viewProviderLoading={viewProviderLoading} viewProviderError={viewProviderError} viewProviderCount={visibleProviderCount} viewProviderHtml={visibleProviderHtml} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} selectedView={selectedView} selectedViewUri={selectedViewUri} viewSelectionPending={viewDiscoveryLoading || workspace.queryContextLoading} viewRenderError={viewRenderError} viewHtml={viewHtml} viewResultCount={visibleResultsPage.length} kanbanGroupingOptions={workspace.kanbanGroupingOptions} kanbanGroupKey={workspace.kanbanGroupKey} onKanbanGroupChange={workspace.setKanbanGroupChoice} onKanbanMoveCard={workspace.kanbanMoveCard} onSelectEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id); }} onRefreshEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (!endpoint || checkingEndpointIds[id]) return; void checkSelectedGraphServer(endpoint).catch((error) => { toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" }); }); }} onOpenResource={(uri) => {
                     // Provider cards are FCT result items. Selecting their Record
                     // must preserve the bookmarked live Providers query, rather
                     // than replacing it with an unbookmarked URI-root query.

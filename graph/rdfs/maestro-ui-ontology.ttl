@@ -311,6 +311,9 @@ mui:lastResultCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ;
 mui:lastNewCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ; rdfs:label "Last known new items"@en .
 
 # Personal facet providers are discovered against properties in the active view scope.
+mui:FacetProvider a owl:Class ; rdfs:subClassOf mui:Provider ;
+  rdfs:label "Facet provider"@en ;
+  rdfs:comment "An approvable provider which supplies one or more facet presentations. mui:widget describes its implementation, not its catalog membership."@en .
 mui:FacetWidget a owl:Class ; rdfs:label "Facet widget"@en .
 mui:PersonalFacetWidget a owl:Class ; rdfs:subClassOf mui:FacetWidget ; rdfs:label "Personal facet widget"@en .
 mui:DateRangeFacetWidget a owl:Class ; rdfs:subClassOf mui:PersonalFacetWidget ; rdfs:label "Date/time range facet"@en .

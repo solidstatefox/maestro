@@ -65,6 +65,9 @@ export type ConfigurePaneWorkspace = Pick<WorkspaceController,
 
 export type PersonalWidgetCardsWorkspace = Pick<WorkspaceController,
   | "FACET_PAGE_SIZE"
+  | "accessCapabilities"
+  | "accessController"
+  | "policyApprovalRevision"
   | "activeLeafId"
   | "activePropertyFilters"
   | "autoConfiguredFacetKeys"
@@ -106,6 +109,7 @@ export type FilterPaneDirectWorkspace = Pick<WorkspaceController,
   | "categoriesWidgetRef"
   | "categoryPageCount"
   | "categoryTreeAllCollapsed"
+  | "categoryTreeRoots"
   | "categoryTreePages"
   | "categoryTreeParentKeys"
   | "centralTab"
@@ -184,6 +188,7 @@ export type LeftPaneDirectWorkspace = Pick<WorkspaceController,
   | "categoriesWidgetRef"
   | "categoryPageCount"
   | "categoryTreeAllCollapsed"
+  | "categoryTreeRoots"
   | "categoryTreePages"
   | "categoryTreeParentKeys"
   | "centralTab"
@@ -464,6 +469,7 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "viewProvider"
   | "selectViewProvider"
   | "returnShareUrl"
+  | "returnButtonVisible"
   | "returnToPreviousContext"
   | "openPinnedShareUrl"
   | "navigateWorkspaceTab"

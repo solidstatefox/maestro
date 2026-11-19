@@ -1,12 +1,20 @@
+import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
 /** Read-only SPARQL Protocol checks. A reachable HTML editor is not sufficient
  * evidence of a functioning SPARQL endpoint, and a single unsupported request
  * method/format must not label a working endpoint unavailable. */
 export type SparqlHealthState = "ok" | "server-error" | "http-error" | "timeout" | "unreachable" | "probe-error";
-export type SparqlHealthAttempt = { url: string; status: number | null; state: SparqlHealthState; method: "GET" | "POST"; query: "ASK" | "SELECT" };
+export type SparqlHealthAttempt = {
+  url: string; status: number | null; state: SparqlHealthState;
+  method: "GET" | "POST"; query: "ASK" | "SELECT";
+  /** Status is genuinely null when fetch failed before an HTTP response. */
+  statusText?: string; contentType?: string; responseUrl?: string; location?: string;
+  responseBody?: string; responseHeaders?: Record<string, string>; error?: string; errorName?: string; durationMs?: number;
+};
 export type SparqlHealthResult = {
   status: number | null;
   state: SparqlHealthState;
   testedUrl: string;
+  diagnostic?: string;
   attempts: SparqlHealthAttempt[];
 };
 
@@ -49,6 +57,7 @@ export async function probeSparqlEndpoint(
         probeUrl.searchParams.set("query", query);
         probeUrl.searchParams.set("format", "application/sparql-results+json");
       }
+      const startedAt = Date.now();
       try {
         const response = await fetcher(probeUrl.toString(), {
           method,
@@ -62,16 +71,41 @@ export async function probeSparqlEndpoint(
           cache: "no-store",
           signal: AbortSignal.timeout(timeoutMs),
         });
-        const body = await response.text();
+        const diagnostic = {
+          url: endpointUrl, status: response.status, method, query: kind,
+          statusText: sanitizeUpstreamDiagnostic(response.statusText),
+          contentType: response.headers.get("content-type") ?? undefined,
+          responseHeaders: Object.fromEntries([...response.headers].filter(([name]) =>
+            !/(?:authorization|cookie|token|secret|api[-_]?key|credential|session)/i.test(name))
+            .map(([name, value]) => [name, sanitizeUpstreamDiagnostic(value)])),
+          responseUrl: sanitizeUpstreamDiagnostic(response.url || endpointUrl),
+          location: response.headers.get("location") ? sanitizeUpstreamDiagnostic(response.headers.get("location")!) : undefined,
+          durationMs: Date.now() - startedAt,
+        };
+        // A response can arrive successfully even when reading its body fails.
+        // Do not collapse its actual HTTP status back to null/unreachable.
+        let body: string;
+        try { body = await response.text(); }
+        catch (error) {
+          attempts.push({ ...diagnostic,
+            state: response.ok ? "probe-error" : response.status >= 500 ? "server-error" : "http-error",
+            errorName: error instanceof Error ? error.name : typeof error,
+            error: `Could not read HTTP response body: ${describeUpstreamError(error)}` });
+          continue;
+        }
         if (response.ok && isSparqlResultBody(body)) {
-          attempts.push({ url: endpointUrl, status: response.status, state: "ok", method, query: kind });
+          attempts.push({ ...diagnostic, state: "ok" });
           return { status: 200, state: "ok", testedUrl: endpointUrl, attempts };
         }
-        attempts.push({ url: endpointUrl, status: response.status,
-          state: response.ok ? "probe-error" : response.status >= 500 ? "server-error" : "http-error", method, query: kind });
+        attempts.push({ ...diagnostic,
+          responseBody: sanitizeUpstreamDiagnostic(body),
+          state: response.ok ? "probe-error" : response.status >= 500 ? "server-error" : "http-error" });
       } catch (error) {
         const timeout = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-        attempts.push({ url: endpointUrl, status: null, state: timeout ? "timeout" : "unreachable", method, query: kind });
+        attempts.push({ url: endpointUrl, status: null, state: timeout ? "timeout" : "unreachable",
+          method, query: kind, errorName: error instanceof Error ? error.name : typeof error,
+          error: describeUpstreamError(error, "Graph-server request failed without an HTTP response"),
+          durationMs: Date.now() - startedAt });
       }
     }
   }
@@ -82,6 +116,8 @@ export async function probeSparqlEndpoint(
     attempts.find((attempt) => attempt.state === "server-error") ??
     attempts.find((attempt) => attempt.state === "http-error") ??
     attempts.find((attempt) => attempt.state === "timeout") ?? attempts[0];
-  return { status: failure?.state === "probe-error" ? null : failure?.status ?? null,
-    state: failure?.state ?? "unreachable", testedUrl: endpointUrl, attempts };
+  return { status: failure?.status ?? null,
+    state: failure?.state ?? "unreachable", testedUrl: endpointUrl,
+    diagnostic: failure?.error ?? ([failure?.status !== null && failure?.status !== undefined ? `HTTP ${failure.status}` : "", failure?.statusText, failure?.responseBody].filter(Boolean).join(": ") || undefined),
+    attempts };
 }

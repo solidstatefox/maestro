@@ -75,4 +75,12 @@ _:curatedProviderList29 rdf:first <gttp://ggg.maestro.ecosys/shacl/provider/temp
 _:curatedProviderList30 rdf:first <gttp://ggg.maestro.ui/provider/email-regex> ;
     rdf:rest _:curatedProviderList31 .
 _:curatedProviderList31 rdf:first <gttp://ggg.maestro.ui/provider/kanban> ;
+    rdf:rest _:curatedProviderList32 .
+_:curatedProviderList32 rdf:first <gttp://ggg.maestro.ecosys/analyze/sankey> ;
+    rdf:rest _:curatedProviderList33 .
+_:curatedProviderList33 rdf:first <gttp://ggg.maestro.ui/provider/category-sunburst> ;
+    rdf:rest _:curatedProviderList34 .
+_:curatedProviderList34 rdf:first <gttp://ggg.maestro.ecosys/analyze/sankey-d3> ;
+    rdf:rest _:curatedProviderList35 .
+_:curatedProviderList35 rdf:first <gttp://ggg.maestro.ui/provider/category-sunburst-chartkit> ;
     rdf:rest rdf:nil .

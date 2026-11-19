@@ -10,7 +10,7 @@ import { normalizeMaestroKind } from "@/lib/maestro-kinds";
 import { buildRecordKindsInspectorSparql } from "@/lib/record-kinds-inspector";
 import dynamic from "next/dynamic";
 const RecordExplorer = dynamic(() => import("@/canvas/right/record-explorer").then(module => module.RecordExplorer), { ssr: false });
-import { decorateFollowedRecordSource, decorateWandedRecordProperties, resolveRecordInteraction, type RecordStatement } from "@/canvas/controllers/record-rdfa-decoration";
+import { decorateFollowedRecordSource, decorateRecordInteractiveTargets, decorateWandedRecordProperties, resolveFullscreenRecordTarget, resolveRecordInteraction, type RecordStatement } from "@/canvas/controllers/record-rdfa-decoration";
 import "./record-source-highlight.css";
 import { RecordStatusButtons, RecordStarButton } from "@/canvas/right/record-status-buttons";
 
@@ -21,7 +21,9 @@ import { ValidationNotice, hasVisibleValidationWarning } from "@/components/ui/v
 import maestroLanguages from "@/data/maestro-languages.json";
 
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useRef, useState, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
+import { InputGroup, InputGroupAddon, InputGroupText, InputGroupButton } from "@/components/ui/input-group";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
+import { createRecordExplorerPresentationController } from "@/lib/app-lifecycle/record-explorer-presentation";
 import { getMaestroComponentPortals } from "@/components/maestro-xslt-components";
 import { toLabel } from "@/lib/uri-labels";
 
@@ -107,7 +109,9 @@ import type { RecordPaneWorkspace } from "@/canvas/controllers/workspace-interfa
 
 /** One Record viewer for Browse session 0 and every fullscreen pivot session.
  * The controller decides which RDFa actions can touch the live query. */
-export type RecordRdfaAction = { sessionIndex: number; statement: RecordStatement; intent: "pivot" | "wand" };
+export type RecordRdfaAction = { sessionIndex: number; statement: RecordStatement; intent: "pivot" | "wand"; kind: "property" | "value" };
+
+type InlineWandItem = { host: HTMLElement; item: NonNullable<Parameters<typeof RightCanvasPanel>[0]["queuedProperties"]>[number]; displayKind: "property" | "value" };
 
 function RecordPaneShell({ fullscreen, children }: { fullscreen: boolean; children: ReactNode }) {
   return fullscreen ? <div className="h-full min-h-0 min-w-0 overflow-hidden">{children}</div>
@@ -121,10 +125,29 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
   fullscreenPane?: boolean;
   interactionMode?: "pointer" | "wand";
   followedSource?: RecordStatement | null;
-  queuedProperties?: readonly { predicate: string; direction: "property" | "property-of" }[];
+  queuedProperties?: readonly {
+    predicate: string; direction: "property" | "property-of";
+    kind?: "property" | "value"; value?: string;
+    termType?: "uri" | "literal" | "bnode";
+    datatype?: string; lang?: string; nodeId?: string;
+  }[];
   onRdfaAction?: (action: RecordRdfaAction) => void;
 }) {
-  const [fullscreenRecord, setFullscreenRecord] = useState(false);
+  // XState owns entry/exit and the Pointer/Wand interaction state. Browse's
+  // live-query actions are not available inside this fullscreen presentation.
+  const [recordExplorerPresentation] = useState(createRecordExplorerPresentationController);
+  const recordExplorerSnapshot = useSyncExternalStore(
+    recordExplorerPresentation.subscribe, recordExplorerPresentation.getSnapshot,
+    recordExplorerPresentation.getSnapshot);
+  useEffect(() => {
+    // Only the Browse owner runs the fullscreen presentation actor. Each
+    // fullscreen Record receives the parent's mode and retains its own data
+    // actor, so a pivot cannot accidentally create a second fullscreen owner.
+    if (fullscreenPane) return;
+    recordExplorerPresentation.start();
+    return () => recordExplorerPresentation.stop();
+  }, [recordExplorerPresentation, fullscreenPane]);
+  const fullscreenRecord = recordExplorerSnapshot.matches("fullscreen");
   const [recordKindFilter,setRecordKindFilterState]=useState<RecordValueKind|"all">(()=>{
     if(typeof window==="undefined")return "all";
     try{const saved=window.localStorage.getItem("maestro:kind:record")||"all";return saved==="all"?"all":normalizeMaestroKind(saved)??"all";}catch{return "all";}
@@ -236,6 +259,11 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     validateSelectedRecord,
     workspaceTab,
   } = workspace;
+  // Fullscreen is a Browse presentation, not a durable global navigation mode.
+  // Leaving Browse or clearing session zero closes it without committing a Wand.
+  useEffect(() => {
+    if (!fullscreenPane && (workspaceTab !== "browse" || !selectedUri)) recordExplorerPresentation.shrink();
+  }, [fullscreenPane, workspaceTab, selectedUri, recordExplorerPresentation]);
   // Record description values have already been fetched; scanning them is
   // exact for the currently loaded page and avoids redundant endpoint ASKs.
   const recordKindsScopeXml = `${recordRootDebugQuery}\n<!-- Kinds filter: ${recordKindFilter}. Record Kinds are classified over fetched RDF values in the browser; no separate FCT Kinds request is executed. -->`;
@@ -247,6 +275,8 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
   const availableRecordKinds = RECORD_VALUE_KINDS.filter(kind => existingKinds.has(kind) || kind === recordKindFilter);
   const visibleProperties = describedPropertyRows.map(item => ({...item,values:item.values.filter(value => recordKindFilter === "all" || classifyRecordValue(value.value, value.termType, value.datatype) === recordKindFilter)})).filter(item => item.values.length > 0);
   const visibleRoles = describedRoleRows.map(item => ({...item,values:item.values.filter(value => recordKindFilter === "all" || classifyRecordValue(value.value, value.termType, value.datatype) === recordKindFilter)})).filter(item => item.values.length > 0);
+  const [inlineWands, setInlineWands] = useState<InlineWandItem[]>([]);
+  const wandPortalsRef = useRef<InlineWandItem[]>([]);
   const formattedRef = fullscreenPane ? fullscreenFormattedRef : formattedRecordContainerRef;
   // React portals mount only allowlisted shadcn components inside the HTML tree.
   useEffect(() => {
@@ -262,78 +292,140 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     const host = rdfaHostRef.current;
     if (!host || !fullscreenPane) return;
     const paint = () => {
+      const rows: RecordStatement[] = describedRecord.map(row => ({
+        predicate: row.property, direction: row.direction, value: row.value,
+        termType: row.termType, ...(row.datatype ? { datatype: row.datatype } : {}),
+        ...(row.lang ? { lang: row.lang } : {}),
+      }));
+      decorateRecordInteractiveTargets(host, rows);
       decorateFollowedRecordSource(host, followedSource);
-      decorateWandedRecordProperties(host, queuedProperties);
+      decorateWandedRecordProperties(host, queuedProperties, rows);
+      // Keep the selected RDFa original in the DOM (including all RDFa
+      // attributes) but replace its visual text with a real inline InputGroup.
+      // Never move a selection into a detached toolbar.
+      const next: InlineWandItem[] = [];
+      for (const atom of Array.from(host.querySelectorAll<HTMLElement>("[data-maestro-wanded]"))) {
+        const found = resolveFullscreenRecordTarget(atom, rows);
+        if (!found) continue;
+        // A value Wand also adorns its predicate, using the SAME query-node
+        // identity.  It does not add a separate predicate-only query binding.
+        const item = queuedProperties.find(selected =>
+          selected.predicate === found.statement.predicate &&
+          selected.direction === found.statement.direction &&
+          (found.kind === "property" ||
+           ((selected.kind ?? "property") === "value" &&
+            selected.value === found.statement.value && selected.termType === found.statement.termType &&
+            (selected.datatype ?? "") === (found.statement.datatype ?? "") &&
+            (selected.lang ?? "").toLowerCase() === (found.statement.lang ?? "").toLowerCase())));
+        if (!item) continue;
+        let slot = atom.nextElementSibling;
+        if (!slot?.hasAttribute("data-maestro-inline-wand-slot")) {
+          slot = document.createElement("div");
+          slot.setAttribute("data-maestro-inline-wand-slot", "true");
+          slot.className = "inline-flex min-w-0 max-w-full align-middle";
+          atom.after(slot);
+        }
+        atom.setAttribute("data-maestro-wand-inline-replaced", "true");
+        next.push({host:slot as HTMLElement,item,displayKind:found.kind});
+      }
+      const remaining = new Set(next.map(portal => portal.host));
+      for (const old of wandPortalsRef.current) {
+        if (!remaining.has(old.host)) old.host.remove();
+      }
+      // Any previously selected text that is no longer in the queue becomes
+      // visible again. These attributes are DOM decorations, never RDF edits.
+      for (const atom of Array.from(host.querySelectorAll<HTMLElement>("[data-maestro-wand-inline-replaced]"))) {
+        if (!atom.hasAttribute("data-maestro-wanded")) atom.removeAttribute("data-maestro-wand-inline-replaced");
+      }
+      const previous = wandPortalsRef.current;
+      if (previous.length !== next.length || next.some((entry,index) =>
+          entry.host !== previous[index]?.host || entry.item !== previous[index]?.item || entry.displayKind !== previous[index]?.displayKind)) {
+        wandPortalsRef.current = next;
+        setInlineWands(next);
+      }
     };
     paint();
     const observer = new MutationObserver(paint);
     observer.observe(host, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      for (const entry of wandPortalsRef.current) entry.host.remove();
+      wandPortalsRef.current = [];
+    };
   }, [fullscreenPane, currentFormattedRecordHtml, describedRecord, recordKindFilter,
       followedSource?.predicate, followedSource?.direction, followedSource?.termType,
       followedSource?.value, followedSource?.datatype, followedSource?.lang,
-      queuedProperties.map(item => `${item.direction}\u0000${item.predicate}`).join("\u0001")]);
+      queuedProperties.map(item => [item.kind, item.direction, item.predicate,
+        item.value, item.termType, item.datatype, item.lang].join("\u0000")).join("\u0001")]);
 
   const onRecordClickCapture = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    // Card-specific buttons unrelated to an RDF statement retain their own
-    // behavior; no provider formatter is taught about sessions or Wand.
+    if (fullscreenPane) {
+      // The inline shadcn Wand group is its OWN selection control. It toggles
+      // once via its React portal; never also dispatch the underlying RDFa dt.
+      if (target.closest("[data-maestro-inline-wand-slot]")) return;
+      // These are local record controls, not query actions. Let the formatter
+      // drive its own carousel without delegating to Browse's query API.
+      if (target.closest("[data-maestro-carousel]")) {
+        const control = target.closest("[data-maestro-carousel]");
+        const direction = control?.getAttribute("data-maestro-carousel") === "previous" ? -1 : 1;
+        const carousel = control?.closest("#record-carousel, [id$='-record-carousel']");
+        const track = carousel?.querySelector<HTMLElement>("#record-carousel-track, [id$='-record-carousel-track']");
+        if (track) track.scrollBy({ left: direction * track.clientWidth, behavior: "smooth" });
+        event.preventDefault(); event.stopPropagation();
+        return;
+      }
+      const rows: RecordStatement[] = describedRecord.map(row => ({
+        predicate: row.property, direction: row.direction, value: row.value,
+        termType: row.termType,
+        ...(row.datatype ? { datatype: row.datatype } : {}),
+        ...(row.lang ? { lang: row.lang } : {}),
+      }));
+      const picked = resolveFullscreenRecordTarget(target, rows);
+      if (picked) {
+        // Fullscreen owns both property and value clicks. Never execute any
+        // legacy Browse live-query handler from a fullscreen Record pane.
+        event.preventDefault(); event.stopPropagation();
+        if (!onRdfaAction) return;
+        if (interactionMode === "wand") {
+          onRdfaAction({ sessionIndex, statement: picked.statement, intent: "wand", kind: picked.kind });
+        } else if (picked.kind === "value" && picked.statement.value) {
+          // Ordinary pointer click opens the next Record; Shift-click is also
+          // supported for backwards-compatible pivot navigation.
+          onRdfaAction({ sessionIndex, statement: picked.statement, intent: "pivot", kind: "value" });
+        }
+        return;
+      }
+      // An unannotated formatter button or record hyperlink can contain a
+      // legacy mui:action. Block that action without blocking Record controls.
+      if (target.closest("[mui\\:action],[data-maestro-filter-property],a[href]") &&
+          !target.closest("[data-maestro-record-control]")) {
+        event.preventDefault(); event.stopPropagation();
+      }
+      return;
+    }
+    // Browse keeps its existing behavior; no fullscreen-specific query
+    // mutations or session rewrites are installed in the normal Record pane.
     const rows: RecordStatement[] = describedRecord.map(row => ({ predicate: row.property,
       direction: row.direction, value: row.value, termType: row.termType,
       ...(row.datatype ? { datatype: row.datatype } : {}),
       ...(row.lang ? { lang: row.lang } : {}) }));
+    // Preserve Browse's existing legacy formatter actions; only fullscreen
+    // substitutes the independent session/Wand interaction semantics.
     if (sessionIndex === 0 &&
         target.closest('[data-maestro-filter-property],[mui\\:action],[data-maestro-carousel]') &&
         interactionMode === "pointer" && !event.shiftKey) return;
-    const binding = resolveRecordInteraction(target, rows, interactionMode === "wand");
+    const binding = resolveRecordInteraction(target, rows, false);
     const label = target.closest("button[about][data-maestro-predicate]");
-    if (fullscreenPane && onRdfaAction && binding && Boolean(binding.value) &&
-        target.closest("a,button,[role=button],[data-maestro-property-value]") ) {
-      event.preventDefault();
-      event.stopPropagation();
-      onRdfaAction({ sessionIndex, statement: binding,
-        intent: interactionMode === "wand" ? "wand" : "pivot" });
-      return;
-    }
-    if (fullscreenPane && target.closest("[data-maestro-property-value], [data-maestro-filter-property], [mui\\:action]")) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    if (sessionIndex > 0 && target.closest("[data-maestro-carousel]")) {
-      // The carousel is a local formatter control, not a query action. Each
-      // pivot scrolls only its own Record HTML and never touches Browse.
-      const control = target.closest("[data-maestro-carousel]");
-      const direction = control?.getAttribute("data-maestro-carousel") === "previous" ? -1 : 1;
-      const carousel = control?.closest("#record-carousel, [id$='-record-carousel']");
-      const track = carousel?.querySelector<HTMLElement>("#record-carousel-track, [id$='-record-carousel-track']");
-      if (track) track.scrollBy({ left: direction * track.clientWidth, behavior: "smooth" });
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    if (sessionIndex > 0 && (binding || label ||
-        target.closest("[mui\\:action], [data-maestro-filter-property]"))) {
-      // Pivot sessions never change Browse's live query on ordinary clicks.
-      // This includes legacy provider mui:action and property chips without
-      // complete RDFa; only the session-0 controller may execute those.
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
     if (label && sessionIndex === 0 && interactionMode === "pointer") {
-      event.preventDefault();
-      event.stopPropagation();
+      event.preventDefault(); event.stopPropagation();
       const predicate = label.getAttribute("data-maestro-predicate");
       if (predicate) openRecordPropertyUri(predicate);
       return;
     }
-    if (binding && binding.value && sessionIndex === 0 && interactionMode === "pointer" &&
-        target.closest("a,button,[role=button]")) {
-      // Session 0 retains Browse's existing action, now dispatched centrally.
-      event.preventDefault();
-      event.stopPropagation();
+    if (binding && binding.value && sessionIndex === 0 && interactionMode === "pointer" && target.closest("a,button,[role=button]")) {
+      event.preventDefault(); event.stopPropagation();
       if (binding.termType === "bnode") {
         if (binding.direction === "property" && selectedRecordTermType === "uri") {
           setExplicitBlankNodeAnchor({ label: binding.value, parent: selectedUri, predicate: binding.predicate });
@@ -352,6 +444,33 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
 
   return (
 <>
+{fullscreenPane && inlineWands.map(({host,item,displayKind},index) => createPortal(
+  <InputGroup key={`${sessionIndex}:${index}:${item.nodeId ?? "?"}`}
+    className="!inline-flex !w-auto min-w-0 max-w-full !flex-wrap break-words border-sky-400/60 bg-sky-100/70 text-sky-900 shadow-none cursor-pointer hover:bg-sky-200/80 dark:border-sky-400/50 dark:bg-sky-900/30 dark:text-sky-100"
+    role="button" tabIndex={0} aria-pressed="true"
+    onClick={event => { event.preventDefault(); event.stopPropagation();
+      onRdfaAction?.({sessionIndex,intent:"wand",kind:item.kind ?? "property",
+        statement:{predicate:item.predicate,direction:item.direction,value:item.value ?? "",
+          termType:item.termType ?? "uri",datatype:item.datatype,lang:item.lang}});
+    }}
+    onKeyDown={event => { if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault(); event.stopPropagation();
+      onRdfaAction?.({sessionIndex,intent:"wand",kind:item.kind ?? "property",
+        statement:{predicate:item.predicate,direction:item.direction,value:item.value ?? "",
+          termType:item.termType ?? "uri",datatype:item.datatype,lang:item.lang}});
+    } }}
+    aria-label={`Unselect ${displayKind === "value" ? "bound value" : "property"} for node ${item.nodeId ?? "?"}`}>
+    <InputGroupAddon className="shrink-0 border-r border-sky-400/30 px-2">
+      <InputGroupText className="font-mono text-xs font-semibold text-inherit">{item.nodeId ?? "?"}</InputGroupText>
+    </InputGroupAddon>
+    <InputGroupAddon align="inline-end" className="min-w-0 flex-[1_1_auto] gap-1 px-2 !whitespace-normal">
+      <InputGroupText className="min-w-0 !whitespace-normal break-all text-xs text-inherit" title={displayKind === "value" ? item.value : item.predicate}>
+        {displayKind === "value" ? `= ${item.termType === "uri" ? toLabel(item.value ?? "") : item.value ?? ""}` :
+          `${toLabel(item.predicate)}${item.direction === "property-of" ? " of" : ""}`}
+      </InputGroupText>
+    </InputGroupAddon>
+  </InputGroup>, host,
+))}
 {workspaceTab === "browse" && <>
             <RecordPaneShell fullscreen={fullscreenPane}>
             <RightPaneBody paneRef={rdfaHostRef} onClickCapture={onRecordClickCapture}>
@@ -364,7 +483,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                     <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_title_icon }} />
                   )}
                   {recordDescribeIncomplete && <Tooltip><TooltipTrigger render={<span role="img" tabIndex={0} aria-label="Incomplete record description" className="inline-flex shrink-0"><ClockFading className="size-4" /></span>} /><TooltipContent>Virtuoso returned an incomplete DESCRIBE for this record.</TooltipContent></Tooltip>}
-                  {selectedUri && sessionIndex > 0 ? <span title={selectedUri} className="truncate">{toLabel(selectedUri)}</span> : selectedUri ? (
+                  {selectedUri && (fullscreenPane || sessionIndex > 0) ? <span title={selectedUri} className="truncate">{sessionIndex > 0 ? toLabel(selectedUri) : (selectedResult?.title ?? selectedGroupRecord?.title ?? toLabel(selectedUri))}</span> : selectedUri ? (
                     <Tooltip><TooltipTrigger render={<button
                       type="button"
                       className={`cursor-pointer text-left underline-offset-2 hover:underline ${facetHoverPreview?.kind === "record" && facetHoverPreview.uri === selectedUri ? "text-purple-700 dark:text-purple-300" : ""}`}
@@ -383,7 +502,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                     <CollapsibleTrigger aria-label={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} title={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground">
                       {recordControlsOpen ? <ChevronDown className="size-4" aria-hidden="true" /> : <ChevronRight className="size-4" aria-hidden="true" />}
                     </CollapsibleTrigger>
-                    {!fullscreenPane && <Tooltip><TooltipTrigger render={<button type="button" className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground" title="Expand Record to fullscreen explorer" aria-label="Expand Record" onClick={() => setFullscreenRecord(true)}><Expand className="size-4" /></button>} /><TooltipContent>Expand Record</TooltipContent></Tooltip>}
+                    {!fullscreenPane && <Tooltip><TooltipTrigger render={<button type="button" className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground" title="Expand Record to fullscreen explorer" aria-label="Expand Record" onClick={() => recordExplorerPresentation.expand()}><Expand className="size-4" /></button>} /><TooltipContent>Expand Record</TooltipContent></Tooltip>}
                     <QueryInspectorButton
                       query={selectedRecordTermType === "bnode" ? (recordDebug.xml || "A blank-node Record request has not executed yet.") : recordRootDebugQuery}
                       filename="record-describe.xml" label="Record queries" toolbarButton
@@ -621,7 +740,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                             <button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"
                               about={item.property} data-maestro-predicate={item.property} data-maestro-direction={item.direction}
                               title={`Open ${item.property} as a URI query`}
-                              onClick={() => openRecordPropertyUri(item.property)}>{toLabel(item.property)}</button>
+                              onClick={() => { if (!fullscreenPane) openRecordPropertyUri(item.property); }}>{toLabel(item.property)}</button>
                           </td>
                           <td className="break-all px-3 py-3 align-top">
                             <RecordValuePages pageSize={5} id={`${item.property}-values`}>
@@ -645,17 +764,18 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                             {value.termType === "bnode" ? (
                               item.direction === "property" && selectedRecordTermType === "uri" ?
                                 <button type="button" className="cursor-pointer text-primary hover:underline" title="Open blank-node Record and its sibling nodes" onClick={() => {
+                                  if (fullscreenPane) return;
                                   setExplicitBlankNodeAnchor({ label: value.value, parent: selectedUri, predicate: item.property });
                                   setSelectedUri(value.value);
                                 }}>{value.value}</button> : <span title={value.value}>{value.value}</span>
                             ) : (
                               <Tooltip><TooltipTrigger render={<button type="button"
                                 className="cursor-pointer break-all text-left font-inherit hover:underline underline-offset-2"
-                                onClick={() => navigateResultBadge(item.property, {
+                                onClick={() => { if (!fullscreenPane) navigateResultBadge(item.property, {
                                   value: value.value, type: value.termType,
                                   ...(value.datatype ? { datatype: value.datatype } : {}),
                                   ...(value.lang ? { lang: value.lang } : {}),
-                                }, item.direction === "property-of" ? "reverse" : "forward")}
+                                }, item.direction === "property-of" ? "reverse" : "forward"); }}
                               ><span className="break-all">{value.termType === "uri"
                                 ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`}\u0000${value.value}`) ?? value.value)
                                 : value.value}</span></button>} /><TooltipContent>{`${toLabel(item.property)}${item.direction === "property-of" ? " of" : ""}: ${value.value}${value.lang ? ` @${value.lang}` : ""}${value.datatype ? `^^${value.datatype}` : ""}`}</TooltipContent></Tooltip>
@@ -685,7 +805,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                             <button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"
                               about={item.property} data-maestro-predicate={item.property} data-maestro-direction={item.direction}
                               title={`Open ${item.property} as a URI query`}
-                              onClick={() => openRecordPropertyUri(item.property)}>{toLabel(item.property)} of</button>
+                              onClick={() => { if (!fullscreenPane) openRecordPropertyUri(item.property); }}>{toLabel(item.property)} of</button>
                           </td>
                           <td className="break-all px-3 py-3 align-top">
                             <RecordValuePages pageSize={5} id={`${item.property}-of-values`}>
@@ -709,17 +829,18 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                             {value.termType === "bnode" ? (
                               item.direction === "property" && selectedRecordTermType === "uri" ?
                                 <button type="button" className="cursor-pointer text-primary hover:underline" title="Open blank-node Record and its sibling nodes" onClick={() => {
+                                  if (fullscreenPane) return;
                                   setExplicitBlankNodeAnchor({ label: value.value, parent: selectedUri, predicate: item.property });
                                   setSelectedUri(value.value);
                                 }}>{value.value}</button> : <span title={value.value}>{value.value}</span>
                             ) : (
                               <Tooltip><TooltipTrigger render={<button type="button"
                                 className="cursor-pointer break-all text-left font-inherit hover:underline underline-offset-2"
-                                onClick={() => navigateResultBadge(item.property, {
+                                onClick={() => { if (!fullscreenPane) navigateResultBadge(item.property, {
                                   value: value.value, type: value.termType,
                                   ...(value.datatype ? { datatype: value.datatype } : {}),
                                   ...(value.lang ? { lang: value.lang } : {}),
-                                }, item.direction === "property-of" ? "reverse" : "forward")}
+                                }, item.direction === "property-of" ? "reverse" : "forward"); }}
                               ><span className="break-all">{value.termType === "uri"
                                 ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`}\u0000${value.value}`) ?? value.value)
                                 : value.value}</span></button>} /><TooltipContent>{`${toLabel(item.property)}${item.direction === "property-of" ? " of" : ""}: ${value.value}${value.lang ? ` @${value.lang}` : ""}${value.datatype ? `^^${value.datatype}` : ""}`}</TooltipContent></Tooltip>
@@ -744,7 +865,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
               )}
             </RightPaneBody>
             </RecordPaneShell>
-            {!fullscreenPane && fullscreenRecord && selectedUri && <RecordExplorer workspace={workspace} onClose={() => setFullscreenRecord(false)} />}
+            {!fullscreenPane && fullscreenRecord && selectedUri && <RecordExplorer workspace={workspace} presentation={recordExplorerPresentation} onClose={() => recordExplorerPresentation.shrink()} />}
             </>}
 </>
   );

@@ -1,0 +1,34 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
+const root = join(__dirname, '..');
+const read = path => readFileSync(join(root, path), 'utf8');
+test('Kanban grouping is local-only; bookmarked default Status and special fixture labels', () => {
+  const controller = read('src/canvas/utils/workspace-controller.tsx');
+  assert.match(controller, /verifiedQueryBookmarked \? "status" : "none"/);
+  assert.match(controller, /key: "status", label: "Status"/);
+  assert.match(controller, /option\.uri === RDF_TYPE_URI \? "Categories"/);
+  assert.match(controller, /setKanbanGroupChoice\("auto"\)/);
+  assert.match(controller, /setKanbanMoves\(\{\}\)/);
+  assert.match(controller, /listValuesQueryClone\(queryXml\)/);
+  assert.doesNotMatch(controller.slice(controller.indexOf('const [kanbanGroupChoice'), controller.indexOf('const viewRenderInputKey')), /updatePersonal|localStorage|setQueryTree|setNodeAttribute/);
+});
+test('Kanban drag and drop remains a presentation action with existing Record navigation', () => {
+  const view = read('src/canvas/tab/view/view-components.tsx');
+  const xlst = read('graph/kanban/provider.ttl');
+  const serializer = read('src/lib/discovered-view-xslt.ts');
+  assert.match(view, /Grouping and drag-and-drop changes are not persisted/);
+  assert.match(view, /onDragStart=|onDragStart\s*=/);
+  assert.match(view, /onDragOver=|onDragOver\s*=/);
+  assert.match(view, /onDrop=|onDrop\s*=/);
+  assert.match(view, /onKanbanMoveCard\?\./);
+  assert.match(view, /onOpenResource\?\.\(uri\)/);
+  assert.match(xlst, /data-kanban-column/);
+  assert.match(xlst, /data-kanban-card/);
+  assert.match(serializer, /name === "draggable"/);
+  assert.match(serializer, /element\.hasAttribute\("data-provider-open-uri"\)/);
+  assert.match(xlst, /button type="button" draggable="true" class="w-full cursor-grab/);
+  assert.match(view, /kanbanDragged\.current = \{uri, from\}/);
+  assert.match(serializer, /name === "data-kanban-column"/);
+});

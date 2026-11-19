@@ -1,20 +1,17 @@
 "use client";
 /** Login belongs to the browser. The CORS bridge forwards HTTP, never
  * authenticates a Maestro session or parses an RDF/WebID profile. */
-import type { PersonalAuthSession } from "@/lib/personal-auth";
+import { personalReadEndpoint, personalWriteEndpoint, type PersonalAuthSession } from "@/lib/personal-auth";
 import { forwardHttp } from "@/lib/client-http-forward";
 
 export async function testPersonalGraph(session: PersonalAuthSession, signal?: AbortSignal): Promise<{
   ok: boolean; connected: boolean; status?: number; readEndpoint?: string; writeEndpoint?: string; error?: string;
 }> {
-  let read: URL;
+  let read: URL, write: URL;
   try {
-    read = new URL(session.graphStore);
-    if(!["http:","https:"].includes(read.protocol))throw Error("Unsupported URL protocol.");
-  } catch { return {ok:false,connected:false,error:"A valid HTTP(S) Graph Store URL is required."}; }
-  read.pathname=read.pathname.replace(/\/sparql-auth\/?$/i,"/sparql");
-  const write=new URL(read.toString());
-  if(session.authType==="sparql-auth")write.pathname=write.pathname.replace(/\/sparql\/?$/i,"/sparql-auth");
+    read = new URL(personalReadEndpoint(session));
+    write = new URL(personalWriteEndpoint(session));
+  } catch (error) { return {ok:false,connected:false,error:`Enter a valid read-only HTTP(S) /sparql endpoint: ${error instanceof Error ? error.message : String(error)}`}; }
   // The login credential remains browser owned.  Read connectivity is tested
   // against the authenticated graph server through the existing /sparql route.
   // A transient cookie is necessary because that unmodified route expects the
@@ -53,7 +50,7 @@ export async function testPersonalGraph(session: PersonalAuthSession, signal?: A
 export async function fetchWebIdProfile(profileUrl:string,signal?:AbortSignal): Promise<{avatarUrl?:string;displayName?:string}> {
   let parsed:URL;
   try{parsed=new URL(profileUrl);if(!["http:","https:"].includes(parsed.protocol))throw Error("Unsupported URL protocol.");}
-  catch{throw new Error("A valid WebID or OpenID URL is required.");}
+  catch(error){throw new Error(`A valid WebID or OpenID URL is required: ${error instanceof Error ? error.message : String(error)}`, {cause:error});}
   parsed.hash="";
   const response=await forwardHttp({url:parsed.toString(),method:"GET",headers:{Accept:"text/turtle, application/ld+json, application/json, application/rdf+xml, text/plain"}},signal);
   if(!response.ok)throw new Error(`Could not retrieve profile (HTTP ${response.status}).`);

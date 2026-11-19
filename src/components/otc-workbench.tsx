@@ -53,8 +53,8 @@ export function OtcWorkbench({ graphServerLabel, graphServerUrl, personalGraphSe
       try {
         const session = await loadPersonalAuthSession();
         if (!cancelled) setLoginStatus(session?.graphStore && session.graphPrefix && session.authHeader ? "authenticated" : "signed-out");
-      } catch {
-        if (!cancelled) setLoginStatus("signed-out");
+      } catch (error) {
+        if (!cancelled) { setLoginStatus("signed-out"); setError(error instanceof Error ? error.message : String(error)); }
       }
     };
     void checkLogin();

@@ -109,5 +109,9 @@ test('bookmarked Status counts and query inspector stay bound to matching FCT sc
   assert.match(source,/const \[entriesScope, setEntriesScope\] = useState/);
   assert.match(source,/setEntriesScope\(queryXml\)/);
   assert.match(source,/const scopedEntries = entriesScope === queryXml \? entries : \[\]/);
-  assert.match(source,/fctQuery=\{entriesScope === queryXml \? fctQuery : ""\}/);
+  // Counts remain scope-gated, while the inspector can show a current-scope
+  // XML/compiled SPARQL preview even when the Status request has failed.
+  assert.match(source,/const scopedEntries = entriesScope === queryXml \? entries : \[\]/);
+  assert.match(source,/fctQuery=\{entriesScope === queryXml \? fctQuery : inspectorXml\}/);
+  assert.match(source,/preview.scope === queryXml \? preview.sparql : ""/);
 });

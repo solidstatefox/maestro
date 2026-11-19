@@ -1,6 +1,6 @@
 "use client";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Table2, TableProperties, ChartColumn, ChartPie, Network, ChartNoAxesCombined, ChartRadar } from "lucide-react";
+import { Table2, TableProperties, ChartColumn, ChartPie, Network, ChartNoAxesCombined, ChartRadar, Workflow } from "lucide-react";
 import { NODE_ANALYTICS_ANALYSIS_URI } from "@/lib/overview-analytics-ids";
 import { OVERVIEW_PERSPECTIVE_URI } from "@/lib/overview-metrics";
 type AnalysisDefinition = { uri: string; label: string; icon: string };
@@ -63,7 +63,7 @@ export function AnalyzeRibbon({ analysisDefinitions, selectedAnalysisUri, analyz
           {analysisDefinitions.some((definition) => !NATIVE_ANALYZE_URIS.has(definition.uri)) && <div className="mx-1 h-11 self-center border-l border-border" role="separator" aria-orientation="vertical" aria-label="SHACL-provided analyses" />}
           {analysisDefinitions.filter((definition) => !NATIVE_ANALYZE_URIS.has(definition.uri)).map((definition) => {
             const active = selectedAnalysisUri === definition.uri && !analyzeHistogram;
-            const Icon = definition.icon === "chart-radar" ? ChartRadar : definition.icon === "chart-pie" ? ChartPie : ChartColumn;
+            const Icon = definition.icon === "chart-radar" ? ChartRadar : definition.icon === "workflow" ? Workflow : definition.icon === "chart-pie" ? ChartPie : ChartColumn;
             return <Tooltip key={definition.uri} disableHoverablePopup={false}>
               <TooltipTrigger render={<button type="button" onClick={() => onSelectAnalysis(definition.uri)} aria-pressed={active}
                 className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${active ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>

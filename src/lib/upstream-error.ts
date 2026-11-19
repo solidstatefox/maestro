@@ -5,6 +5,19 @@
  * certificate errors, timeouts...) in `error.cause`. This walks the cause chain and returns what the network
  * layer or the graph server actually reported instead of the generic wrapper text.
  */
+/** Preserve diagnostic information but never send authentication material to the client.
+ * This also applies when an upstream server echoes a request URL or headers
+ * inside an error body. Do not include stacks or raw request headers. */
+export function sanitizeUpstreamDiagnostic(value: string, maxLength = 4096): string {
+  const redacted = value
+    .replace(/(\b(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-maestro-iteracompute-key)\s*[:=]\s*)[^\r\n,;}]+/gi, "$1[REDACTED]")
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9+/_=.\-]+/gi, "$1 [REDACTED]")
+    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[REDACTED]@")
+    .replace(/([?&](?:access_token|refresh_token|token|api_key|apikey|client_secret|password|secret|key)=)[^&#\s]+/gi, "$1[REDACTED]")
+    .replace(/([\"']?(?:password|client_secret|access_token|refresh_token|api_key)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,}]+/gi, "$1[REDACTED]");
+  return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}… [truncated]` : redacted;
+}
+
 const GENERIC_MESSAGES = new Set(["fetch failed", "failed to fetch", "network error", "load failed", "terminated"]);
 
 export function describeUpstreamError(error: unknown, fallback = "Unknown error"): string {
@@ -33,7 +46,7 @@ export function describeUpstreamError(error: unknown, fallback = "Unknown error"
   if (error instanceof Error && error.name === "TimeoutError" && !parts.some((part) => /timed? ?out|timeout/i.test(part))) parts.push("the graph server did not respond before the timeout");
   if (parts.length === 0) {
     const generic = error instanceof Error ? error.message.trim() : "";
-    return generic ? `${generic} (the network layer gave no further detail)` : fallback;
+    return sanitizeUpstreamDiagnostic(generic ? `${generic} (the network layer gave no further detail)` : fallback);
   }
-  return parts.join(": ");
+  return sanitizeUpstreamDiagnostic(parts.join(": "));
 }

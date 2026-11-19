@@ -87,7 +87,7 @@ export async function seedPersonalGraphs(signal?:AbortSignal):Promise<Array<{fil
       // The remote graph server never dereferences Maestro's localhost URL.
       if(triples.length)await updatePersonal(buildInsertData(graph,triples,ctx.base),signal);
       if(entry.file==="dataserver-seed.ttl"){
-        const endpoint=ctx.session.graphStore.replace(/\/sparql-auth\/?$/i,"/sparql");
+        const endpoint=ctx.session.graphStore;
         const p="gttp://ggg.maestro.ecosys/ids/dataservers/endpoints#personal-sparql";
         await updatePersonal(`INSERT DATA { GRAPH ${iri(graph)} { ${iri(p)} a <https://schema.org/EntryPoint> ; <http://www.w3.org/2000/01/rdf-schema#label> "Personal SPARQL" ; <https://schema.org/url> ${iri(endpoint)} ; <http://purl.org/dc/terms/isPartOf> <gttp://ggg.maestro.ecosys/ids/dataservers/endpoints> ; <https://schema.org/position> "-1"^^<http://www.w3.org/2001/XMLSchema#integer> . } }`,signal);
       }

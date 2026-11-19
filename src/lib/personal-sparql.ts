@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { graphForPrefix } from "./personal-auth";
+import { graphForPrefix, personalReadEndpoint, personalWriteEndpoint } from "./personal-auth";
 import { authNote, fetchWithDigestFallback } from "./digest-auth";
 import { parseRdfDocument } from "./rdf-to-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
@@ -82,7 +82,7 @@ function getGraphManifest(): GraphManifest {
   try {
     manifest = JSON.parse(readFileSync(getGraphManifestPath(), "utf8"));
   } catch (error) {
-    throw new Error(`Could not read graph/manifest.json: ${error instanceof Error ? error.name : "Unknown error"}`);
+    throw new Error(`Could not read graph/manifest.json: ${describeUpstreamError(error)}`);
   }
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error(`graph/manifest.json must contain a JSON object mapping RDF filenames to Graph graph local paths or IRIs.`);
@@ -151,24 +151,14 @@ export function resolveConfiguredFctEndpoint(endpoints: FctEndpoint[], requested
 }
 type SparqlJson = { results?: { bindings?: Record<string, { type?: string; value?: string }>[] } };
 
-/** Return the personal READ endpoint (/sparql) without embedding credentials in its URL. A pasted /sparql-auth is normalised to /sparql. */
+/** All personal SPARQL reads use the read-only /sparql URL entered at login. */
 export function personalSparqlUrl(request?: Request): URL {
-  const session = assertPersonalSession(request);
-  const raw = (session.graphStore || DEFAULT_GRAPH_STORE).trim();
-  const url = new URL(raw);
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Personal graph store must use HTTP or HTTPS.");
-  url.pathname = url.pathname.replace(/\/sparql-auth\/?$/i, "/sparql");
-  return url;
+  return new URL(personalReadEndpoint(assertPersonalSession(request)));
 }
 
-/** Return the personal WRITE endpoint: the user's /sparql endpoint switched to /sparql-auth for sparql-auth logins. */
+/** All personal SPARQL writes use the authentication method selected at login. */
 export function personalSparqlWriteUrl(request?: Request): URL {
-  const url = personalSparqlUrl(request);
-  const session = getPersonalSession(request);
-  if (session?.authType === "sparql-auth") {
-    url.pathname = url.pathname.replace(/\/sparql\/?$/i, "/sparql-auth");
-  }
-  return url;
+  return new URL(personalWriteEndpoint(assertPersonalSession(request)));
 }
 
 /** Build authenticated request headers for the personal SPARQL endpoint. */

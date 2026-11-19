@@ -39,7 +39,7 @@ export function RootAutocompleteQueryInspector({ open, onOpenChange, query, inpu
           <X className="size-4" aria-hidden="true" /> Close
         </button>
       </div>
-      {query ? <CodeBlock className="min-h-0 flex-1" code={query} language="sparql" filename="root-uri-autocomplete.sparql" />
+      {query ? <CodeBlock className="min-h-0 flex-1" code={query} language="sparql" filename="root-uri-autocomplete.sparql" executionAddr={addr} />
         : <p className="p-3 text-sm text-muted-foreground">No SPARQL is dispatched for an empty input or a complete URI. Enter search text, then open this inspector.</p>}
     </DialogContent>
   </Dialog>;

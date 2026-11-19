@@ -1,6 +1,9 @@
 "use client";
-import { useRef, useState } from "react";
+import { ErrorDetails } from "@/components/ui/error-details";
+import { useEffect, useRef, useState } from "react";
 import { Braces } from "lucide-react";
+import { LeftWidgetButtonTray, type LeftWidgetTrayAction } from "@/components/ui/left-widget-button-tray";
+import type { DerivedRegexField } from "@/lib/fct-derived-facets";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { useFctQuery, type FctQueryNode } from "@/lib/fct-query";
 import { discoverApprovedRegexDerivations } from "@/lib/client-derived-facet-providers";
@@ -19,10 +22,11 @@ export function DerivedFacetButton({ source }: { source: FctQueryNode }) {
     const next=new AbortController(); controller.current=next;
     setBusy(true); setError("");
     try {
-      const fields=await discoverApprovedRegexDerivations(source.attributes.iri || "", next.signal);
+      // Revalidate approvals at click time so revocations never apply stale fields.
+      const currentFields = await discoverApprovedRegexDerivations(source.attributes.iri || "", next.signal);
       if (next.signal.aborted) return;
-      if (!fields.length) {setError("No approved regex derivation provider matches this facet.");return;}
-      replaceTree(spawnRegexDerivedFacets(tree,source.id,fields));
+      if (!currentFields.length) { setError("Regex derivation provider approval changed; refresh this facet."); return; }
+      replaceTree(spawnRegexDerivedFacets(tree,source.id,currentFields));
     } catch (error) {
       if (!next.signal.aborted) setError(error instanceof Error ? error.message : "Derived facet creation failed.");
     } finally {if (controller.current===next) {setBusy(false);controller.current=null;}}
@@ -33,6 +37,41 @@ export function DerivedFacetButton({ source }: { source: FctQueryNode }) {
       onClick={() => void extract()} aria-label="Extract approved regex-derived facets">
         <Braces className="size-4" />
       </button>} /><TooltipContent>Extract fields using an approved regex provider</TooltipContent></Tooltip>
-    {error && <Tooltip><TooltipTrigger render={<span role="status" className="max-w-28 truncate text-xs text-destructive" title={error}>No provider</span>} /><TooltipContent>{error}</TooltipContent></Tooltip>}
+    {error && <ErrorDetails prefix="Facet provider" error={error} />}
   </div>;
+}
+
+/** An approved provider is a condition for offering the action at all, and
+ * unapproved actions must not occupy a direct or overflow slot. The lookup is
+ * cancelled on facet changes/unmount; discovery failures stay distinguishable
+ * from a confirmed empty provider set. */
+export function PersonalFacetButtonTray({ source, actions, approvalRevision, sessionKey, sessionActive }: {
+  source?: FctQueryNode; actions: LeftWidgetTrayAction[]; approvalRevision: number; sessionKey: string; sessionActive: boolean;
+}) {
+  const property = source?.attributes.iri ?? "";
+  const [approval, setApproval] = useState<{
+    property: string; revision: number; sessionKey: string; fields: DerivedRegexField[]; error: string;
+  } | null>(null);
+  useEffect(() => {
+    // XState signedIn is authoritative. A stale facet can remain mounted for a
+    // render after logout; it may not contact the personal provider store.
+    if (!sessionActive || !sessionKey || !property || !source) { setApproval(null); return; }
+    const controller = new AbortController();
+    discoverApprovedRegexDerivations(property, controller.signal)
+      .then(fields => { if (!controller.signal.aborted) setApproval({property,revision:approvalRevision,sessionKey,fields,error:""}); })
+      .catch(error => { if (!controller.signal.aborted && sessionActive) setApproval({property,revision:approvalRevision,sessionKey,fields:[],
+        error: error instanceof Error ? error.message : String(error) }); });
+    return () => controller.abort();
+  }, [property, source?.id, approvalRevision, sessionKey, sessionActive]);
+  const approvedForScope = sessionActive && !!sessionKey && approval?.property === property &&
+    approval.revision === approvalRevision && approval.sessionKey === sessionKey;
+  const fields = approvedForScope ? approval.fields : [];
+  const available = actions.map(action => action.id === "derived" ? {
+    ...action, when: Boolean(source && fields.length),
+    render: source && fields.length ? <DerivedFacetButton source={source} /> : undefined,
+  } : action);
+  return <>
+    <LeftWidgetButtonTray actions={available} />
+    {approvedForScope && approval.error && <ErrorDetails prefix="Regex provider discovery" error={approval.error} />}
+  </>;
 }

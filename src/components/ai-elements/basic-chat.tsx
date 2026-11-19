@@ -534,11 +534,12 @@ export function BasicAssistantChat({
           } : message);
           messagesRef.current = cleaned;
           setMessages(cleaned);
-        } catch {
+        } catch (error) {
+          const failure = error instanceof Error ? error.message : String(error);
           const failed = messagesRef.current.map(message => message.id === menuId ? {
             ...message, otcProgress: [...(message.otcProgress ?? []), {
               step: "cleanup" as const, status: "error" as const,
-              detail: "Could not remove temporary input graph; remove it from the personal graph server", receivedAt: Date.now(),
+              detail: `Could not remove temporary input graph; remove it from the personal graph server: ${failure}`, receivedAt: Date.now(),
             }],
           } : message);
           messagesRef.current = failed;
@@ -580,7 +581,7 @@ export function BasicAssistantChat({
           try { window.localStorage.removeItem("maestro-chat-transcode-mode"); } catch { /* optional */ }
           setMessages([]);
           setError("");
-          void clearAssistantActivity().catch(() => setError("Could not clear assistant activity history."));
+          void clearAssistantActivity().catch(error => setError(`Could not clear assistant activity history: ${error instanceof Error ? error.message : String(error)}`));
         }}>Clear chat</Button>
       </div>
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4" aria-live="polite" aria-label="Chat messages">

@@ -45,7 +45,10 @@
     </xsl:call-template>
     <xsl:text>&#10;} OPTIONAL { </xsl:text><xsl:value-of select="$focus"/><xsl:text> &lt;</xsl:text><xsl:value-of select="concat($rdfs,'label')"/><xsl:text>&gt; ?title . }&#10;</xsl:text>
     <xsl:if test="contains($graph,':') and not(starts-with($graph,'$'))"><xsl:text>}&#10;</xsl:text></xsl:if>
-    <xsl:text>} LIMIT 1000</xsl:text>
+    <xsl:text>} ORDER BY ?c1 ?lat ?lng ?point ?wkt ?title LIMIT </xsl:text>
+    <xsl:choose><xsl:when test="number($view/@limit) &gt; 0"><xsl:value-of select="floor(number($view/@limit))"/></xsl:when><xsl:otherwise>101</xsl:otherwise></xsl:choose>
+    <xsl:text> OFFSET </xsl:text>
+    <xsl:choose><xsl:when test="number($view/@offset) &gt;= 0"><xsl:value-of select="floor(number($view/@offset))"/></xsl:when><xsl:otherwise>0</xsl:otherwise></xsl:choose>
    </sparql>
    <facets>
     <xsl:for-each select="$view/../*[local-name()='property' or local-name()='property-of' or local-name()='class']">

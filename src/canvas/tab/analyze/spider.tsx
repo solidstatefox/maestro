@@ -1,5 +1,7 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import { Legend, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip } from "recharts";
 import { spiderAxisKey, validateSpiderQuery, type SpiderAxis, type SpiderRow } from "@/lib/spider-numeric-policy";
 import { validateSpiderCore } from "@/lib/client-spider-shacl";
@@ -48,15 +50,16 @@ export function AnalyzeSpider({workspace}: {workspace:WorkspaceController}) {
       .catch(error=>{if(!controller.signal.aborted)setCore({key:validationKey,report:null,error:error instanceof Error?error.message:String(error)});});
     return ()=>controller.abort();
   },[validationKey,axes,rows]);
+  if (projection && rows.length === 0) return <MaestroEmptyResults title="No Spider results" description="No results were returned for the current query. Try the default Browse perspective." onBrowse={() => workspace.setWorkspaceTab("browse")}/>;
   return <section className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6" aria-label="Spider numeric analysis">
-    <div className="mx-auto max-w-6xl space-y-4">
+    <div className="w-full min-w-0 space-y-4">
       <header className="border-b pb-3"><h2 className="text-lg font-semibold">Spider</h2>
         <p className="text-xs text-muted-foreground">Every result on the current FCT page is a polygon. Axes are the view's Properties and Roles; all cells must pass the numeric query-validator policy.</p>
       </header>
-      {workspace.analysisValuesError && <p role="alert" className="text-sm text-destructive">{workspace.analysisValuesError}</p>}
+      {workspace.analysisValuesError && <ErrorDetails prefix="Spider projection" error={workspace.analysisValuesError} />}
       {!projection && !workspace.analysisValuesError && <p role="status" className="text-sm text-muted-foreground">Projecting the page with the existing FCT list-values view…</p>}
       {corePending && <p role="status" className="text-sm text-muted-foreground">Validating Spider axes with the provider's SHACL Core shape…</p>}
-      {coreError && <p role="alert" className="text-sm text-destructive">Spider SHACL validation: {coreError}</p>}
+      {coreError && <ErrorDetails prefix="Spider SHACL validation" error={coreError} />}
       {coreReport && dismissed!==validationKey && <ValidationNotice report={coreReport} onDismiss={()=>setDismissed(validationKey)} />}
       {validated && !validated.ok && !corePending && !coreError && !coreReport && <p role="alert" className="rounded-md border p-4 text-sm text-muted-foreground">Numeric query validation: {validated.reason}</p>}
       {validated?.ok && coreReport?.complete && coreReport.conforms && <div className="rounded-xl border bg-card p-3 sm:p-5">

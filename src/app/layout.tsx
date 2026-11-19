@@ -25,9 +25,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} h-full overflow-hidden antialiased`}
     >
-      <body className="min-h-full flex flex-col font-sans">
+      <body className="h-full min-h-0 flex flex-col overflow-hidden font-sans">
         <Script src="/vendor/saxon-js/SaxonJS2.js" strategy="beforeInteractive" />
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <DisableNativeTooltips />

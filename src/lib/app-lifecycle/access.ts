@@ -148,19 +148,21 @@ export function selectMaestroCapabilities(snapshot: MaestroAccessSnapshot, input
   queryKey?: string; recordSelected?: boolean; providersActive?: boolean;
 } = {}) {
   const sessionReady = snapshot.value === "signedIn" && Boolean(snapshot.context.sessionKey);
+  // Authentication is necessary but not sufficient: until the graph manifest
+  // has been seeded and verified, no personal graph UI may issue reads/writes.
   const policyReady = sessionReady && snapshot.context.policyStage === "ready";
   const queryMatches = Boolean(input.queryKey) && snapshot.context.queryKey === input.queryKey;
-  const bookmarked = sessionReady && queryMatches && snapshot.context.bookmark === "bookmarked";
+  const bookmarked = policyReady && queryMatches && snapshot.context.bookmark === "bookmarked";
   return {
-    canUsePersonalStore: sessionReady,
+    canUsePersonalStore: policyReady,
     canUsePolicyProviders: policyReady,
     policyStage: sessionReady ? snapshot.context.policyStage : "unavailable",
     policyError: sessionReady ? snapshot.context.policyError : "",
-    canMutatePersonalStore: sessionReady,
+    canMutatePersonalStore: policyReady,
     canShowStatusFacet: bookmarked,
     canShowRecordStatusActions: bookmarked && Boolean(input.recordSelected),
     canApproveProvider: bookmarked && policyReady && Boolean(input.providersActive),
-    bookmarkVerified: sessionReady && queryMatches && (snapshot.context.bookmark === "bookmarked" || snapshot.context.bookmark === "unbookmarked"),
+    bookmarkVerified: policyReady && queryMatches && (snapshot.context.bookmark === "bookmarked" || snapshot.context.bookmark === "unbookmarked"),
     bookmarkId: bookmarked ? snapshot.context.bookmarkId : "",
   };
 }

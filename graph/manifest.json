@@ -27,5 +27,9 @@
   "kinds/provider.ttl": "/shacl/policies",
   "spider/provider.ttl": "/shacl/policies",
   "email-regex/provider.ttl": "/shacl/policies",
-  "kanban/provider.ttl": "/shacl/policies"
+  "kanban/provider.ttl": "/shacl/policies",
+  "sankey/provider.ttl": "/shacl/policies",
+  "sunburst/provider.ttl": "/shacl/policies",
+  "sankey-d3/provider.ttl": "/shacl/policies",
+  "sunburst-chartkit/provider.ttl": "/shacl/policies"
 }

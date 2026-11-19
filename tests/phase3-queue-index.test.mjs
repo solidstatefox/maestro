@@ -13,7 +13,9 @@ test("pending queue item positions derive from existing scheduledGraphFetch queu
   assert.match(cache, /refreshPendingQueueIndexes\(\)/);
   // A request that has already dispatched has no position in the waiting
   // queue; rendering "0." invented a queue position that does not exist.
-  assert.match(appbar, /query\.queueIndex > 0 \? `\$\{query\.queueIndex\}\.` : "—"/);
+  assert.match(appbar, /query\.serverQueueLaneIndex/);
+  assert.match(appbar, /`\$\{query\.serverQueueLane\}\.\$\{query\.serverQueueLaneIndex\}`/);
+  assert.match(appbar, /query\.queueIndex > 0 \? `browser\.\$\{query\.queueIndex\}` : "—"/);
   assert.doesNotMatch(appbar, /query\.queueIndex > 0 \? query\.queueIndex : "0"/);
   assert.match(appbar, /Cancel \$\{query\.label\}/);
 });

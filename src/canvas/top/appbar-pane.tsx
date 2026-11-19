@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { UI_COMPONENT } from "@/lib/maestro-ui-component-ids";
 
-import { EndpointStatusIcon } from "@/canvas/top/appbar";
+import { EndpointStatusIcon, endpointHealthDetails } from "@/canvas/top/appbar";
 
 import maestroLanguages from "@/data/maestro-languages.json";
 
@@ -181,13 +181,15 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     } catch { return false; }
   }));
   useEffect(() => {
-    if (!workspace.authSession) { setAppbarButtons([]); return; }
+    if (!workspace.authSession || !workspace.accessCapabilities.canUsePersonalStore) { setAppbarButtons([]); return; }
     let mounted = true;
     const refresh = async () => {
       try {
         const payload = await manageAppbarButtons({action:"list"});
         if (mounted) setAppbarButtons(payload.buttons ?? []);
-      } catch { /* Loading optional appbar providers must not block the appbar. */ }
+      } catch (error) {
+        if (mounted) toast.add({ title: "Could not load appbar providers", description: error instanceof Error ? error.message : String(error), type: "error" });
+      }
     };
     void manageAppbarButtons({action:"ensure-providers"})
       .then(async () => {
@@ -200,14 +202,14 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
       });
     window.addEventListener("maestro:appbar-buttons-updated", refresh);
     return () => { mounted = false; window.removeEventListener("maestro:appbar-buttons-updated", refresh); };
-  }, [workspace.authSession]);
+  }, [workspace.authSession, workspace.accessCapabilities.canUsePersonalStore]);
   const openPinnedBookmark = (url: string) => {
     try {
       const destination = new URL(url, window.location.origin);
       if (destination.origin === window.location.origin && /^https?:$/.test(destination.protocol) && destination.searchParams.has("q"))
         { if (!workspace.openPinnedShareUrl(destination.href)) toast.add({ title: "Could not restore bookmark", type: "error" }); }
       else toast.add({ title: "Invalid bookmark share URL", type: "error" });
-    } catch { toast.add({ title: "Bookmark has no valid share URL", type: "error" }); }
+    } catch (error) { toast.add({ title: "Bookmark has no valid share URL", description: error instanceof Error ? error.message : String(error), type: "error" }); }
   };
   const [bookmarkAttention, setBookmarkAttention] = useState(false);
   const [policyBookmarkVisible, setPolicyBookmarkVisible] = useState(false);
@@ -339,7 +341,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     queryTree,
     queryTreeHeightDbRef,
     queryXml,
-    returnShareUrl,
+    returnButtonVisible,
     recordDescriptionPageSize,
     recordDescriptionQueryLimit,
     refreshMaestroPage,
@@ -442,6 +444,11 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     });
   }, [graphProbe.identity, graphProbe.state, graphProbe.error, graphProbeIdentity, graphAlreadySelected, graphAutoFill]);
 
+  // When a session has been published but the XState actor has not yet
+  // observed it, show amber rather than flashing an incorrect green Ready.
+  const graphInitializationPending = Boolean(authSession) &&
+    !workspace.accessCapabilities.canUsePersonalStore &&
+    workspace.accessCapabilities.policyStage !== "failed";
   const showCancel = pendingQueryCount > 0 || queryActivityPending;
   const liveServer = (queryTree.attributes.addr ?? "").split("@").slice(1).join("@");
   const activeGraphServer = fctEndpoints.find(endpoint =>
@@ -453,11 +460,11 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
 <header ref={headerLayoutRef} id={UI_COMPONENT.appbar} className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
         <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-2">
           <ButtonGroup aria-label="Graph navigation" className="shrink-0">
-            {returnShareUrl && <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon"
-              aria-label="Return to Browse query" onClick={() => { if (!workspace.returnToPreviousContext()) toast.add({ title: "Could not restore the Browse query", type: "error" }); }}
+            {returnButtonVisible && <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon"
+              aria-label="Return to previous context" onClick={() => { if (!workspace.returnToPreviousContext()) toast.add({ title: "Could not restore the previous context", type: "error" }); }}
               className="h-9 w-auto gap-1.5 border-blue-500/60 bg-blue-600 px-3 text-white hover:bg-blue-700 hover:text-white focus-visible:ring-blue-500">
               <CornerDownLeft className="size-4" aria-hidden="true" />Return
-            </Button>} /><TooltipContent>Return to Browse query</TooltipContent></Tooltip>}
+            </Button>} /><TooltipContent>Return to previous context</TooltipContent></Tooltip>}
 
             {workspace.accessCapabilities.canUsePersonalStore && (<>
             <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onMouseEnter={() => startHistoryActionHover("backward")} onMouseLeave={stopHistoryActionHover} onClick={() => void navigateQueryHistory("backward")} aria-label="Previous query in history" aria-busy={historyNavigationPending === "backward"} disabled={!historyHasOlder || historyNavigationPending !== null} className={`size-9 text-muted-foreground hover:text-foreground active:bg-accent/80 ${historyNavigationPending !== null ? "bg-muted text-muted-foreground" : ""}`}><span className="inline-flex" aria-hidden="true">{historyNavigationPending === "backward" ? <ClockArrowRight className="size-4 scale-x-[-1]" /> : <ArrowLeft className="size-4" />}</span></Button>} /><TooltipContent className={historyActionMenu === "backward" ? "!max-w-none max-w-[min(36rem,calc(100vw-1rem))] p-2" : ""} onMouseEnter={() => { if (historyHoverTimerRef.current) clearTimeout(historyHoverTimerRef.current); }} onMouseLeave={stopHistoryActionHover}>{historyActionMenu === "backward" ? <div className="w-[min(34rem,calc(100vw-2rem))] text-background"><div className="px-1 pb-2 text-xs font-semibold">Earlier in History</div><div className="max-h-64 overflow-auto">{historyActionItems.map((item) => <button type="button" key={item.historyId} onClick={() => void restoreHistoryActionItem(item.historyId)} className="block w-full border-t border-background/20 px-1 py-2 text-left text-xs hover:bg-background/10"><div className="break-all font-mono">{formatHistoryAction(item.action, "backward")}</div><div className="mt-1 opacity-70">{item.created ? new Date(item.created).toLocaleString() : ""}</div></button>)}</div></div> : historyNavigationPending === "backward" ? "Loading previous query…" : "Previous query in History"}</TooltipContent></Tooltip>
@@ -469,7 +476,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               if (centralTab === "groups") setCentralTab("results");
               setSearchPipelineRun((current) => current + 1);
             }} aria-label="Reset query to home" className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground"><Home className="size-4" aria-hidden="true" /></Button>} /><TooltipContent>Reset query</TooltipContent></Tooltip>
-            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onClick={() => { if (showCancel) cancelMaestroPage(); else void refreshMaestroPage(); }} aria-label={showCancel ? "Cancel pending queries" : "Refresh current query"} className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground">{showCancel ? <X className="size-4" aria-hidden="true" /> : <RotateCw className="size-4" aria-hidden="true" />}</Button>} /><TooltipContent className={showCancel ? "!max-w-none max-w-[min(32rem,calc(100vw-1rem))] p-2" : ""}>{showCancel ? <div className="w-[min(29rem,calc(100vw-2rem))]"><div className="px-1 pb-2 text-xs font-semibold">Pending queries</div><div className="max-h-64 overflow-y-auto">{pendingQueryDetails.length ? pendingQueryDetails.map((query) => <div key={query.id} className="flex items-center gap-2 border-t border-border/40 px-1 py-1.5"><span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground" aria-label={query.queueIndex > 0 ? `Queue position ${query.queueIndex}` : "Active or awaiting dispatch"}>{query.queueIndex > 0 ? `${query.queueIndex}.` : "—"}</span><span className="min-w-0 flex-1 truncate text-xs" title={query.label}>{query.label}</span><button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded hover:bg-accent" aria-label={`Cancel ${query.label}`} title={`Cancel ${query.label}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); cancelIndividualMaestroQuery(query.id); }}><X className="size-3.5" aria-hidden="true" /></button></div>) : <span className="px-1 text-xs text-muted-foreground">Loading before dispatch</span>}</div></div> : "Refresh query (check selected graph server only if not green)"}</TooltipContent></Tooltip>
+            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onClick={() => { if (showCancel) cancelMaestroPage(); else void refreshMaestroPage(); }} aria-label={showCancel ? "Cancel pending queries" : "Refresh current query"} className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground">{showCancel ? <X className="size-4" aria-hidden="true" /> : <RotateCw className="size-4" aria-hidden="true" />}</Button>} /><TooltipContent className={showCancel ? "!max-w-none max-w-[min(32rem,calc(100vw-1rem))] p-2" : ""}>{showCancel ? <div className="w-[min(29rem,calc(100vw-2rem))]"><div className="px-1 pb-2 text-xs font-semibold">Pending queries</div><div className="max-h-64 overflow-y-auto">{pendingQueryDetails.length ? pendingQueryDetails.map((query) => <div key={query.id} className="flex items-center gap-2 border-t border-border/40 px-1 py-1.5"><span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground" aria-label={query.queueIndex > 0 ? `Queue position ${query.queueIndex}` : "Active or awaiting dispatch"}>{query.serverQueueIndex && query.serverQueueIndex > 0 && query.serverQueueLane && query.serverQueueLaneIndex ? `${query.serverQueueLane}.${query.serverQueueLaneIndex}` : query.queueIndex > 0 ? `browser.${query.queueIndex}` : "—"}</span><span className="min-w-0 flex-1 truncate text-xs" title={query.label}>{query.label}</span><button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded hover:bg-accent" aria-label={`Cancel ${query.label}`} title={`Cancel ${query.label}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); cancelIndividualMaestroQuery(query.id); }}><X className="size-3.5" aria-hidden="true" /></button></div>) : <span className="px-1 text-xs text-muted-foreground">Loading before dispatch</span>}</div></div> : "Refresh query (check selected graph server only if not green)"}</TooltipContent></Tooltip>
           </ButtonGroup>
 
           {/* One address: [graph]@[graph server], with no gap around the at-sign. */}
@@ -588,7 +595,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                         aria-label="Choose graph server"
                         className="flex w-full min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap rounded-none bg-transparent px-2 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <EndpointStatusIcon status={displayedEndpointStatus} />
+                        <span title={endpointHealthDetails(displayedEndpointStatus)}><EndpointStatusIcon status={displayedEndpointStatus} /></span>
                         <span className="min-w-0 truncate whitespace-nowrap">{fctEndpoints.find((endpoint) => endpoint.id === displayedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
                         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                       </button></DropdownMenuTrigger>
@@ -599,7 +606,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                             {fctEndpoints.filter((endpoint) => (endpoint.group || "Endpoints") === group).map((endpoint) => {
                               const status = endpointStatuses[endpoint.id];
                               const statusText = status?.status != null ? `HTTP ${status.status}` : status ? status.state : "Not yet pinged";
-                              return <DropdownMenuItem key={endpoint.id} onSelect={() => void chooseFctEndpoint(endpoint.id)} className="flex min-w-0 items-center gap-2">
+                              return <DropdownMenuItem key={endpoint.id} title={endpointHealthDetails(status)} onSelect={() => void chooseFctEndpoint(endpoint.id)} className="flex min-w-0 items-center gap-2">
                                 <EndpointStatusIcon status={status} />
                                 <span className="min-w-0 flex-1 whitespace-nowrap">{endpoint.label}</span>
                                 <span className="shrink-0 text-xs text-muted-foreground">{statusText}</span>
@@ -863,16 +870,16 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   setShareLinkCopied(true);
                   toast.add({ title: "Share link copied", description: "The query URL is on your clipboard.", type: "success" });
                   window.setTimeout(() => setShareLinkCopied(false), 2500);
-                } catch {
+                } catch (error) {
                   setShareLinkCopied(false);
-                  toast.add({ title: "Could not copy share link", description: "The browser denied clipboard access.", type: "error" });
+                  toast.add({ title: "Could not copy share link", description: error instanceof Error ? error.message : String(error), type: "error" });
                 }
               }}
             >{shareLinkCopied ? <Check aria-hidden="true" /> : <Link aria-hidden="true" />}</Button>
           } />
           <TooltipContent>{shareLinkCopied ? "Share link copied" : "Copy share link"}</TooltipContent>
         </Tooltip>
-        {workspace.accessCapabilities.canUsePersonalStore && authSession ? (
+        {authSession ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -880,17 +887,22 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                 aria-label={`Logged in as ${authSession.userName || "User"}`}
                 className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <Avatar className="size-9 ring-1 ring-border hover:ring-primary transition-all">
-                  {authSession.avatarUrl && (
-                    <AvatarImage src={authSession.avatarUrl} alt={authSession.userName || "User avatar"} />
-                  )}
-                  <AvatarFallback className="bg-primary text-primary-foreground font-semibold text-xs uppercase">
-                    {(authSession.userName || "U")[0]}
-                  </AvatarFallback>
-                  <AvatarBadge className="bg-emerald-500 ring-2 ring-background">
-                    <span className="sr-only">Logged in</span>
-                  </AvatarBadge>
-                </Avatar>
+                <Tooltip>
+                  <TooltipTrigger render={<span className="inline-flex rounded-full">
+                    <Avatar className="size-9 ring-1 ring-border hover:ring-primary transition-all">
+                      {authSession.avatarUrl && (
+                        <AvatarImage src={authSession.avatarUrl} alt={authSession.userName || "User avatar"} />
+                      )}
+                      <AvatarFallback className="bg-primary text-primary-foreground font-semibold text-xs uppercase">
+                        {(authSession.userName || "U")[0]}
+                      </AvatarFallback>
+                      <AvatarBadge className={`${graphInitializationPending ? "bg-amber-500 animate-pulse motion-reduce:animate-none" : workspace.accessCapabilities.policyStage === "failed" ? "bg-destructive" : "bg-emerald-500"} ring-2 ring-background`}>
+                        <span className="sr-only">{graphInitializationPending ? "Graph loading in progress" : workspace.accessCapabilities.policyStage === "failed" ? "Graph loading failed" : "Logged in"}</span>
+                      </AvatarBadge>
+                    </Avatar>
+                  </span>} />
+                  <TooltipContent>{graphInitializationPending ? "Graph loading in progress" : workspace.accessCapabilities.policyStage === "failed" ? "Graph loading failed" : "Connected"}</TooltipContent>
+                </Tooltip>
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64 p-2">
@@ -904,16 +916,16 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                       <AvatarFallback className="bg-primary text-primary-foreground font-semibold text-xs uppercase">
                         {(authSession.userName || "U")[0]}
                       </AvatarFallback>
-                      <AvatarBadge className="bg-emerald-500 ring-2 ring-background">
-                        <span className="sr-only">Logged in</span>
+                      <AvatarBadge className={`${graphInitializationPending ? "bg-amber-500 animate-pulse motion-reduce:animate-none" : workspace.accessCapabilities.policyStage === "failed" ? "bg-destructive" : "bg-emerald-500"} ring-2 ring-background`}>
+                        <span className="sr-only">{workspace.accessCapabilities.policyStage === "ready" ? "Connected" : "Graph loading in progress"}</span>
                       </AvatarBadge>
                     </Avatar>
                     <div className="flex flex-col min-w-0">
                       <p className="text-sm font-medium leading-tight truncate">{authSession.userName || "Personal Account"}</p>
                       <div className="flex items-center gap-1.5 pt-0.5">
-                        <span className="size-1.5 rounded-full bg-emerald-500" />
+                        <span className={`size-1.5 rounded-full ${graphInitializationPending ? "bg-amber-500 animate-pulse motion-reduce:animate-none" : workspace.accessCapabilities.policyStage === "failed" ? "bg-destructive" : "bg-emerald-500"}`} />
                         <span className="text-[10px] text-muted-foreground uppercase font-mono font-medium tracking-wide">
-                          Connected
+                          {workspace.accessCapabilities.policyStage === "ready" ? "Connected" : workspace.accessCapabilities.policyStage === "failed" ? "Graph loading failed" : "Graph loading in progress"}
                         </span>
                       </div>
                     </div>
@@ -1010,7 +1022,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   placeholder="http://demo.openlinksw.com/sparql"
                   className="font-mono text-xs"
                 />
-                <p className="text-xs text-muted-foreground">Enter your /sparql endpoint. Maestro reads from it and switches to /sparql-auth automatically for writes.</p>
+                <p className="text-xs text-muted-foreground">Enter your read-only /sparql endpoint. Updates use the authenticated endpoint matching the method selected below.</p>
               </div>
 
               <div className="flex flex-col gap-1.5">

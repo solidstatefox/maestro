@@ -25,6 +25,8 @@ export interface PersonalAuthSession {
   authHeader?: string;
 }
 
+export { personalReadEndpoint, personalWriteEndpoint } from "./personal-endpoints";
+
 export interface PublicSessionPayload {
   graphStore: string;
   graphPrefix: string;

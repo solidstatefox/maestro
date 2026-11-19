@@ -5,6 +5,7 @@ export const MAESTRO_TIMEOUT_CATEGORIES = [
   { key: "results", label: "Results" },
   { key: "counts", label: "Results and facet counts" },
   { key: "alphabet", label: "Alphabet" },
+  { key: "status", label: "Status" },
   { key: "categories", label: "Categories" },
   { key: "properties", label: "Properties" },
   { key: "roles", label: "Roles" },
@@ -25,7 +26,7 @@ export type MaestroTimeoutCategory = (typeof MAESTRO_TIMEOUT_CATEGORIES)[number]
 export type MaestroWidgetTimeouts = Record<MaestroTimeoutCategory, number>;
 const KEY = "maestro-widget-query-timeouts-v2";
 const EMPTY: MaestroWidgetTimeouts = {
-  results: 0, counts: 0, alphabet: 0, categories: 0, properties: 0,
+  results: 0, counts: 0, alphabet: 0, status: 60, categories: 0, properties: 0,
   roles: 0, kinds: 0, personal: 0, graphs: 0, groups: 0, record: 0,
   policies: 0, providerPolicies: 0, providerFormats: 0, providerFacets: 0, providerTranscoders: 0, providerCurators: 0, other: 0,
 };
@@ -53,6 +54,7 @@ export function timeoutCategoryForSource(source: string): MaestroTimeoutCategory
   if (s.includes("provider-transcoders")) return "providerTranscoders";
   if (s.includes("provider-curators")) return "providerCurators";
   if (s.includes("alphabet")) return "alphabet";
+  if (s.includes("status-facet") || s.includes("statuses-facet")) return "status";
   if (s.includes("configure:kinds") || s.includes("kindavailability")) return "kinds";
   if (s.includes("count") || s.includes("distinct")) return "counts";
   if (s.includes("record-") || s.includes("recorddescription") || s.includes("results-enrichment")) {

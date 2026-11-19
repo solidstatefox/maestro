@@ -506,7 +506,7 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                             >
                               {["all", ...availableKinds(group === "Properties" ? "property" : "role", group === "Properties" ? configurePropertyKind : configureRoleKind)].map(kind => <option key={kind} className="bg-background text-foreground" value={kind}>{kind === "all" ? "All kinds" : kind}</option>)}
                             </select>}
-                            {group === "Properties" && <LeftWidgetButtonTray threshold={3} actions={[{
+                            {group === "Properties" && <LeftWidgetButtonTray threshold={4} actions={[{
                               id: "add-or-properties", label: orQuotaExceeded ? "Disjunction quota exceeded" : "Add OR", icon: <Split className="size-4" />,
                               when: selectedItems.length > 0 && orEditing !== "Properties", disabled: orQuotaExceeded || facetListStale,
                               onSelect: () => beginOrGroup("Properties"),
@@ -522,7 +522,7 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                                 extraQueries={configureInspectorTabs(queryTree, queryWithoutPagingXml(FCT_VIEW_TYPES.PROPERTIES), "property", propertyFacets[0]?.uri)}
                               />,
                               }]} />}
-                            {group === "Roles" && <LeftWidgetButtonTray threshold={3} actions={[{
+                            {group === "Roles" && <LeftWidgetButtonTray threshold={4} actions={[{
                               id: "add-or-roles", label: orQuotaExceeded ? "Disjunction quota exceeded" : "Add OR", icon: <Split className="size-4" />,
                               when: selectedItems.length > 0 && orEditing !== "Roles", disabled: orQuotaExceeded || facetListStale,
                               onSelect: () => beginOrGroup("Roles"),
@@ -665,7 +665,7 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                                     </div>
                                   ))}
                                 </div>
-                                {orEditing === group && transaction.error && <p role="alert" className="mt-2 text-xs text-destructive">{transaction.error}</p>}
+                                {orEditing === group && transaction.error && <ErrorDetails prefix="Configure" error={transaction.error} />}
                                 {orEditing === group && <div className="mt-2 flex justify-end gap-2 border-t pt-2">
                                   <button type="button" className="rounded border px-2 py-1 text-xs hover:bg-accent" onClick={commitOrGroup}>Update</button>
                                   <button type="button" className="rounded border px-2 py-1 text-xs hover:bg-accent" onClick={() => configureController.send({ type: "CANCEL" })}>Close</button>

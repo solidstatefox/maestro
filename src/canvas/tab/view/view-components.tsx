@@ -3,10 +3,10 @@ import { ErrorDetails } from "@/components/ui/error-details";
 import { describeFctSource } from "@/lib/rdf-source";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { ProviderCatalogLoadingSkeleton } from "@/canvas/workspace-skeleton";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CodeBlock } from "@/components/ui/code-block";
 import { ArrowLeft } from "lucide-react";
-import { Network } from "lucide-react";
+import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import type { ProviderKind } from "@/lib/provider-catalog-xslt";
 type ViewChoice = { uri: string };
 const BOOKMARK_APPROVAL_MESSAGE = "Bookmark this query to manage {kind} approvals. Use the highlighted Bookmark button in the appbar.";
@@ -28,13 +28,23 @@ export interface ViewPageProps {
   viewSelectionPending?: boolean;
   viewRenderError: string;
   viewHtml: string;
+  viewResultCount: number;
+  kanbanGroupingOptions?: { key: string; label: string }[];
+  kanbanGroupKey?: string;
+  onKanbanGroupChange?: (key: string) => void;
+  onKanbanMoveCard?: (uri: string, from: string, to: string, beforeUri?: string) => void;
   onSelectEndpoint: (id: string) => void;
   onRefreshEndpoint: (id: string) => void;
   onPolicyAction?: (uri: string, action: "toggle" | "forget" | "bookmark", approved: boolean) => void;
   onOpenResource?: (uri: string) => void;
   onSelectProvider?: (uri: string, selected: boolean) => void;
+  onBrowse: () => void;
 }
-export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider, viewProviderLoading, viewProviderError, viewProviderCount, viewProviderHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, selectedViewUri = "", viewSelectionPending = false, viewRenderError, viewHtml, onSelectEndpoint, onRefreshEndpoint, onPolicyAction, onOpenResource, onSelectProvider }: ViewPageProps) {
+export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider, viewProviderLoading, viewProviderError, viewProviderCount, viewProviderHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, selectedViewUri = "", viewSelectionPending = false, viewRenderError, viewHtml, viewResultCount, onSelectEndpoint, onRefreshEndpoint, onPolicyAction, onOpenResource, onSelectProvider, onBrowse, kanbanGroupingOptions = [], kanbanGroupKey = "none", onKanbanGroupChange, onKanbanMoveCard }: ViewPageProps) {
+  const kanbanActive = selectedView?.uri === "gttp://ggg.maestro.ui/provider/kanban" && !viewProvider;
+  // A ref survives the native drag lifecycle synchronously; React state updates
+  // may not have committed by the first dragover event.
+  const kanbanDragged = useRef<{uri: string; from: string} | null>(null);
   const [policyCode, setPolicyCode] = useState<{ uri: string; code: string; query: string; loading: boolean; error: string } | null>(null);
   useEffect(() => { setPolicyCode(null); }, [viewProvider, viewProviderHtml]);
   async function openPolicyCode(uri: string) {
@@ -47,7 +57,16 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
       setPolicyCode({ uri, code: "", query: "", loading: false, error: error instanceof Error ? error.message : "Could not load policy source." });
     }
   }
-  return <div className="min-h-0 flex-1 overflow-auto p-4">
+  return <div className="flex min-h-0 w-full flex-1 flex-col overflow-auto p-4">
+                  {kanbanActive && !policyCode && <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm" role="status">
+                    <span><strong>Temporary board:</strong> Grouping and drag-and-drop changes are not persisted and do not update RDF or the FCT query.</span>
+                    <label className="inline-flex items-center gap-2">Group cards by
+                      <select aria-label="Group Kanban cards by facet" className="rounded-md border bg-background px-2 py-1 text-sm" value={kanbanGroupKey}
+                        onChange={event => onKanbanGroupChange?.(event.currentTarget.value)}>
+                        {kanbanGroupingOptions.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  </div>}
                   {requiresBookmark && !policyCode && <div data-policy-bookmark-banner="true" role="status" className="mb-4 rounded-md border border-amber-400/50 bg-amber-100/80 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{BOOKMARK_APPROVAL_MESSAGE.replace("{kind}", PROVIDER_APPROVAL_LABEL[viewProvider ?? "policies"])}</div>}
                   {policyCode ? <div className="flex h-full min-h-0 flex-col gap-3">
                     <button type="button" onClick={() => setPolicyCode(null)} className="inline-flex w-fit items-center gap-2 rounded px-2 py-1 text-sm hover:bg-accent"><ArrowLeft className="size-4"/>Back to results</button>
@@ -55,8 +74,8 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
                       : <CodeBlock className="min-h-0 flex-1" code={policyCode.code} language="turtle" filename="policy.ttl" />}
                   </div> : viewProvider ? (viewProviderLoading ? <ProviderCatalogLoadingSkeleton label={viewProvider} />
                     : viewProviderError ? <ErrorDetails prefix="Provider discovery" error={viewProviderError} />
-                    : viewProviderCount === 0 ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">{viewProvider === "kinds" ? "No Kinds providers returned by the selected policies graph. Check graph/kinds/provider.ttl in the seed manifest and inspect the FCT response for incompleteness." : viewProvider === "perspectives" ? "No PerspectiveWidget providers returned by the selected policies graph. Check the provider manifest and the FCT response." : `No applicable ${viewProvider} found for the current query context.`}</p>
-                    : <div className="maestro-discovered-view" onClick={(event) => {
+                    : viewProviderCount === 0 ? <MaestroEmptyResults onBrowse={onBrowse} title="No providers found" description={viewProvider === "kinds" ? "No Kinds providers were returned. Try the default Browse perspective, or check provider discovery and the seeded graph." : `No ${viewProvider} providers match this query context. Try the default Browse perspective.`}/>
+                    : <div className="maestro-discovered-view w-full min-h-0 flex-1" onClick={(event) => {
                         const target = event.target as HTMLElement;
                         const selection = target.closest<HTMLInputElement>('input[data-provider-select]');
                         if (selection) {
@@ -75,16 +94,39 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
                       }} dangerouslySetInnerHTML={{ __html: viewProviderHtml }}/>)
                     : viewDiscoveryLoading ? <p className="text-sm text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></p>
                     : viewDiscoveryError ? <ErrorDetails prefix="View discovery" error={viewDiscoveryError} />
-                    : !selectedView ? <div role={selectedViewUri ? "status" : undefined} aria-busy={viewSelectionPending} className="mx-auto max-w-lg rounded-lg border border-dashed p-8 text-center">
-                        <Network className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden="true"/>
-                        <h3 className="font-medium">{selectedViewUri ? viewSelectionPending ? "Checking selected Perspective…" : "Selected Perspective unavailable" : "No views found"}</h3>
-                        <p className="mt-2 text-sm text-muted-foreground">{selectedViewUri ? viewSelectionPending
-                          ? "The saved selection is retained while provider discovery and SHACL validation complete."
-                          : "The selected provider was not returned for this query context. The selection has not been discarded."
-                          : "No views match the classes at this breadcrumb scope."}</p>
-                      </div>
+                    : !selectedView ? <MaestroEmptyResults onBrowse={onBrowse} title={selectedViewUri ? viewSelectionPending ? "Checking selected Perspective…" : "Selected Perspective unavailable" : "No perspectives available"} description={selectedViewUri ? viewSelectionPending ? "The saved selection is retained while discovery and SHACL validation complete. You can use the default Browse perspective meanwhile." : "The selected provider did not match this query context. Try the default Browse perspective." : "No Perspectives match the current query. Try the default Browse perspective."}/>
                     : viewRenderError ? <ErrorDetails prefix="View rendering" error={viewRenderError} />
-                    : <div className="maestro-discovered-view" onClick={(event) => {
+                    : !viewHtml.trim() && viewResultCount > 0 ? <p role="status" className="text-sm text-muted-foreground"><ElapsedStatus label="Rendering perspective" category="other" clockScope="views"/></p>
+                    : !viewHtml.trim() ? <MaestroEmptyResults onBrowse={onBrowse} title="No results to display" description="This Perspective returned no cards for the current page. Try the default Browse perspective."/>
+                    : <div className="maestro-discovered-view w-full min-h-0 flex-1"
+                      onDragStart={event => {
+                        if (!kanbanActive) return;
+                        const card = (event.target as HTMLElement).closest<HTMLElement>('article[data-kanban-card="true"]');
+                        const uri = card?.getAttribute("data-kanban-uri") ?? "";
+                        const from = card?.getAttribute("data-kanban-from") ?? "";
+                        if (!uri || !card) return;
+                        kanbanDragged.current = {uri, from};
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("application/x-maestro-kanban", uri);
+                        event.dataTransfer.setData("text/plain", uri);
+                      }}
+                      onDragOver={event => {
+                        if (kanbanActive && kanbanDragged.current && (event.target as HTMLElement).closest("section[data-kanban-column]")) {
+                          event.preventDefault(); event.dataTransfer.dropEffect = "move";
+                        }
+                      }}
+                      onDrop={event => {
+                        const column = (event.target as HTMLElement).closest<HTMLElement>("section[data-kanban-column]");
+                        const dragged = kanbanDragged.current;
+                        if (!kanbanActive || !column || !dragged) return;
+                        event.preventDefault();
+                        const targetCard = (event.target as HTMLElement).closest<HTMLElement>('article[data-kanban-card="true"]');
+                        const beforeUri = targetCard?.getAttribute("data-kanban-uri") ?? "";
+                        onKanbanMoveCard?.(dragged.uri, dragged.from, column.getAttribute("data-kanban-column") ?? "", beforeUri);
+                        kanbanDragged.current = null;
+                      }}
+                      onDragEnd={() => { kanbanDragged.current = null; }}
+                      onClick={(event) => {
                         const target = event.target as HTMLElement;
                         const resource = target.closest<HTMLButtonElement>("button[data-provider-open-uri]");
                         if (resource) {

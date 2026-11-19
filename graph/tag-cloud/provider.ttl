@@ -4,7 +4,7 @@
 
 # Tag-cloud presentation is opt-in through the standard provider approval gate.
 # Properties are explicit RDF policy data, never regex-guessed by React.
-<gttp://ggg.maestro.ui/provider/tag-cloud> a mui:Provider ;
+<gttp://ggg.maestro.ui/provider/tag-cloud> a mui:Provider, mui:FacetProvider ;
   rdfs:label "Tag cloud"@en ;
   mui:accepts <gttp://ggg.maestro.ui/provider/tag-cloud-input> ;
   mui:widget <gttp://ggg.maestro.ui/widget/tag-cloud> ;

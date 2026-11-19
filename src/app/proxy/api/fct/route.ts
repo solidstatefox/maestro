@@ -2,7 +2,7 @@ import { isBlankNodeTerm } from "@/lib/bnode";
 import { normalizeMaestroConcurrency } from "@/lib/maestro-concurrency";
 import { clientFromRequest, newProxyClientId, MAESTRO_CLIENT_COOKIE, saveProxyClientPreferences } from "@/lib/maestro-proxy-client-preferences";
 import { rescheduleMaestroQueries } from "@/lib/graph-server-query-scheduler";
-import { getUserGraph, getShapesGraph, graphForFile, queryPersonalSparql } from "@/lib/personal-sparql";
+import { getUserGraph, getShapesGraph, graphForFile, queryPersonalSparql, PersonalSparqlHttpError } from "@/lib/personal-sparql";
 import { currentProxyClient, withProxyClient } from "@/lib/maestro-proxy-client-preferences";
 import { weightMaestroQuery } from "@/lib/graph-server-query-scheduler";
 import { streamProxyQuery, MAESTRO_EVENT_HEADER } from "@/lib/proxy-query-stream";
@@ -24,7 +24,8 @@ import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { getConfiguredFctEndpoints, getPersonalSession, personalSparqlHeaders, personalSparqlUrl, normalizeGraphServerUri, resolveConfiguredFctEndpoint } from "@/lib/personal-sparql";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
 import { probeSparqlEndpoint } from "@/lib/sparql-health-probe";
-import { describeUpstreamError } from "@/lib/upstream-error";
+import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
+import { updateFctExecutionAddress } from "@/lib/fct-execution-address";
 import { proxyLog } from "@/lib/maestro-logger";
 import { withGraphServerSlot } from "@/lib/server-query-scheduler";
 import { virtuosoRankFailure, virtuosoAggregateFailure } from "@/lib/virtuoso-query-fallbacks";
@@ -294,7 +295,7 @@ function fctUpstreamMetadata(response: Response, body: string): Pick<FctExecutio
 }
 
 function fctResponseXml(args: {
-  query: string; view: string; limit: number; offset: number; bindings?: Record<string, SparqlBindingTerm>[];
+  query: string; view: string; limit: number; offset: number; executionAddr?: string; bindings?: Record<string, SparqlBindingTerm>[];
   vars?: string[]; elapsedMs: number; complete: boolean; timeoutMs?: number; graphOnly?: boolean; countOnly?: boolean;
   labels?: Map<string, string>; error?: string;
   datatypeEvidence?: Array<{ datatype: string; originalDatatype?: string; count: number }>;
@@ -331,7 +332,7 @@ function fctResponseXml(args: {
   });
   const datatypeXml = args.datatypeEvidence?.length ? `<fct:datatypeEvidence>${args.datatypeEvidence.map(item =>
     `<fct:datatype iri="${xmlText(item.datatype)}" originalDatatype="${xmlText(item.originalDatatype ?? "")}" count="${item.count}"/>`).join("")}</fct:datatypeEvidence>` : "";
-  return `<fct:facets xmlns:fct="${FCT_NS}">${metadata}${datatypeXml}<fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;
+  return `<fct:facets xmlns:fct="${FCT_NS}"${args.executionAddr ? ` execution-addr="${xmlText(args.executionAddr)}"` : ""}>${metadata}${datatypeXml}<fct:result type="${xmlText(resultType)}">${rows}</fct:result></fct:facets>`;
 }
 
 /** Safe absolute RDF IRIs may use schemes beyond HTTP (e.g. urn:, gttp:).
@@ -829,11 +830,74 @@ async function handlePost(request: Request) {
         return fctError("Could not derive Status from the bookmarked live query.", 400);
       const query = statusSelection.query;
       const started = Date.now();
-      const result = await executeSparql(personalSparqlUrl(request).toString(), query, undefined, compiled.timeoutMs, request.signal, true);
-      if (!result.response.ok) return fctError(`Status SPARQL returned HTTP ${result.response.status}`, 502, result.text.slice(0, 350));
-      const parsed = parseResults(result.text);
-      if (!parsed) return fctError("Status SPARQL returned malformed JSON.", 502);
+      // TEMPORARY Status-401 investigation. No query, graph, or auth behavior is changed.
+      // Remove this entire diagnostic block after the regression is resolved.
+      const statusSession = getPersonalSession(request);
+      const statusAuthorization = personalSparqlHeaders(request).Authorization ?? "";
+      const statusTrace = {
+        executionEndpoint: personalEndpoint,
+        liveEndpoint: endpoint.url,
+        statusGraph: getPersonalStatusGraph(request),
+        graphPrefix: statusSession?.graphPrefix ?? "",
+        authType: statusSession?.authType ?? "none",
+        hasSession: Boolean(statusSession),
+        hasAuthorization: Boolean(statusAuthorization),
+        authorizationScheme: statusAuthorization.split(" ", 1)[0] || "none",
+        federatedService: /\bSERVICE\s*</i.test(query),
+        query,
+        timeoutMs: compiled.timeoutMs,
+      };
+      proxyLog("debug", "status.sparql.request", {
+        ...statusTrace,
+        // Explicit, development-only opt-in for raw local credentials.
+        // Never send this to the browser or enable it in a production deployment.
+        ...(process.env.NODE_ENV !== "production" && process.env.MAESTRO_STATUS_DEBUG_UNSAFE === "1"
+          ? { temporaryRawAuthorization: statusAuthorization } : {}),
+      });
+      // Restore the pre-regression Status path from maestro 2.zip: the
+      // session-scoped personal SPARQL reader also used by Bookmarks/Providers.
+      // Keep the existing FCT status compilation and graph exactly as-is.
+      let parsed: SparqlJsonResults;
+      try {
+        parsed = await queryPersonalSparql(query, compiled.timeoutMs, request) as SparqlJsonResults;
+        proxyLog("debug", "status.sparql.success", { status: 200, elapsedMs: Date.now()-started,
+          rows: parsed.results?.bindings?.length ?? 0, ...statusTrace });
+      } catch (error) {
+        const status = error instanceof PersonalSparqlHttpError ? error.status : null;
+        proxyLog("debug", "status.sparql.failure", { ...statusTrace, status,
+          elapsedMs: Date.now()-started, responseBody: error instanceof PersonalSparqlHttpError ? error.responseBody : "",
+          errorName: error instanceof Error ? error.name : "unknown" });
+        if (status === 401 || status === 403) {
+          // The ErrorDetails popover/copy action must contain the upstream
+          // response *actually received* by the proxy, not merely our 401
+          // interpretation. It cannot report SR619 unless ODS returned SR619.
+          const upstreamBody = error instanceof PersonalSparqlHttpError
+            ? sanitizeUpstreamDiagnostic(error.responseBody, 16000)
+            : describeUpstreamError(error);
+          const diagnostics = [
+            `Executing SPARQL endpoint: ${sanitizeUpstreamDiagnostic(personalEndpoint)}`,
+            `Remote population endpoint: ${sanitizeUpstreamDiagnostic(endpoint.url)}`,
+            `Status graph: ${sanitizeUpstreamDiagnostic(getPersonalStatusGraph(request))}`,
+            `Upstream response status: HTTP ${status}`,
+            `Elapsed: ${Date.now() - started} ms`,
+            `Upstream response body:`, upstreamBody || "(empty response)",
+            `SPARQL submitted by Maestro:`, sanitizeUpstreamDiagnostic(query, 16000),
+          ].join("\n");
+          const failure = fctError(`Status SPARQL returned HTTP ${status}: personal store authorization required.`, status, diagnostics);
+          // Opt-in browser Console diagnosis, independent from the real SPARQL response.
+          // The session credential is never placed into an HTTP response header.
+          failure.headers.set("X-Maestro-Status-Debug", Buffer.from(JSON.stringify({
+            ...statusTrace, query: query.slice(0, 2500), queryTruncated: query.length > 2500,
+            status, elapsedMs: Date.now()-started,
+            responseBody: error instanceof PersonalSparqlHttpError ? error.responseBody.slice(0, 1200) : "",
+          }), "utf8").toString("base64"));
+          failure.headers.set("Cache-Control", "no-store");
+          return failure;
+        }
+        throw error;
+      }
       return new Response(fctResponseXml({ query, view: FCT_VIEW_TYPES.LIST_STATUS, limit: 0, offset: 0,
+        executionAddr: updateFctExecutionAddress(address, { graph: getPersonalStatusGraph(request), endpoint: personalEndpoint }),
         bindings: (parsed.results?.bindings ?? []).map(row => ({ c1: row.status, c2: row.count })),
         vars: ["c1", "c2"], elapsedMs: Date.now() - started, complete: true,
         timeoutMs: compiled.timeoutMs }), { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
@@ -1120,6 +1184,10 @@ async function handlePost(request: Request) {
     const xml = fctResponseXml({
       datatypeEvidence,
       query: activeQuery, view: compiled.view, limit: compiled.limit, offset: compiled.offset,
+      executionAddr: updateFctExecutionAddress(address, {
+        endpoint: executionEndpoint,
+        ...(hasStatusConstraints ? { graph: getPersonalStatusGraph(request) } : {}),
+      }),
       bindings, vars, elapsedMs: Date.now() - startedAt, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly, labels,
       badgeColumns: compiled.badgeColumns,
       sqlState: anytime ? "S1TAT" : sqlState,

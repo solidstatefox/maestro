@@ -57,22 +57,70 @@ test("query restoration and cancellation use the existing execution identity", (
   c.stop();
 });
 
-test("Providers Return is captured once, not replaced by subsequent ribbon queries", () => {
+test("a captured Providers candidate does not start Return without explicit Features entry", () => {
   const c = ready();
   const observe = (key: string, url: string, isProviderQuery: boolean, tab: "browse" | "view" | "analyze" = "view", restoringHistory = false) =>
-    c.send({ type: "NAVIGATION_OBSERVED", key, url, hydrated: true, tab, isProviderQuery, restoringHistory });
+    c.send({ type: "NAVIGATION_OBSERVED", key, url, hydrated: true, tab, viewPanel: "providers", isProviderQuery, restoringHistory });
   observe("browse-query", "https://maestro.test/?q=browse", false, "browse");
   c.send({ type: "PROVIDERS_ENTRY_REQUESTED", fromUrl: "https://maestro.test/?q=browse" });
   // The endpoint selector may briefly rewrite addr before the Providers FCT query is installed.
   observe("browse-query-intermediate", "https://maestro.test/?q=personal-endpoint", false, "browse");
   observe("providers-policies", "https://maestro.test/?q=policy", true);
   assert.equal(c.getSnapshot().navigation.returnUrl, "https://maestro.test/?q=browse");
+  assert.equal(c.getSnapshot().navigation.returnVisible, false, "a provider query alone must not initiate Return");
   observe("providers-formats", "https://maestro.test/?q=formats", true);
   assert.equal(c.getSnapshot().navigation.returnUrl, "https://maestro.test/?q=browse");
+  assert.equal(c.getSnapshot().navigation.returnVisible, false);
   observe("history-query", "https://maestro.test/?q=history", false, "browse");
   assert.equal(c.getSnapshot().navigation.returnUrl, "");
   observe("providers-fsm", "https://maestro.test/?q=fsm", true, "view", true);
   assert.equal(c.getSnapshot().navigation.returnUrl, "", "History restoration never invents Return destination");
+  c.stop();
+});
+
+test("Features initiates a persistent XState Return session; only Return or a new URL ends it", () => {
+  const c = createMaestroOperationsController(); c.start();
+  const observe = (tab: "browse" | "view" | "analyze", viewPanel: "trail" | "perspectives" | "providers",
+    key = queryA, hydrated = true) => c.send({ type: "NAVIGATION_OBSERVED", key,
+    url: `https://maestro.test/?q=${key}`, hydrated, tab, viewPanel,
+    isProviderQuery: false, restoringHistory: false });
+  assert.equal(c.getSnapshot().navigation.returnVisible, false);
+  observe("browse", "trail");
+  c.send({ type: "RIBBON_ENTRY_FROM_BROWSE", sourceKey: queryA, fromUrl: "https://maestro.test/?q=browse" });
+  assert.equal(c.getSnapshot().navigation.returnVisible, false, "Browse candidate alone does not initiate Return");
+  observe("view", "perspectives");
+  assert.equal(c.getSnapshot().navigation.returnVisible, false);
+  c.send({ type: "FEATURES_ENTERED", fromUrl: "https://maestro.test/?q=perspective" });
+  assert.equal(c.getSnapshot().navigation.returnVisible, true, "selecting Features initiates Return immediately");
+  assert.equal(c.getSnapshot().navigation.returnUrl, "https://maestro.test/?q=browse");
+  observe("view", "providers");
+  observe("view", "trail");
+  assert.equal(c.getSnapshot().navigation.returnVisible, true, "leaving Features ribbon does not dismiss Return");
+  observe("analyze", "providers");
+  assert.equal(c.getSnapshot().navigation.returnVisible, true, "Analyze must not dismiss Return");
+  observe("browse", "trail", queryB);
+  assert.equal(c.getSnapshot().navigation.returnVisible, true, "Browse navigation must not dismiss Return");
+  assert.equal(c.getSnapshot().navigation.returnUrl, "https://maestro.test/?q=browse", "return destination stays original");
+  c.send({ type: "FEATURES_ENTERED", fromUrl: "https://maestro.test/?q=other" });
+  assert.equal(c.getSnapshot().navigation.returnUrl, "https://maestro.test/?q=browse", "reentry must not overwrite saved Return");
+  c.send({ type: "CONTEXT_RETURNED" });
+  assert.equal(c.getSnapshot().navigation.returnVisible, false, "clicking Return terminates the session");
+  assert.equal(c.getSnapshot().navigation.returnUrl, "");
+  observe("view", "providers", queryB, false);
+  assert.equal(c.getSnapshot().navigation.returnVisible, false, "a new URL/hydration may reset Return");
+  c.stop();
+});
+
+test("Features can start Return from a Perspective even without prior Browse capture", () => {
+  const c = createMaestroOperationsController(); c.start();
+  c.send({ type: "NAVIGATION_OBSERVED", key: queryA, url: "https://maestro.test/?q=perspectives",
+    hydrated: true, tab: "view", viewPanel: "perspectives", isProviderQuery: false, restoringHistory: false });
+  c.send({ type: "FEATURES_ENTERED", fromUrl: "https://maestro.test/?q=perspectives" });
+  assert.equal(c.getSnapshot().navigation.returnVisible, true);
+  assert.equal(c.getSnapshot().navigation.returnUrl, "https://maestro.test/?q=perspectives");
+  c.send({ type: "NAVIGATION_OBSERVED", key: queryB, url: "https://maestro.test/?q=new",
+    hydrated: false, tab: "view", viewPanel: "providers", isProviderQuery: false, restoringHistory: false });
+  assert.equal(c.getSnapshot().navigation.returnVisible, false);
   c.stop();
 });
 

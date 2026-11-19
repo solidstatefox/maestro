@@ -1,13 +1,15 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, MousePointer2, Shrink, WandSparkles } from "lucide-react";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Breadcrumb, BreadcrumbList, BreadcrumbItem, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { useFctQuery } from "@/lib/fct-query-api";
-import { buildWandQuery, type RecordTrailEdge, type WandedRecordEdge } from "@/lib/record-explorer-query";
+import { buildWandQuery, wandPropertyNodeId, type RecordTrailEdge, type WandedRecordEdge } from "@/lib/record-explorer-query";
+import type { RecordExplorerPresentationController } from "@/lib/app-lifecycle/record-explorer-presentation";
 import { toLabel } from "@/lib/uri-labels";
 import { blankNodeRecordListValuesQuery, extendBlankNodeRecordQuery, unanchoredBlankNodeRecordQuery } from "@/lib/bnode-dom";
 import { RecordSessionsController, type RecordSessionDescriptor, type RecordSessionIdentity, type RecordSessionsSnapshot } from "@/canvas/controllers/record-session-model";
@@ -19,13 +21,13 @@ import "./record-source-highlight.css";
 
 /** Fullscreen is a layout host only. Each Record is rendered by the same
  * RightCanvasPanel as Browse, with its own controller-owned workspace. */
-type Props = { workspace: RecordPaneWorkspace; onClose: () => void };
+type Props = { workspace: RecordPaneWorkspace; presentation: RecordExplorerPresentationController; onClose: () => void };
 type Mode = "pointer" | "wand";
 
 type SessionViewProps = {
   session: RecordSessionDescriptor; index: number; slot: HTMLDivElement | null;
   base: RecordPaneWorkspace; controller: RecordSessionsController;
-  mode: Mode; marked: readonly WandedRecordEdge[];
+  mode: Mode; marked: readonly (WandedRecordEdge & { nodeId: string })[];
   followedSource: RecordStatement | null;
   onAction: (action: RecordRdfaAction) => void;
 };
@@ -70,7 +72,9 @@ function makePivotIdentity(source: RecordSessionDescriptor, binding: RecordState
   return identity;
 }
 
-export function RecordExplorer({ workspace, onClose }: Props) {
+export function RecordExplorer({ workspace, presentation, onClose }: Props) {
+  const presentationSnapshot = useSyncExternalStore(presentation.subscribe, presentation.getSnapshot, presentation.getSnapshot);
+  const mode: Mode = presentationSnapshot.matches({ fullscreen: "wand" }) ? "wand" : "pointer";
   const { replaceTree } = useFctQuery();
   const queryTree = workspace.queryTree;
   const queryXml = workspace.queryXml;
@@ -88,7 +92,6 @@ export function RecordExplorer({ workspace, onClose }: Props) {
   if (!controllerRef.current) controllerRef.current = new RecordSessionsController(rootIdentity);
   const controller = controllerRef.current;
   const [snapshot, setSnapshot] = useState<RecordSessionsSnapshot>(() => controller.snapshot());
-  const [mode, setMode] = useState<Mode>("pointer");
   const [marked, setMarked] = useState<WandedRecordEdge[]>([]);
   const [slots, setSlots] = useState<Array<HTMLDivElement | null>>([null, null, null]);
   const slotRefs = useRef<Array<(element: HTMLDivElement | null) => void>>([]);
@@ -98,6 +101,21 @@ export function RecordExplorer({ workspace, onClose }: Props) {
     });
   }
   const [error, setError] = useState("");
+  // Browse owns session zero. An already-open fullscreen viewer must observe
+  // a new Browse selection, cancel obsolete pivots, and keep its breadcrumb
+  // identity consistent with the Record pane it actually renders.
+  useLayoutEffect(() => {
+    const previous = controller.snapshot().sessions[0]?.identity;
+    if (previous?.value === rootIdentity.value && previous.termType === rootIdentity.termType &&
+        previous.datatype === rootIdentity.datatype && previous.lang === rootIdentity.lang &&
+        previous.queryXml === rootIdentity.queryXml &&
+        previous.bnodeQueryXml === rootIdentity.bnodeQueryXml) return;
+    controller.selectBrowseRecord(rootIdentity);
+    setSnapshot(controller.snapshot());
+    setMarked([]);
+    setError("");
+  }, [controller, rootIdentity.value, rootIdentity.termType, rootIdentity.datatype,
+      rootIdentity.lang, rootIdentity.queryXml, rootIdentity.bnodeQueryXml]);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   // Fullscreen header starts collapsed, including session 0. This is only a
@@ -116,6 +134,18 @@ export function RecordExplorer({ workspace, onClose }: Props) {
   const navigate = useCallback((index: number, binding: RecordStatement) => {
     const source = controller.snapshot().sessions[index];
     if (!source || !binding.value) return;
+    const alreadyFollowed = controller.followedSource(source.id);
+    if (alreadyFollowed && alreadyFollowed.predicate === binding.predicate &&
+        alreadyFollowed.direction === binding.direction && alreadyFollowed.value === binding.value &&
+        alreadyFollowed.termType === binding.termType &&
+        (alreadyFollowed.datatype ?? "") === (binding.datatype ?? "") &&
+        (alreadyFollowed.lang ?? "").toLowerCase() === (binding.lang ?? "").toLowerCase()) {
+      controller.disposeAfter(index);
+      setSnapshot(controller.snapshot());
+      setMarked(current => current.filter(item => item.recordIndex <= index));
+      setError("");
+      return;
+    }
     try {
       const next = makePivotIdentity(source, binding, workspace.recordDescriptionQueryLimit);
       controller.appendPivot(next, { predicate: binding.predicate,
@@ -128,16 +158,40 @@ export function RecordExplorer({ workspace, onClose }: Props) {
     }
   }, [controller, workspace.recordDescriptionQueryLimit]);
 
-  const wand = useCallback((index: number, binding: RecordStatement) => {
-    setMarked(current => current.some(item => item.recordIndex === index &&
-        item.predicate === binding.predicate && item.direction === binding.direction)
-      ? current.filter(item => !(item.recordIndex === index && item.predicate === binding.predicate && item.direction === binding.direction))
-      : [...current, { recordIndex: index, predicate: binding.predicate, direction: binding.direction }]);
+  const wand = useCallback((index: number, binding: RecordStatement, kind: "property" | "value") => {
+    if (kind === "value" && binding.termType === "bnode") {
+      setError("A blank-node label cannot be bound as a portable FCT value. Select its property instead.");
+      return;
+    }
+    const selected: WandedRecordEdge = { recordIndex: index, predicate: binding.predicate,
+      direction: binding.direction, kind,
+      ...(kind === "value" ? { value: binding.value, termType: binding.termType,
+        ...(binding.datatype ? { datatype: binding.datatype } : {}),
+        ...(binding.lang ? { lang: binding.lang } : {}) } : {}),
+    };
+    const same = (item: WandedRecordEdge) => item.recordIndex === index &&
+      item.predicate === binding.predicate && item.direction === binding.direction &&
+      (item.kind ?? "property") === kind &&
+      (kind === "property" || (item.value === binding.value && item.termType === binding.termType &&
+        (item.datatype ?? "") === (binding.datatype ?? "") &&
+        (item.lang ?? "").toLowerCase() === (binding.lang ?? "").toLowerCase()));
+    setMarked(current => current.some(same) ? current.filter(item => !same(item)) : [...current, selected]);
+    setError("");
   }, []);
   const onAction = useCallback((action: RecordRdfaAction) => {
     if (action.intent === "pivot") navigate(action.sessionIndex, action.statement);
-    else wand(action.sessionIndex, action.statement);
+    else wand(action.sessionIndex, action.statement, action.kind);
   }, [navigate, wand]);
+
+  // The draft is derived entirely through FCT's detached query API; adding or
+  // removing a visual Wand marker never mutates the authoritative Browse tree.
+  const wandDraft = useMemo(() => marked.length ? buildWandQuery(queryTree, trail, marked) : null,
+    [queryTree, snapshot, marked]);
+  // The real property ID is displayed next to each original RDFa atom, not
+  // duplicated in a top tray. A bound Value uses its parent's property ID.
+  const inlineMarked = useMemo(() => marked.map(item => ({ ...item,
+    nodeId: wandDraft ? (wandPropertyNodeId(wandDraft, trail, item) ?? "?") : "?",
+  })), [marked, wandDraft, trail]);
 
   const focusBreadcrumb = (index: number) => {
     // Focusing ancestors changes only the viewport. Successors retain their
@@ -155,7 +209,7 @@ export function RecordExplorer({ workspace, onClose }: Props) {
     onClose();
   };
   const setQueryAndClose = () => {
-    if (!marked.length) return;
+    if (!marked.length || !presentationSnapshot.matches({fullscreen:"wand"})) return;
     replaceTree(buildWandQuery(queryTree, trail, marked));
     controller.shrink();
     onClose();
@@ -166,14 +220,14 @@ export function RecordExplorer({ workspace, onClose }: Props) {
     <header className="flex shrink-0 flex-wrap items-center gap-3 border-b px-4 py-2">
       <div className="font-semibold">Record explorer</div>
       <ToggleGroup type="single" aria-label="Record interaction mode" value={mode}
-        onValueChange={value => { if (value === "pointer" || value === "wand") setMode(value); }}
+        onValueChange={value => { if (value === "pointer" || value === "wand") presentation.setMode(value); }}
         className="rounded-md border p-0.5">
         <ToggleGroupItem value="pointer" title="Pointer mode" aria-label="Pointer mode"><MousePointer2 className="size-4" /></ToggleGroupItem>
         <ToggleGroupItem value="wand" title="Wand mode — queue properties for the live FCT query" aria-label="Wand mode"><WandSparkles className="size-4" /></ToggleGroupItem>
       </ToggleGroup>
-      {marked.length > 0 && <span className="text-xs text-muted-foreground">{marked.length} queued properties</span>}
-      {error && <span role="alert" className="max-w-md truncate text-xs text-destructive" title={error}>{error}</span>}
-      <button type="button" onClick={setQueryAndClose} disabled={!marked.length}
+      {marked.length > 0 && <span className="text-xs text-muted-foreground">{marked.length} queued selections</span>}
+      {error && <ErrorDetails prefix="Record" error={error} />}
+      <button type="button" onClick={setQueryAndClose} disabled={!marked.length || mode !== "wand"}
         title="Set live FCT query from queued Record properties and shrink" aria-label="Set query"
         className="ml-auto inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40">
         <WandSparkles className="size-4" /> Set query
@@ -210,7 +264,7 @@ export function RecordExplorer({ workspace, onClose }: Props) {
             <ResizablePanel key={index} defaultSize={100/3} minSize={15}>
               <div ref={slotRefs.current[index]} className="h-full min-h-0 min-w-0 overflow-hidden">
                 {!sessions[snapshot.visibleStart + index] &&
-                  <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">Shift-click a Record value in the preceding pane</div>}
+                  <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">Click a Record value in the preceding pane</div>}
               </div>
             </ResizablePanel>,
           ])}
@@ -226,7 +280,7 @@ export function RecordExplorer({ workspace, onClose }: Props) {
       const paneIndex = index - snapshot.visibleStart;
       const slot = paneIndex >= 0 && paneIndex < 3 ? slots[paneIndex] : null;
       const props: SessionViewProps = { session, index, slot, base: workspace,
-        controller, mode, marked, followedSource: controller.followedSource(session.id), onAction };
+        controller, mode, marked: inlineMarked, followedSource: controller.followedSource(session.id), onAction };
       return index === 0 ? <BrowseSessionView key={session.id} {...props} />
         : <PivotSessionView key={session.id} {...props} />;
     })}

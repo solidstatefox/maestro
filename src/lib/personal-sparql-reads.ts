@@ -1,6 +1,7 @@
 "use client";
 
 import { loadPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
+import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
 const SH = "http://www.w3.org/ns/shacl#";
@@ -35,10 +36,10 @@ async function personalSelect(makeQuery: (graphs: { shapes: string; ontology: st
   let result: { error?: string; results?: { bindings?: Row[] } };
   try {
     result = JSON.parse(body) as typeof result;
-  } catch {
+  } catch (error) {
     const kind = /\bhtml\b/i.test(contentType) || /^\s*<!doctype\s+html/i.test(body)
       ? "an HTML error page" : "non-JSON content";
-    throw new Error(`Personal provider discovery received ${kind} from /proxy/api/sparql (HTTP ${response.status}, ${contentType}).`);
+    throw new Error(`Personal provider discovery received ${kind} from /proxy/api/sparql (HTTP ${response.status} ${response.statusText}, ${contentType}): ${describeUpstreamError(error)}; upstream: ${sanitizeUpstreamDiagnostic(body)}`, { cause: error });
   }
   if (!response.ok || result.error) throw new Error(result.error || `SPARQL discovery failed (HTTP ${response.status}).`);
   if (!Array.isArray(result.results?.bindings)) throw new Error("Personal provider discovery returned no W3C SPARQL Results bindings.");

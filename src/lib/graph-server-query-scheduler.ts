@@ -8,8 +8,8 @@ export type QueryPriority = "autocomplete" | "interactive" | "facet" | "count";
 export type QueryWeight = "light" | "heavy";
 type Task = { priority: QueryPriority; weight: QueryWeight; client: string; order: number;
   start: () => void; cancel: () => void;
-  queuePosition?: (index: number, server: string) => void;
-  lastQueuePosition: number;
+  queuePosition?: (index: number, server: string, lane: QueryWeight, laneIndex: number) => void;
+  lastQueuePosition: number; lastLaneIndex: number;
 };
 type ClientUsage = { total: number; heavy: number };
 type ServerQueue = {
@@ -64,9 +64,17 @@ function reportQueuePositions(): void {
   all.sort((a, b) => a.localIndex - b.localIndex || a.task.order - b.task.order);
   all.forEach(({ task, server }, i) => {
     const index = i + 1;
-    if (index !== task.lastQueuePosition) {
+    const queue = queues.get(server)!;
+    const lane = task.weight;
+    const orderedLane = [...(lane === "light" ? queue.pendingLight : queue.pendingHeavy)]
+      .sort((a,b) => ranks[a.priority] - ranks[b.priority] || a.order - b.order);
+    const laneIndex = orderedLane.indexOf(task) + 1;
+    // A different job can enter this physical lane without changing the
+    // proxy-wide ordinal; emit its new lane index as well.
+    if (index !== task.lastQueuePosition || task.lastLaneIndex !== laneIndex) {
       task.lastQueuePosition = index;
-      task.queuePosition?.(index, server);
+      task.lastLaneIndex = laneIndex;
+      task.queuePosition?.(index, server, lane, laneIndex);
     }
   });
 }
@@ -105,7 +113,7 @@ function drain(server: string, queue: ServerQueue): void {
     const [task] = list.splice(index, 1);
     if (task.lastQueuePosition !== 0) {
       task.lastQueuePosition = 0;
-      task.queuePosition?.(0, server);
+      task.queuePosition?.(0, server, task.weight, 0);
     }
     reportQueuePositions();
     const usage = queue.clients.get(task.client) ?? { total: 0, heavy: 0 };
@@ -176,7 +184,7 @@ export async function scheduleMaestroQuery<T>(server: string, priority: QueryPri
       drain(server, queue);
     };
     const task: Task = { priority, weight, client, order: sequence++, cancel: onAbort,
-      queuePosition: proxyQueuePositionNotifier(), lastQueuePosition: -1, start: () => {
+      queuePosition: proxyQueuePositionNotifier(), lastQueuePosition: -1, lastLaneIndex: -1, start: () => {
       running = true;
       if (signal?.aborted) { finish(); reject(new DOMException("Maestro request canceled", "AbortError")); return; }
       void work().then(resolve, reject).finally(finish);

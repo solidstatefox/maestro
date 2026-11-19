@@ -115,6 +115,7 @@ export function escapeXmlText(value: string): string {
 export type ParsedFctResponse = {
   datatypeEvidence?: Array<{ datatype: string; originalDatatype?: string; count: number }>;
   sparql: string;
+  executionAddr?: string;
   viewType: string;
   rows: FctResponseColumn[][];
   complete: "yes" | "no";
@@ -143,6 +144,7 @@ export function parseFctResponse(xmlText: string): ParsedFctResponse {
   const root = document.documentElement;
   const getText = (name: string) => byLocalName(root, name)[0]?.textContent?.trim() ?? "";
   const error = presentServerError(getText("error"));
+  const executionAddr = root.getAttribute("execution-addr") ?? undefined;
   
   const warning = getText("warning");
 const sqlState = getText("sql-state");
@@ -282,6 +284,7 @@ const dbActivity = getText("db-activity");
   return {
     datatypeEvidence,
     sparql: getText("sparql"),
+    executionAddr,
     viewType: resultType,
     rows: rowColumns,
     complete: getText("complete") === "yes" ? "yes" : "no",

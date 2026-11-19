@@ -5,6 +5,14 @@
   background-color: rgb(219 234 254 / 0.9); /* sky-100 */
   box-shadow: inset 0 0 0 1px rgb(2 132 199 / 0.65);
   border-radius: 0.25rem;
+  /* Normal-click / pointer-mode selection highlights the value itself.
+     Give its text a visible inset, including every fragment when a long RDF
+     lexical value wraps across lines; never paint the containing table row. */
+  padding: 0.125rem 0.375rem;
+  line-height: 1.9; /* inline padding needs a taller line box or its top is clipped */
+  vertical-align: baseline;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
   color: rgb(7 89 133);
   transition: background-color 120ms ease-in-out;
 }
@@ -24,12 +32,60 @@
 
 /* Wand selections are visually distinct from the followed source. They are
  * derived from the controller's queue and survive Record formatter rerenders. */
-.maestro-record-explorer [data-maestro-wanded="true"]:not([data-maestro-followed-source]) {
+.maestro-record-explorer [data-maestro-wanded]:not([data-maestro-followed-source]) {
   background-color: rgb(59 130 246 / 0.10);
   box-shadow: inset 0 0 0 1px rgb(59 130 246 / 0.32);
   border-radius: 0.2rem;
 }
-.dark .maestro-record-explorer [data-maestro-wanded="true"]:not([data-maestro-followed-source]) {
+.dark .maestro-record-explorer [data-maestro-wanded]:not([data-maestro-followed-source]) {
   background-color: rgb(96 165 250 / 0.16);
   box-shadow: inset 0 0 0 1px rgb(96 165 250 / 0.4);
+}
+
+/* RDFa properties and values have independent fullscreen affordances. An
+ * unannotated formatter heading is not clickable unless it resolves to one
+ * exact predicate in the Record SELECT. */
+.maestro-record-explorer [data-maestro-record-interactive="property"],
+.maestro-record-explorer [data-maestro-record-interactive="value"] {
+  cursor: pointer;
+}
+.maestro-record-explorer [data-maestro-record-interactive="property"]:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+/* Only the selected semantic atom is painted, never the containing row. */
+.maestro-record-explorer [data-maestro-wanded="property"],
+.maestro-record-explorer [data-maestro-wanded="value"] {
+  cursor: pointer;
+}
+
+/* A Wand marker is an inline InputGroup at the selected RDFa position.
+   Keep the original semantic atom available for RDFa parsing and reversibility,
+   but do not show a duplicate highlighted label/row beside the group. */
+.maestro-record-explorer [data-maestro-wand-inline-replaced="true"] {
+  display: none !important;
+}
+.maestro-record-explorer [data-maestro-inline-wand-slot] {
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+/* A selected label or value can be arbitrarily long. Let the semantic field
+ * reflow around its *actual* content rather than using fixed XSLT grid tracks
+ * (which clipped property names). No precomputed widths or JS measurements. */
+.maestro-record-explorer dl > div:has([data-maestro-inline-wand-slot]),
+.maestro-record-explorer [data-maestro-property-row]:has([data-maestro-inline-wand-slot]) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.maestro-record-explorer dl > div:has([data-maestro-inline-wand-slot]) > :is(dt,dd) {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.maestro-record-explorer [data-maestro-inline-wand-slot] {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }

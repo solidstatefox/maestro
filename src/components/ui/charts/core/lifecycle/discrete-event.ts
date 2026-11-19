@@ -1,0 +1,65 @@
+const DISCRETE_EVENTS: ReadonlySet<string> = /* @__PURE__ */ new Set([
+  "beforetoggle",
+  "cancel",
+  "click",
+  "close",
+  "contextmenu",
+  "copy",
+  "cut",
+  "auxclick",
+  "dblclick",
+  "dragend",
+  "dragstart",
+  "drop",
+  "focusin",
+  "focusout",
+  "input",
+  "invalid",
+  "keydown",
+  "keypress",
+  "keyup",
+  "mousedown",
+  "mouseup",
+  "paste",
+  "pause",
+  "play",
+  "pointercancel",
+  "pointerdown",
+  "pointerup",
+  "ratechange",
+  "reset",
+  "seeked",
+  "submit",
+  "toggle",
+  "touchcancel",
+  "touchend",
+  "touchstart",
+  "volumechange",
+  "change",
+  "selectionchange",
+  "textInput",
+  "compositionstart",
+  "compositionend",
+  "compositionupdate",
+  "beforeblur",
+  "afterblur",
+  "beforeinput",
+  "blur",
+  "fullscreenchange",
+  "fullscreenerror",
+  "focus",
+  "hashchange",
+  "popstate",
+  "select",
+  "selectstart",
+]);
+
+/** True while a discrete event is being dispatched (its listeners and the microtasks they queued); false on the server and outside events. */
+export const inDiscreteEvent = (): boolean => {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  // `window.event` is what React reads for this (react-dom 19 `resolveUpdatePriority`); it is undefined outside a dispatch.
+  const { event } = window as { readonly event?: Event };
+  return event !== undefined && DISCRETE_EVENTS.has(event.type);
+};

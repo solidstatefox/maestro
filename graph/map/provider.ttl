@@ -62,6 +62,15 @@
   <div class="flex min-h-[300px] min-w-0 flex-1 overflow-hidden">
     <div data-map-canvas="true" class="relative min-h-[300px] min-w-0 flex-1"/>
   </div>
+  <!-- Map has an independent bounded, read-only page of the live FCT scope.
+       The toolbar is owned by this provider, not by Browse Results paging. -->
+  <div class="flex shrink-0 items-center justify-end gap-2 border-t px-3 py-2 text-xs" role="navigation" aria-label="Map results pagination">
+    <span data-map-page-count="true" class="mr-auto tabular-nums text-muted-foreground">Page 1</span>
+    <button type="button" data-map-previous="true" disabled="disabled"
+      class="rounded border border-input px-3 py-1.5 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
+    <button type="button" data-map-next="true" disabled="disabled"
+      class="rounded border border-input px-3 py-1.5 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40">Next</button>
+  </div>
   <div hidden="hidden">
     <textarea data-provider-field="queryXml"><xsl:value-of select="mctx:query-text"/></textarea>
     <xsl:for-each select="mctx:metadata/mctx:entry">
@@ -95,6 +104,18 @@
   const status = root.querySelector('[data-map-status]');
   const error = root.querySelector('[data-map-error]');
   const canvas = root.querySelector('[data-map-canvas]');
+  const previousPageButton = root.querySelector('[data-map-previous]');
+  const nextPageButton = root.querySelector('[data-map-next]');
+  const pageCount = root.querySelector('[data-map-page-count]');
+  const mapPageSize = 100;
+  let currentPage = 0;
+  let hasNextPage = false;
+  let pageRequest;
+  const updatePageControls = (busy = false) => {
+    previousPageButton.disabled = busy || currentPage === 0;
+    nextPageButton.disabled = busy || !hasNextPage;
+    pageCount.textContent = 'Page ' + (currentPage + 1) + ' · ' + points.length + ' mapped';
+  };
   const facetOptions = Array.from(select.options).filter(option => option.value);
   const facetDefinitions = [...new Map(facetOptions.map(option => [option.value, {
     key: option.value, iri: option.dataset.iri, direction: option.dataset.direction,
@@ -166,6 +187,7 @@
   let maplibre;
   signal.addEventListener('abort', () => {
     activeColorRequest?.abort();
+    pageRequest?.abort();
     resizeObserver?.disconnect();
     themeObserver?.disconnect();
     markers.forEach(marker => marker.remove());
@@ -175,6 +197,7 @@
   const statusText = (message) => { status.textContent = message; };
   const setUrlColor = key => {
     const params = new URLSearchParams(window.location.search);
+    if ((params.get('colorBy') || '') === key) return;
     if (key) params.set('colorBy', key); else params.delete('colorBy');
     window.history.replaceState(window.history.state, '', window.location.pathname + '?' + params.toString() + window.location.hash);
     if (key) {
@@ -298,6 +321,68 @@
   select.addEventListener('change', () => { void recolor(); });
   const restored = new URLSearchParams(window.location.search).get('colorBy') || '';
   if (restored && facetDefinitions.some(facet => facet.key === restored)) select.value = restored;
+  const loadMapPage = async page => {
+    if (signal.aborted || !Number.isSafeInteger(page) || page < 0) return;
+    pageRequest?.abort();
+    activeColorRequest?.abort();
+    pageRequest = new AbortController();
+    const requestSignal = AbortSignal.any([signal, pageRequest.signal]);
+    updatePageControls(true);
+    statusText('Locating map resources…');
+    showingError('');
+    try {
+      // The provider clones the current FCT XML and changes ONLY its own
+      // derived Map page. No change to Browse's authoritative live <view>.
+      const derived = parseXml(queryXml);
+      const derivedView = Array.from(derived.getElementsByTagName('*')).find(node => node.localName === 'view');
+      if (!derivedView) throw new Error('Live FCT query has no view');
+      derivedView.setAttribute('limit', String(mapPageSize + 1));
+      derivedView.setAttribute('offset', String(page * mapPageSize));
+      const pageXml = new XMLSerializer().serializeToString(derived);
+      const compiled = await api.compileQuery(pageXml, shapeUri, queryStylesheet, requestSignal);
+      const resultXml = await api.executeQuery({ kind: 'sparql', addr, sparql: compiled.sparql }, requestSignal);
+      const pointsXml = await api.transformXml(resultStylesheet, resultXml, requestSignal);
+      if (requestSignal.aborted) return;
+      const pageRows = Array.from(parseXml(pointsXml).documentElement.children).filter(node => node.localName === 'point');
+      // The extra result is a sentinel. Do not invent a total or run a heavy
+      // COUNT over the full geographic FCT query.
+      // A malformed or unplottable coordinate still consumes a SELECT row.
+      // Base Next availability on the raw SPARQL page, not only valid pins.
+      const resultRows = Array.from(parseXml(resultXml).getElementsByTagName('*')).filter(node => node.localName === 'result');
+      const more = resultRows.length > mapPageSize;
+      const seen = new Set();
+      const nextPoints = pageRows.slice(0, mapPageSize).flatMap(node => {
+        const uri = node.getAttribute('uri');
+        const lat = Number(node.getAttribute('lat'));
+        const lng = Number(node.getAttribute('lng'));
+        if (!uri || seen.has(uri) || !Number.isFinite(lat) || !Number.isFinite(lng) ||
+            Math.abs(lat) > 90 || Math.abs(lng) > 180) return [];
+        seen.add(uri);
+        return [{ uri, lat, lng, title: node.getAttribute('title') || uri, colorTermKey: '', colorValue: '' }];
+      });
+      if (requestSignal.aborted) return;
+      points = nextPoints;
+      currentPage = page;
+      hasNextPage = more;
+      updatePageControls();
+      statusText(points.length + ' mapped resources on page ' + (page + 1));
+      if (points.length) {
+        const bounds = new maplibre.LngLatBounds();
+        points.forEach(point => bounds.extend([point.lng, point.lat]));
+        map.resize();
+        map.fitBounds(bounds, { padding: 48, maxZoom: 12, duration: 0 });
+      }
+      await recolor();
+    } catch (reason) {
+      if (!requestSignal.aborted) {
+        statusText('Map query failed');
+        showingError(reason?.message || String(reason));
+        updatePageControls();
+      }
+    }
+  };
+  previousPageButton.addEventListener('click', () => { if (!previousPageButton.disabled) void loadMapPage(currentPage - 1); });
+  nextPageButton.addEventListener('click', () => { if (!nextPageButton.disabled) void loadMapPage(currentPage + 1); });
   try {
     statusText('Locating map resources…');
     maplibre = await api.loadLibrary('maplibre-gl');
@@ -318,28 +403,7 @@
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     resizeObserver = new ResizeObserver(() => { if (!signal.aborted) map.resize(); });
     resizeObserver.observe(canvas);
-    const compiled = await api.compileQuery(queryXml, shapeUri, queryStylesheet, signal);
-    const resultXml = await api.executeQuery({ kind: 'sparql', addr, sparql: compiled.sparql }, signal);
-    const pointsXml = await api.transformXml(resultStylesheet, resultXml, signal);
-    if (signal.aborted) return;
-    const seen = new Set();
-    points = Array.from(parseXml(pointsXml).documentElement.children).flatMap(node => {
-      if (node.localName !== 'point') return [];
-      const uri = node.getAttribute('uri');
-      const lat = Number(node.getAttribute('lat'));
-      const lng = Number(node.getAttribute('lng'));
-      if (!uri || seen.has(uri) || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return [];
-      seen.add(uri);
-      return [{ uri, lat, lng, title: node.getAttribute('title') || uri, colorTermKey: '', colorValue: '' }];
-    });
-    statusText(points.length + ' mapped resources');
-    if (points.length) {
-      const bounds = new maplibre.LngLatBounds();
-      points.forEach(point => bounds.extend([point.lng, point.lat]));
-      map.resize();
-      map.fitBounds(bounds, { padding: 48, maxZoom: 12, duration: 0 });
-    }
-    await recolor();
+    await loadMapPage(0);
   } catch (reason) {
     if (!signal.aborted) { statusText('Map query failed'); showingError(reason?.message || String(reason)); }
   }
@@ -434,7 +498,10 @@
     </xsl:call-template>
     <xsl:text>&#10;} OPTIONAL { </xsl:text><xsl:value-of select="$focus"/><xsl:text> &lt;</xsl:text><xsl:value-of select="concat($rdfs,'label')"/><xsl:text>&gt; ?title . }&#10;</xsl:text>
     <xsl:if test="contains($graph,':') and not(starts-with($graph,'$'))"><xsl:text>}&#10;</xsl:text></xsl:if>
-    <xsl:text>} LIMIT 1000</xsl:text>
+    <xsl:text>} ORDER BY ?c1 ?lat ?lng ?point ?wkt ?title LIMIT </xsl:text>
+    <xsl:choose><xsl:when test="number($view/@limit) &gt; 0"><xsl:value-of select="floor(number($view/@limit))"/></xsl:when><xsl:otherwise>101</xsl:otherwise></xsl:choose>
+    <xsl:text> OFFSET </xsl:text>
+    <xsl:choose><xsl:when test="number($view/@offset) &gt;= 0"><xsl:value-of select="floor(number($view/@offset))"/></xsl:when><xsl:otherwise>0</xsl:otherwise></xsl:choose>
    </sparql>
    <facets>
     <xsl:for-each select="$view/../*[local-name()='property' or local-name()='property-of' or local-name()='class']">

@@ -1,3 +1,4 @@
+import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
 import { NextResponse } from "next/server";
 import { resolveOpenApiOperation } from "@/lib/openapi-registry";
 import { validateOpenAiChatPayload } from "@/lib/openai-chat-completions";
@@ -90,7 +91,7 @@ export async function POST(request: Request): Promise<Response> {
       if (text.length > 1500000) return NextResponse.json({error:"Service response too large"},{status:502});
       let parsed: unknown;
       try { parsed = JSON.parse(text); }
-      catch { return NextResponse.json({error:"Service returned invalid JSON"},{status:502}); }
+      catch (error) { return NextResponse.json({error:`Service returned invalid JSON: ${describeUpstreamError(error)}`, upstreamStatus:response.status, upstreamMessage:sanitizeUpstreamDiagnostic(text)},{status:502}); }
       return NextResponse.json(parsed, {status: response.status >= 400 && response.status < 600 ? response.status : response.ok ? 200 : 502,
         headers: {"Cache-Control":"no-store"}});
     }
@@ -108,7 +109,7 @@ export async function POST(request: Request): Promise<Response> {
     const data: unknown = JSON.parse(text);
     return NextResponse.json(data, { headers: { "Cache-Control": "private, max-age=300" } });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Service call failed" }, { status: 502 });
+    return NextResponse.json({ error: describeUpstreamError(error, "Service call failed") }, { status: 502 });
   }
 }
 

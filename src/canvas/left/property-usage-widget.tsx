@@ -128,7 +128,7 @@ export function PropertyUsageWidget({ tree, direction, limit, endpointReady, onN
       <div className="flex min-w-0 items-center gap-1">
         <button type="button" className="cursor-pointer text-sm font-semibold hover:underline underline-offset-2"
           onClick={() => onNavigate(direction)} title={`Show ${title.toLowerCase()} in Results`}>{title}</button>
-        <LeftWidgetButtonTray threshold={3} actions={[{
+        <LeftWidgetButtonTray threshold={4} actions={[{
           id: "inspector", label: `Inspect ${title} facet query`, icon: <Code2 className="size-4" />,
           render: <QueryInspectorButton query={queryXml} filename={`${direction}s-fct-query.xml`}
             extraQueries={sparql ? [{ id: "sparql", label: "SPARQL", query: sparql, filename: `${direction}s.sparql`, language: "sparql" }] : undefined} />,

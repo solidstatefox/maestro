@@ -169,7 +169,7 @@ export async function clearClientQueryCache(): Promise<void> {
 /** In-flight Maestro query operations, shared by query listeners and the Refresh/Abort control. */
 const pendingQueryControllers = new Set<AbortController>();
 export type PendingMaestroQuery = { id: number; label: string; state: "preparing" | "queued" | "active";
-  queueIndex: number; serverQueueIndex?: number; queueServer?: string };
+  queueIndex: number; serverQueueIndex?: number; queueServer?: string; serverQueueLane?: "light" | "heavy"; serverQueueLaneIndex?: number };
 const pendingQueryDetails = new Map<AbortController, PendingMaestroQuery>();
 // Link the public request signal to its tracked controller so dispatch status
 // reflects the existing browser scheduler without creating a second queue.
@@ -392,12 +392,12 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
       }
       const headers = new Headers(init?.headers);
       headers.set("x-maestro-query-events", "1");
-      const onServerQueuePosition = (queueIndex: number, server: string) => {
+      const onServerQueuePosition = (queueIndex: number, server: string, lane?: "light" | "heavy", laneIndex?: number) => {
         if (!owner) return;
         const item = pendingQueryDetails.get(owner);
         if (!item) return;
         pendingQueryDetails.set(owner, { ...item,
-          serverQueueIndex: queueIndex, queueServer: server, state: "active" });
+          serverQueueIndex: queueIndex, queueServer: server, serverQueueLane: lane, serverQueueLaneIndex: laneIndex, state: "active" });
         refreshPendingQueueIndexes();
       };
       return fetch(input, { ...init, headers }).then(response =>

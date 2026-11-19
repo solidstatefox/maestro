@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { useState } from "react";
 import { Regex, X } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -79,7 +80,7 @@ export function NamedRegexCreateButton({ relationship, propertyUri }: { relation
         <label className="block space-y-1 text-sm">Name<input className="w-full rounded border bg-background px-2 py-1.5" value={name} onChange={e => setName(e.target.value)} maxLength={120} placeholder="e.g. University domains" /></label>
         <label className="block space-y-1 text-sm">Regex pattern<textarea className="w-full rounded border bg-background px-2 py-1.5 font-mono text-xs" value={pattern} onChange={e => setPattern(e.target.value)} rows={3} maxLength={2000} placeholder="^[^@]+@example\.org$" /></label>
         <p className="text-xs text-muted-foreground">New filters are saved unchecked. Check one in the facet list to apply it; multiple checked patterns use AND.</p>
-        {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+        {error && <ErrorDetails prefix="Facet regex" error={error} />}
         <div className="flex justify-end gap-2"><button className="rounded border px-3 py-1.5 text-sm hover:bg-accent" onClick={() => setOpen(false)}>Cancel</button>
           <button className="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground" onClick={apply}>Apply</button></div>
       </DialogContent>

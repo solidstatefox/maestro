@@ -43,7 +43,8 @@ test("query src provenance drives the blue Return control through the controller
   assert.match(controller, /operations\.snapshot\.navigation\.returnUrl/);
   assert.match(controller, /const returnShareUrl/);
   assert.match(header, /CornerDownLeft/);
-  assert.match(header, /returnShareUrl/);
+  assert.match(controller, /const returnButtonVisible = operations\.snapshot\.navigation\.returnVisible/);
+  assert.match(header, /returnButtonVisible/);
 });
 
 test("Categories ingest RDF into one personal ontology graph and dedupe source namespaces in the browser", () => {

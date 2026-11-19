@@ -1,4 +1,5 @@
 "use client";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { Ban } from "lucide-react";
@@ -237,6 +238,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
     setWorkspaceTab,
     showResultBadges,
     sourceSparql,
+    sparqlExecutionAddr,
     toggleAnalysisRow,
     tutorialMode,
     uriNode,
@@ -314,8 +316,9 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
               {workspaceTab === "browse" && centralTab === "results" && (alphabetPreflight === "available" || Boolean(alphabetIndex)) && (
                 <div id="maestro-alphabet" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2" aria-label="Alphabetical browse by selected label properties">
                   {!isLoadingAlphabet && <IncompleteWidgetIndicator source="alphabet" />}
+                  <ToggleGroup type="multiple" value={parseAlphabetSelections(alphabetIndex).map(value => value.replace(/^!/, ""))} onValueChange={() => {}} className="flex flex-wrap items-center gap-1">
                   {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0 || parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)).map((letter) => (
-                    <button key={letter} type="button" title={`Letter ${letter}; Shift-click excludes the letter; multiple selections are OR`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)}
+                    <ToggleGroupItem unstyled key={letter} value={letter} type="button" title={`Letter ${letter}; Shift-click excludes the letter; multiple selections are OR`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)}
                       disabled={isLoadingAlphabet || (!alphabetCounts[letter] && !parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`))}
                       className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
                       onClick={(event) => {
@@ -326,8 +329,9 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                       <span className="font-medium">{parseAlphabetSelections(alphabetIndex).includes(`!${letter}`) ? <><span className="inline-flex items-center gap-1.5"><Ban aria-label="Excluded" className="size-3.5 shrink-0" />{letter}</span></> : letter}</span>
                       <Separator orientation="vertical" className="mx-1 h-4 bg-current opacity-30 data-vertical:self-center" />
                       <span className={`tabular-nums font-normal ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
-                    </button>
+                    </ToggleGroupItem>
                   ))}
+                  </ToggleGroup>
                   {isLoadingAlphabet && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Fetching alphabet" category="alphabet" clockScope="alphabet" requestWaves={26} /></span>}
                   
                 </div>
@@ -413,6 +417,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                   </div>
                   <CodeBlock
                     className="h-full min-h-0"
+                    executionAddr={querySourceFormat === "sparql" ? sparqlExecutionAddr : queryTree.attributes.addr}
                     language={(querySourceFormat === "xml" || querySourceFormat === "alphabet-xml" || querySourceFormat === "list-values-xml" || querySourceFormat === "response") ? "xml" : "sparql"}
                     code={querySourceFormat === "xml" ? prettyQueryXml
                       : querySourceFormat === "sparql" ? sourceSparql

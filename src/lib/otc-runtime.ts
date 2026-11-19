@@ -1,3 +1,4 @@
+import { describeUpstreamError } from "@/lib/upstream-error";
 import { resolveOpenApiOperation } from "@/lib/openapi-registry";
 import { qwenThinkingOptions, type QwenThinkingBudget } from "@/lib/qwen-thinking";
 /** OpenLink Transcoder: Liquid templates and bounded, synchronous SHACL-gated successor discovery. */
@@ -210,9 +211,7 @@ async function sourceSparql(request: Request, query: string, source: string, sou
     });
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "TimeoutError";
-    throw new Error(timedOut
-      ? `OTC source SPARQL ${isAsk ? "ASK" : "SELECT"} timed out.`
-      : `OTC source SPARQL ${isAsk ? "ASK" : "SELECT"} could not connect to the selected graph server.`);
+    throw new Error(`${timedOut ? "OTC source SPARQL timed out" : "OTC source SPARQL could not connect"} (${isAsk ? "ASK" : "SELECT"}): ${describeUpstreamError(error)}`, {cause:error});
   }
   const text = await response.text();
   if (!response.ok) throw new Error(`OTC source SPARQL ${isAsk ? "ASK" : "SELECT"} returned HTTP ${response.status}.`);
@@ -278,9 +277,9 @@ async function survey(request: Request, rule: OtcRule, row: Row, activity: OtcLl
       cache: "no-store", signal: AbortSignal.any([request.signal, ...(cancellationSignal ? [cancellationSignal] : []), AbortSignal.timeout(120000)]),
     });
   } catch (error) {
-    log.response = error instanceof Error && error.name === "TimeoutError"
-      ? "IteraCompute request timed out." : "Could not connect to IteraCompute.";
-    throw new Error(`OTC survey: ${log.response}`);
+    log.response = `${error instanceof Error && error.name === "TimeoutError"
+      ? "IteraCompute request timed out" : "Could not connect to IteraCompute"}: ${describeUpstreamError(error)}`;
+    throw new Error(`OTC survey: ${log.response}`, {cause:error});
   }
   // IteraCompute streams OpenAI-compatible SSE. Output text is buffered until
   // completion; partial JSON is NEVER treated as survey bindings.
@@ -334,7 +333,7 @@ async function survey(request: Request, rule: OtcRule, row: Row, activity: OtcLl
     if (!data) return;
     if (data === "[DONE]") { ended = true; return; }
     let chunk: Chunk;
-    try { chunk = JSON.parse(data) as Chunk; } catch { throw new Error("OTC survey returned malformed streaming data."); }
+    try { chunk = JSON.parse(data) as Chunk; } catch (error) { throw new Error(`OTC survey returned malformed streaming data: ${error instanceof Error ? error.message : String(error)}`, {cause:error}); }
     if (chunk.error) throw new Error(`OTC survey: ${chunk.error.message || "stream failed"}`);
     if (chunk.usage) providerUsage = chunk.usage;
     for (const choice of chunk.choices ?? []) {
@@ -377,7 +376,7 @@ async function survey(request: Request, rule: OtcRule, row: Row, activity: OtcLl
   const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   let parsed: { bindings?: Record<string, Term> };
   try { parsed = JSON.parse(clean) as { bindings?: Record<string, Term> }; }
-  catch { throw new Error("Survey did not return valid binding JSON."); }
+  catch (error) { throw new Error(`Survey did not return valid binding JSON: ${error instanceof Error ? error.message : String(error)}`, {cause:error}); }
   if (!parsed.bindings || !parsed.bindings.resp) throw new Error("Survey did not bind reserved ?resp.");
   const result: Row = { ...row };
   for (const [name, term] of Object.entries(parsed.bindings)) {

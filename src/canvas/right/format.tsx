@@ -48,7 +48,7 @@ export function parsePolicyQueryAction(source: string, element: Element, recordU
     if (dataBinding) return (element as HTMLElement).dataset[dataBinding[1]] ?? "";
     if (/^(?:true|false|null|-?\d+(?:\.\d+)?)$/.test(raw)) return JSON.parse(raw);
     if (raw.startsWith("\"") || raw.startsWith("[") || raw.startsWith("{")) {
-      try { return JSON.parse(raw); } catch { throw new Error("Action arguments must be JSON literals or approved record/data bindings."); }
+      try { return JSON.parse(raw); } catch (error) { throw new Error(`Action arguments must be JSON literals or approved record/data bindings: ${error instanceof Error ? error.message : String(error)}`, { cause: error }); }
     }
     if (raw.startsWith("'") && raw.endsWith("'")) return raw.slice(1, -1).replace(/\\'/g, "'").replace(/\\\\/g, "\\");
     throw new Error("Action arguments must be literals, record.uri, result.uri, or event.currentTarget.dataset.<name>.");

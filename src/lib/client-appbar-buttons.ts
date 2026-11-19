@@ -54,7 +54,7 @@ async function ensureProviderBookmarks(ctx: PersonalContext) {
     { kind: "curators", title: "Curators", icon: "landmark" },
     { kind: "kinds", title: "Kinds", icon: "regex" },
   ] as const;
-  const endpoint = ctx.session.graphStore.replace(/\/sparql-auth\/?$/i, "/sparql");
+  const endpoint = ctx.session.graphStore;
   const base = ctx.base;
   const bookmarkGraph = iri(`${base}#bookmarks`);
   const appbarGraph = graph(ctx);

@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { useEffect, useMemo, useState } from "react";
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { readFctResponse } from "@/canvas/utils/fct-response";
@@ -73,7 +74,7 @@ export function PersonalTagCloud({ property, values, tree, selected, counts, ena
   const largest = known.length ? Math.max(...known) : 1;
   const classes = ["text-xs", "text-sm", "text-base", "text-lg"] as const;
   return <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 p-1" aria-label="Tag cloud" aria-busy={busy}>
-    {cooccurringError && <span role="status" title={cooccurringError} className="w-full text-center text-xs text-destructive">Co-occurring tags unavailable; showing facet values.</span>}
+    {cooccurringError && <ErrorDetails prefix="Co-occurring tags" error={cooccurringError} />}
     {items.length === 0 && <span className="text-xs text-muted-foreground" role="status">
       {busy ? "Loading tags…" : "No tag values in the current facet scope"}
     </span>}

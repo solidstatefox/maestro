@@ -1,4 +1,5 @@
 "use client";
+import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
@@ -21,7 +22,7 @@ const periodFor = (hour: number) => hour >= 5 && hour < 7 || hour >= 18 && hour 
   ? "Twilight" : hour >= 7 && hour < 12 ? "Morning" : hour >= 12 && hour < 18
   ? "Afternoon" : "Evening";
 
-export function BookmarkCharts({ queryXml, providerUri, stylesheet }: { queryXml: string; providerUri: string; stylesheet: string }) {
+export function BookmarkCharts({ queryXml, providerUri, stylesheet, onBrowse }: { queryXml: string; providerUri: string; stylesheet: string; onBrowse: () => void }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -87,7 +88,7 @@ export function BookmarkCharts({ queryXml, providerUri, stylesheet }: { queryXml
   const tags = useMemo(() => rows.filter(r=>r.label).sort((a,b)=>b.count-a.count).slice(0,100).map(r=>({label:r.label,count:r.count})),[rows]);
   if (loading) return <p className="p-4 text-sm text-muted-foreground">Analyzing bookmarks…</p>;
   if (error) return <ErrorDetails prefix="Bookmark analysis" error={error} className="m-4" />;
-  if (!rows.length) return <p className="p-4 text-sm text-muted-foreground">No matching bookmark data for this analysis.</p>;
+  if (!rows.length) return <MaestroEmptyResults title="No bookmark analysis results" description="No bookmarked records match this analysis. Try the default Browse perspective." onBrowse={onBrowse}/>;
   if (kind === "tags") return <section className="min-h-0 w-full p-4" aria-label="Bookmark tags pie chart">
     <h2 className="mb-2 text-sm font-medium">Bookmark tags</h2>
     <p className="mb-4 text-xs text-muted-foreground">Distinct matching bookmarks per tag. A bookmark with several tags contributes to each tag.</p>

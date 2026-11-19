@@ -52,19 +52,21 @@ test('Kinds are discovered by direct SELECT at login, multiple providers, no SHA
   assert.match(f, /!state\.patterns\.length && !kindDirection/);
 });
 
-test('XState Return only captures displaced Browse query, not ribbon or history navigation', () => {
+test('XState Return preserves the Browse source when Sheet opens a History/Bookmarks perspective', () => {
   const n = read('src/lib/app-lifecycle/operations.ts');
   const w = read('src/canvas/utils/workspace-controller.tsx');
   assert.match(n, /browseQueryKey: string; browseUrl: string/);
   assert.match(n, /providerCommitted = event.isProviderQuery/);
   assert.match(n, /context.browseQueryKey === event.sourceKey/);
   assert.doesNotMatch(n, /CONTEXT_REPLACED/);
-  assert.match(w, /if \(tab === "browse" && operations.controller.getSnapshot\(\).navigation.returnUrl\)/);
-  assert.match(w, /History\/Bookmarks are explicit Browse navigations, not ribbon hijacks/);
+  assert.doesNotMatch(w, /if \(tab === "browse" && operations.controller.getSnapshot\(\).navigation.returnUrl\)/);
+  assert.match(w, /Sheet's Show actions enter an actual, SHACL-discovered Perspective/);
+  assert.match(w, /type: "RIBBON_ENTRY_FROM_BROWSE", sourceKey: queryXml/);
+  assert.match(w, /setSelectedViewUri\(includeFavorites \? PERSONAL_PERSPECTIVE_URI\.bookmarks : PERSONAL_PERSPECTIVE_URI\.history\)/);
   assert.match(w, /setWorkspaceTab\("browse"\);\s*setViewProvider\(null\)/);
   assert.match(w, /if \(tab !== "view"\) \{\s*\+\+providerNavigationSequenceRef\.current;\s*navigationTransactions\.cancel\(\)/);
   assert.match(w, /A ribbon click alone does not displace Browse/);
-  assert.match(read('src/canvas/top/appbar-pane.tsx'), /Return to Browse query/);
+  assert.match(read('src/canvas/top/appbar-pane.tsx'), /Return to previous context/);
 });
 
 test('query addr is authoritative for the server selector, even during Provider navigation', () => {

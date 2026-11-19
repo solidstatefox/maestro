@@ -2,10 +2,9 @@
 import { FacetDecorationControl, FacetItemDecoration } from "@/lib/facet-decoration-contract";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { OrUidLabel } from "@/components/ui/or-uid-label";
-import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
 import { NumericFacetContent } from "@/canvas/left/personal-numeric-facet";
 import { NamedRegexCreateButton, NamedRegexList } from "@/canvas/left/named-regex-facet";
-import { DerivedFacetButton } from "@/canvas/left/derived-facet-button";
+import { PersonalFacetButtonTray } from "@/canvas/left/derived-facet-button";
 import { PersonalTagCloud } from "@/canvas/left/personal-tag-cloud";
 import { formatNumericFacetLabels } from "@/lib/numeric-facet-format";
 import { isCoercibleNumericLexical } from "@/lib/virtuoso-numeric-coercion";
@@ -112,6 +111,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
   tagCloudProviders?: Map<string, TagCloudFacetProvider>;
   onNumericRangeChange?: (property: string, start: string, end: string) => void;
 }): ReactNode {
+  if (!workspace.accessCapabilities.canUsePersonalStore) return null;
   const { FACET_PAGE_SIZE, activeLeafId, activePropertyFilters, autoConfiguredFacetKeys, beginFacetHoverPreview, clearTutorialPreview, deleteNode, endpointReadyForQuery, facetCandidateCounts, facetHoverPreview, findPropertyPathNode, groupByOptions, groupedPersonalFacetUri, navigateIntoRelationship, navigateToPropertyPath, personalWidgetCardRefs, personalWidgets, queryTree, removeProperty, scrollToGroupForFacetValue, setCentralTab, setFacetCandidateCounts, setGroupByPropertyUri, setPersonalWidgets, setPropertyValue, workspaceTab } = workspace;
     return (
       <div
@@ -170,7 +170,9 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                   {autoConfiguredFacetKeys.has(`property::${widget.uri}`) && (
                     <Bot className="size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                   )}
-                  <LeftWidgetButtonTray threshold={3} actions={[
+                  <PersonalFacetButtonTray source={boundNode} approvalRevision={workspace.policyApprovalRevision}
+                    sessionKey={workspace.accessController.getSnapshot().context.sessionKey}
+                    sessionActive={workspace.accessCapabilities.canUsePersonalStore} actions={[
                     { id: "inspector", label: "Inspect facet query", icon: <Code2 className="size-4"/>, render: <QueryInspectorButton
                       query={inspectorXml}
                       filename={`facet-${facetPropertyLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}.xml`}
@@ -206,7 +208,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     { id: "regex", label: "Create named regex filter", icon: <Regex className="size-4"/>, when: isStringFacet,
                       render: <NamedRegexCreateButton relationship={boundNode} propertyUri={widget.uri} /> },
                     { id: "derived", label: "Extract approved derived facets", icon: <Braces className="size-4"/>, when: Boolean(boundNode),
-                      render: boundNode ? <DerivedFacetButton source={boundNode} /> : null },
+                      render: null },
                     { id: "decoration", label: "Provider decoration", icon: <Palette className="size-4"/>, render: <FacetDecorationControl direction="forward" iri={widget.uri}/> },
                     { id: "remove", label: `Remove ${facetPropertyLabel(widget.uri)} facet`, icon: <Trash2 className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
                       type="button"

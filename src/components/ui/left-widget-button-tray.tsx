@@ -18,24 +18,25 @@ export type LeftWidgetTrayAction = {
   disabled?: boolean;
   when?: boolean;
 };
-export function LeftWidgetButtonTray({ actions, threshold = 3 }: {
+export function LeftWidgetButtonTray({ actions, threshold = 4 }: {
   actions: LeftWidgetTrayAction[];
-  /** Zero-based slot occupied by the ellipsis if overflow exists. */
+  /** Number of direct buttons before overflow; remainder live in the ellipsis. */
   threshold?: number;
 }) {
   const hosts = useRef(new Map<string, HTMLSpanElement>());
   const available = actions.filter(action => action.when !== false);
   const actionIds = new Set(available.map(action => action.id));
   if (actionIds.size !== available.length) throw new Error("Duplicate left-widget tray action id");
-  const visible = available.slice(0, Math.max(0, threshold));
-  const hidden = available.slice(Math.max(0, threshold));
+  const directButtons = Math.max(0, threshold);
+  const visible = available.slice(0, directButtons);
+  const hidden = available.slice(directButtons);
   const button = (action: LeftWidgetTrayAction) => action.render ?? <Tooltip>
     <TooltipTrigger render={<button type="button" disabled={action.disabled} onClick={action.onSelect}
       aria-label={action.label} className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:opacity-30">{action.icon}</button>} />
     <TooltipContent>{action.label}</TooltipContent>
   </Tooltip>;
   return <div data-left-widget-button-tray className="inline-flex shrink-0 items-center gap-1">
-    {visible.map(action => <span key={action.id} data-tray-action={action.id} className="inline-flex shrink-0">{button(action)}</span>)}
+    {visible.map(action => <span key={action.id} data-tray-action={action.id} className="inline-flex shrink-0 opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100">{button(action)}</span>)}
     {hidden.length > 0 && <DropdownMenu>
       <DropdownMenuTrigger asChild><button type="button" aria-label="More widget actions" title="More widget actions"
         className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Ellipsis className="size-4" aria-hidden="true" /></button></DropdownMenuTrigger>

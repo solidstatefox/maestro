@@ -20,6 +20,10 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
     const element = doc.createElement("result");
     element.setAttribute("uri", row.uri);
     element.setAttribute("label", row.label);
+    // An absent grouping value is a real Ungrouped column, not an absent
+    // attribute. XSLT grouping by @group must see the same empty string on
+    // every such row, otherwise all cards vanish from Kanban.
+    element.setAttribute("group", row.group ?? "");
     if (row.selected) element.setAttribute("selected", "true");
     if (row.appbarAdded) element.setAttribute("appbarAdded", "true");
     if (row.appbarAvailable) element.setAttribute("appbarAvailable", "true");
@@ -45,7 +49,7 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
   const transformed = document.createDocumentFragment();
   while (parsed.body.firstChild) transformed.appendChild(parsed.body.firstChild);
   const allowedTags = new Set(["div", "section", "article", "header", "footer", "h1", "h2", "h3", "h4", "p", "span", "strong", "em", "small", "ul", "ol", "li", "a", "button", "input", "label", "code", "pre", "img"]);
-  const supportedIcons = new Set(["server", "network", "globe", "database", "layout-grid", "badge-check", "badge-alert", "badge-x", "badge-question-mark", "refresh-cw", "code-2", "x"]);
+  const supportedIcons = new Set(["server", "network", "globe", "database", "layout-grid", "kanban", "badge-check", "badge-alert", "badge-x", "badge-question-mark", "refresh-cw", "code-2", "x"]);
   const svgNs = "http://www.w3.org/2000/svg";
   // Render safe, allowlisted Lucide symbols from XSLT placeholders. Never accept arbitrary SVG from a stylesheet.
   const insertLucideIcon = (node: Element, name: string) => {
@@ -62,6 +66,7 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
       "badge-x": [["path",{d:"M3.85 8.62a4 4 0 0 1 4.77-4.77 4 4 0 0 1 6.76 0 4 4 0 0 1 4.77 4.77 4 4 0 0 1 0 6.76 4 4 0 0 1-4.77 4.77 4 4 0 0 1-6.76 0 4 4 0 0 1-4.77-4.77 4 4 0 0 1 0-6.76"}],["path",{d:"m9 9 6 6m0-6-6 6"}]],
       "badge-question-mark": [["path",{d:"M3.85 8.62a4 4 0 0 1 4.77-4.77 4 4 0 0 1 6.76 0 4 4 0 0 1 4.77 4.77 4 4 0 0 1 0 6.76 4 4 0 0 1-4.77 4.77 4 4 0 0 1-6.76 0 4 4 0 0 1-4.77-4.77 4 4 0 0 1 0-6.76"}],["path",{d:"M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4m.1 3h.01"}]],
       "refresh-cw": [["path",{d:"M3 12a9 9 0 0 1 15.36-6.36L21 8"}],["path",{d:"M21 3v5h-5"}],["path",{d:"M21 12a9 9 0 0 1-15.36 6.36L3 16"}],["path",{d:"M8 16H3v5"}]],
+      "kanban": [["rect",{x:"2",y:"3",width:"20",height:"18",rx:"2"}],["path",{d:"M8 3v18M16 3v18M2 9h6M16 14h6"}]],
       "layout-grid": [["rect",{x:"3",y:"3",width:"7",height:"7",rx:"1"}],["rect",{x:"14",y:"3",width:"7",height:"7",rx:"1"}],["rect",{x:"3",y:"14",width:"7",height:"7",rx:"1"}],["rect",{x:"14",y:"14",width:"7",height:"7",rx:"1"}]],
       "x": [["path",{d:"M18 6 6 18M6 6l12 12"}]],
       "code-2": [["path",{d:"m18 16 4-4-4-4"}],["path",{d:"m6 8-4 4 4 4"}],["path",{d:"m14.5 4-5 16"}]],
@@ -101,11 +106,25 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
             // Pin/unpin is validated by the personal appbar service.
           } else if (name === "data-provider-code" && element.localName.toLowerCase() === "button" && attribute.value === "true") {
             // Code viewer action is delegated and URI-validated by the Providers view.
+          } else if (name === "data-kanban-column" && element.localName.toLowerCase() === "section") {
+            // Declarative column identity for temporary HTML drag-and-drop.
+          } else if (["data-kanban-card", "data-kanban-uri", "data-kanban-from"].includes(name) && element.localName.toLowerCase() === "article") {
+            // Validated against the visible result page by the View controller.
+          } else if (name === "draggable" && attribute.value === "true" && (element.localName.toLowerCase() === "article"
+              || (element.localName.toLowerCase() === "button" && element.hasAttribute("data-provider-open-uri")))) {
+            // Native Kanban drag gesture on the card or its clickable title; no executable code.
           } else if (name === "data-provider-uri" && element.localName.toLowerCase() === "article") {
             // React validates this URI before requesting code from the authenticated personal store.
           } else if (name === "data-perspective-appbar-icon" && element.localName.toLowerCase() === "span" && /^[a-z][a-z0-9-]{0,63}$/.test(attribute.value)) {
             // A non-executable placeholder for the trusted React DynamicIcon component.
-          } else if (name === "data-perspective-id" && element.localName.toLowerCase() === "button") {
+          } else if (name === "data-perspective-pin-slot" && element.localName.toLowerCase() === "span" && attribute.value === "true") {
+            // Inert portal mount for the trusted React Pin/PinOff control.
+          } else if (name === "data-perspective-pin-id" && element.localName.toLowerCase() === "span") {
+            // The React handler validates the identifier against current saved rows.
+          } else if (name === "data-perspective-action-slot" && element.localName.toLowerCase() === "span" && ["select", "delete"].includes(attribute.value)) {
+            // Inert XSLT slot: trusted React mounts a Lucide Button with Base UI Tooltip.
+          } else if (name === "data-perspective-id" && (element.localName.toLowerCase() === "button" ||
+              (element.localName.toLowerCase() === "span" && ["select", "delete"].includes(element.getAttribute("data-perspective-action-slot") ?? "")))) {
             // The perspective controller validates this identifier against its returned dataset.
           } else if (["data-perspective-open", "data-perspective-select", "data-perspective-delete", "data-perspective-appbar"].includes(name)
               && element.localName.toLowerCase() === "button" && attribute.value === "true") {

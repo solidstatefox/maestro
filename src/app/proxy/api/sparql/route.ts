@@ -1,6 +1,6 @@
 import { MAESTRO_KIND_IDS, normalizeMaestroKind } from "@/lib/maestro-kinds";
 import { buildFctKindAvailabilitySparql } from "@/lib/fct-count-sparql";
-import { getUserGraph, updatePersonalSparql } from "@/lib/personal-sparql";
+import { getUserGraph, personalSparqlUrl, queryPersonalSparql, updatePersonalSparql } from "@/lib/personal-sparql";
 import { buildBlankNodeRecordSparql } from "@/lib/bnode";
 import { requirePersonalLogin } from "@/lib/personal-guard";
 import { verifyApprovalBookmark } from "@/lib/policy-approval-store";
@@ -339,7 +339,7 @@ async function handlePost(request: Request) {
           return NextResponse.json({error: "Expected LOAD <HTTP(S) RDF URL> INTO GRAPH <personal graph>."}, {status:400});
         }
         let url: URL;
-        try { url = new URL(isLoad[1]); } catch { return NextResponse.json({error:"Invalid RDF source URL."},{status:400}); }
+        try { url = new URL(isLoad[1]); } catch (error) { return NextResponse.json({error:`Invalid RDF source URL: ${describeUpstreamError(error)}`},{status:400}); }
         if (!["http:","https:"].includes(url.protocol) || url.username || url.password ||
             !graphs.every(uri => uri.startsWith(`${base}/`) || uri.startsWith(`${base}#`))) {
           return NextResponse.json({error:"RDF LOAD requires a public HTTP(S) source and an authenticated personal graph."},{status:400});
@@ -373,6 +373,31 @@ async function handlePost(request: Request) {
         return NextResponse.json({ error: "Bookmark the live FCT query before modifying Status." }, { status: 409 });
       await updatePersonalSparql(update, queryTimeoutMs ?? 20000, request);
       return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+    }
+    // Authenticated *read* of the user's own personal store. This remains the
+    // existing /sparql endpoint and forwards the same SELECT/ASK unchanged;
+    // it does not retry, rewrite or use an authenticated write service.
+    // It is never cached across users or dispatched to an arbitrary addr.
+    if (body?.personalRead === true) {
+      const denied = requirePersonalLogin(request);
+      if (denied) return denied;
+      const address = typeof body.addr === "string" ? body.addr : "";
+      const separator = address.lastIndexOf("@");
+      const selectedUrl = separator >= 0 ? address.slice(separator + 1) : "";
+      const personalUrl = personalSparqlUrl(request).toString();
+      if (selectedUrl !== personalUrl) {
+        return NextResponse.json({error:"Personal SPARQL reads must use the logged-in personal /sparql endpoint."}, {status:403});
+      }
+      if (typeof body.query !== "string" || !isBoundedReadOnlySparql(body.query, 100000)) {
+        return NextResponse.json({error:"Expected a read-only personal SELECT/ASK query."}, {status:400});
+      }
+      // selectPersonal() sends SELECT. Avoid the generic cached server-reader,
+      // which has no credentials and may reject an unregistered personal endpoint.
+      // The existing personal helper supplies session authentication headers.
+      diagnosticOperation = "authenticated personal SPARQL SELECT";
+      diagnosticEndpoint = personalUrl;
+      const parsed = await queryPersonalSparql(body.query.trim(), queryTimeoutMs ?? 20000, request);
+      return NextResponse.json(parsed, {headers:{"Cache-Control":"no-store"}});
     }
     const endpointList = await getConfiguredFctEndpoints(request);
     // Every SPARQL request carries the address of its originating FCT query.

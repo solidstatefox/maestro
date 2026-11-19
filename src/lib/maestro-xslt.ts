@@ -1,5 +1,48 @@
+import { annotateMaestroRecordRdfa } from "@/lib/maestro-record-rdfa";
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 import { snapshotFctQueryXml } from "@/lib/fct-query-api";
+
+/** Independent, bounded client-memory cache for completed Record XSLT output.
+ * Identity includes the exact stylesheet, Record, FCT response, live query and
+ * gallery; approval changes or fresh RDF cannot reuse old formatted markup.
+ * No login/session data or RDF is stored in localStorage. */
+const RECORD_FORMAT_CACHE_LIMIT = 16;
+const RECORD_FORMAT_CACHE_BYTES = 12_000_000;
+const recordFormatHtmlCache = new Map<string, string>();
+let cachedRecordFormatBytes = 0;
+
+export function clearMaestroRecordFormatCache(): void {
+  recordFormatHtmlCache.clear();
+  cachedRecordFormatBytes = 0;
+}
+export function maestroRecordFormatCacheStats(): { entries: number; bytes: number } {
+  return { entries: recordFormatHtmlCache.size, bytes: cachedRecordFormatBytes };
+}
+function fromRecordFormatCache(key: string): string | undefined {
+  const html = recordFormatHtmlCache.get(key);
+  if (html !== undefined) {
+    recordFormatHtmlCache.delete(key);
+    recordFormatHtmlCache.set(key, html);
+  }
+  return html;
+}
+function cacheRecordFormat(key: string, html: string): void {
+  const weight = key.length * 2 + html.length * 2;
+  if (weight > RECORD_FORMAT_CACHE_BYTES) return;
+  const prior = recordFormatHtmlCache.get(key);
+  if (prior !== undefined) cachedRecordFormatBytes -= key.length * 2 + prior.length * 2;
+  recordFormatHtmlCache.delete(key);
+  recordFormatHtmlCache.set(key, html);
+  cachedRecordFormatBytes += weight;
+  while (recordFormatHtmlCache.size > RECORD_FORMAT_CACHE_LIMIT || cachedRecordFormatBytes > RECORD_FORMAT_CACHE_BYTES) {
+    const oldest = recordFormatHtmlCache.keys().next().value;
+    if (oldest === undefined) break;
+    const value = recordFormatHtmlCache.get(oldest)!;
+    cachedRecordFormatBytes -= (oldest.length + value.length) * 2;
+    recordFormatHtmlCache.delete(oldest);
+  }
+}
+
 
 /**
  * Record-policy XSLT 3.0 adapter. The stylesheet is stored in the graph and
@@ -63,12 +106,18 @@ export async function transformMaestroRecordXslt(
   }
 
 
-  const html = await transformWithMaestroSaxon(
-    stylesheetText,
-    new XMLSerializer().serializeToString(envelope),
-    { recordUri, signal },
-  );
-  return new DOMParser().parseFromString(html, "text/html");
+  // Cache the complete *rendered* markup, not the RDF query or JSX portals.
+  // Rebuild DOM on a hit so pagination and delegated handlers remain isolated.
+  const sourceXml = new XMLSerializer().serializeToString(envelope);
+  const cacheKey = `${recordUri.length}:${recordUri}${stylesheetText.length}:${stylesheetText}${sourceXml}`;
+  if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  const previous = fromRecordFormatCache(cacheKey);
+  if (previous !== undefined) return new DOMParser().parseFromString(previous, "text/html");
+  const html = await transformWithMaestroSaxon(stylesheetText, sourceXml, { recordUri, signal });
+  if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  const withRdfa = annotateMaestroRecordRdfa(new DOMParser().parseFromString(html, "text/html"), describedRecord, recordUri);
+  cacheRecordFormat(cacheKey, withRdfa.documentElement.outerHTML);
+  return withRdfa;
 }
 
 /**

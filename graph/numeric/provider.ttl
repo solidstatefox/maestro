@@ -5,7 +5,7 @@
 
 # Numeric facets are property-agnostic. Eligibility is confirmed against actual
 # numeric bindings in the live FCT focus; no hard-coded vocabulary property.
-<gttp://ggg.maestro.ui/provider/numeric-range> a mui:Provider ;
+<gttp://ggg.maestro.ui/provider/numeric-range> a mui:Provider, mui:FacetProvider ;
   rdfs:label "Numeric range"@en ;
   mui:accepts <gttp://ggg.maestro.ui/provider/numeric-range-input> ;
   mui:widget <gttp://ggg.maestro.ui/widget/numeric-range> ;

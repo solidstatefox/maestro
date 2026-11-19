@@ -123,6 +123,15 @@ test("bookmark XState rejects late verification after a local bookmark or revoke
   c.send({ type: "BOOKMARK_CONFIRMED", queryKey: "q1", bookmarkId: "urn:bookmark" });
   completeFirst({ bookmarked: false, bookmarkId: "" });
   await new Promise<void>(resolve => setImmediate(resolve));
+  // A confirmed local bookmark cannot authorize personal data while the
+  // XState policy/graph-seeding lifecycle is still in progress.
+  assert.equal(c.getSnapshot().context.bookmark, "bookmarked");
+  assert.equal(selectMaestroCapabilities(c.getSnapshot(), { queryKey: "q1" }).canShowStatusFacet, false);
+  c.send({ type: "POLICY_STATUS_OBSERVED", sessionKey: "session-1", stage: "seeding" });
+  assert.equal(selectMaestroCapabilities(c.getSnapshot(), { queryKey: "q1" }).canShowStatusFacet, false);
+  c.send({ type: "POLICY_STATUS_OBSERVED", sessionKey: "session-1", stage: "verifying" });
+  assert.equal(selectMaestroCapabilities(c.getSnapshot(), { queryKey: "q1" }).canShowStatusFacet, false);
+  c.send({ type: "POLICY_STATUS_OBSERVED", sessionKey: "session-1", stage: "ready" });
   assert.equal(selectMaestroCapabilities(c.getSnapshot(), { queryKey: "q1" }).canShowStatusFacet, true);
   let failSecond!: (reason: Error) => void;
   const second = new Promise<{ bookmarked: boolean; bookmarkId: string }>((_, reject) => { failSecond = reject; });

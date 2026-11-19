@@ -1,4 +1,6 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
+import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
@@ -190,7 +192,7 @@ export function OverviewPerspective({workspace}: {workspace: WorkspaceController
   ].filter(row=>row.v>0);
 
   return <main aria-label="Overview executive summary" className="min-h-0 flex-1 overflow-y-auto bg-background p-4 sm:p-6">
-    <div className="mx-auto max-w-6xl space-y-5">
+    <div className="w-full min-w-0 space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 pb-4">
         <div className="space-y-1"><h2 className="text-2xl font-semibold tracking-tight">Overview</h2>
           <p className="text-sm text-muted-foreground">Relationships, composition and evidence for the active FCT result set</p></div>
@@ -199,7 +201,7 @@ export function OverviewPerspective({workspace}: {workspace: WorkspaceController
           {publishedAddress && !updating && <Badge variant="outline" title="VoID metadata describes a named graph, not the filtered FCT result set.">{published?.key===publishedKey ? (graphStats ? "Graph statistics available" : "VoID not published") : "Checking graph metadata"}</Badge>}</div>
       </header>
       {updating ? <p className="py-8 text-sm text-muted-foreground" role="status">Waiting for the current graph-server result and facet projections.</p> :
-      !hasReport ? <p className="py-8 text-sm text-muted-foreground" role="status">No summary data is available for this query. Change the query or graph server to explore another scope.</p> : <>
+      !hasReport ? <MaestroEmptyResults title="No summary available" description="No summary data is available for this query. Try the default Browse perspective or select another graph server." onBrowse={() => workspace.setWorkspaceTab("browse")}/> : <>
         <div className="space-y-1"><h3 className="text-xs font-semibold uppercase tracking-wider text-blue-700 dark:text-sky-400">At a glance</h3>
           <p className="max-w-4xl text-sm leading-relaxed text-foreground/85">{data.summary}</p></div>
 
@@ -209,7 +211,7 @@ export function OverviewPerspective({workspace}: {workspace: WorkspaceController
             {textMatchCoverage.some(item=>item.percentage>0) && <div className="min-w-0"><h4 className="mb-1 text-center text-xs font-semibold">Text-match predicates</h4><p className="mb-2 text-center text-[11px] text-muted-foreground">Predicates that actually matched the root search</p><LabeledRings items={textMatchCoverage}/></div>}
           </div>
         </Section>}
-        {showTextMatch && currentTextMatches?.error && <p role="status" className="text-xs text-muted-foreground">Text-match provenance unavailable: {currentTextMatches.error}</p>}
+        {showTextMatch && currentTextMatches?.error && <ErrorDetails prefix="Text-match provenance" error={currentTextMatches.error} />}
 
         <div className="grid gap-4 lg:grid-cols-2">
           {classRatios.length>0 && <Section title="Class coverage" detail={data.classCoverage.length ? "Share of all FCT matches belonging to each class. Classes overlap; totals need not add to 100%." : "Share of returned class-facet frequencies. The exact match total was unavailable; this is not resource coverage."}>

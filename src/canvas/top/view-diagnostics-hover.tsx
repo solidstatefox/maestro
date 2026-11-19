@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { useEffect, useState, type ReactNode } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { CircleCheck, CircleAlert, CircleX } from "lucide-react";
@@ -36,7 +37,7 @@ export function ViewDiagnosticsHover({ children, enabled }: { children: ReactNod
           className="max-h-[min(70vh,32rem)] w-[min(36rem,calc(100vw-1.5rem))] overflow-y-auto overflow-x-hidden rounded-md border border-border bg-popover p-3 text-left text-popover-foreground shadow-xl">
       <span className="block pb-2 text-xs font-semibold">Loaded policies and provider definitions</span>
       {loading && <span className="block text-xs text-muted-foreground">Reading personal graph…</span>}
-      {error && <span className="block text-xs text-destructive">{error}</span>}
+      {error && <ErrorDetails prefix="View diagnostics" error={error} />}
       {(["Policies", "mui:Providers"] as const).map(category => <span key={category} className="block pb-2">
         <span className="block border-b py-1 text-xs font-semibold">{category}</span>
         {!loading && !entries.some(entry => entry.category === category) && <span className="block py-1 text-xs text-muted-foreground">No definitions found</span>}

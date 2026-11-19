@@ -2,7 +2,7 @@
 import { ErrorDetails } from "@/components/ui/error-details";
 import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
 import { Code2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
 import { FACET_ITEM_GAP_CLASS } from "@/canvas/left/facet-layout";
@@ -11,14 +11,15 @@ import type { FctQueryTree } from "@/lib/fct-query-api";
 import { shortenCount } from "@/lib/utils";
 import { RECORD_STATUS_NAMES } from "@/lib/personal-status-vocabulary";
 import { toLabel } from "@/lib/uri-labels";
-import { fctStatusFacet } from "@/lib/fct-client";
+import { fctStatusFacet, fctListStatusClone } from "@/lib/fct-client";
+import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
 /** The same borderless Status fixture serves Record and policy facets. Counts
  * are optional; no count is invented when the personal graph has not answered. */
-export function StatusFacetWidget<T extends string>({ names, selected, counts, toggle, query, countQuery, fctQuery, loading, error, filename, labels, onNavigate }: {
+export function StatusFacetWidget<T extends string>({ names, selected, counts, toggle, query, countQuery, fctQuery, loading, error, filename, labels, onNavigate, inspectorAddr, inspectorPreview = false }: {
   names: readonly T[]; selected: ReadonlySet<T>; counts: Partial<Record<T, number>> | null;
-  toggle: (name: T) => void; query?: string; countQuery?: string; fctQuery?: string; loading?: boolean; error?: string; filename?: string; labels?: Partial<Record<T,string>>; onNavigate?: () => void;
+  toggle: (name: T) => void; query?: string; countQuery?: string; fctQuery?: string; loading?: boolean; error?: string; filename?: string; labels?: Partial<Record<T,string>>; onNavigate?: () => void; inspectorAddr?: string; inspectorPreview?: boolean;
 }) {
   // Don't present a conspicuous "0" badge for an otherwise empty Status facet.
   // Checked statuses stay visible and removable even when their count is zero.
@@ -26,15 +27,16 @@ export function StatusFacetWidget<T extends string>({ names, selected, counts, t
   return <article className="flex min-w-0 flex-col" aria-label="Status">
     <header className="group/header flex items-start justify-between gap-2 border-b px-2 py-2">
       <div className="flex min-w-0 items-center gap-1">{onNavigate ? <button type="button" className="cursor-pointer text-sm font-semibold hover:underline underline-offset-2" title="Navigate to mui:status of the current focus" onClick={onNavigate}>Status</button> : <h2 className="text-sm font-semibold">Status</h2>}
-        {(fctQuery || query) && <LeftWidgetButtonTray threshold={3} actions={[{
-          id: "inspector", label: "Inspect Status facet query", icon: <Code2 className="size-4" />,
+        {(fctQuery || query) && <LeftWidgetButtonTray threshold={4} actions={[{
+          id: "inspector", label: "Inspect Status XML and SPARQL", icon: <Code2 className="size-4" />,
           render: <QueryInspectorButton query={fctQuery || query || ""} language={fctQuery ? "xml" : "sparql"}
             filename={fctQuery ? "status-list-status.xml" : filename ?? "statuses-query.sparql"}
-            countQuery={countQuery} countFilename="status-count.sparql" primaryTabLabel={fctQuery ? "FCT list-status" : "Status SPARQL"} />,
+            extraQueries={fctQuery ? [{ id: "status-sparql", label: inspectorPreview ? "SPARQL preview" : "SPARQL (first batch)", query: countQuery || "# Status SPARQL preview unavailable", filename: "status-list-status.sparql", language: "sparql" as const }] : []}
+            addr={inspectorAddr} primaryTabLabel={fctQuery ? "XML" : "Status SPARQL"} />,
         }]} />}
       </div>
       <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-        {loading && <ElapsedStatus label="" category="personal" clockScope="statuses" />}
+        {loading && <ElapsedStatus label="Status" category="status" clockScope="statuses" />}
         {showCounts && shortenCount(names.reduce((total, name) => total + (counts?.[name] ?? 0), 0))}
       </span>
     </header>
@@ -71,8 +73,25 @@ export function LiveQueryStatusWidget({ tree, toggle, revision, queryXml, onNavi
   const [entriesScope, setEntriesScope] = useState("");
   const [fctQuery, setFctQuery] = useState("");
   const [countQuery, setCountQuery] = useState("");
+  const [executedAddr, setExecutedAddr] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [preview, setPreview] = useState<{scope:string;sparql:string;addr:string}>({scope:"",sparql:"",addr:""});
+  const inspectorXml = useMemo(() => {
+    try { return fctListStatusClone(queryXml); }
+    catch { return ""; }
+  }, [queryXml]);
+  // The inspector must show the same remote, read-only population query
+  // used by the client Status join, not the obsolete ODS SERVICE projection.
+  // Preview without VALUES until the personal status candidate set is known.
+  useEffect(() => {
+    try {
+      const compiled = compileFctXmlToSparql(inspectorXml);
+      setPreview({scope:queryXml,sparql:compiled.query,addr:tree.attributes.addr ?? ""});
+    } catch {
+      setPreview({scope:queryXml,sparql:"",addr:""});
+    }
+  }, [queryXml, inspectorXml, tree.attributes.addr]);
   // Checked statuses belong to the current view carrier's scope, not
   // necessarily to the query root. Keep the UI in sync with the same scope
   // used by toggleLiveStatusFilter in the authoritative query controller.
@@ -92,9 +111,9 @@ export function LiveQueryStatusWidget({ tree, toggle, revision, queryXml, onNavi
     setLoading(true); setError("");
     void fctStatusFacet(queryXml, controller.signal)
       .then(data => { if (!controller.signal.aborted) {
-        setEntries(data.entries); setEntriesScope(queryXml); setFctQuery(data.fctQuery); setCountQuery(data.sparql);
+        setEntries(data.entries); setEntriesScope(queryXml); setFctQuery(data.fctQuery); setCountQuery(data.sparql); setExecutedAddr(data.addr ?? "");
       } }).catch(reason => { if (!controller.signal.aborted) {
-        setEntries([]); setEntriesScope(""); setFctQuery(""); setCountQuery("");
+        setEntries([]); setEntriesScope(""); setFctQuery(""); setCountQuery(""); setExecutedAddr("");
         setError(reason instanceof Error ? reason.message : "Status list unavailable");
       } }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -107,7 +126,9 @@ export function LiveQueryStatusWidget({ tree, toggle, revision, queryXml, onNavi
   return <StatusFacetWidget names={names} selected={selected} counts={counts} labels={labels}
     toggle={toggle} onNavigate={onNavigate}
     query={entriesScope === queryXml ? countQuery : ""}
-    countQuery={entriesScope === queryXml ? countQuery : ""}
-    fctQuery={entriesScope === queryXml ? fctQuery : ""}
+    countQuery={entriesScope === queryXml ? countQuery : (preview.scope === queryXml ? preview.sparql : "")}
+    fctQuery={entriesScope === queryXml ? fctQuery : inspectorXml}
+    inspectorAddr={entriesScope === queryXml && executedAddr ? executedAddr : preview.scope === queryXml ? preview.addr : undefined}
+    inspectorPreview={entriesScope !== queryXml}
     filename="list-status.sparql" loading={loading || (!error && entriesScope !== queryXml)} error={error} />;
 }

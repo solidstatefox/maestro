@@ -11,6 +11,7 @@ export function useQuerySessionState() {
   const [urlStateInitialized, setUrlStateInitialized] = useState(false);
   const [querySourceFormat, setQuerySourceFormat] = useState<"xml" | "sparql" | "alphabet-xml" | "alphabet-sparql" | "list-values-xml" | "list-values-sparql" | "response">("xml");
   const [sparqlQuery, setSparqlQuery] = useState("");
+  const [sparqlExecutionAddr, setSparqlExecutionAddr] = useState("");
   const [breadcrumbTrail, setBreadcrumbTrail] = useState<
   { id: string; uri: string; name: string }[]
 >([]);
@@ -43,6 +44,8 @@ export function useQuerySessionState() {
     setQuerySourceFormat,
     sparqlQuery,
     setSparqlQuery,
+    sparqlExecutionAddr,
+    setSparqlExecutionAddr,
     breadcrumbTrail,
     setBreadcrumbTrail,
     ancestorGhostRetainedRef,

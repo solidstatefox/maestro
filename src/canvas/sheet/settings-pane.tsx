@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { ChevronsDownUp, ChevronsUpDown, Settings, Download, Upload } from "lucide-react";
 
 import { MAESTRO_TIMEOUT_CATEGORIES, writeMaestroWidgetTimeouts } from "@/lib/maestro-query-timeouts";
+import { clearMaestroRecordFormatCache, maestroRecordFormatCacheStats } from "@/lib/maestro-xslt";
 import { readUriAutocompleteSettings, writeUriAutocompleteSettings } from "@/lib/uri-autocomplete-settings";
 import { readRootHoverDelayMs, writeRootHoverDelayMs } from "@/lib/root-breadcrumb-settings";
 
@@ -178,7 +179,9 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     let live = true;
     void readIteraComputeKey().then((key) => {
       if (live) { setIteraComputeKey(key); setIteraComputeKeyLoaded(true); }
-    }).catch(() => { if (live) setIteraComputeKeyLoaded(true); });
+    }).catch(error => { if (live) { setIteraComputeKeyLoaded(true);
+      toast.add({title:"Could not read IteraCompute settings",description:error instanceof Error ? error.message : String(error),type:"error"});
+    } });
     return () => { live = false; };
   }, []);
   const [autocompleteSettings, setAutocompleteSettings] = useState(readUriAutocompleteSettings);
@@ -288,7 +291,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                   <input id="maestro-iteracompute-key" type={showIteraComputeKey ? "text" : "password"} autoComplete="off" spellCheck={false}
                     value={iteraComputeKey} disabled={!iteraComputeKeyLoaded} placeholder="Enter IteraCompute API key"
                     onChange={(event) => setIteraComputeKey(event.target.value)}
-                    onBlur={() => { if (iteraComputeKeyLoaded) { try { writeIteraComputeKey(iteraComputeKey); } catch { toast.add({ title: "Invalid IteraCompute API key", type: "error" }); } } }}
+                    onBlur={() => { if (iteraComputeKeyLoaded) { try { writeIteraComputeKey(iteraComputeKey); } catch (error) { toast.add({ title: "Invalid IteraCompute API key", description: error instanceof Error ? error.message : String(error), type: "error" }); } } }}
                     className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm" />
                   <Button type="button" variant="outline" onClick={() => setShowIteraComputeKey((v) => !v)}>{showIteraComputeKey ? "Hide" : "Show"}</Button>
                   <Button type="button" variant="outline" disabled={!iteraComputeKeyLoaded} onClick={() => {
@@ -352,7 +355,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                     setPrefixSource(next);
                     void maestroStorageSet("maestro-namespace-prefix-source", next);
                   }}>
-                  <option value="prefixcc">prefix.cc community list (falls back to Zazuko over HTTPS)</option>
+                  <option value="prefixcc">prefix.cc community list (falls back to built-in)</option>
                   <option value="zazuko">Zazuko curated list</option>
                   <option value="builtin">Built-in list only</option>
                 </select>
@@ -394,6 +397,17 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
               </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
+                  <Label>Clear format cache</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">Empty the separate in-memory cache of XSLT-formatted Record HTML. RDF data and other caches are unchanged.</p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={() => {
+                  const { entries } = maestroRecordFormatCacheStats();
+                  clearMaestroRecordFormatCache();
+                  toast.add({ title: "Record format cache cleared", description: `${entries} formatted Records discarded.` });
+                }}>Clear format cache</Button>
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                <div className="min-w-0">
                   <Label>Auto-configure</Label>
                   <p className="mt-1 text-xs text-muted-foreground">Clear learned facet usage, recorded exclude flags, and saved candidates.</p>
                 </div>
@@ -409,8 +423,8 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                       setFacetAutofillCandidates({ property: [], "property-in": [] });
                       setFacetUsageRevision((revision) => revision + 1);
                       toast.add({ title: "Auto-configure reset", description: "Learned facet usage and saved candidates were cleared.", type: "success" });
-                    } catch {
-                      toast.add({ title: "Auto-configure could not be reset", description: "Browser storage is unavailable.", type: "error" });
+                    } catch (error) {
+                      toast.add({ title: "Auto-configure could not be reset", description: error instanceof Error ? error.message : String(error), type: "error" });
                     }
                   }}
                   className="shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
@@ -449,12 +463,14 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                       <Switch id="set-all-timeouts" aria-label="Enable master timeout" checked={masterTimeoutEnabled}
                         onCheckedChange={(on) => { setMasterTimeoutEnabled(on); if (on) applyMasterTimeout(masterTimeout); }} />
                     </InputGroupAddon>
-                    {masterTimeoutEnabled && <div className="space-y-2 px-3 py-3">
+                    {masterTimeoutEnabled && <div className="w-full min-w-0 space-y-2 py-3">
                       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span>Master timeout</span><output>{masterTimeout ? `${masterTimeout}s` : "Default"}</output></div>
                       <Slider aria-label="Set all query timeouts in seconds" min={0} max={120} step={5}
                         value={[masterTimeout]} onValueChange={(values) => applyMasterTimeout(values[0] ?? 0)} />
                     </div>}
                   </InputGroup>
+                  <fieldset disabled={masterTimeoutEnabled} aria-label="Individual query timeouts"
+                    className="min-w-0 space-y-2 disabled:opacity-50">
                   <div className="space-y-2 border-t pt-3">
                     <div className="flex items-center justify-between gap-2">
                       <Label htmlFor="maestro-uri-complete-timeout" className="text-xs">Root URI autocomplete timeout</Label>
@@ -466,6 +482,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                       onValueChange={(values) => updateAutocompleteSettings("timeoutSeconds", values[0] ?? 5)} />
                     <p className="text-xs text-muted-foreground">Follows Set all while master timeout is enabled; default 5s.</p>
                   </div>
+                  </fieldset>
                   <div className="space-y-2 border-t pt-3">
                     <div className="flex items-center justify-between gap-2">
                       <Label htmlFor="maestro-root-hover-delay" className="text-xs">Root breadcrumb editor hover</Label>
@@ -479,6 +496,8 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                         writeRootHoverDelayMs(value);
                       }} />
                   </div>
+                  <fieldset disabled={masterTimeoutEnabled} aria-label="Individual widget query timeouts"
+                    className="min-w-0 space-y-2 disabled:opacity-50">
                   {MAESTRO_TIMEOUT_CATEGORIES.map(({ key, label }) => (
                     <div key={key} className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
@@ -491,6 +510,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                         onValueCommit={(values) => changeWidgetTimeout(key, values[0] ?? 0)} />
                     </div>
                   ))}
+                  </fieldset>
                 </CollapsibleContent>
               </Collapsible>
               <Collapsible open={panelLimitsOpen} onOpenChange={setPanelLimitsOpen} className="rounded-md border">

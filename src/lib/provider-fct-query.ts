@@ -46,14 +46,10 @@ export function providerFctQuery(tree: FctQueryTree, providerKind: ProviderKind,
   } else if (providerKind === "curators") {
     children = [node("provider-curator", "class", `${MUI}CurationProvider`), view];
   } else if (providerKind === "facet-widgets") {
-    // Keep the view on the provider; mui:widget is an additional filter.
-    children = [
-      node("provider-facet-provider", "class", `${MUI}Provider`),
-      node("provider-facet-widget", "property", `${MUI}widget`, [
-        node("provider-facet-widget-type", "class", `${MUI}FacetWidget`),
-      ]),
-      view,
-    ];
+    // The catalog lists the facet PROVIDERS themselves. A nested constraint on
+    // mui:widget's class previously excluded valid providers in FCT. RDF
+    // declares facet-provider membership explicitly; applicability is SHACL.
+    children = [node("provider-facet-provider", "class", `${MUI}FacetProvider`), view];
   } else {
     // The transcoder itself is the provider shown in Results. The former
     // InputShape -> inverse mui:accepts -> Transcoder projection needlessly
@@ -107,10 +103,6 @@ export function hasProviderFctFilters(tree: FctQueryTree, providerKind: Provider
   if (providerKind === "fsm-providers") return hasClass(children, `${MUI}StateMachineProvider`);
   if (providerKind === "curators") return hasClass(children, `${MUI}CurationProvider`);
   if (providerKind === "kinds") return hasClass(children, `${MUI}KindProvider`);
-  if (providerKind === "facet-widgets") {
-    const widget = relation(children, "property", `${MUI}widget`);
-    return hasClass(children, `${MUI}Provider`) &&
-      Boolean(widget && hasClass(widget.children, `${MUI}FacetWidget`));
-  }
+  if (providerKind === "facet-widgets") return hasClass(children, `${MUI}FacetProvider`);
   return hasClass(children, `${OTC}Transcoder`);
 }

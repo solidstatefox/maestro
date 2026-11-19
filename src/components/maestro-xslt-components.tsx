@@ -28,6 +28,13 @@ const SCALAR_BOOLEANS = new Set([
 const JSON_PROPERTIES = new Set(["center", "bounds", "padding", "offset", "position"]);
 const BLOCKED_ATTRIBUTES = /^(?:on[A-Za-z]|srcDoc$|dangerouslySetInnerHTML$|ref$|key$)/i;
 const ALLOWED_URL = /^(?:https?:\/\/|\/(?!\/)|#|\?)/i;
+// A formatter's custom component tag is the immutable blueprint for a React
+// portal. React Strict Mode replays effects on the same DOM nodes; after the
+// first mount their original children are gone. Keep those children per DOM
+// host so replaying the effect cannot turn RecordValuePages into empty rows.
+// WeakMap entries disappear with the replaced/discarded Record DOM tree.
+const portalChildBlueprints = new WeakMap<Element, readonly ReactNode[]>();
+
 const PROP_ALIASES: Record<string,string> = {
   class: "className", classname: "className", tabindex: "tabIndex", for: "htmlFor",
   showzoom: "showZoom", showcompass: "showCompass", showfullscreen: "showFullscreen",
@@ -67,6 +74,14 @@ function safeProperty(name: string, value: string): [string, unknown] | null {
 }
 
 function componentFor(node: Element) {
+  // HTML parsing folds <Button> and <button> to the same localName. Native
+  // <button> controls emitted by a Record XSLT must remain DOM buttons: using
+  // one as a portal host for the registered shadcn Button renders a SECOND
+  // <button> inside it (and duplicates its id), which React rejects during
+  // hydration. Only custom component tags are eligible for portal mounting.
+  // Provider-authored native buttons already retain their attributes and the
+  // existing delegated data-maestro-* click handlers.
+  if (node.localName.toLowerCase() === "button") return null;
   // Record values are primary content, not a decorative async widget. Mount
   // their lightweight renderer immediately: an unresolved dynamic import left
   // the XSLT portal host blank after its original child nodes were removed.
@@ -136,8 +151,15 @@ export function getMaestroComponentPortals(root: Element): ReactPortal[] {
     // React recreates the entire subtree inside this portal. Leaving the source
     // DOM nodes in place renders them *as well* (notably a second map marker and
     // a stray MapControls element above the canvas).
-    const children = Array.from(host.childNodes).map(renderElement);
-    host.replaceChildren();
+    let children = portalChildBlueprints.get(host);
+    if (!children) {
+      children = Array.from(host.childNodes).map(renderElement);
+      portalChildBlueprints.set(host, children);
+      // Remove original XSLT nodes only once. On effect replay this container
+      // can already contain LIVE React portal nodes: clearing those a second
+      // time would detach visible values without a React reconciliation.
+      host.replaceChildren();
+    }
     return createPortal(createElement(component, props, ...children), host, host.id || `xslt-component-${index}`);
   });
 }

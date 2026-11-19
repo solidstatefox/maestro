@@ -2,7 +2,7 @@ import { beginMaestroQueryExecution, type MaestroQueryClockScope } from "./maest
 
 /** Streaming response adapter: preserve the ordinary Response contract for callers. */
 export async function unwrapMaestroQueryEvents(response: Response, scope: MaestroQueryClockScope | null,
-  signal?: AbortSignal | null, onQueuePosition?: (queueIndex: number, server: string) => void): Promise<Response> {
+  signal?: AbortSignal | null, onQueuePosition?: (queueIndex: number, server: string, lane?: "light" | "heavy", laneIndex?: number) => void): Promise<Response> {
   if (!response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) return response;
   const reader = response.body?.getReader();
   if (!reader) throw new Error("Missing Maestro query event stream");
@@ -29,9 +29,11 @@ export async function unwrapMaestroQueryEvents(response: Response, scope: Maestr
         const dataText = frame.split("\n").filter(line => line.startsWith("data:"))
           .map(line => line.slice(5).replace(/^[ \t]/, "")).join("\n");
         if (!event || !dataText) continue;
-        const data = JSON.parse(dataText) as { queryId?: number; queueIndex?: number; server?: string; elapsedMs?: number; status?: number; statusText?: string; headers?: [string,string][]; body?: string };
+        const data = JSON.parse(dataText) as { queryId?: number; queueIndex?: number; server?: string; lane?: "light" | "heavy"; laneIndex?: number; elapsedMs?: number; status?: number; statusText?: string; headers?: [string,string][]; body?: string };
         if (event === "queue-position" && Number.isSafeInteger(data.queueIndex) && (data.queueIndex ?? -1) >= 0) {
-          onQueuePosition?.(data.queueIndex!, typeof data.server === "string" ? data.server : "");
+          onQueuePosition?.(data.queueIndex!, typeof data.server === "string" ? data.server : "",
+            data.lane === "heavy" || data.lane === "light" ? data.lane : undefined,
+            Number.isInteger(data.laneIndex) && (data.laneIndex ?? 0) >= 0 ? data.laneIndex : undefined);
         } else if (event === "dispatched" && typeof data.queryId === "number" && scope) {
           if (pendingCompletion.delete(data.queryId)) continue;
           running.set(data.queryId, beginMaestroQueryExecution(scope));

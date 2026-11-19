@@ -1,7 +1,7 @@
 "use client";
 /** The same RDF -> XState adapter is used in the browser for curator and
  * Record controls. Use the existing authenticated personal SPARQL transport;
- * it resolves /sparql-auth to /sparql consistently across login modes. */
+ * reads use /sparql; updates use the authentication mode selected at login. */
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { compileStatusMachines, statusMachineRows, statusMachineSelect, type CompiledStatusMachine } from "@/lib/status-machine-runtime";
 

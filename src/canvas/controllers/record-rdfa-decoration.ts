@@ -55,6 +55,93 @@ export function recordBindingOn(node: Element): RecordStatement | null {
   return null;
 }
 
+export type FullscreenRecordTarget = {
+  kind: "property" | "value";
+  statement: RecordStatement;
+};
+
+/** A <dt> is a property label, not a value. An RDFa resource/content is a
+ * value even when its parent <tr>/<dd> also carries a predicate annotation.
+ * Resolve unannotated formatter captions only when one predicate matches: a
+ * decorative heading must never turn into an arbitrary query binding. */
+export function resolveFullscreenRecordTarget(
+  target: Element, rows: readonly RecordStatement[],
+): FullscreenRecordTarget | null {
+  const valueTarget = target.closest(
+    "[data-maestro-property-value],[data-maestro-record-uri],[data-maestro-iri]," +
+    "[resource],[content],[data-maestro-literal],a[rel],a[rev],a[property]",
+  );
+  if (valueTarget) {
+    const statement = resolveRecordInteraction(valueTarget, rows, false);
+    if (statement && statement.value) return { kind: "value", statement };
+  }
+
+  // A legacy XSLT may emit literal values as plain text nodes inside <dd>.
+  // Permit the pivot only if the exact lexical value identifies one RDF term
+  // from the authoritative Record SELECT (never infer identity from styling).
+  const textCarrier = target.closest("dd span,dd p,td span,td p,[data-maestro-record-literal]");
+  if (textCarrier && !valueTarget) {
+    const text = (textCarrier.textContent ?? "").trim();
+    const scoped = textCarrier.closest("[data-maestro-predicate],[data-predicate],tr,dl > div");
+    const predicate = scoped ? predicateOn(scoped) : null;
+    const direction = scoped ? directionOn(scoped) : "property";
+    const matching = rows.filter(row => row.termType === "literal" && row.value === text &&
+      (!predicate || (row.predicate === predicate && row.direction === direction)));
+    if (matching.length === 1) return { kind: "value", statement: matching[0] };
+  }
+
+  const propertyTarget = target.closest(
+    "[data-maestro-filter-property],button[data-maestro-predicate]," +
+    "dt,th[data-maestro-predicate],th[about],button[about],[data-maestro-property-label]",
+  );
+  if (propertyTarget) {
+    const predicate = predicateOn(propertyTarget) ||
+      propertyTarget.getAttribute("data-maestro-filter-property") ||
+      propertyTarget.getAttribute("about");
+    const direction = directionOn(propertyTarget);
+    if (predicate && /^[a-z][a-z0-9+.-]*:\S+$/i.test(predicate)) {
+      return { kind: "property", statement: {
+        predicate, direction, value: "", termType: "uri",
+      } };
+    }
+    // Some legacy XSLT templates use <dt> with a human-readable RDFa
+    // predicate label but omit @about. Only a unique vocabulary match counts.
+    const caption = (propertyTarget.textContent ?? "").trim().toLowerCase();
+    const candidates = new Map<string, RecordStatement>();
+    for (const row of rows) {
+      const local = row.predicate.split(/[\/#]/).pop()?.toLowerCase() ?? "";
+      if (caption && (caption === local || caption === row.predicate.toLowerCase()))
+        candidates.set(`${row.direction}\u0000${row.predicate}`, row);
+    }
+    if (candidates.size === 1) {
+      const item = [...candidates.values()][0];
+      return { kind: "property", statement: { predicate: item.predicate,
+        direction: item.direction, value: "", termType: "uri" } };
+    }
+  }
+  // Fall back to a uniquely resolved RDFa statement (e.g., a provider emits
+  // data-maestro-record-uri without @rel but its Record SELECT has one match).
+  const statement = resolveRecordInteraction(target, rows, false);
+  if (statement?.value && target.closest("a,button,[role=button],[property],[resource],[content]"))
+    return { kind: "value", statement };
+  return null;
+}
+
+/** Local visual affordances are independent from Browse query handlers. */
+export function decorateRecordInteractiveTargets(host: Element, rows: readonly RecordStatement[]): void {
+  host.querySelectorAll("[data-maestro-record-interactive]").forEach(node =>
+    node.removeAttribute("data-maestro-record-interactive"));
+  const selectors = [
+    "[data-maestro-property-value]", "[data-maestro-record-uri]", "[resource]",
+    "[content]", "dd span", "dd p", "td span", "td p", "a[href]", "[data-maestro-record-literal]", "button[data-maestro-predicate]", "button[about]", "dt", "th[data-maestro-predicate]", "th[about]",
+    "[data-maestro-filter-property]",
+  ].join(",");
+  for (const element of Array.from(host.querySelectorAll(selectors))) {
+    const target = resolveFullscreenRecordTarget(element, rows);
+    if (target) element.setAttribute("data-maestro-record-interactive", target.kind);
+  }
+}
+
 export function sameRecordStatement(a: RecordStatement, b: RecordStatement): boolean {
   return a.predicate === b.predicate && a.direction === b.direction &&
     a.value === b.value && a.termType === b.termType &&
@@ -111,8 +198,12 @@ export function resolveRecordInteraction(node: Element, rows: readonly RecordSta
   const uri = uriNode?.getAttribute("data-maestro-record-uri") ||
     uriNode?.getAttribute("data-maestro-iri") || uriNode?.getAttribute("resource") ||
     uriNode?.getAttribute("href") || "";
+  const scope = node.closest("[data-maestro-predicate],[data-predicate],tr,[data-maestro-statement]");
+  const contextualPredicate = scope && predicateOn(scope);
+  const contextualDirection = scope ? directionOn(scope) : "property";
   const matches = uri && /^[a-z][a-z0-9+.-]*:\S+$/i.test(uri)
-    ? rows.filter(row => row.value === uri && row.termType === "uri") : [];
+    ? rows.filter(row => row.value === uri && row.termType === "uri" &&
+      (!contextualPredicate || (row.predicate === contextualPredicate && row.direction === contextualDirection))) : [];
   if (matches.length === 1) return matches[0];
   if (wand) {
     const labelled = node.closest("[data-maestro-predicate],[data-predicate],[rel],[rev],[property]");
@@ -136,18 +227,37 @@ export function resolveRecordInteraction(node: Element, rows: readonly RecordSta
  * Decorations are removable and never modify the RDFa attributes. */
 export function decorateWandedRecordProperties(
   host: Element,
-  selected: readonly { predicate: string; direction: "property" | "property-of" }[],
+  selected: readonly {
+    predicate: string; direction: "property" | "property-of";
+    kind?: "property" | "value";
+    value?: string;
+    termType?: "uri" | "literal" | "bnode";
+    datatype?: string; lang?: string;
+  }[],
+  rows: readonly RecordStatement[] = [],
 ): void {
   host.querySelectorAll("[data-maestro-wanded]").forEach(node => node.removeAttribute("data-maestro-wanded"));
   if (!selected.length) return;
-  const keys = new Set(selected.map(item => `${item.direction}\u0000${item.predicate}`));
   const candidates = host.querySelectorAll(
-    "[data-maestro-property-value],button[data-maestro-predicate],[rel][resource],[rev][resource],[property][content]",
+    "[data-maestro-property-value],button[data-maestro-predicate],dt,th[data-maestro-predicate],th[about]," +
+    "[data-maestro-property-label],[data-maestro-record-uri],[resource],[content]," +
+    "dd span,dd p,[data-maestro-record-literal]",
   );
   for (const element of Array.from(candidates)) {
-    const predicate = predicateOn(element);
-    if (predicate && keys.has(`${directionOn(element)}\u0000${predicate}`)) {
-      element.setAttribute("data-maestro-wanded", "true");
-    }
+    const found = resolveFullscreenRecordTarget(element, rows);
+    if (!found) continue;
+    const sameSelection = selected.some(item =>
+      item.predicate === found.statement.predicate && item.direction === found.statement.direction &&
+      (found.kind === "property" ||
+       ((item.kind ?? "property") === "value" &&
+       (item.value === found.statement.value && item.termType === found.statement.termType &&
+        (item.datatype ?? "") === (found.statement.datatype ?? "") &&
+        (item.lang ?? "").toLowerCase() === (found.statement.lang ?? "").toLowerCase()))));
+    if (!sameSelection) continue;
+    // Prefer one precise value carrier rather than outlining its ancestor row
+    // and every child link. A property-only Wand never paints its RDF values.
+    const atom = found.kind === "value"
+      ? element.closest("[data-maestro-property-value]") ?? element : element;
+    atom.setAttribute("data-maestro-wanded", found.kind);
   }
 }

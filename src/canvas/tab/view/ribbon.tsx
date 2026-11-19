@@ -1,10 +1,11 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { createMaestroPerspectiveSelectionController } from "@/lib/app-lifecycle/perspective-selection";
 import { pendingApprovalController, selectPendingApprovalBadge } from "@/lib/app-lifecycle/pending-approvals";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
-import { Server, Database, Globe, LayoutGrid, Filter, Network, ShieldCheck, FileCode2, ArrowLeftRight, Landmark, Blocks, Bookmark, History, Route, Regex, Telescope, ChartNoAxesCombined } from "lucide-react";
+import { Server, Database, Globe, LayoutGrid, Kanban, Filter, Network, ShieldCheck, FileCode2, ArrowLeftRight, Landmark, Blocks, Bookmark, History, Route, Regex, Telescope, ChartNoAxesCombined } from "lucide-react";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import { useMapProviderDiscovery } from "@/lib/map-provider-discovery";
 import type { ProviderKind } from "@/lib/provider-catalog-xslt";
@@ -20,6 +21,7 @@ export interface ViewRibbonProps {
   viewProvider: ProviderKind | null;
   setViewProvider: Dispatch<SetStateAction<ProviderKind | null>>;
   onSelectProvider: (providerKind: ProviderKind | null) => void;
+  onFeaturesEntered: () => void;
   selectedViewUri: string;
   onSelectView: (uri: string) => void;
   viewDiscoveryLoading: boolean;
@@ -29,7 +31,7 @@ export interface ViewRibbonProps {
   triggerUri: string;
   historyUri?: string;
 }
-export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredViews, viewProvider, setViewProvider, onSelectProvider, selectedViewUri, onSelectView, viewDiscoveryLoading, queryClassUris, queryMatchedProviders = [], queryXml, triggerUri, historyUri }: ViewRibbonProps) {
+export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredViews, viewProvider, setViewProvider, onSelectProvider, onFeaturesEntered, selectedViewUri, onSelectView, viewDiscoveryLoading, queryClassUris, queryMatchedProviders = [], queryXml, triggerUri, historyUri }: ViewRibbonProps) {
   const mapDiscovery = useMapProviderDiscovery(viewPanel === "perspectives", queryXml);
   const mapProvider = mapDiscovery.provider;
   const approvalSnapshot = useSyncExternalStore(pendingApprovalController.subscribe,
@@ -42,6 +44,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
     key: string; providers: { kind: PersonalPerspectiveKind; label: string; uri: string }[];
   }>({ key: "", providers: [] });
   const [personalDiscoveryPending, setPersonalDiscoveryPending] = useState(false);
+  const [personalDiscoveryError, setPersonalDiscoveryError] = useState("");
   const classKey = useMemo(() => [...new Set(queryClassUris)].sort().join("\n"), [queryClassUris]);
   // The query-context machine has already validated contextual SHACL targets
   // for this exact History visit. Use that existing result, including when
@@ -60,9 +63,13 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
       queryXml, triggerUri, historyUri, controller.signal,
       contextualKey ? contextualKey.split("\n") : [])
       .then(providers => {
-        if (!controller.signal.aborted) setPersonalDiscovery({ key: discoveryKey, providers });
+        if (!controller.signal.aborted) { setPersonalDiscovery({ key: discoveryKey, providers }); setPersonalDiscoveryError(""); }
       })
-      .catch(() => { /* Retain the last confirmed provider set on transient errors. */ })
+      .catch(error => {
+        // Preserve the selection across transient discovery errors but retain
+        // the original cause for browser diagnostics rather than dropping it.
+        if (!controller.signal.aborted) setPersonalDiscoveryError(error instanceof Error ? error.message : String(error));
+      })
       .finally(() => { if (!controller.signal.aborted) setPersonalDiscoveryPending(false); });
     return () => controller.abort();
   }, [classKey, contextualKey, queryXml, triggerUri, historyUri, discoveryKey]);
@@ -105,7 +112,10 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
   const onRibbonPanelChange = (panel: "trail" | "perspectives" | "providers") => {
     if (panel === viewPanel) return;
     setViewPanel(panel);
-    if (panel === "providers") onSelectProvider("policies");
+    if (panel === "providers") {
+      onFeaturesEntered();
+      onSelectProvider("policies");
+    }
   };
   // Discovery is observational. Selecting a ribbon item belongs only to an
   // explicit user action or the URL restoration transaction. In particular,
@@ -128,7 +138,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
               // that over a SHACL policy icon, with a generic fallback.
               const xsltIcon = view.stylesheet.match(/data-view-icon\s*=\s*["']([^"']+)["']/i)?.[1];
               const icon = xsltIcon || view.icon;
-              const Icon = icon === "server" ? Server : icon === "database" ? Database : icon === "globe" ? Globe : icon === "layout-grid" ? LayoutGrid : Network;
+              const Icon = icon === "server" ? Server : icon === "database" ? Database : icon === "globe" ? Globe : icon === "kanban" ? Kanban : icon === "layout-grid" ? LayoutGrid : Network;
               const title = view.stylesheet.match(/data-view-title\s*=\s*["']([^"']+)["']/i)?.[1] || view.label;
               return <button type="button" key={view.uri} aria-pressed={active}
                 onClick={() => onSelectView(view.uri)}
@@ -136,7 +146,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
                 <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{title}
               </button>;
             })}
-            {mapDiscovery.error && <span role="status" title={mapDiscovery.error} className="max-w-64 truncate px-3 py-2 text-xs text-destructive">Maps discovery: {mapDiscovery.error}</span>}
+            {mapDiscovery.error && <ErrorDetails prefix="Maps discovery" error={mapDiscovery.error} />}
             {mapProvider && <button type="button" aria-pressed={!viewProvider && selectedViewUri === mapProvider.uri}
               onClick={() => onSelectView(mapProvider.uri)}
               className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${!viewProvider && selectedViewUri === mapProvider.uri ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
@@ -152,6 +162,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
                 <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{provider.label}
               </button>;
             })}
+            {personalDiscoveryError && <ErrorDetails prefix="Personal perspective discovery" error={personalDiscoveryError} />}
             {personalDiscoveryPending && <span className="px-3 text-xs text-muted-foreground"><ElapsedStatus label="Locating personal perspectives" category="policies" clockScope="views" /></span>}
             {viewDiscoveryLoading && <span className="px-3 text-xs text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></span>}
           </div> },

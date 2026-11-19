@@ -71,7 +71,7 @@ export function configureMaestroBrowserLogging(active: boolean, level: BrowserLo
         try {
           const diagnostic = JSON.parse(decodeURIComponent(escape(atob(encoded)))) as { event?: unknown; code?: unknown; status?: unknown };
           browserLog.debug("proxy.diagnostic", { requestId, code: diagnostic.code, status: diagnostic.status });
-        } catch { browserLog.debug("proxy.diagnostic.decode-failed", { requestId }); }
+        } catch (error) { browserLog.debug("proxy.diagnostic.decode-failed", { requestId, error }); }
       }
       // Never print cloned upstream bodies: these can contain personal RDF, FCT
       // XML, SPARQL or authentication diagnostics. HTTP status is sufficient.

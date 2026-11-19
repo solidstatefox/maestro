@@ -69,9 +69,9 @@ export function BrowseGroupsCanvas({ workspace }: { workspace: WorkspaceControll
                 <div id="central-panel-groups" role="tabpanel" aria-labelledby="central-tab-groups" className="flex min-h-0 flex-1 flex-col overflow-hidden">
                   {groupByOptions.length > 0 ? (
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                      {groupValuesLoading ? <p className="shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground"><ElapsedStatus label="Loading group values" category="groups" /></p> : null}
+                      {groupValuesLoading ? <p className="m-3 shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground"><ElapsedStatus label="Loading group values" category="groups" /></p> : null}
                       {groupValuesError ? <ErrorDetails prefix="Grouped results" error={groupValuesError} /> : null}
-                      {!groupValuesLoading && !groupValuesError && groupValues.length === 0 && !(isGroupByCategory && isLoadingClasses) ? <p className="shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground">No values found for this relationship in the current scope.</p> : null}
+                      {!groupValuesLoading && !groupValuesError && groupValues.length === 0 && !(isGroupByCategory && isLoadingClasses) ? <p className="m-3 shrink-0 rounded-md border border-dashed p-4 text-sm text-muted-foreground">No values found for this relationship in the current scope.</p> : null}
                       <div className="min-w-0 flex-1 overflow-y-auto p-3">
                         <div className="flex flex-col gap-3">
                         {visibleGroupValues.map((groupValue) => {
@@ -97,14 +97,14 @@ export function BrowseGroupsCanvas({ workspace }: { workspace: WorkspaceControll
                               <QueryInspectorButton query={serializeFctQuery(createGroupMemberQuery(queryTree, selectedGroupByOption!, groupValue))} filename={`group-${groupValueLabel.replace(/[^a-z0-9_-]+/gi, "-")}.xml`} />
                             </header>
                             <div className="flex flex-col gap-1 p-2">
-                              {members.error ? <p className="px-2 py-2 text-xs text-destructive">{members.error}</p> : members.loading ? <p className="px-2 py-2 text-xs text-muted-foreground"><ElapsedStatus label="Loading matching Results items" category="groups" /></p> : members.results.length > 0 ? members.results.map((item) => <button key={item.uri} type="button" onClick={() => setSelectedUri(item.uri)} className={`flex min-w-0 flex-col rounded-md px-2 py-2 text-left hover:bg-accent/50 ${selectedUri === item.uri ? "bg-accent/40" : ""}`}><span className="break-words text-sm font-medium cursor-pointer">{item.termType === "uri" ? toLabel(item.uri, "Class") : item.title || item.uri}</span><span className="mt-0.5 break-all text-xs text-muted-foreground">{item.uri}</span></button>) : <p className="px-2 py-2 text-xs text-muted-foreground">No Results items match this value.</p>}
+                              {members.error ? <ErrorDetails prefix="Group members" error={members.error} /> : members.loading ? <p className="px-2 py-2 text-xs text-muted-foreground"><ElapsedStatus label="Loading matching Results items" category="groups" /></p> : members.results.length > 0 ? members.results.map((item) => <button key={item.uri} type="button" onClick={() => setSelectedUri(item.uri)} className={`flex min-w-0 flex-col rounded-md px-2 py-2 text-left hover:bg-accent/50 ${selectedUri === item.uri ? "bg-accent/40" : ""}`}><span className="break-words text-sm font-medium cursor-pointer">{item.termType === "uri" ? toLabel(item.uri, "Class") : item.title || item.uri}</span><span className="mt-0.5 break-all text-xs text-muted-foreground">{item.uri}</span></button>) : <p className="px-2 py-2 text-xs text-muted-foreground">No Results items match this value.</p>}
                             </div>
                           </article>;
                         })}
                         </div>
                       </div>
                     </div>
-                  ) : <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">Select a property or role in Focus, then choose it from Group by.</p>}
+                  ) : <p className="m-3 rounded-md border border-dashed p-4 text-sm text-muted-foreground">Select a property or role in Focus, then choose it from Group by.</p>}
                 </div>
               )}
 </>;

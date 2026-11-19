@@ -6,6 +6,7 @@ export type GraphPhase = "unknown" | "checking" | "ready" | "unavailable";
 export type QueryPhase = "restoring" | "waitingForServer" | "readyToExecute" | "executing" | "ready" | "failed" | "cancelled";
 export type RequestPhase = "idle" | "queued" | "active";
 export type NavigationTab = "browse" | "view" | "analyze";
+export type NavigationViewPanel = "trail" | "perspectives" | "providers";
 export type GraphEvent = {
   type: "GRAPH_OBSERVED"; key: string; registryReady: boolean;
   selected: boolean; ready: boolean; failed: boolean;
@@ -16,9 +17,10 @@ export type QueryEvent =
 export type RequestEvent = { type: "REQUEST_ACTIVITY"; queued: number; active: number };
 export type NavigationEvent =
   | { type: "NAVIGATION_OBSERVED"; key: string; url: string; hydrated: boolean;
-      tab: NavigationTab; isProviderQuery: boolean; restoringHistory: boolean }
+      tab: NavigationTab; viewPanel: NavigationViewPanel; isProviderQuery: boolean; restoringHistory: boolean }
   | { type: "PROVIDERS_ENTRY_REQUESTED"; fromUrl: string }
   | { type: "RIBBON_ENTRY_FROM_BROWSE"; sourceKey: string; fromUrl: string }
+  | { type: "FEATURES_ENTERED"; fromUrl: string }
   | { type: "PROVIDERS_ENTRY_CANCELLED" }
   | { type: "BROWSE_QUERY_DISPLACED"; sourceKey: string }
   | { type: "CONTEXT_RETURNED" }
@@ -31,8 +33,8 @@ type RequestContext = { queued: number; active: number };
 type NavigationContext = {
   key: string; lastUrl: string; returnUrl: string; pendingEntryUrl: string;
   browseQueryKey: string; browseUrl: string;
-  hydrated: boolean; isProviderQuery: boolean; tab: NavigationTab;
-  historyPending: "backward" | "forward" | null;
+  hydrated: boolean; isProviderQuery: boolean; tab: NavigationTab; viewPanel: NavigationViewPanel;
+  returnVisible: boolean; historyPending: "backward" | "forward" | null;
 };
 const emptyGraph: GraphContext = { key: "" };
 const emptyQuery: QueryContext = { key: "", hydrated: false, graphReady: false };
@@ -40,7 +42,8 @@ const emptyRequests: RequestContext = { queued: 0, active: 0 };
 const emptyNavigation: NavigationContext = {
   key: "", lastUrl: "", returnUrl: "", pendingEntryUrl: "",
   browseQueryKey: "", browseUrl: "",
-  hydrated: false, isProviderQuery: false, tab: "browse", historyPending: null,
+  hydrated: false, isProviderQuery: false, tab: "browse", viewPanel: "trail",
+  returnVisible: false, historyPending: null,
 };
 
 const graphMachine = setup({
@@ -108,28 +111,35 @@ function observeNavigation(
   context: NavigationContext,
   event: Extract<NavigationEvent, { type: "NAVIGATION_OBSERVED" }>,
 ): Partial<NavigationContext> {
-  if (!event.hydrated) return { hydrated: false, returnUrl: "" };
+  if (!event.hydrated) return { hydrated: false, returnUrl: "", pendingEntryUrl: "", returnVisible: false, browseQueryKey: "", browseUrl: "" };
   // Record a real Browse query, even after the user opens the View ribbon
   // without changing the live query. A ribbon query is NEVER a return target.
   const newBrowse = event.tab === "browse" && !event.isProviderQuery && !event.restoringHistory;
   const providerCommitted = event.isProviderQuery && !event.restoringHistory &&
     Boolean(context.pendingEntryUrl) && event.key !== context.key;
-  // Leaving a displaced Browse query through an unrelated Browse navigation
-  // abandons its Return entry. Ribbon-to-ribbon changes must not create one.
-  const abandoned = newBrowse && Boolean(context.returnUrl) &&
+  // Before Features opens, an unrelated Browse navigation invalidates the
+  // earlier candidate. Once Features activates Return, only an explicit
+  // Return click (or a new URL/hydration) may clear that session.
+  const abandoned = newBrowse && !context.returnVisible && Boolean(context.returnUrl) &&
     event.key !== context.browseQueryKey;
   return {
-    key: event.key, lastUrl: event.url, hydrated: true, tab: event.tab, isProviderQuery: event.isProviderQuery,
+    key: event.key, lastUrl: event.url, hydrated: true, tab: event.tab, viewPanel: event.viewPanel, isProviderQuery: event.isProviderQuery,
     browseQueryKey: newBrowse ? event.key : context.browseQueryKey,
     browseUrl: newBrowse ? event.url : context.browseUrl,
     returnUrl: abandoned ? "" : providerCommitted ? context.pendingEntryUrl : context.returnUrl,
     pendingEntryUrl: providerCommitted || abandoned ? "" : context.pendingEntryUrl,
+    // A mere navigation observation must never start Return. Only the
+    // explicit FEATURES_ENTERED event may open the persistent XState session.
+    returnVisible: context.returnVisible,
   };
 }
 const navigationMachine = setup({
   types: { context: {} as NavigationContext, events: {} as NavigationEvent },
 }).createMachine({
   id: "maestro-navigation", initial: "restoring", context: emptyNavigation,
+  // Return is a persistent XState session. Entering View > Features starts
+  // it; changing tabs, ribbons, or the live query does NOT end it. Only the
+  // Return action (CONTEXT_RETURNED) or fresh URL hydration resets it.
   on: {
     NAVIGATION_OBSERVED: [
       { guard: ({ event }) => !event.hydrated, target: ".restoring",
@@ -140,10 +150,20 @@ const navigationMachine = setup({
         actions: assign(({ context, event }) => observeNavigation(context, event)) },
       { target: ".analyze", actions: assign(({ context, event }) => observeNavigation(context, event)) },
     ],
+    FEATURES_ENTERED: {
+      // An explicit View > Features selection starts Return immediately,
+      // even before a provider query finishes loading (or if none matches).
+      // Re-entering Features must never overwrite the original destination.
+      guard: ({ context, event }) => context.hydrated && !context.returnVisible && Boolean(event.fromUrl),
+      actions: assign(({ context, event }) => ({
+        returnUrl: context.returnUrl || context.pendingEntryUrl || context.browseUrl || event.fromUrl,
+        pendingEntryUrl: "",
+        returnVisible: true,
+      })),
+    },
     RIBBON_ENTRY_FROM_BROWSE: {
-      // The Return control appears on entry to any View/Analyze ribbon, not
-      // only after a Provider FCT replacement. Keep its original Browse owner
-      // across all ribbon-to-ribbon transitions.
+      // Capture a candidate Browse destination for later Features entry.
+      // This does NOT start or display Return in other ribbons.
       guard: ({ context, event }) => context.hydrated && context.tab === "browse" &&
         !context.isProviderQuery && !context.returnUrl && Boolean(event.fromUrl) &&
         context.key === event.sourceKey && context.browseQueryKey === event.sourceKey,
@@ -173,7 +193,7 @@ const navigationMachine = setup({
         returnUrl: context.pendingEntryUrl, pendingEntryUrl: "",
       })),
     },
-    CONTEXT_RETURNED: { actions: assign({ returnUrl: "", pendingEntryUrl: "" }) },
+    CONTEXT_RETURNED: { actions: assign({ returnUrl: "", pendingEntryUrl: "", returnVisible: false }) },
     HISTORY_NAVIGATION_PENDING: { actions: assign(({ event }) => ({ historyPending: event.direction })) },
   },
   states: { restoring: {}, browse: {}, view: {}, analyze: {} },
@@ -259,8 +279,8 @@ export function createMaestroOperationsController() {
       } else if (event.type === "REQUEST_ACTIVITY") {
         if (requests && (snapshot.requests.queued !== event.queued || snapshot.requests.active !== event.active)) requests.send(event);
       } else if (event.type === "NAVIGATION_OBSERVED") {
-        if (navigation && (snapshot.navigation.key !== event.key || snapshot.navigation.lastUrl !== event.url || snapshot.navigation.hydrated !== event.hydrated || snapshot.navigation.tab !== event.tab || snapshot.navigation.isProviderQuery !== event.isProviderQuery)) navigation.send(event);
-      } else if (event.type === "RIBBON_ENTRY_FROM_BROWSE" || event.type === "PROVIDERS_ENTRY_REQUESTED" || event.type === "PROVIDERS_ENTRY_CANCELLED" || event.type === "BROWSE_QUERY_DISPLACED" || event.type === "CONTEXT_RETURNED" || event.type === "HISTORY_NAVIGATION_PENDING") {
+        if (navigation && (snapshot.navigation.key !== event.key || snapshot.navigation.lastUrl !== event.url || snapshot.navigation.hydrated !== event.hydrated || snapshot.navigation.tab !== event.tab || snapshot.navigation.viewPanel !== event.viewPanel || snapshot.navigation.isProviderQuery !== event.isProviderQuery)) navigation.send(event);
+      } else if (event.type === "RIBBON_ENTRY_FROM_BROWSE" || event.type === "FEATURES_ENTERED" || event.type === "PROVIDERS_ENTRY_REQUESTED" || event.type === "PROVIDERS_ENTRY_CANCELLED" || event.type === "BROWSE_QUERY_DISPLACED" || event.type === "CONTEXT_RETURNED" || event.type === "HISTORY_NAVIGATION_PENDING") {
         navigation?.send(event);
       } else {
         query?.send(event);

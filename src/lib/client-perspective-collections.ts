@@ -47,7 +47,7 @@ SELECT ?entry ?label ?created ?description ?url ?queryXML ?tag ?tagPredicate ?la
  OPTIONAL { ?entry ?tagPredicate ?tag . VALUES ?tagPredicate { <http://www.w3.org/2004/02/skos/core#prefLabel> <${DCT}subject> <http://rdfs.org/scot/ns#has_tag> } }
  OPTIONAL { ?entry <${MUI}lastResultCount> ?lastResultCount }
  OPTIONAL { ?entry <${MUI}lastNewCount> ?lastNewCount }
-} } ORDER BY DESC(?created) LIMIT 500` : `PREFIX vfct: <${VFCT}> PREFIX dcterms: <${DCT}> PREFIX rdfs: <${RDFS}>
+} } ORDER BY DESC(?created) ?entry ?tagPredicate ?tag __PAGINATION__` : `PREFIX vfct: <${VFCT}> PREFIX dcterms: <${DCT}> PREFIX rdfs: <${RDFS}>
 SELECT ?entry ?label ?created ?url ?queryXML ?lastResultCount ?lastNewCount WHERE { GRAPH <${historyGraph}> {
  ?entry a vfct:QueryHistoryVisit ; vfct:historyCreated ?created .
  OPTIONAL { ?entry dcterms:title ?title } OPTIONAL { ?entry rdfs:label ?rlabel }
@@ -55,17 +55,27 @@ SELECT ?entry ?label ?created ?url ?queryXML ?lastResultCount ?lastNewCount WHER
  OPTIONAL { ?entry vfct:historyStateUrl ?url } OPTIONAL { ?entry vfct:historyQueryXML ?queryXML }
  OPTIONAL { ?entry <${MUI}lastResultCount> ?lastResultCount }
  OPTIONAL { ?entry <${MUI}lastNewCount> ?lastNewCount }
-} } ORDER BY DESC(?created) LIMIT 500`;
-  const result = await selectPersonal(q,ctx,signal);
+} } ORDER BY DESC(?created) ?entry __PAGINATION__`;
   const byUri=new Map<string,PerspectiveCollection["rows"][number]>();
   const numeric=(value:string):number|null=>/^\d+$/.test(value)&&Number.isSafeInteger(Number(value))?Number(value):null;
-  for(const row of result){
-    const uri=row.entry?.value??"";if(!iri(uri))continue;
-    let item=byUri.get(uri);
-    if(!item){item={uri,label:row.label?.value??"",created:row.created?.value??"",description:row.description?.value??"",url:row.url?.value??"",queryXml:row.queryXML?.value??"",tags:[],tagPredicates:[],lastResultCount:numeric(row.lastResultCount?.value??""),lastNewCount:numeric(row.lastNewCount?.value??"")};byUri.set(uri,item);}
-    const tag=row.tag?.value??"", predicate=row.tagPredicate?.value??"";
-    if(tag&&!item.tags.includes(tag))item.tags.push(tag);
-    if(predicate&&!item.tagPredicates.includes(predicate))item.tagPredicates.push(predicate);
+  // History and Bookmarks are both paged at the ODS transport. Do not stop at
+  // the old 500-row cutoff: search/FCT scope and UI pagination must operate on
+  // complete collections, not an arbitrarily truncated first page. Stable
+  // ordering keeps joined bookmark tags contiguous across page boundaries.
+  const batchSize = 500, maxResultRows = 25_000;
+  let complete = false;
+  for (let offset = 0; offset < maxResultRows; offset += batchSize) {
+    const result = await selectPersonal(q.replace("__PAGINATION__", `LIMIT ${batchSize} OFFSET ${offset}`),ctx,signal);
+    for(const row of result){
+      const uri=row.entry?.value??"";if(!iri(uri))continue;
+      let item=byUri.get(uri);
+      if(!item){item={uri,label:row.label?.value??"",created:row.created?.value??"",description:row.description?.value??"",url:row.url?.value??"",queryXml:row.queryXML?.value??"",tags:[],tagPredicates:[],lastResultCount:numeric(row.lastResultCount?.value??""),lastNewCount:numeric(row.lastNewCount?.value??"")};byUri.set(uri,item);}
+      const tag=row.tag?.value??"", predicate=row.tagPredicate?.value??"";
+      if(tag&&!item.tags.includes(tag))item.tags.push(tag);
+      if(predicate&&!item.tagPredicates.includes(predicate))item.tagPredicates.push(predicate);
+    }
+    if (result.length < batchSize) { complete = true; break; }
   }
+  if (!complete) throw new Error(`Personal ${kind} collection exceeded the 25,000-result-row safety cap. Narrow the saved collection before displaying it; partial results are not shown.`);
   return {provider,rows:[...byUri.values()]};
 }

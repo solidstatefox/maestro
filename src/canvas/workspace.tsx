@@ -30,6 +30,7 @@ import { propertyUsageScope } from "@/lib/property-usage-query";
 import { AppLifecycleDiagnostics } from "@/canvas/diagnostics/app-lifecycle-diagnostics";
 import { ResizableHandle, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
+import { fctQueryExecutionAddress } from "@/lib/fct-query-clone";
 
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
 
@@ -678,11 +679,11 @@ export function MaestroWorkspace() {
   };
   collectQueryClasses(queryTree.children);
   // Use the identical live ribbon in both ready and loading layouts.
-  const workspaceRibbon = !urlStateInitialized ? <RibbonLoadingSkeleton /> : (!workspace.accessCapabilities.canUsePersonalStore || workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewProvider={viewProvider} setViewProvider={setViewProvider} onSelectProvider={workspace.selectViewProvider} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setViewPanel("perspectives"); setSelectedViewUri(uri); setViewProvider(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} queryMatchedProviders={workspace.queryMatchedProviders} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <MaestroHoverExpand active={analyzeRibbonPanel} onChange={(panel) => {
+  const workspaceRibbon = !urlStateInitialized ? <RibbonLoadingSkeleton /> : (!workspace.accessCapabilities.canUsePersonalStore || workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewProvider={viewProvider} setViewProvider={setViewProvider} onSelectProvider={workspace.selectViewProvider} onFeaturesEntered={workspace.enterViewFeatures} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setViewPanel("perspectives"); setSelectedViewUri(uri); setViewProvider(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} queryMatchedProviders={workspace.queryMatchedProviders} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <MaestroHoverExpand active={analyzeRibbonPanel} onChange={(panel) => {
     if (panel === "analytics" || panel === "trail") setAnalyzeRibbonPanel(panel);
   }} panels={[{ id: "trail", label: "Trail", content: <nav aria-label="Analyze breadcrumbs" className="flex w-max min-w-full flex-nowrap items-start gap-2">{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb,index)=>renderPathBreadcrumb(crumb,index))}</nav> }, { id: "analytics", label: "Analytics", content: <AnalyzeRibbon analysisDefinitions={analysisDefinitions} selectedAnalysisUri={selectedAnalysisUri} analyzeHistogram={analyzeHistogram} isCompareAnalysis={isCompareAnalysis} firstBreadcrumbLabel={tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : undefined} firstResultTitle={visibleResultsPage[0]?.title} onSelectAnalysis={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(false); }} onSelectHistogram={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(true); }} /> }]} />);
   return (
-    <main className="flex h-dvh min-h-[500px] flex-col bg-background text-foreground">
+    <main className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <Toaster />
       <AppLifecycleDiagnostics registry={workspace.appLifecycle} access={workspace.accessController} operations={workspace.operationsController} providerCatalog={workspace.providerCatalogController} />
       {endpointHealthToast && <div role="status" className="fixed bottom-5 right-5 z-[200] flex max-w-sm items-center gap-2 rounded-md border bg-popover px-3 py-2 text-popover-foreground shadow-md">
@@ -704,8 +705,8 @@ export function MaestroWorkspace() {
                 await clearMaestroStorage();
                 window.localStorage.clear();
                 window.location.reload();
-              } catch {
-                toast.add({ title: "Could not clear cache", description: "Check your browser's site storage permissions.", type: "error" });
+              } catch (error) {
+                toast.add({ title: "Could not clear cache", description: error instanceof Error ? error.message : String(error), type: "error" });
                 setClearCacheDialogOpen(false);
               }
             }}>Clear Cache</AlertDialogAction>
@@ -919,7 +920,7 @@ export function MaestroWorkspace() {
           <DialogHeader><DialogTitle>Bookmark query Code Block</DialogTitle><DialogDescription>Inspect the bounded FCT query, the SPARQL returned by Virtuoso FCT, and both raw responses.</DialogDescription></DialogHeader>
           <div className="min-h-0 flex-1 space-y-4 overflow-auto">
             <section><h3 className="mb-2 text-sm font-semibold">FCT query XML</h3><CodeBlock code={bookmarkQueryDebug.xml || "No saved query has run yet."} language="xml" filename="bookmark-history-query.xml" /></section>
-            <section><h3 className="mb-2 text-sm font-semibold">Translated SPARQL</h3><CodeBlock code={bookmarkQueryDebug.sparql} language="sparql" filename="bookmark-history-query.sparql" /></section>
+            <section><h3 className="mb-2 text-sm font-semibold">Translated SPARQL</h3><CodeBlock code={bookmarkQueryDebug.sparql} language="sparql" filename="bookmark-history-query.sparql" executionAddr={fctQueryExecutionAddress(bookmarkQueryDebug.xml)} /></section>
             <section><h3 className="mb-2 text-sm font-semibold">FCT results response</h3><CodeBlock code={bookmarkQueryDebug.response} language="xml" filename="bookmark-history-query-response.xml" /></section>
             <section><h3 className="mb-2 text-sm font-semibold">Count response</h3><CodeBlock code={bookmarkQueryDebug.countResponse} language="xml" filename="bookmark-history-query-count-response.xml" /></section>
           </div>

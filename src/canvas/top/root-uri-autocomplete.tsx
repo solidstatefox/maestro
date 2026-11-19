@@ -1,4 +1,5 @@
 "use client";
+import { ErrorDetails } from "@/components/ui/error-details";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { createUriAutocompleteController, selectUriAutocomplete, type UriSuggestion } from "@/lib/app-lifecycle/uri-autocomplete";
 import { createRootUriAutocompleteQuery } from "@/lib/uri-autocomplete-query";
@@ -42,7 +43,7 @@ export function RootUriAutocomplete({ value, addr, propertyUris, gateState, susp
           const raw = await response.text();
           let data: {results?: {bindings?: Array<{uri?: {type?:string;value?:string};label?:{value?:string};type?:{type?:string;value?:string}}>};error?: string} = {};
           try { data = JSON.parse(raw) as typeof data; }
-          catch { throw new Error(`Autocomplete HTTP ${response.status}: invalid SPARQL JSON`); }
+          catch (error) { throw new Error(`Autocomplete HTTP ${response.status}: invalid SPARQL JSON (${error instanceof Error ? error.message : String(error)})`, { cause: error }); }
           if (!response.ok || !Array.isArray(data.results?.bindings)) {
             const message = data.error || `Autocomplete HTTP ${response.status}`;
             if (/UNABLE_TO_GET_ISSUER_CERT_LOCALLY|unable to get local issuer certificate/i.test(message))
@@ -97,7 +98,7 @@ export function RootUriAutocomplete({ value, addr, propertyUris, gateState, susp
           handle outside interaction; XState retains loading/empty/error rows. */}
       <ComboboxContent aria-label="URI suggestions">
         {result.loading ? <div role="status" className="px-3 py-2 text-sm text-muted-foreground">Searching…</div>
-        : result.error ? <div role="alert" className="px-3 py-2 text-sm text-destructive">{result.error}</div>
+        : result.error ? <div role="alert" className="px-3 py-2"><ErrorDetails prefix="Autocomplete" error={result.error} /></div>
         : !key ? <div className="px-3 py-2 text-sm text-muted-foreground">Type to search resource labels</div>
         : null}
         {result.ready && suggestions.length===0 && <div role="status" className="px-3 py-2 text-sm text-muted-foreground">No results</div>}

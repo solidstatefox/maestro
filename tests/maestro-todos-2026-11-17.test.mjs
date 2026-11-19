@@ -48,7 +48,7 @@ check('Configure inspectors use the existing read-only SPARQL proxy and provide 
   /method: "POST"/,
   /displayedLanguage !== "sparql"/,
   /onClick=\{\(\) => void execute\(\)\}/,
-  /displayedLanguage === "sparql" && addr/);
+  /displayedLanguage === "sparql" && displayedExecutionAddr/);
 check('Record query inspector exposes honest Kinds scope XML and classification SPARQL preview',
   'src/canvas/right/pane.tsx',
   /recordKindsScopeXml/, /buildRecordKindsInspectorSparql\(/,

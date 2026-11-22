@@ -27,7 +27,8 @@
           <xsl:for-each select="/m:context/m:breadcrumbs/m:breadcrumb">
             <xsl:variable name="iri" select="string(@iri)"/>
             <xsl:variable name="direction" select="string(@direction)"/>
-            <cell cell-style="padding: 3px 6px;"><xsl:for-each select="$res/m:value[@property=$iri and @direction=$direction]">
+            <xsl:variable name="anchor" select="string(@anchor-id)"/>
+            <cell cell-style="padding: 3px 6px;"><xsl:for-each select="$res/m:value[if ($anchor) then @node-id=$anchor else @property=$iri and @direction=$direction]">
               <value><xsl:value-of select="."/></value>
             </xsl:for-each></cell>
           </xsl:for-each>
@@ -48,7 +49,8 @@
   <xsl:template match="/m:context">
     <xsl:variable name="facet" select="string(m:selection/@facet)"/>
     <xsl:variable name="direction" select="string(m:selection/@direction)"/>
-    <xsl:variable name="values" select="distinct-values(m:results/m:result/m:value[@property=$facet and @direction=$direction]/string())"/>
+    <xsl:variable name="anchor" select="string(m:selection/@node-id)"/>
+    <xsl:variable name="values" select="distinct-values(m:results/m:result/m:value[if ($anchor) then @node-id=$anchor else @property=$facet and @direction=$direction]/string())"/>
     <analysis kind="compare" table-style="font-size: 12px; line-height: 1.25;" header-style="padding: 4px 6px;" cell-style="padding: 3px 6px;" row-style="line-height: 1.25;">
       <columns><column kind="result" label="Result"/>
         <xsl:for-each select="$values[position() le 60]"><column kind="value" label="{.}"/></xsl:for-each>
@@ -58,7 +60,7 @@
         <row uri="{@uri}" label="{@label}">
           <xsl:for-each select="$values[position() le 60]">
             <xsl:variable name="v" select="."/>
-            <cell checked="{if ($res/m:value[@property=$facet and @direction=$direction and string(.)=$v]) then 'yes' else 'no'}"/>
+            <cell checked="{if ($res/m:value[(if ($anchor) then @node-id=$anchor else @property=$facet and @direction=$direction) and string(.)=$v]) then 'yes' else 'no'}"/>
           </xsl:for-each>
         </row>
       </xsl:for-each></rows>

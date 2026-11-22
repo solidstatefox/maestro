@@ -1,13 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 const read = file => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
 
 test('root click remains navigation, with immediate hover and independent signal region', () => {
   const s = read('src/canvas/top/breadcrumb-renderers.tsx');
   assert.match(s, /type: "LABEL_ENTER"/);
   assert.match(s, /type: "SIGNAL_ENTER"/);
-  assert.match(s, /onClick=\{handleRootBreadcrumbClick\}/);
+  // The root's label alone receives the transported-anchor gesture;
+  // minus and signal controls retain their independent actions.
+  assert.match(s, /data-maestro-root-label-region="true"/);
+  assert.match(s, /data-maestro-root-label="true"/);
+  assert.match(s, /toggleTransportedAnchorAt\(queryTree\.attributes\.id \?\? "",event\.shiftKey\)\) handleRootBreadcrumbClick\(\)/);
+  assert.match(s, /data-maestro-signal-region="true"/);
   assert.doesNotMatch(s, /onClick=\{\(\) => \{ handleRootBreadcrumbClick\(\); setRootSearchExpanded\(true\)/);
   assert.match(s, /<InputGroup aria-label="Root breadcrumb"/);
   assert.match(s, /<BreadcrumbNodeMinus/);
@@ -71,25 +76,28 @@ test('XState Return preserves the Browse source when Sheet opens a History/Bookm
 
 test('query addr is authoritative for the server selector, even during Provider navigation', () => {
   const w = read('src/canvas/utils/workspace-controller.tsx');
-  assert.match(w, /Query \+ graph-server selector must never point to different stores/);
-  assert.match(w, /queryEndpoint && queryEndpoint.id !== endpoint.id/);
-  assert.match(w, /if \(queryEndpoint && queryEndpoint.id !== endpoint.id\) \{\s*setSelectedEndpointId\(queryEndpoint.id\);\s*return;/);
+  assert.match(w, /Every query\'s addr is authoritative/);
+  assert.match(w, /Only an explicit menu action may replace/);
+  assert.match(w, /observeGraphServerQuery\(authoritativeServerUrl\)/);
+  assert.doesNotMatch(w, /setSelectedEndpointId\(queryEndpoint.id\)/);
   const providerFlow = w.slice(w.indexOf('async function selectViewProvider('), w.indexOf('function returnToPreviousContext('));
   assert.doesNotMatch(providerFlow, /await synchronizeFctEndpointSelection/);
   assert.match(providerFlow, /restoreQueryAndUiState\(xml, null\)/);
 });
 
 test('Configure and Return-to-Filters buttons use native shadcn outline controls', () => {
-  const p = read('src/canvas/left/pane.tsx');
+  const p = read('src/canvas/left/pane-navigation.tsx');
   const b = read('src/canvas/left/return-to-filters.tsx');
   assert.match(p, /<Button variant="outline" size="sm"/);
   assert.match(b, /<Button type="button" size="sm" variant="outline"/);
   assert.doesNotMatch(p, /<span aria-hidden="true" className="h-5 w-px shrink-0 bg-border"/);
 });
 
-test('protected four endpoints and routing contracts are not modified in patch worktree', () => {
-  const routeNames = ['service','observations','fct','sparql'];
+test('three native proxy routes remain; telemetry and observations use registered OpenAPI operations', () => {
+  const routeNames = ['service','fct','sparql'];
   for (const name of routeNames) {
     assert.ok(read(`src/app/proxy/api/${name}/route.ts`).length > 100, name);
   }
+  assert.ok(!existsSync('src/app/proxy/api/events/route.ts'));
+  assert.ok(!existsSync('src/app/proxy/api/observations/route.ts'));
 });

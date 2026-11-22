@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { readClientPolicyApprovals } from "@/lib/client-policy-approvals";
@@ -17,7 +18,7 @@ export type PerspectiveCollection = {provider:{uri:string;kind:"bookmarks"|"hist
  * subject to the server's independent approval gates. */
 export async function loadPerspectiveCollection(kind:"bookmarks"|"history", providerUri:string, signal?:AbortSignal):Promise<PerspectiveCollection> {
   const ctx = await personalContext();
-  const graph = `${ctx.base}/shacl/policies`;
+  const graph = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`;
   if (providerUri && !iri(providerUri)) throw new Error("Invalid perspective provider URI.");
   const definitions = await selectPersonal(`PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
     SELECT DISTINCT ?provider ?kind ?label ?template ?stylesheet ?target WHERE {
@@ -37,7 +38,7 @@ export async function loadPerspectiveCollection(kind:"bookmarks"|"history", prov
   const approved = new Set(statuses.filter(s=>s.status==="Approved").map(s=>s.uri));
   const provider=providers.find(p=>approved.has(p.uri));
   if (!provider) throw new Error("No Approved provider registered for this perspective.");
-  const bookmarkGraph = `${ctx.base}#bookmarks`, historyGraph = `${ctx.base}#history`;
+  const bookmarkGraph = `${resolveGraph(GRAPH.BOOKMARKS, ctx.base)}`, historyGraph = `${resolveGraph(GRAPH.HISTORY, ctx.base)}`;
   const q = kind === "bookmarks" ? `PREFIX b: <${BOOKMARK}> PREFIX dcterms: <${DCT}> PREFIX rdfs: <${RDFS}> PREFIX schema: <https://schema.org/> PREFIX vfct: <${VFCT}>
 SELECT ?entry ?label ?created ?description ?url ?queryXML ?tag ?tagPredicate ?lastResultCount ?lastNewCount WHERE { GRAPH <${bookmarkGraph}> {
  ?entry a b:Bookmark . OPTIONAL { ?entry dcterms:title ?title } OPTIONAL { ?entry rdfs:label ?rlabel }

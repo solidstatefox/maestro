@@ -39,10 +39,11 @@ test('Status never shows misleading zero aggregate or zero row badges', () => {
   assert.match(status, /selected\.has\(name\)/);
 });
 
-test('calendar clamps year/month atomically and only moves week if fully outside domain', () => {
+test('calendar restores authoritative FCT bounds and clamps only on domain changes', () => {
   assert.match(calendar, /const visibleMonth = `\$\{year\}-\$\{String\(month \+ 1\)\.padStart\(2, "0"\)\}`/);
-  assert.match(calendar, /if \(visibleMonth < min\.slice\(0, 7\) \|\| visibleMonth > max\.slice\(0, 7\)\) \{\s*setYear\(first\.getUTCFullYear\(\)\);\s*setMonth\(first\.getUTCMonth\(\)\);/);
-  assert.match(calendar, /if \(iso\(current\) <= max && weekEnd >= min\) return current/);
+  assert.match(calendar, /restoredCalendarDate\(savedStart, savedEnd, domain\)/);
+  assert.match(calendar, /setWeekStart\(restoredCalendarWeekStart\(focus\)\)/);
+  assert.match(calendar, /if \(iso\(weekStart\) > domain\.max \|\| end < domain\.min\)/);
 });
 
 test('Tag Cloud keys asynchronous co-occurrence by the exact FCT scope on reentry', () => {

@@ -19,12 +19,23 @@ function loadDiscovery(decisions, captured) {
   const row = {provider:{value:provider},matchedClass:{value:klass},template:{value:template},stylesheet:{value:'<xsl:stylesheet version="1.0"/>'},label:{value:'Graph Servers'}};
   const context = {
     module,exports:module.exports,AbortSignal,
-    fetch:async (_url,args)=>{
-      const body=JSON.parse(args.body);
-      captured.push(body.query);
-      return {ok:true,status:200,headers:{get:()=> 'application/sparql-results+json'},text:async()=>JSON.stringify({results:{bindings:[row]}})};
-    },
+    // Test guard: provider discovery must use the instrumented proxy transport,
+    // not a direct browser fetch that would bypass queue/clock attribution.
+    fetch:async()=>{throw Error('discovery bypassed maestroQueryFetch');},
     require(name){
+      if(name==='@/lib/constants/graphs') return { GRAPH:{SHACL_POLICIES:'shacl-policies',STATUS:'status',POLICY_APPROVALS:'policy-approvals',APPBAR:'appbar'}, resolveGraph:(key,base)=>base+'/'+({ 'shacl-policies':'shacl/policies',status:'status','policy-approvals':'status',appbar:'appbar'}[key]||key) };
+      if(name==='@/lib/client-query-cache') return {maestroQueryFetch: async (url,args)=>{
+        assert.equal(url,'/proxy/api/sparql');
+        assert.equal(args.method,'POST');
+        assert.equal(args.headers['Content-Type'],'application/json');
+        assert.equal(args.headers['X-Maestro-Debug-Source'],'urn:maestro:component:view-discover');
+        const body=JSON.parse(args.body);
+        captured.push(body.query);
+        return {ok:true,status:200,headers:{get:()=> 'application/sparql-results+json'},text:async()=>JSON.stringify({results:{bindings:[row]}})};
+      }};
+      if(name==='@/lib/proxy-debug') return {proxyDebugHeaders:(source,component)=>({
+        'X-Maestro-Debug-Source':source,'X-Maestro-Debug-Component':component,
+      })};
       if(name==='@/lib/personal-auth') return {loadPersonalAuthSession:async()=>({graphPrefix:'https://personal.example/u',graphStore:'https://personal.example/sparql'}),graphForPrefix:x=>x};
       if(name==='@/lib/client-policy-approvals') return {readClientPolicyApprovals:async uris=>uris.map(uri=>({uri,status:decisions}))};
       if(name==='@/lib/upstream-error') return {describeUpstreamError: error => String(error?.message ?? error), sanitizeUpstreamDiagnostic: text => String(text)};
@@ -63,7 +74,7 @@ test('RDF Graph Servers widget is a Perspective and remains a CardGrid',()=>{
 });
 test('View discovery uses current FCT Categories evidence and scoped XState result, not a React copy',()=>{
   const w=source('src/canvas/utils/workspace-controller.tsx');
-  assert.match(w,/classFacetsResultKey === JSON\.stringify\(\[classFacetQueryXml, selectedEndpointId, queryRefreshRevision\]\)/);
+  assert.match(w,/classFacetsResultKey === JSON\.stringify\(\[classFacetQueryXml, queryGraphServer, queryRefreshRevision\]\)/);
   assert.match(w,/classFacets\.filter\(item => Number\(item\.count\) > 0\)/);
   assert.match(w,/viewDiscoverySnapshot\.context\.key === viewDiscoveryScope/);
   assert.doesNotMatch(w,/setDiscoveredViews\(/);

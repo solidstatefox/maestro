@@ -63,7 +63,7 @@ async function flushUriObservations(useBeacon = false) {
   for (const item of batch) observationQueue.delete(item.uri);
   observationFlushInFlight = true;
   const debug = proxyDebugHeaders("uri-observations", "UriLabelObservationBatch");
-  const payload = JSON.stringify({
+  const payload = JSON.stringify({ service: "maestroTransport", operationId: "recordUriObservations", payload: {
     observations: batch,
     addr: firstAddr,
     _debug: {
@@ -71,13 +71,13 @@ async function flushUriObservations(useBeacon = false) {
       component: debug["X-Maestro-Debug-Component"],
       requestId: debug["X-Maestro-Debug-Request"],
     },
-  });
+  } });
   try {
     if (useBeacon && typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-      const sent = navigator.sendBeacon("/proxy/api/observations", new Blob([payload], { type: "application/json" }));
+      const sent = navigator.sendBeacon("/proxy/api/service", new Blob([payload], { type: "application/json" }));
       if (!sent) for (const item of batch) observationQueue.set(item.uri, item);
     } else {
-      const response = await fetch("/proxy/api/observations", {
+      const response = await fetch("/proxy/api/service", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...debug },
         body: payload,

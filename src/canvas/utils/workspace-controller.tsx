@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { rootPointerIsNear } from "@/lib/app-lifecycle/root-proximity";
@@ -40,6 +41,7 @@ import { PERSONAL_PERSPECTIVE_URI, personalPerspectiveMatchesQuery } from "@/lib
 
 import { callOpenApiService } from "@/lib/service-client";
 import { graphServerSoftware, graphServerDescription } from "@/lib/server-metadata";
+import { recordGraphServerStatusObservation } from "@/lib/client-graph-server-status-history";
 import { configuredTimeoutMs } from "@/lib/maestro-query-timeouts";
 import { createAuthenticationActions, useAuthenticationSessionLifecycle } from "@/canvas/controllers/authentication";
 
@@ -71,8 +73,9 @@ import { DEFAULT_RESULTS_PAGE_SIZE, RESULTS_PAGE_SIZE_STORAGE_KEY, RESULTS_BATCH
 
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
+import { componentRetryHeaders, useMaestroComponentRetry } from "@/lib/maestro-component-retry";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
-import { listValuesQueryClone, parseListValuesXml, escapeXmlText, parseFctResponse, readFctResponse, presentServerError, facetLoadErrorMessage, groupValueKey, fctTermKey, facetValueKey, groupValueBinding, type EnrichedTerm, type ScopeValue, type FctResponseColumn, type FctMatch, type FctResult, type ParsedFctResponse, type ListValueProjection, type RelationshipDirection } from "@/canvas/utils/fct-response";
+import { mergeValuesQueryClone, parseListValuesXml, escapeXmlText, parseFctResponse, readFctResponse, presentServerError, facetLoadErrorMessage, groupValueKey, fctTermKey, facetValueKey, groupValueBinding, type EnrichedTerm, type ScopeValue, type FctResponseColumn, type FctMatch, type FctResult, type ParsedFctResponse, type ListValueProjection, type ListValueResource, type RelationshipDirection } from "@/canvas/utils/fct-response";
 import { DistinctCount, distinctCountQueryFor, personalFacetInspectorQueries, PersonalWidgetQueryListener, PersonalRoleWidget, getActiveViewPropertyFilters, getActiveViewRoleFilters, getPersonalRoleFacetNodes, treeHasPropertyFilter, compareGroupValues, type PersonalWidget, type ScopeRelationship, type GroupByOption, type GroupMembersState, type RoleWidgetStatus } from "@/canvas/left/filter";
 import { findQueryNode, queryTreeHasStatuses, querySourceAttribute, ellipsize, RDF_TYPE_URI, GROUP_BY_FACET_HIGHLIGHT_CLASSES, readGraphServerFromQueryXml, readShareableUiState, parseFctQueryXml, workbenchQueryTreeApi, type ShareableUiState, APPBAR_TAB_NUMBER, VIEW_RIBBON_TAB_NUMBER, decodeAppbarTab, copyRibbonUrlParams } from "@/canvas/utils/query-controller";
 
@@ -89,7 +92,8 @@ import { AnalyzeRibbon } from "@/canvas/tab/analyze/ribbon";
 import { ViewPage } from "@/canvas/tab/view/view-components";
 import { AnalyzeHistogram, useAnalyzeState, type AnalysisDefinition, type AnalysisCell, type AnalysisTable } from "@/canvas/tab/analyze/analysis-utils";
 
-import { downloadRecordDescribeSnapshot, useRecordCoreState, useRecordPresentationState, useRecordPageSettings, type RecordService, type ServiceResult, type RecordGraphAuthor } from "@/canvas/right/record";
+import type { RecordExportFormat } from "@/canvas/right/record-export";
+import { downloadRecordDescribeSnapshot, recordDownloadTitle, useRecordCoreState, useRecordPresentationState, useRecordPageSettings, type RecordService, type ServiceResult, type RecordGraphAuthor } from "@/canvas/right/record";
 import { blankNodeRecordListValuesQuery, rootBlankNodeRecordQuery, unanchoredBlankNodeRecordQuery } from "@/lib/bnode-dom";
 import { parseBlankNodeRecordBindings, boundBlankNodeAnchorFromFct, type BNodeRecordAnchor, type RecordValueTerm, type BlankNodeRecord } from "@/lib/bnode";
 import { parsePolicyQueryAction, resolveRecordFormatCategory, useRecordFormatSelection, type RecordPolicyOption } from "@/canvas/right/format";
@@ -99,8 +103,10 @@ import { renderValueOperator } from "@/canvas/top/breadcrumb";
 
 import { decodeFctFacetGroupRows } from "@/lib/group-projection-contract";
 import { FCT_VIEW_TYPES, type FctViewType } from "@/lib/fct-view-types";
-import { findGroupCarrier, groupKeyFromCarrier, markFctGroup, ungroupForMembers } from "@/lib/fct-groups-carrier";
+import { findGroupCarrier, groupKeyFromCarrier, markFctGroup, markTransportedGroup, ungroupForMembers } from "@/lib/fct-groups-carrier";
 import { snapshotFctQueryXml } from "@/lib/fct-query-api";
+import { activeTransportedFacets, resolveTransportedFacets, transportedAnchorPath, toggleTransportedAnchor } from "@/lib/fct-facet-alias";
+import { getPath, indexFctPaths } from "@/lib/fct-get-path";
 import { propertyUsageNavigation, type PropertyUsageDirection } from "@/lib/property-usage-query";
 import type { FctValue } from "@/lib/fct-query-api";
 import { validMaestroLanguage } from "@/lib/maestro-language";
@@ -119,6 +125,7 @@ import { browserLog, configureMaestroBrowserLogging, type BrowserLogLevel } from
 import { useAppLifecycleObserver } from "@/canvas/diagnostics/use-app-lifecycle-observer";
 import type { ReactNode, Dispatch, SetStateAction, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { ButtonGroup } from "@/components/ui/button-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MaestroAnalysisDataTable, type MaestroDataColumn, type MaestroDataRow } from "@/components/maestro-analysis-data-table";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from "recharts";
 import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
@@ -151,14 +158,14 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightLeft, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Signal, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, EqualApproximately, Regex, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info, Table2, TableProperties, ChartColumn, Server, Database, Globe, LayoutGrid, FileCode2, ArrowLeftRight, Blocks, WandSparkles } from "lucide-react";
+import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightLeft, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Signal, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, EqualApproximately, Regex, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info, Table2, TableProperties, ChartColumn, Server, Database, Globe, LayoutGrid, FileCode2, ArrowLeftRight, Blocks, WandSparkles, ExternalLink, Pencil } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
-import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, setMaestroSessionCookie, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
+import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
-import { graphAutoFillAllowsQuery } from "@/lib/app-lifecycle/graph-autofill";
 import { PERSONAL_SPARQL_HEALTH_EVENT } from "@/lib/client-personal-sparql";
-import { MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, abortPendingMaestroQueries, stopPendingMaestroQueries, resumePendingMaestroQueries, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
+import { MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, MAESTRO_GRAPH_SERVER_TRANSPORT_FAILURE, abortPendingMaestroQueries, stopPendingMaestroQueries, resumePendingMaestroQueries, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
+import { resolveSelectedGraphHealthTarget } from "@/lib/graph-server-preflight";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
 import { canApplyAutoConfigure, validRecordGraphFamily, validRecordAuthorGraph } from "@/lib/app-lifecycle/context-guards";
 import { navigateFacetHeaderQuery } from "@/lib/fct-facet-header-navigation";
@@ -171,6 +178,9 @@ import { setMaestroIncompleteResults, getMaestroIncompleteResults, subscribeMaes
 import { resetMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 import { resetMaestroQueryExecutionClocks } from "@/lib/maestro-query-execution-clock";
 import { initializeMaestroStorage, maestroStorageGet, maestroStorageSet, clearMaestroStorage } from "@/lib/maestro-storage";
+import { ensureLoggedInPersonalServer, listPersonalGraphServers, asEndpointOption, PERSONAL_SERVERS_CHANGED } from "@/lib/client-personal-graph-servers";
+import { readGraphServerDirectory, replaceCourtesyGraphServers, flattenGraphServerDirectory, collectSharedGraphServer, validGraphServerUrl } from "@/lib/graph-server-directory";
+import { chooseStartupGraphServer, createBlankStartupQuery, prepareInitialFctQuery, readCachedPersonalGraphServers, rememberPersonalGraphServers } from "@/lib/graph-server-startup";
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -179,6 +189,7 @@ import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
+import { inspectFctValueReferences, dependentFctValueReferences, type ValueReference } from "@/lib/fct-value-references";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import xmlFormat from "xml-formatter";
 import hljs from "highlight.js/lib/core";
@@ -261,6 +272,17 @@ const TEXT_SEARCH_NAME_PROPERTIES = [
 
 /** Shared workspace lifecycle and query orchestration. The FCT query API remains authoritative. */
 export function useWorkspaceController() {
+  // Each component retries its own existing cloned FCT query. The Browse URL,
+  // query store and global refresh generation remain unchanged.
+  const retryProperties = useMaestroComponentRetry("properties");
+  const retryRoles = useMaestroComponentRetry("roles");
+  const retryCategories = useMaestroComponentRetry("categories");
+  const retryGraphs = useMaestroComponentRetry("graphs");
+  const retryAlphabet = useMaestroComponentRetry("alphabet");
+  const retryGroups = useMaestroComponentRetry("groups");
+  const retryResults = useMaestroComponentRetry("results");
+  const retryRecord = useMaestroComponentRetry("record");
+
   const [isSpongingUri, setIsSpongingUri] = useState(false);
   useEffect(() => listenForMaestroCopies(), []);
   const {
@@ -294,8 +316,8 @@ export function useWorkspaceController() {
   } = useBookmarksState();
   const {
     endpointReloadRevision, setEndpointReloadRevision, queryRefreshRevision, setQueryRefreshRevision,
-    fctEndpoints, setFctEndpoints, selectedEndpointId, setSelectedEndpointId,
-    endpointStatuses, setEndpointStatuses, isCheckingEndpoints, setIsCheckingEndpoints,
+    fctEndpoints, graphServerDirectoryHydrated, setFctEndpoints, setManagedEndpoints, selectedEndpointId, observeGraphServerQuery,
+    endpointStatuses, setEndpointStatuses, reportGraphHealthFailure, reportGraphHealthProbe, isCheckingEndpoints, setIsCheckingEndpoints,
     checkingEndpointIds, setCheckingEndpointIds, endpointChecksCompleted, setEndpointChecksCompleted,
     endpointChecksTotal, setEndpointChecksTotal, endpointMenuError, setEndpointMenuError,
     endpointHealthToast, setEndpointHealthToast, isRefreshingFailedEndpoint, setIsRefreshingFailedEndpoint,
@@ -305,7 +327,7 @@ export function useWorkspaceController() {
     graphInfoRequestRef,
   } = useGraphScopeState();
   const {
-    selectedUri, setSelectedUri, urlStateInitialized, setUrlStateInitialized,
+    selectedUri, setSelectedUri, urlStateInitialized, setUrlStateInitialized, urlRestoreError, setUrlRestoreError,
     querySourceFormat, setQuerySourceFormat, sparqlQuery, setSparqlQuery, sparqlExecutionAddr, setSparqlExecutionAddr,
     breadcrumbTrail, setBreadcrumbTrail, ancestorGhostRetainedRef, previousActiveGhostPathRef,
     previousScopeRelationshipsRef, rootBreadcrumb, signalPickerExpanded, setSignalPickerExpanded, rootSearchExpanded,
@@ -316,6 +338,17 @@ export function useWorkspaceController() {
   } = useQuerySessionState();
   // The code inspector is owned by the durable root breadcrumb, not the
   // hover-mounted URI combobox. Its SPARQL snapshot survives pointer motion.
+  // Only transient pointer position is React state. A transported anchor is
+  // committed atomically to the authoritative FCT query on Shift+click.
+  const [hoveredTransportedTargetId, setHoveredTransportedTargetId] = useState<string | null>(null);
+  const [valueReferenceEditor, setValueReferenceEditor] = useState<{
+    parentId:string; valueId:string | null; mode:"from"|"fromView"|"constant";
+    targetId:string; text:string; datatype:string; lang:string; op:string;
+  } | null>(null);
+  const [valueReferenceError, setValueReferenceError] = useState("");
+  const [blockedReferenceDeletion, setBlockedReferenceDeletion] = useState<{
+    nodeId:string; dependents:ValueReference[];
+  } | null>(null);
   const [rootAutocompleteInspectorOpen, setRootAutocompleteInspectorOpen] = useState(false);
   const [rootAutocompleteInspection, setRootAutocompleteInspection] = useState<{
     query: string | null; input: string; addr: string;
@@ -533,6 +566,19 @@ export function useWorkspaceController() {
   // Only the selected endpoint's health may affect active query effects. A
   // different endpoint finishing its health check must not restart these loads.
   const selectedEndpointStatus = selectedEndpointId ? endpointStatuses[selectedEndpointId] : undefined;
+  // Passive personal evidence sink. Never awaits a write before browsing and
+  // never persists response bodies, SPARQL, diagnostics or credentials. History
+  // writes are serialized and de-duplicated by the client history module.
+  useEffect(() => {
+    if (!personalStoreReady) return;
+    for (const endpoint of fctEndpoints) {
+      const status = endpointStatuses[endpoint.id];
+      if (!status) continue;
+      void recordGraphServerStatusObservation(endpoint.url, status).catch(error => {
+        browserLog.warn("graph-servers.status-history-write-failed", { error });
+      });
+    }
+  }, [personalStoreReady, fctEndpoints, endpointStatuses]);
   
   
   
@@ -566,6 +612,33 @@ export function useWorkspaceController() {
     window.addEventListener(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, onSuccess);
     return () => window.removeEventListener(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, onSuccess);
   }, [fctEndpoints, setEndpointStatuses, setEndpointHealthToast]);
+
+  // FCT failures report their *actual* addr. Mark the server degraded
+  // immediately, then verify once through the existing GET health route.
+  // Do not gate Browse, spawn independent polling, or retry the failed FCT.
+  const graphHealthVerificationRef = useRef<Record<string, { at: number; pending: boolean }>>({});
+  useEffect(() => {
+    const onFailure = (event: Event) => {
+      const detail = (event as CustomEvent<{endpointUrl?: string; diagnostic?: string; at?: number}>).detail;
+      if (!detail?.endpointUrl) return;
+      const endpoint = fctEndpoints.find(item => graphServerUrlMatches(item.url, detail.endpointUrl!, item.schemeInferred));
+      if (!endpoint) return;
+      reportGraphHealthFailure(endpoint.id, detail.endpointUrl, detail.diagnostic ?? "Connection failed", detail.at);
+      if (endpoint.id !== selectedEndpointId) return;
+      const previous = graphHealthVerificationRef.current[endpoint.id];
+      const now = Date.now();
+      if (previous?.pending || (previous && now - previous.at < 15_000)) return;
+      graphHealthVerificationRef.current[endpoint.id] = { at: now, pending: true };
+      void checkSelectedGraphServer(endpoint, false, detail.endpointUrl).finally(() => {
+        graphHealthVerificationRef.current[endpoint.id] = { at: Date.now(), pending: false };
+      });
+    };
+    window.addEventListener(MAESTRO_GRAPH_SERVER_TRANSPORT_FAILURE, onFailure);
+    return () => window.removeEventListener(MAESTRO_GRAPH_SERVER_TRANSPORT_FAILURE, onFailure);
+  // checkSelectedGraphServer reads the current URL and registry, but is not a
+  // dependency: updating health must not reattach listeners or restart probes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fctEndpoints, selectedEndpointId, reportGraphHealthFailure]);
 
   // Personal SHACL/provider/status SPARQL operations use the same endpoint
   // registry as normal graph queries. A 503 must not leave its dropdown icon
@@ -731,7 +804,7 @@ useEffect(() => {
   }, [queryTreeHeightPercent, queryTreeHeightLoaded]);
 
   // Restore personal authentication session on load.
-  useAuthenticationSessionLifecycle({ authSession, setAuthSession, setAuthRestoreIssue, setLoginGraphStore, setPersonalSparqlEndpoint, setLoginGraphPrefix, setLoginTab, setLoginUsername, setLoginPassword, setLoginOauthToken, setLoginOauthProfileUrl, setLoginOauthUserName, setLoginWebIdUri, setFetchedAvatarUrl, setAuthRestoreComplete });
+  useAuthenticationSessionLifecycle({ authSession, setAuthSession, setAuthRestoreIssue, setLoginGraphStore, setPersonalSparqlEndpoint, setLoginGraphPrefix, setLoginTab, setLoginUsername, setLoginPassword, setLoginOauthToken, setLoginOauthProfileUrl, setLoginOauthUserName, setLoginWebIdUri, setFetchedAvatarUrl, setAuthRestoreComplete, setPersonalPoliciesReady, setPersonalPoliciesSeedError });
 
   
 
@@ -885,10 +958,21 @@ useEffect(() => {
     const location = findGroupCarrier(queryTree);
     if (!location) return;
     if (!value) {
-      const next = markFctGroup(queryTree, null);
+      const next = markTransportedGroup(markFctGroup(queryTree, null), null);
       const attributes = { ...location.view.attributes };
       for (const key of ["by", "bucket", "lexical", "previousType", "previousLimit", "previousOffset"]) delete attributes[key];
       replaceQueryTree(setGroupedViewAttributes(next, location.view.id, attributes));
+      return;
+    }
+    if (value.startsWith("alias:")) {
+      const anchorId = value.slice("alias:".length);
+      if (!activeTransportedFacets(queryTree).some(alias => alias.id === anchorId)) return;
+      const grouped = markTransportedGroup(markFctGroup(queryTree, null), anchorId);
+      replaceQueryTree(setGroupedViewAttributes(grouped, location.view.id, {
+        ...location.view.attributes, type: FCT_VIEW_TYPES.LIST,
+        limit: String(groupBatchSize), offset: "0",
+      }));
+      setGroupBatchOffset(0);
       return;
     }
     const separator = value.indexOf(":");
@@ -897,7 +981,7 @@ useEffect(() => {
     if (!iri || (direction !== "forward" && direction !== "reverse")) return;
     const name = direction === "forward" ? "property" : "property-of";
     const existing = location.siblings.find((node) => node.name === name && node.attributes.iri === iri);
-    const grouped = markFctGroup(queryTree, { id: existing?.id, name, iri });
+    const grouped = markFctGroup(markTransportedGroup(queryTree, null), { id: existing?.id, name, iri });
     const next = setGroupedViewAttributes(grouped, location.view.id, {
       ...location.view.attributes, type: FCT_VIEW_TYPES.LIST, limit: String(groupBatchSize), offset: "0",
     });
@@ -1072,7 +1156,8 @@ useEffect(() => {
   
   
 
-  const { handleFetchProfile, handleTestConnection, handleLoginSubmit } = createAuthenticationActions({
+  const { handleFetchProfile, handleTestConnection, handleLoginSubmit, handleRetryPersonalInitialization } = createAuthenticationActions({
+    authSession,
     loginTab,
     loginOauthProfileUrl,
     loginWebIdUri,
@@ -1086,7 +1171,13 @@ useEffect(() => {
     loginPassword,
     fetchedAvatarUrl,
     loginOauthToken,
-    setLoginTesting,
+    setLoginTesting: (next: boolean | ((previous: boolean) => boolean)) => {
+      // Preserve React's Dispatch<SetStateAction<boolean>> contract. Login
+      // transitions remain the authority for the Sheet cache-clear gate.
+      const pending = typeof next === "function" ? next(loginTesting) : next;
+      setLoginTesting(pending);
+      accessController.send({ type: "LOGIN_ACTIVITY", pending });
+    },
     setLoginError,
     setLoginGraphStore,
     setLoginGraphPrefix,
@@ -1191,28 +1282,33 @@ useEffect(() => {
   };
 
   const applyRecordAsRootValue = (uri: string) => {
-    if (!uri.trim()) return;
-    const nonTextTree = {
-      ...queryTree,
-      children: queryTree.children
-        .filter((node) => node.name !== "text")
-        .map((node) => setMainViewType(node, FCT_VIEW_TYPES.LIST)),
+    if (!/^https?:\/\/\S+$/i.test(uri.trim())) return;
+    // Home semantics first: cancel old requests, reset clocks and facets, and
+    // discard *every* old class/text/property/role/group/anchor constraint.
+    resetHomeQuery();
+    const findView = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
+      for (const node of nodes) {
+        if (node.name === "view") return node;
+        const nested = findView(node.children);
+        if (nested) return nested;
+      }
+      return undefined;
     };
-    const record = results.find((item) => item.uri === uri) ?? groupValues.find((item) => item.uri === uri);
-    const rootValue = record?.termType === "literal"
-      ? { text: uri, ...(record.lang ? { lang: record.lang } : { datatype: record.datatype || "string" }) }
-      : { text: uri, datatype: "uri" };
-    replaceQueryTree(workbenchQueryTreeApi.setValue(nonTextTree, null, [rootValue], {
-      replaceExisting: true,
-      idPrefix: "query-uri-value",
+    const oldView = findView(queryTree.children);
+    const newView: FctQueryNode = oldView
+      ? { ...oldView, attributes: { ...oldView.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0", index: "" }, children: [] }
+      : { id: "query-view", name: "view", attributes: { type: FCT_VIEW_TYPES.LIST, limit: "30", offset: "0" }, children: [] };
+    const freshRoot = { ...queryTree, children: [newView] };
+    replaceQueryTree(workbenchQueryTreeApi.setValue(freshRoot, null, [{ text: uri, datatype: "uri" }], {
+      replaceExisting: true, idPrefix: "query-uri-value",
     }));
-    if (record?.termType !== "literal") {
-      selectedSignalModeRef.current = "uri";
-      setSelectedSignalMode("uri");
-      setSavedUriDraft(uri);
-      searchDraftRef.current = uri;
-      setSearchDraft(uri);
-    }
+    selectedSignalModeRef.current = "uri";
+    setSelectedSignalMode("uri");
+    setSavedUriDraft(uri);
+    searchDraftRef.current = uri;
+    setSearchDraft(uri);
+    setResultsUiPage(0);
+    setCentralTab("results");
     clearTutorialPreview();
     setSearchPipelineRun((current) => current + 1);
   };
@@ -1311,7 +1407,7 @@ useEffect(() => {
             method: "POST",
             cache: "no-store",
             headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("uri-label-lookup", "UriLabelLookup") },
-            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}` : ""))}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="${FCT_VIEW_TYPES.DESCRIBE}" limit="30" offset="0"/></query>`,
+            body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryTree.attributes.addr ?? "")}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="${FCT_VIEW_TYPES.DESCRIBE}" limit="30" offset="0"/></query>`,
             signal: controller.signal,
           });
           const data = await readFctResponse(response);
@@ -1500,73 +1596,110 @@ useEffect(() => {
 
 
 
-  const [graphRegistryLoadedRevision, setGraphRegistryLoadedRevision] = useState<number>(-1);
-  const graphRegistryReady = authRestoreComplete && graphRegistryLoadedRevision === endpointReloadRevision && fctEndpoints.length > 0;
-
-  // Read the registry once after session restoration; subsequently only an
-  // explicit login changes the menu. Never POST a proxy selection on refresh.
+  // Registry refresh is control-plane only: an already registered public
+  // server must remain executable across login/logout and registry retries.
+  // addr, not a server directory or a personal session, authorizes the
+  // execution destination. XState still guards private write capabilities.
+  const authoritativeServerUrl = (queryTree.attributes.addr ?? "").split("@").slice(1).join("@").trim();
+  // Readiness comes from the authoritative query tree, not a second XML parse.
+  // A restored server is executable even if the asynchronous menu registry has
+  // not reconciled its ID yet; malformed addresses still fail closed.
+  const graphRegistryReady = Boolean(validGraphServerUrl(authoritativeServerUrl));
+  useLayoutEffect(() => { observeGraphServerQuery(authoritativeServerUrl); }, [authoritativeServerUrl, observeGraphServerQuery]);
+  // Startup does NOT restore a menu selection. Browser preference is only a
+  // candidate for constructing the initial FCT query. Once that full query is
+  // committed, the selection actor observes addr and resolves the menu/health.
+  // Preference is independent of personal credentials; a restored shared URL
+  // becomes the last used server once it resolves in the public registry.
   useEffect(() => {
-    if (!authRestoreComplete) return;
+    if (!authoritativeServerUrl || !fctEndpoints.some((item) => item.id === selectedEndpointId &&
+      graphServerUrlMatches(item.url, authoritativeServerUrl, item.schemeInferred))) return;
+    maestroStorageSet("maestro-last-graph-server-url", authoritativeServerUrl);
+  }, [authoritativeServerUrl, selectedEndpointId, fctEndpoints]);
+
+  // The personal registry is an authenticated RDF projection, independent of
+  // public courtesy aliases. Login/reseeding and Perspective mutations refresh
+  // it; XState readiness gates the whole operation.
+  useEffect(() => {
+    if (!personalStoreReady || !authSession) { setManagedEndpoints([]); return; }
+    let cancelled = false;
+    const refresh = () => { void (async () => {
+      try {
+        const entries = await listPersonalGraphServers();
+        if (!cancelled) {
+          const projected = entries.map(asEndpointOption);
+          setManagedEndpoints(projected);
+          rememberPersonalGraphServers(authSession.graphStore, authSession.userName ?? authSession.username ?? "", projected);
+        }
+      } catch (error) {
+        if (!cancelled) browserLog.warn("graph-servers.personal-registry.unavailable", error);
+      }
+    })(); };
+    void ensureLoggedInPersonalServer().then(refresh).catch(error => {
+      if (!cancelled) browserLog.warn("graph-servers.personal-register.failed", error);
+    });
+    window.addEventListener(PERSONAL_SERVERS_CHANGED, refresh);
+    return () => { cancelled = true; window.removeEventListener(PERSONAL_SERVERS_CHANGED, refresh); };
+  }, [authSession, personalStoreReady, setManagedEndpoints]);
+
+  const lastPersonalGraphServerRef = useRef("");
+  useEffect(() => {
+    if (!authSession) return;
+    const personal = fctEndpoints.find((item) => item.id === "personal-sparql" ||
+      item.label.toLowerCase() === "personal sparql");
+    if (personal) lastPersonalGraphServerRef.current = personal.url;
+  }, [authSession, fctEndpoints]);
+
+  // Browser-owned courtesy catalog. On startup, immediately display the last
+  // saved groups from IndexedDB. On login and explicit refresh, ask the proxy
+  // only whether its flat-file *content digest* changed. If unchanged, do
+  // not download it; if changed, replace only courtesy groups. Shared survives.
+  // The entire exchange is optional to reading from any addr.
+  useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const params = new URLSearchParams(window.location.search);
-        const requestedUrl = readGraphServerFromQueryXml(params.get("q"));
-        const response = await cachedFetchFct("/proxy/api/fct", {
-          cache: "no-store", headers: proxyDebugHeaders("endpoint-menu", "EndpointMenu"),
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? "Could not load graph servers.");
+        await initializeMaestroStorage();
         if (cancelled) return;
-        const endpoints: EndpointOption[] = Array.isArray(data.endpoints)
-          ? (data.endpoints as EndpointOption[]).filter((item) =>
-              authSession || (item.id !== "personal-sparql" && item.label.toLowerCase() !== "personal sparql"))
-          : [];
-        // Only an inferred HTTPS registry entry may match an HTTP query addr.
-        // Preserve the live query's declared scheme and endpoint identity.
-        const requested = requestedUrl
-          ? endpoints.find((item) => item.id === requestedUrl || graphServerUrlMatches(item.url, requestedUrl, item.schemeInferred))
-          : undefined;
-        if (requestedUrl && !requested) {
-          setEndpointMenuError(`The graph server in query addr is not configured: ${requestedUrl}`);
-        } else {
-          setEndpointMenuError("");
-        }
-        // An empty response during restoration must not erase a menu that
-        // was already available to the user.
-        setFctEndpoints((current) => endpoints.length > 0 ? endpoints : current);
-        // Readiness is explicit: an empty or failed registry cannot release the startup gate.
-        if (endpoints.length > 0) setGraphRegistryLoadedRevision(endpointReloadRevision);
-        // Preserve the selection across a login-triggered registry reload.
-        // Never clear it because a transient response omits an entry.
-        setSelectedEndpointId((current) => {
-          const retained = endpoints.find((item) => item.id === current);
-          const choice = requested ?? retained ?? (!requestedUrl ? endpoints[0] : undefined);
-          return choice?.id ?? current;
-        });
+        const stored = readGraphServerDirectory();
+        setFctEndpoints(flattenGraphServerDirectory({ ...stored,
+          groups: Object.fromEntries(Object.entries(stored.groups).filter(([group]) => group !== "Shared")) }));
+        const probe = await fetch("/proxy/api/service", { method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-menu-digest", "GraphServerCourtesyDigest") },
+          body: JSON.stringify({service:"maestroTransport",operationId:"courtesyGraphServers",
+            payload:{action:"check",digest:stored.courtesyDigest}}) });
+        if (!probe.ok) throw new Error(`Graph-server courtesy digest HTTP ${probe.status}`);
+        const version = await probe.json() as {digest?: string;changed?: boolean};
+        if (cancelled || version.changed === false) return;
+        const response = await fetch("/proxy/api/service", { method: "POST", cache: "no-store",
+          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-menu", "GraphServerCourtesyList") },
+          body: JSON.stringify({service:"maestroTransport",operationId:"courtesyGraphServers",
+            payload:{action:"list"}}) });
+        if (!response.ok) throw new Error(`Graph-server courtesy list HTTP ${response.status}`);
+        const data = await response.json() as {digest?: string;endpoints?: EndpointOption[]};
+        if (cancelled) return;
+        if (!data.digest || data.digest !== version.digest || !Array.isArray(data.endpoints))
+          throw new Error("Graph-server courtesy-list digest changed during download.");
+        const updated = replaceCourtesyGraphServers(data.digest, data.endpoints);
+        setFctEndpoints(flattenGraphServerDirectory({ ...updated,
+          groups: Object.fromEntries(Object.entries(updated.groups).filter(([group]) => group !== "Shared")) }));
+        setEndpointMenuError("");
       } catch (error) {
-        // Registry loading is control-plane work. A canceled fetch (for example
-        // during teardown of an older application version) is not evidence of
-        // a graph-server failure and must never become a banner error.
-        const aborted = error instanceof Error && (error.name === "AbortError" ||
-          /signal is aborted without reason/i.test(error.message));
-        if (!cancelled && !aborted) setEndpointMenuError(
-          error instanceof Error ? error.message : "Could not load graph servers.",
-        );
-        // Keep both the existing menu and selection on fetch failure.
+        // A courtesy directory is never a prerequisite for public reads.
+        if (!cancelled) setEndpointMenuError(error instanceof Error ? error.message : "Could not refresh graph-server courtesy list.");
       }
     })();
     return () => { cancelled = true; };
-    // A new login explicitly increments endpointReloadRevision. Session
-    // restoration only unblocks the first read; it never increments revision.
+    // Login triggers a version check, never a graph-server replacement.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authRestoreComplete, endpointReloadRevision]);
+  }, [endpointReloadRevision]);
 
   /** Health-check precisely one registered server, using the authoritative
    * live-query addr when it is a permitted alias of a host-only registry URL. */
   async function checkSelectedGraphServer(endpoint: EndpointOption, manageProgress = true, targetUrl?: string): Promise<EndpointStatus> {
     const liveServerUrl = targetUrl ?? readGraphServerFromQueryXml(queryXml) ?? "";
     const testedUrl = graphServerUrlMatches(endpoint.url, liveServerUrl, endpoint.schemeInferred) ? liveServerUrl : endpoint.url;
+    const probeStartedAt = Date.now();
     const successCountAtStart = graphServerSuccessCountRef.current[endpoint.id] ?? 0;
     // A later check for this endpoint supersedes earlier checks (including
     // checks for an old HTTP/HTTPS query addr).
@@ -1632,14 +1765,9 @@ useEffect(() => {
         setQueryAttribute("addr", `${address.slice(0, separator)}@${resolvedUrl}`);
       }
     }
-    setEndpointStatuses((current) => {
-      const previous = current[endpoint.id];
-      // Query success can update the state before this queued update applies.
-      if (previous?.state === "ok" && previous.status === 200 &&
-          newerSuccessForThisUrl && (status.state !== "ok" || status.status !== 200)) return current;
-      if (previous?.status === status.status && previous.state === status.state && previous.testedUrl === status.testedUrl && previous.diagnostic === status.diagnostic && JSON.stringify(previous.attempts) === JSON.stringify(status.attempts)) return current;
-      return { ...current, [endpoint.id]: status };
-    });
+    // XState rejects probes that began before a more recent transport failure.
+    // No health observation can reset Browse query identity or request clocks.
+    reportGraphHealthProbe(status, probeStartedAt);
     return status;
   }
 
@@ -1665,23 +1793,25 @@ useEffect(() => {
   async function synchronizeFctEndpointSelection(graphServerUri: string) {
     if (!graphServerUri) return;
     const endpoint = fctEndpoints.find((item) => item.id === graphServerUri || graphServerUrlMatches(item.url, graphServerUri, item.schemeInferred));
-    if (!endpoint) throw new Error(`The query references an unconfigured graph server: ${graphServerUri}`);
-    if (!authSession && (endpoint.id === "personal-sparql" || endpoint.label.toLowerCase() === "personal sparql")) {
-      throw new Error("Log in before selecting the personal graph server.");
-    }
-    setSelectedEndpointId(endpoint.id);
+    // Unknown URLs are valid Shared entries; server identity never depends on a login.
+    // Query restoration commits the FCT XML; the actor will observe addr.
     setEndpointMenuError("");
   }
 
   async function chooseFctEndpoint(endpointId: string) {
-    if (!endpointId || endpointId === selectedEndpointId) return;
+    if (!endpointId) return;
     const endpoint = fctEndpoints.find((item) => item.id === endpointId);
     if (!endpoint) return;
-    if (!authSession && (endpoint.id === "personal-sparql" || endpoint.label.toLowerCase() === "personal sparql")) return;
-    setSelectedEndpointId(endpointId);
+    // A remembered menu preference is NOT an addressed FCT query. Selecting
+    // even the already-displayed server must commit addr when it is missing.
+    // Otherwise the user cannot start the session from the graph-server menu.
+    if (endpointId === selectedEndpointId &&
+        graphServerUrlMatches(endpoint.url, authoritativeServerUrl, endpoint.schemeInferred)) return;
     setEndpointMenuError("");
     setEndpointHealthToast(null);
-    const graph = queryTree.attributes.graph?.trim() ?? "";
+    const original = queryTree.attributes.addr ?? "";
+    const separator = original.indexOf("@");
+    const graph = separator >= 0 ? original.slice(0, separator) : (queryTree.attributes.graph?.trim() ?? "");
     setQueryAttribute("addr", `${graph}@${endpoint.url}`);
     // The query health gate checks the newly selected server before executing.
   }
@@ -1698,30 +1828,48 @@ useEffect(() => {
       return;
     }
     const propertyNodes = getActiveViewPropertyFilters(queryTree);
+    // An <a> is a viewer-plane reference to one exact remote relationship.
+    // Append its Personal widget after ordinary facets, never prepend a
+    // standalone special renderer. Its source and providers see the same
+    // predicate and RDF terms as any other Personal facet.
+    const anchored = activeTransportedFacets(queryTree);
+    const sources = [
+      ...propertyNodes.map(node => ({ key: node.attributes.iri, node, anchor: undefined as ReturnType<typeof resolveTransportedFacets>[number] | undefined })),
+      ...anchored.map(anchor => ({ key: anchor.id, node: anchor.target, anchor })),
+    ];
     setPersonalWidgets((current) => {
-      const existingByUri = new Map(
-        current.map((widget) => [widget.uri, widget]),
+      const existingByKey = new Map(
+        current.map((widget) => [widget.key ?? widget.uri, widget]),
       );
-      const next = propertyNodes.map((node) => {
+      const next = sources.map(({key, node, anchor}) => {
         const uri = node.attributes.iri;
         const boundValues = node.children
           .filter((child) => child.name === "value" && Boolean(child.text))
           .map((child) => fctTermKey(child.text ?? "", child.attributes.datatype, child.attributes["xml:lang"]));
         const excluded = node.attributes.exclude?.trim().toLowerCase() === "yes";
         const baseLabel = node.attributes.label || toLabel(uri, "Property");
-        const label = baseLabel;
-        const existing = existingByUri.get(uri);
+        const label = anchor
+          ? anchor.path.map(hop => `${toLabel(hop.iri, hop.direction === "reverse" ? "Role" : "Property")}${hop.direction === "reverse" ? " of" : ""}`).join(" › ")
+          : baseLabel;
+        const existing = existingByKey.get(key);
         if (existing) {
-          return existing.label === label && existing.excluded === excluded &&
+          const sameAnchor = !anchor && !existing.anchor || Boolean(anchor && existing.anchor &&
+            anchor.id === existing.anchor.id && anchor.href === existing.anchor.href &&
+            anchor.parentId === existing.anchor.parentId &&
+            anchor.path.map(step => `${step.id}|${step.iri}|${step.direction}`).join("/") ===
+              existing.anchor.path.map(step => `${step.id}|${step.iri}|${step.direction}`).join("/"));
+          return sameAnchor && existing.label === label && existing.excluded === excluded &&
             existing.selectedValues.length === boundValues.length &&
             existing.selectedValues.every(
               (value, index) => value === boundValues[index],
             )
             ? existing
-            : { ...existing, label, excluded, selectedValues: boundValues };
+            : { ...existing, key, anchor, label, excluded, selectedValues: boundValues };
         }
         return {
+          key,
           uri,
+          anchor,
           label,
           excluded,
           values: [],
@@ -1735,8 +1883,13 @@ useEffect(() => {
         next.length === current.length &&
         next.every(
           (widget, index) =>
-            widget.uri === current[index]?.uri &&
+            (widget.key ?? widget.uri) === (current[index]?.key ?? current[index]?.uri) &&
             widget.label === current[index]?.label &&
+            (widget.anchor?.id ?? "") === (current[index]?.anchor?.id ?? "") &&
+            (widget.anchor?.href ?? "") === (current[index]?.anchor?.href ?? "") &&
+            (widget.anchor?.parentId ?? "") === (current[index]?.anchor?.parentId ?? "") &&
+            (widget.anchor?.path.map(step => `${step.id}|${step.iri}|${step.direction}`).join("/") ?? "") ===
+              (current[index]?.anchor?.path.map(step => `${step.id}|${step.iri}|${step.direction}`).join("/") ?? "") &&
             widget.excluded === current[index]?.excluded &&
             widget.selectedValues.length ===
               current[index]?.selectedValues.length &&
@@ -1885,7 +2038,7 @@ useEffect(() => {
     const uri = `gttp://ggg.maestro.ecosys/ns/ui#${name}`;
     const scope = statusFilterScopeId ? findQueryNode(queryTree.children, statusFilterScopeId) : undefined;
     const existing = (scope?.children ?? queryTree.children).find((node) => node.name === "status" && node.text?.trim() === uri);
-    if (existing) deleteNode(existing.id);
+    if (existing) guardedDeleteQueryNode(existing.id);
     else insertNode(statusFilterScopeId, { id: `status-${crypto.randomUUID()}`, name: "status", attributes: { type: "uri" }, text: uri, children: [] });
     setResultsUiPage(0);
     setResultsPage(resultsBatchSize, 0);
@@ -1897,7 +2050,7 @@ useEffect(() => {
     if (!/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(uri)) return;
     const scope = statusFilterScopeId ? findQueryNode(queryTree.children, statusFilterScopeId) : undefined;
     const existing = (scope?.children ?? queryTree.children).find(node => node.name === "status" && node.text?.trim() === uri);
-    if (existing) deleteNode(existing.id);
+    if (existing) guardedDeleteQueryNode(existing.id);
     else insertNode(statusFilterScopeId, { id: `status-${crypto.randomUUID()}`, name: "status", attributes: { type: "uri" }, text: uri, children: [] });
     setResultsUiPage(0);
     setResultsPage(resultsBatchSize, 0);
@@ -1938,7 +2091,7 @@ useEffect(() => {
     setViewProvider(null);
   }, [authRestoreComplete, authSession, personalStoreReady, setWorkspaceTab, setViewProvider]);
   const bookmarkQueryKey = canonicalQueryIdentityXml(queryXml);
-  const autoConfigureScopeKey = `${bookmarkQueryKey}\u0000${selectedEndpointId}\u0000${queryRefreshRevision}`;
+  const autoConfigureScopeKey = `${bookmarkQueryKey}\u0000${queryTree.attributes.addr ?? ""}\u0000${queryRefreshRevision}`;
   const accessCapabilities = selectMaestroCapabilities(accessSnapshot, {
     queryKey: bookmarkQueryKey,
     recordSelected: Boolean(selectedUri),
@@ -2069,24 +2222,17 @@ useEffect(() => {
       if (restoredTree) {
         // Restore the authoritative query through the store so every existing
         // query listener sees the same tree as if the user had built it in the UI.
-        const restoredTextNode = restoredTree.children.find(
-          (node) => node.name === "text" && (node.uiKey === "query-text" || node.id === "query-text"),
-        );
-        setSearch(restoredTextNode?.text ?? "");
+        // Do not call setSearch() on the provisional live tree. The restored
+        // XML is committed once below; draft/UI fields are reconciled later.
         // The Name / All fields / Clear Terms control is derived from the
         // presence of this node and its `property` attribute. Preserve that
         // structure exactly, including a URL that intentionally has no <text>.
         // Keep the datasite field tied to the graph attribute in q, rather than
         // allowing a separately saved draft field to override the shared query.
         const restoredAddress = restoredTree.attributes.addr ?? "";
-        const restoredServer = restoredAddress.includes("@") ? restoredAddress.slice(restoredAddress.indexOf("@") + 1) : "";
-        if (restoredServer) {
-          const matchingEndpoint = fctEndpoints.find((item) =>
-            item.id === restoredServer || graphServerUrlMatches(item.url, restoredServer, item.schemeInferred));
-          // Query + graph-server selector must never point to different stores.
-          // The registry can still be loading on the initial URL restoration.
-          if (matchingEndpoint) setSelectedEndpointId(matchingEndpoint.id);
-        }
+        // Do not select by a session-scoped registry ID here. The XState
+        // selection actor observes the committed query addr, and resolves the
+        // correct ID against whichever registry is currently available.
         const addressDelimiter = restoredAddress.indexOf("@");
         const incomingGraph = addressDelimiter >= 0 ? restoredAddress.slice(0, addressDelimiter) : "";
         // Three distinct address modes: empty graph triggers discovery,
@@ -2216,21 +2362,74 @@ useEffect(() => {
     if (urlStateInitialized) maestroStorageSet("maestro-show-result-badges", showResultBadges ? "true" : "false");
   }, [urlStateInitialized, showResultBadges]);
 
-  // Restore the initial share URL once. Subsequent state changes only rewrite
-  // the address bar; they never navigate or rerun this initializer.
+  const initialUrlRestoredRef = useRef(false);
+  // Preserve the actual arrival URL. React/Next navigation must not reclassify
+  // the visit merely because another subsystem wrote a URL while hydrating.
+  const arrivalSearchRef = useRef<string | null>(null);
+  if (arrivalSearchRef.current === null && typeof window !== "undefined") {
+    arrivalSearchRef.current = window.location.search;
+  }
+
+  // URL startup is a two-stage synchronous conveyor, not an authentication or
+  // server-directory lifecycle. A well-formed q goes through unchanged. With
+  // no q, first create a blank, unaddressed FCT tree; only an absent/incomplete
+  // addr invokes a best-effort LOCAL lookup and finally DBpedia. Auth and
+  // courtesy seeding may finish later; they never hold up a shared URL.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    // Select the URL tab before restoring any query or saved UI state.
-    const tabFromUrl = params.get("tab");
-    const decodedTabFromUrl = decodeAppbarTab(tabFromUrl);
-    if (decodedTabFromUrl) setWorkspaceTab(decodedTabFromUrl);
-    const initialUiState = readShareableUiState();
-    restoreQueryAndUiState(params.get("q"), initialUiState, params.get("history"), true);
-    if (!initialUiState) setShowResultBadges(maestroStorageGet("maestro-show-result-badges") === "true");
-    // An explicit ?tab= wins over a possibly older workspaceTab in saved state.
-    if (decodedTabFromUrl) setWorkspaceTab(decodedTabFromUrl);
-    setUrlStateInitialized(true);
-  // This is intentionally a one-time initializer for the initial URL only.
+    if (initialUrlRestoredRef.current) return;
+    try {
+      const params = new URLSearchParams(arrivalSearchRef.current ?? window.location.search);
+      const supplied = params.get("q");
+      const parsed = supplied?.trim() ? parseFctQueryXml(supplied) : createBlankStartupQuery();
+      // A present but malformed q is not equivalent to a missing q. Reject it
+      // visibly instead of silently discarding the user's saved filters.
+      if (!parsed) throw new Error("The supplied q is not a well-formed FCT query.");
+
+      const rawAddr = (parsed.attributes.addr ?? "").trim();
+      const at = rawAddr.indexOf("@");
+      const explicitServer = at >= 0 ? validGraphServerUrl(rawAddr.slice(at + 1)) : validGraphServerUrl(rawAddr);
+      let prepared = parsed;
+      if (!explicitServer) {
+        const selected = chooseStartupGraphServer({
+          preferredUrl: maestroStorageGet("maestro-last-graph-server-url") ?? "",
+          loginPersonalUrl: authSession?.graphStore ?? "",
+          personalEndpoints: authSession ? readCachedPersonalGraphServers(
+            authSession.graphStore, authSession.userName ?? authSession.username ?? "") : [],
+          directory: readGraphServerDirectory(),
+        });
+        if (selected.addedDefault) collectSharedGraphServer(selected.url);
+        prepared = prepareInitialFctQuery(parsed, selected.url);
+      } else if (at < 0) {
+        // Preserve a legacy server-only addr, adding the required graph prefix.
+        prepared = prepareInitialFctQuery(parsed, explicitServer);
+      }
+
+      const server = (prepared.attributes.addr ?? "").split("@").slice(1).join("@").trim();
+      if (!validGraphServerUrl(server)) throw new Error("No valid graph-server address is available.");
+      const initialUiState = readShareableUiState(arrivalSearchRef.current ?? undefined);
+      const initialXml = serializeFctQuery(prepared);
+      if (!restoreQueryAndUiState(initialXml, initialUiState, params.get("history"), true))
+        throw new Error("The initial FCT query could not be restored.");
+      // No menu ID, health actor or browser preference can override this commit.
+      // Both URL synchronization and normal request effects observe its result.
+      if (workbenchQueryTreeApi.getTree().attributes.addr !== prepared.attributes.addr)
+        throw new Error("The FCT store did not retain the query's graph server.");
+
+      const decodedTabFromUrl = decodeAppbarTab(params.get("tab"));
+      if (decodedTabFromUrl) setWorkspaceTab(decodedTabFromUrl);
+      if (!initialUiState) setShowResultBadges(maestroStorageGet("maestro-show-result-badges") === "true");
+      initialUrlRestoredRef.current = true;
+      setUrlRestoreError("");
+      setUrlStateInitialized(true);
+    } catch (error) {
+      // The only exceptional branch is a malformed supplied q or a failed
+      // canonical store commit. It is terminal, never an endless skeleton.
+      const message = error instanceof Error ? error.message : "The FCT query could not be restored.";
+      browserLog.warn("url.restore.failed", error);
+      setUrlRestoreError(message);
+    }
+  // Run once for the arrival URL. Subsequent personal login/seed changes are
+  // deliberately orthogonal and must not rerun or replace this FCT snapshot.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2284,11 +2483,35 @@ useEffect(() => {
   // Phase C navigation actor owns the Providers Return destination.
   // See useMaestroOperations below; FCT/URL restoration remains authoritative.
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!urlStateInitialized) return;
     const url = new URL(buildCurrentShareUrl());
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   }, [urlStateInitialized, queryXml, queryRevision, selectedEndpointId, selectedFacet, propertiesPage, classesPage, graphsPage, rolesPage, findEndpointsEnabled, centralTab, workspaceTab, queryTreeOpen, showResultBadges, querySourceFormat, defaultLeftTab, focusListOrder, focusWidgetsSuppressed, resultsUiPage, groupUiPage, groupBatchSize, groupBatchOffset, resultsPageSize, selectedUri, graphText, graphAutoFill, rdfSourceUrl, rdfTargetGraph, savedSearchDraft, savedUriDraft, selectedNamePropertyUris, breadcrumbBadgeMode, selectedSignalMode, searchDraft, viewPanel, selectedViewUri, viewProvider, selectedAnalysisUri, analyzeHistogram]);
+
+  // Avoid writing the same restored History URL on every unrelated React
+  // render, dependency refresh, or asynchronous provider validation. An
+  // in-flight write is also deduplicated; only genuine UI-state changes write.
+  const persistedHistoryStateRef = useRef(new Map<string, string>());
+  const pendingHistoryStateRef = useRef(new Map<string, Promise<void>>());
+  async function persistChangedHistoryUrl(historyId: string, stateUrl: string): Promise<void> {
+    if (persistedHistoryStateRef.current.get(historyId) === stateUrl) return;
+    const key = `${historyId}\u0000${stateUrl}`;
+    const pending = pendingHistoryStateRef.current.get(key);
+    if (pending) return pending;
+    const task = (async () => {
+      const response = await clientQueryFavorites({
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "updateState", historyId, stateUrl }), cache: "no-store",
+      });
+      if (!response.ok) throw new Error(`History state update failed (HTTP ${response.status})`);
+      persistedHistoryStateRef.current.set(historyId, stateUrl);
+      if (persistedHistoryStateRef.current.size > 64)
+        persistedHistoryStateRef.current.delete(persistedHistoryStateRef.current.keys().next().value!);
+    })();
+    pendingHistoryStateRef.current.set(key, task);
+    try { await task; } finally { pendingHistoryStateRef.current.delete(key); }
+  }
 
   /** Persist one History visit for a query snapshot, preserving queue ordering. */
   async function writeHistoryVisit(queryXmlSnapshot: string, stateUrlSnapshot: string, action: { operator: "+" | "-"; xpath: string; value?: string } | null) {
@@ -2312,10 +2535,7 @@ useEffect(() => {
       currentParams.set("history", payload.historyId);
       window.history.replaceState(window.history.state, "", `${window.location.pathname}?${currentParams.toString()}${window.location.hash}`);
     }
-    await clientQueryFavorites( {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "updateState", historyId: payload.historyId, stateUrl: visitUrl.toString() }), cache: "no-store",
-    });
+    await persistChangedHistoryUrl(payload.historyId, visitUrl.toString());
   }
 
   /** Commit an actual visit for the exact snapshot before bookmarking.
@@ -2376,10 +2596,7 @@ useEffect(() => {
         // Never overwrite an older visit's URL with the URL for a newer query
         // while that newer query's History item is still being written.
         if (currentId && historyVisitIdRef.current === currentId && historyVisitQueryRef.current === queryXml) {
-          await clientQueryFavorites( {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "updateState", historyId: currentId, stateUrl }), cache: "no-store",
-          });
+          await persistChangedHistoryUrl(currentId, stateUrl);
         }
       } catch (error) {
         browserLog.warn("history.synchronization.failed", error);
@@ -2460,6 +2677,12 @@ useEffect(() => {
       if (typeof uri !== "string" || !uri || node.attributes.exclude?.trim().toLowerCase() === "yes") return [];
       return [{ key: `reverse:${uri}`, uri, direction: "reverse" as const, label: `${toLabel(uri, "Role")} of`, nodeId: node.id }];
     }).filter((option, index, all) => all.findIndex((candidate) => candidate.key === option.key) === index),
+    ...activeTransportedFacets(queryTree).map(alias => ({
+      key: `alias:${alias.id}`, uri: alias.target.attributes.iri,
+      direction: alias.target.name === "property-of" ? "reverse" as const : "forward" as const,
+      label: alias.path.map(hop => `${toLabel(hop.iri, hop.direction === "reverse" ? "Role" : "Property")}${hop.direction === "reverse" ? " of" : ""}`).join(" › "),
+      nodeId: alias.href, anchorId: alias.id, parentId: alias.parentId,
+    })),
   ];
   const selectedGroupByOption = groupByOptions.find((option) => option.key !== "" && option.key === groupByPropertyUri) ?? null;
   // The FCT relationship, not the restored centerTab preference, determines
@@ -2493,7 +2716,8 @@ useEffect(() => {
   const visibleGroupValues = pageGroupValues;
   const groupedPersonalFacetUri = selectedGroupByOption?.direction === "forward"
     && selectedGroupByOption.uri !== RDF_TYPE_URI
-    && personalWidgets.some((widget) => widget.uri === selectedGroupByOption.uri && !widget.excluded)
+    && personalWidgets.some((widget) => widget.uri === selectedGroupByOption.uri && !widget.excluded &&
+      (!selectedGroupByOption.anchorId || widget.anchor?.id === selectedGroupByOption.anchorId))
     ? selectedGroupByOption.uri
     : null;
   const isGroupByCategory = selectedGroupByOption?.direction === "forward" && selectedGroupByOption.uri === RDF_TYPE_URI;
@@ -2630,46 +2854,10 @@ useEffect(() => {
   const alphabetQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
     type: FCT_VIEW_TYPES.ALPHABET, index: "", indexLabels: alphabetLabelUris, limit: "26", offset: "0",
   }));
-  // ASK preflight: clone the *live* query and append only the label
-  // relationship to its active view scope. Do not run the alphabet query,
-  // its language/initial filters, GROUP BY, or any count until ASK is true.
-  const alphabetAskQueryXml = (() => {
-    const clone = setQueryViewAttributes(queryTree, {
-      type: FCT_VIEW_TYPES.ASK, index: "", limit: "1", offset: "0",
-    });
-    const addLabelAtViewScope = (nodes: FctQueryNode[], parentName = "query"): FctQueryNode[] => {
-      // Literal values at a forward-property focus do not have RDF labels.
-      // The alphabet query includes them, so the preflight must too.
-      if (nodes.some((node) => node.name === "view")) return parentName === "property" ? nodes : [
-        ...nodes,
-        { id: "alphabet-preflight-label", name: "property", attributes: { iri: alphabetLabelUris }, children: [] },
-      ];
-      return nodes.map((node) => ({ ...node, children: addLabelAtViewScope(node.children, node.name) }));
-    };
-    return serializeFctQuery({ ...clone, children: addLabelAtViewScope(clone.children) });
-  })();
-  // Each alphabet badge now uses the same letter-restricted WHERE clause as
-  // the Results view. Virtuoso's grouped uppercase-initial aggregate produced
-  // incorrect totals on DBpedia, whereas the scalar Z count returned 3.
-  // Derive each letter's count as FCT XML; compiled SPARQL remains opaque.
-  const alphabetCountQueryForLetter = (letter: string): string => {
-    if (!/^[A-Z]$/.test(letter)) throw new Error("Invalid alphabet letter.");
-    return alphabetQueryXml
-      .replace('type="alphabet"', `type="${FCT_VIEW_TYPES.COUNT_DISTINCT}"`)
-      .replace('index=""', `index="${letter}"`);
-  };
+  // Inspector shows the same single grouped alphabet request that executes.
   const alphabetSparql = (() => {
-    try {
-      const selected = queryTree.children.flatMap((node) => {
-        const collect = (item: FctQueryNode): string[] => item.name === "view"
-          ? [item.attributes.index ?? ""] : item.children.flatMap(collect);
-        return collect(node);
-      }).find((letter) => /^[A-Z]$/.test(letter));
-      const letter = selected || "A";
-      return `# Alphabet count for ${letter} is compiled exclusively from FCT XML.\n${compileFctXmlToSparql(alphabetCountQueryForLetter(letter)).query}`;
-    } catch (error) {
-      return `# Alphabet count compilation failed: ${error instanceof Error ? error.message : String(error)}`;
-    }
+    try { return compileFctXmlToSparql(alphabetQueryXml).query; }
+    catch (error) { return `# Alphabet compilation failed: ${error instanceof Error ? error.message : String(error)}`; }
   })();
   const currentView = (() => {
     const seek = (nodes: FctQueryNode[]): FctQueryNode | undefined => {
@@ -2698,7 +2886,10 @@ useEffect(() => {
   
   
   
-  const queryGraphServer = readGraphServerFromQueryXml(queryCountXml);
+  // Re-parsing our own serialized XML for its root address introduced an
+  // independent DOMParser failure gate. The query-tree root owns addr; clones
+  // used for counting and Results retain that same execution address.
+  const queryGraphServer = graphRegistryReady ? authoritativeServerUrl : null;
   // Graph auto-fill is optional address enrichment, not graph-server health.
   // An inconclusive/failed discovery must not disable ordinary FCT queries.
   const graphAddress = queryTree.attributes.addr ?? "";
@@ -2707,14 +2898,14 @@ useEffect(() => {
   setObservationQueryAddr(queryTree.attributes.addr ?? "");
   // Reuse the existing canonical query identity, which excludes pagination.
   // Results page changes must not restart a potentially expensive graph probe.
-  const graphProbeIdentity = `${bookmarkQueryKey}\u0000${selectedEndpointId}\u0000${queryRefreshRevision}`;
+  const graphProbeIdentity = `${bookmarkQueryKey}\u0000${queryGraphServer ?? ""}\u0000${queryRefreshRevision}`;
   const [graphProbe, setGraphProbe] = useState<{ identity: string; state: "empty" | "running" | "no-graph" | "error"; error?: string }>({ identity: "", state: "empty" });
-  const graphResolutionReady = graphAutoFillAllowsQuery({
-    enabled: graphAutoFill, graphSelected: graphAlreadySelected,
-    graphFieldEditing, queryIdentity: graphProbeIdentity,
-    probeIdentity: graphProbe.identity, probeState: graphProbe.state,
-  });
-  const selectedRegisteredGraphServer = fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId);
+  // Resolve by the live query URL first. On logout a newly loaded public
+  // registry may assign a different UI ID, but the endpoint remains usable
+  // throughout the XState reconciliation and must not blank Browse.
+  const selectedRegisteredGraphServer = fctEndpoints.find((endpoint) => queryGraphServer &&
+    graphServerUrlMatches(endpoint.url, queryGraphServer, endpoint.schemeInferred)) ??
+    fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId);
   const queryServerMatchesSelection = Boolean(queryGraphServer && selectedRegisteredGraphServer &&
     graphServerUrlMatches(selectedRegisteredGraphServer.url, queryGraphServer, selectedRegisteredGraphServer.schemeInferred));
   const selectedServerProvenHealthy = Boolean(selectedEndpointStatus?.state === "ok" && selectedEndpointStatus.status === 200 &&
@@ -2773,11 +2964,11 @@ useEffect(() => {
   // cannot alter the FCT scope used for graph discovery.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlStateInitialized, graphHealthReady, graphAlreadySelected, graphFieldEditing, graphAutoFill, graphProbeIdentity]);
-  const endpointReadyForQuery = graphRegistryReady && graphResolutionReady && Boolean(
-    selectedEndpointId && graphHealthReady &&
-    // addr is authoritative: the verified SPARQL URL must be the one in <query>.
-    queryServerMatchesSelection
-  );
+  // Graph health and auto-fill are observational, not execution gates.
+  // A stale green check, an unavailable health probe, or optional discovery
+  // must not block Browse or reset its already-running data pipeline. URL
+  // restoration and a selected, registered FCT endpoint remain authoritative.
+  const endpointReadyForQuery = Boolean(queryGraphServer);
 
   // History navigation holds the old pipeline suspended while the RDF History
   // item and potentially a different graph server are being restored.
@@ -2801,6 +2992,10 @@ useEffect(() => {
     setResultsPageComplete(false);
     resultsLoadedQueryIdentityRef.current = "";
     resultsBatchRequestPending.current = false;
+    // Aborted promises deliberately cannot publish to the replacement query.
+    // Clear their old loading flags at this atomic query boundary, too.
+    setIsSearching(false);
+    setIsCountingResults(false);
     setGroupValues([]);
     setGroupMembers({});
     setGroupValuesError("");
@@ -2819,43 +3014,47 @@ useEffect(() => {
     setAlphabetCounts({});
     setAlphabetError("");
     alphabetCountsQueryRef.current = "";
-  }, [queryCountXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+  // A registry ID may change on logout while the graph-server URL stays the
+  // same. Never clear results or reset clocks for that administrative change.
+  }, [queryCountXml, queryGraphServer, queryRefreshRevision]);
 
 
   
-  // A URL load or an attempted query against a non-green server triggers
-  // exactly one selected-server health check. No startup failover or bulk scans.
-  
-  
+  // Selection is enough to initiate health verification. The selected entry
+  // may be restored from local preferences *before* an empty FCT query gets an
+  // addr; do not make that missing addr prevent the only check that would
+  // reveal whether the server is usable. Once addr exists, its URL wins over
+  // any stale preference until the selection actor catches up.
   useEffect(() => {
-    if (!urlStateInitialized || !graphRegistryReady || !selectedEndpointId) return;
-    const selected = fctEndpoints.find((item) => item.id === selectedEndpointId);
-    if (!selected || !queryGraphServer || !graphServerUrlMatches(selected.url, queryGraphServer, selected.schemeInferred)) return;
-    if (selectedServerProvenHealthy) return;
-    // One automatic health-check sequence per selected server. Query revisions
-    // must not restart its progress bar; a manual Refresh can retry explicitly.
-    const probeKey = `${selected.id}\u0000${queryGraphServer}`;
+    const target = resolveSelectedGraphHealthTarget(fctEndpoints, selectedEndpointId, queryGraphServer);
+    if (!target) return;
+    const { endpoint: selected, testedUrl } = target;
+    const previous = endpointStatuses[selected.id];
+    if (previous?.state === "ok" && previous.status === 200 &&
+        graphServerUrlMatches(previous.testedUrl ?? "", testedUrl)) return;
+    // The URL is the actual server identity. Changing the selected server
+    // starts a fresh probe, without restarting on query edits or pagination.
+    const probeKey = `${selected.id}\u0000${testedUrl}`;
     if (lastPreflightRef.current === probeKey || preflightInFlightRef.current === probeKey) return;
     lastPreflightRef.current = probeKey;
     preflightInFlightRef.current = probeKey;
-    // The outer startup sequence owns the progress indicator across all retries.
-    // Individual probe attempts must not reset or hide it.
     setEndpointChecksCompleted(0);
     setEndpointChecksTotal(3);
     setIsCheckingEndpoints(true);
     void (async () => {
       try {
-        // A cold start can race the proxy registry/session initialization. Only
-        // report an unavailable server after a couple of bounded retries; the
-        // manual toast Refresh used to work because it happened later.
+        // Bounded retries absorb a cold proxy startup. They use the existing
+        // FCT health route; they never run a Results query or change addr.
         let health: EndpointStatus | undefined;
         for (let attempt = 0; attempt < 3; attempt += 1) {
           if (attempt > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, attempt * 900));
-          health = await checkSelectedGraphServer(selected, false, queryGraphServer);
+          if (preflightInFlightRef.current !== probeKey) return;
+          health = await checkSelectedGraphServer(selected, false, testedUrl);
           if (preflightInFlightRef.current !== probeKey) return;
           setEndpointChecksCompleted(attempt + 1);
           if (health.state === "ok" && health.status === 200) break;
         }
+        if (preflightInFlightRef.current !== probeKey) return;
         if (health?.state !== "ok" || health.status !== 200) {
           setEndpointHealthToast({ endpointId: selected.id, message: health?.state === "probe-error"
             ? `The SPARQL health probe could not verify ${selected.label}'s response format.`
@@ -2871,13 +3070,15 @@ useEffect(() => {
         }
       }
     })();
+    // A published health result is observed by the XState health actor, but
+    // merely publishing it must not restart the preflight. The source of
+    // preflight identity is the resolved selected server and address only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlStateInitialized, graphRegistryReady, selectedEndpointId, fctEndpoints, queryGraphServer, queryRefreshRevision, queryRevision]);
+  }, [selectedEndpointId, fctEndpoints, queryGraphServer, queryRefreshRevision]);
 
-  // A cheap ASK first determines whether the current scope has labels.
-  // Only a true response reveals the pane and starts counts.
-  // Both requests share the same AbortController so navigation cannot publish
-  // stale letters or reveal the pane for an earlier query.
+  // A single grouped FCT alphabet request replaces the old ASK + 26 scalar
+  // count-distinct requests. The server returns one (initial, COUNT(DISTINCT
+  // focus)) row per available initial, all using the same query snapshot.
   useEffect(() => {
     const controller = new AbortController();
     if (alphabetCountsQueryRef.current !== alphabetQueryXml) {
@@ -2887,90 +3088,51 @@ useEffect(() => {
     setAlphabetPreflight("checking");
     setIsLoadingAlphabet(false);
     setAlphabetError("");
-    if (!selectedEndpointId || !endpointReadyForQuery) {
+    if (!queryGraphServer || !endpointReadyForQuery) {
       setAlphabetPreflight("unavailable");
       return () => controller.abort();
     }
+    setIsLoadingAlphabet(true);
     void (async () => {
       try {
-        const askResponse = await cachedFetchFct("/proxy/api/fct", {
+        const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("alphabet-ask", "AlphabetSystemFacetAsk") },
-          body: alphabetAskQueryXml,
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("alphabet-counts", "AlphabetGroupedCounts"), ...componentRetryHeaders(retryAlphabet) },
+          body: alphabetQueryXml,
         });
-        const askXml = await askResponse.text();
-        if (!askResponse.ok) throw new Error(`Alphabet preflight returned HTTP ${askResponse.status}: ${askXml.slice(0, 300)}`);
-        const askDoc = new DOMParser().parseFromString(askXml, "application/xml");
-        if (askDoc.querySelector("parsererror")) throw new Error("Invalid alphabet ASK response XML.");
-        const decision = Array.from(askDoc.getElementsByTagName("*")).find((node) => node.localName === "boolean")?.textContent?.trim();
-        if (decision !== "true" && decision !== "false") throw new Error("Alphabet preflight returned no valid boolean.");
+        if (!response.ok) throw new Error(`Alphabet aggregate returned HTTP ${response.status}`);
+        const payload = await readFctResponse(response);
+        if (payload.incomplete || payload.viewType !== FCT_VIEW_TYPES.ALPHABET)
+          throw new Error("Alphabet aggregate was incomplete or had the wrong view type.");
+        const counts: Record<string, number> = {};
+        for (const row of payload.rows) {
+          const letter = row[0]?.value;
+          const count = Number(row[1]?.value);
+          if (typeof letter !== "string" || !/^[A-Z]$/.test(letter) ||
+              !Number.isSafeInteger(count) || count < 0 || counts[letter] !== undefined)
+            throw new Error("Alphabet aggregate returned an invalid or duplicated initial count.");
+          counts[letter] = count;
+        }
         if (controller.signal.aborted) return;
-        if (decision === "false") {
-          setAlphabetPreflight("unavailable");
-          setAlphabetCounts({});
-          return;
-        }
-        setAlphabetPreflight("available");
-        setIsLoadingAlphabet(true);
-        // The grouped first-letter aggregate is not equivalent to the scalar
-        // letter-restricted count on Virtuoso (observed on DBpedia: Z=1 vs 3).
-        // Derive each count from the exact TEXT Results selection, including
-        // its scope, label predicates, and language restriction.
-        const letters = Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-        const next: Record<string, number> = {};
-        const failures: string[] = [];
-        const countLetter = async (letter: string): Promise<void> => {
-          const queryXml = alphabetCountQueryForLetter(letter);
-          const response = await cachedFetchFct("/proxy/api/fct", {
-            method: "POST", cache: "no-store", signal: controller.signal,
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("alphabet-letter-count", `AlphabetCount:${letter}`) },
-            body: JSON.stringify({ queryXml }),
-          });
-          if (!response.ok) throw new Error(`Letter ${letter}: HTTP ${response.status}`);
-          const payload = await readFctResponse(response);
-          const count = Number(payload.rows[0]?.[0]?.value);
-          if (payload.incomplete || payload.viewType !== FCT_VIEW_TYPES.COUNT_DISTINCT || !Number.isSafeInteger(count) || count < 0) {
-            throw new Error(`Letter ${letter}: incomplete or invalid count`);
-          }
-          next[letter] = count;
-        };
-        // Limit concurrent full-text aggregates against public SPARQL endpoints.
-        let cursor = 0;
-        await Promise.all(Array.from({ length: 3 }, async () => {
-          while (!controller.signal.aborted && cursor < letters.length) {
-            const letter = letters[cursor++];
-            try { await countLetter(letter); }
-            catch (error) {
-              if (!controller.signal.aborted) failures.push(error instanceof Error ? error.message : String(error));
-            }
-          }
-        }));
-        if (!controller.signal.aborted) {
-          setMaestroIncompleteResults("alphabet", {
-            incomplete: failures.length > 0, requestId: "", message: failures.join("; "),
-          });
-          setAlphabetCounts(next);
-          if (failures.length) setAlphabetError(`${failures.length} alphabet letter counts could not be verified.`);
-          if (!Object.values(next).some((count) => count > 0)) setAlphabetPreflight("unavailable");
-        }
+        setMaestroIncompleteResults("alphabet", { incomplete: false, requestId: "", message: "" });
+        setAlphabetCounts(counts);
+        setAlphabetPreflight(Object.values(counts).some(count => count > 0) ? "available" : "unavailable");
       } catch (error) {
-        if (!controller.signal.aborted) {
-          setAlphabetError(error instanceof Error ? error.message : "Could not load alphabet counts.");
-          setAlphabetPreflight("unavailable");
-          setAlphabetCounts({});
-        }
+        if (controller.signal.aborted) return;
+        const message = error instanceof Error ? error.message : "Could not load alphabet counts.";
+        setAlphabetError(message);
+        setMaestroIncompleteResults("alphabet", { incomplete: true, requestId: "", message });
+        setAlphabetPreflight("unavailable");
+        setAlphabetCounts({});
       } finally {
         if (!controller.signal.aborted) setIsLoadingAlphabet(false);
       }
     })();
     return () => {
       controller.abort();
-      // Aborted operations intentionally skip their finally setter. Release
-      // the previous request's loading state even when no replacement starts
-      // (e.g. Home with no Alphabet index, or an endpoint becoming unavailable).
       setIsLoadingAlphabet(false);
     };
-  }, [alphabetQueryXml, alphabetAskQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+  }, [alphabetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryAlphabet]);
 
   useEffect(() => {
     // Keep the view's persisted index label predicates consistent with changes
@@ -2982,13 +3144,15 @@ useEffect(() => {
   // do not clear widgets merely because arbitrary query state changed. The
   // coordinated clear is invoked only by the explicit view-navigation actions.
   useLayoutEffect(() => {
-const queryIdentity = `${selectedEndpointId}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
+const queryIdentity = `${queryGraphServer ?? ""}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
 activeQueryIdentityRef.current = queryIdentity;
-}, [queryCountXml, selectedEndpointId, endpointReadyForQuery]);
+}, [queryCountXml, queryGraphServer, endpointReadyForQuery]);
 
 useEffect(() => {
   if (!urlStateInitialized || !endpointReadyForQuery) return;
-  const nextIdentity = `${selectedEndpointId}\u0000${queryCountXml}`;
+  // Registry IDs change across sessions. Only the executable FCT addr and
+  // query itself should count as a new Browse scope for reset/page navigation.
+  const nextIdentity = `${queryGraphServer}\u0000${queryCountXml}`;
   const previousIdentity = previousResultsQueryIdentityRef.current;
 
   previousResultsQueryIdentityRef.current = nextIdentity;
@@ -3016,7 +3180,7 @@ useEffect(() => {
   }
 }, [
   queryResultsXml,
-  selectedEndpointId,
+  queryGraphServer,
   urlStateInitialized,
   endpointReadyForQuery,
   resultsOffset,
@@ -3032,8 +3196,11 @@ useEffect(() => {
     setResultsPageMatchCount(0);
     setResultsPageComplete(false);
     setResultsTotalCount(null);
-    setIsCountingResults(endpointReadyForQuery);
-    setIsSearching(endpointReadyForQuery);
+    // A navigation has not yet started either request. Do not retain loading
+    // flags from the old query while the new FCT addr/XState scope reconciles.
+    // Each Results/count effect turns its own flag on when it actually starts.
+    setIsCountingResults(false);
+    setIsSearching(false);
     setSearchError("");
     setSparqlQuery("");
   setSparqlExecutionAddr("");
@@ -3232,10 +3399,10 @@ useEffect(() => {
   const { recordValidation, setRecordValidation, isValidatingRecord, setIsValidatingRecord } = useRecordValidationState(recordLifecycle);
   const { formattedRecordHtml, setFormattedRecordHtml, recordLabelRevision, setRecordLabelRevision, formattedRecordButtonsHtml, setFormattedRecordButtonsHtml, recordFormatPreviews, setRecordFormatPreviews, recordFormatMenuOpen, setRecordFormatMenuOpen, recordControlsOpen, setRecordControlsOpen, recordFormatError, setRecordFormatError, bookmarkQueryDebugOpen, setBookmarkQueryDebugOpen, bookmarkQueryDebug, setBookmarkQueryDebug, recordServices, setRecordServices, recordServiceTab, setRecordServiceTab, recordServiceResults, setRecordServiceResults, recordServiceArguments, setRecordServiceArguments, recordServiceDom, setRecordServiceDom, recordDebug, setRecordDebug, recordUriLabelCacheRef, activeServiceRecordRef, formattedRecordContainerRef } = useRecordPresentationState(preferredAlphabetLanguage, recordLifecycle);
   /** Download the RDF triples in the exact DESCRIBE snapshot shown in Record. */
-  const downloadRecordDescribe = () => downloadRecordDescribeSnapshot(
+  const downloadRecordDescribe = (format: RecordExportFormat = "ntriples") => downloadRecordDescribeSnapshot(
     recordDescriptionSnapshot,
     currentRecordDescriptionKey,
-    selectedUri,
+    selectedUri, format, recordDownloadTitle(describedRecord, selectedUri),
   );
   const { recordDescriptionPage, setRecordDescriptionPage, recordDescriptionPageSize, setRecordDescriptionPageSize, recordDescriptionQueryLimit, setRecordDescriptionQueryLimit, pendingRecordDescriptionLimit, setPendingRecordDescriptionLimit, pendingCenterBatchLimit, setPendingCenterBatchLimit, pendingLeftPanelLimit, setPendingLeftPanelLimit, pendingGroupsBatchLimit, setPendingGroupsBatchLimit } = useRecordPageSettings();
   const previousSettingsRevisionRef = useRef<string | null>(null);
@@ -3328,9 +3495,9 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   const blankNodeAnchor: BNodeRecordAnchor | null = explicitBlankNodeAnchor?.label === selectedUri
     ? { parent: explicitBlankNodeAnchor.parent, predicate: explicitBlankNodeAnchor.predicate }
     : blankNodeTerm ? boundBlankNodeAnchorFromFct(queryTree, getPropertyPath()) ?? null : null;
-  const currentRecordDescriptionKey = [selectedUri, blankNodeTerm ? "bnode" : currentRecordIdentity?.termType ?? "uri", blankNodeAnchor?.parent ?? "", blankNodeAnchor?.predicate ?? "", blankNodeAnchor?.direction ?? "", blankNodeAnchor?.depth ?? "", currentRecordIdentity?.datatype ?? "", currentRecordIdentity?.lang ?? "", selectedEndpointId, queryTree.attributes.addr ?? "",
+  const currentRecordDescriptionKey = [selectedUri, blankNodeTerm ? "bnode" : currentRecordIdentity?.termType ?? "uri", blankNodeAnchor?.parent ?? "", blankNodeAnchor?.predicate ?? "", blankNodeAnchor?.direction ?? "", blankNodeAnchor?.depth ?? "", currentRecordIdentity?.datatype ?? "", currentRecordIdentity?.lang ?? "", queryGraphServer, queryTree.attributes.addr ?? "",
     queryTree.attributes.graph ?? "", queryTree.attributes.inference ?? "", queryTree.attributes["same-as"] ?? "",
-    selectedRecordGraph, selectedRecordAuthor, recordDescriptionQueryLimit, preferredAlphabetLanguage].join("\u0000");
+    selectedRecordGraph, selectedRecordAuthor, recordDescriptionQueryLimit, preferredAlphabetLanguage, retryRecord].join("\u0000");
 
 
   const resultsCountSparql = buildFctCountSparql(queryTree);
@@ -3348,17 +3515,18 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   }));
   // Phase C: keyed graph/query/navigation XState actors orchestrate the
   // existing data-plane. The proxy scheduler remains the request authority.
-  const operationGraphKey = `${selectedEndpointId}\u0000${queryGraphServer ?? ""}`;
-  const operationQueryKey = `${selectedEndpointId}\u0000${resultsRequestXml}\u0000${queryRefreshRevision}`;
+  const operationGraphKey = queryGraphServer ?? "";
+  const operationQueryKey = `${queryGraphServer}\u0000${resultsRequestXml}\u0000${queryRefreshRevision}\u0000${retryResults}`;
   const operations = useMaestroOperations({
     graphKey: operationGraphKey,
     graphRegistryReady,
-    graphSelected: Boolean(selectedEndpointId),
-    graphReady: graphHealthReady,
+    graphSelected: Boolean(queryGraphServer),
+    graphReady: endpointReadyForQuery,
     querySourceReady: endpointReadyForQuery,
-    graphFailed: Boolean(selectedEndpointStatus && selectedEndpointStatus.state !== "ok" && selectedEndpointStatus.state !== "probe-error"),
+    graphFailed: false, // Network health is informative, never an XState execution gate for an explicit addr.
     queryKey: operationQueryKey,
     queryHydrated: urlStateInitialized,
+    queryRestoreError: urlRestoreError,
     navigationKey: queryXml,
     navigationUrl: typeof window === "undefined" ? "" : buildCurrentShareUrl(),
     navigationTab: workspaceTab,
@@ -3367,10 +3535,37 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     restoringHistory: historyRestoreInProgressRef.current,
   });
   const canExecuteMaestroQuery = operations.execution.canExecuteQuery;
+  // Debug-only control-plane trace for a restored Browse query that never
+  // dispatches Results. This is an observation of existing gates, not another
+  // lifecycle, request, timer, or source of truth. The compact code contains
+  // booleans only: h=hydrated, r=registry, s=selected endpoint, m=query URL
+  // matches registry, e=endpoint execution-ready, x=XState execution-ready.
+  // Do not log query XML, graph IRIs, registry IDs or credentials.
+  const resultsGateTraceCode = [
+    `h${Number(urlStateInitialized)}`,
+    `r${Number(graphRegistryReady)}`,
+    `s${Number(Boolean(selectedEndpointId))}`,
+    `m${Number(queryServerMatchesSelection)}`,
+    `e${Number(endpointReadyForQuery)}`,
+    `x${Number(canExecuteMaestroQuery)}`,
+  ].join(".");
+  const resultsGateTracePhase = `${operations.execution.graphPhase}.${operations.execution.queryPhase}`;
+  const previousResultsGateTraceRef = useRef("");
+  useEffect(() => {
+    // Settings restore asynchronously from IndexedDB. Keep the first complete
+    // gate snapshot available when Debug logging is enabled after hydration.
+    if (!browserLogging || (browserLogLevel !== "debug" && browserLogLevel !== "trace")) return;
+    const traceIdentity = `${resultsGateTraceCode}|${resultsGateTracePhase}`;
+    if (previousResultsGateTraceRef.current === traceIdentity) return;
+    previousResultsGateTraceRef.current = traceIdentity;
+    browserLog.debug("browse.results.gate", {
+      component: "ResultsGate", code: resultsGateTraceCode, kind: resultsGateTracePhase,
+    });
+  }, [resultsGateTraceCode, resultsGateTracePhase, browserLogging, browserLogLevel]);
   const returnShareUrl = operations.snapshot.navigation.returnUrl || null;
   const returnButtonVisible = operations.snapshot.navigation.returnVisible;
   const historyNavigationPending = operations.snapshot.navigation.historyPending;
-  const resultsCountRequestIdentity = `${selectedEndpointId}\u0000${resultsCountSparql ?? ""}`;
+  const resultsCountRequestIdentity = `${queryGraphServer ?? ""}\u0000${resultsCountSparql ?? ""}`;
   const completeFirstResultsPage = resultsPageComplete && resultsOffset === 0 &&
     resultsLoadedQueryIdentityRef.current === activeQueryIdentityRef.current;
   const latestResultsCountRequestIdentityRef = useRef(resultsCountRequestIdentity);
@@ -3442,8 +3637,10 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       cancelled = true;
       window.clearTimeout(timer);
       controller.abort();
+      // The old scalar COUNT must not hold the replacement query in loading.
+      setIsCountingResults(false);
     };
-  }, [urlStateInitialized, resultsCountSparql, resultsCountRequestIdentity, selectedEndpointId, endpointReadyForQuery, canExecuteMaestroQuery, queryRefreshRevision, completeFirstResultsPage, queryXml]);
+  }, [urlStateInitialized, resultsCountSparql, resultsCountRequestIdentity, queryGraphServer, endpointReadyForQuery, canExecuteMaestroQuery, queryRefreshRevision, completeFirstResultsPage, queryXml]);
 
   // Hydrate from the existing Maestro IndexedDB store (not the live query XML).
   useEffect(() => {
@@ -3521,14 +3718,14 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   // request effects can briefly show counts from the previous query.
   
   useLayoutEffect(() => {
-    const identity = `${selectedEndpointId}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}\u0000${propertyFacetQueryXml}\u0000${roleFacetQueryXml}`;
+    const identity = `${queryGraphServer ?? ""}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}\u0000${propertyFacetQueryXml}\u0000${roleFacetQueryXml}`;
     if (pendingConfigureFacetIdentityRef.current === identity) return;
     pendingConfigureFacetIdentityRef.current = identity;
     if (endpointReadyForQuery) {
       setIsLoadingProperties(true);
       setIsLoadingRoles(true);
     }
-  }, [selectedEndpointId, endpointReadyForQuery, propertyFacetQueryXml, roleFacetQueryXml]);
+  }, [queryGraphServer, endpointReadyForQuery, propertyFacetQueryXml, roleFacetQueryXml]);
 
   // Mirror the Group By scroll behavior for Color By, including a selection
   // restored from a share URL after the Map perspective mounts.
@@ -3536,7 +3733,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   useEffect(() => {
     const handleSelection = (event: Event) => {
       const { direction, iri } = (event as CustomEvent<{ direction: string; iri: string }>).detail ?? {};
-      if (typeof iri === "string" && iri && ["forward", "reverse", "class"].includes(direction)) {
+      if (typeof iri === "string" && iri && ["forward", "reverse", "class", "alias"].includes(direction)) {
         setDefaultLeftTab("personal");
         setColorByScrollTarget({ direction, iri });
       }
@@ -3557,13 +3754,13 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     target.scrollIntoView({ behavior: "smooth", block: "start" });
     setColorByScrollTarget(null);
   }, [colorByScrollTarget, defaultLeftTab, isLoadingClasses, isLoadingRoles,
-      isLoadingProperties, personalWidgets.map(widget => widget.uri).join("|"),
+      isLoadingProperties, personalWidgets.map(widget => widget.key ?? widget.uri).join("|"),
       roleFacets.map(facet => facet.uri).join("|")]);
 
   // Scroll to the active Group by facet when that widget's own request settles.
   // Other facet widgets load independently and must not delay this scroll.
   useEffect(() => {
-    const facetLoadKey = `${queryXml}\u0000${selectedEndpointId}\u0000${search}`;
+    const facetLoadKey = `${queryXml}\u0000${queryGraphServer ?? ""}\u0000${search}`;
     const targetLoading = isGroupByCategory
       ? isLoadingClasses
       : groupedRoleUri
@@ -3631,24 +3828,36 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     // Results already subscribes to endpoint readiness and the restored query.
     // Do not advance searchPipelineRun here: it schedules a *second* identical
     // first-load request whenever the initial search text is empty.
-  }, [urlStateInitialized, selectedEndpointId, canExecuteMaestroQuery, initialBrowseTriggered, search]);
+  }, [urlStateInitialized, queryGraphServer, canExecuteMaestroQuery, initialBrowseTriggered, search]);
 
   useEffect(() => {
     let cancelled = false;
     // One controller owns both stages of this Results run. When the query,
     // endpoint, or page changes, cleanup aborts any in-flight client requests.
     const controller = new AbortController();
-    const requestQueryIdentity = `${selectedEndpointId}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
+    const requestQueryIdentity = `${queryGraphServer ?? ""}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
 
     // Do not fetch the default tree while a shared query is restoring, or
     // before the selected endpoint has passed the health check. Empty search
     // remains a valid query once both prerequisites are ready.
     const endpointReady = endpointReadyForQuery && canExecuteMaestroQuery;
-    if (!urlStateInitialized || !endpointReady) return;
+    if (!urlStateInitialized || !endpointReady) {
+      // A Share URL may have replaced a running query while the controller
+      // has not yet observed the new query key. No request owns this spinner.
+      setIsSearching(false);
+      return;
+    }
     setSearchError("");
+    // These two markers distinguish debounce starvation from an XState gate
+    // that never opens. They use the established browser logger, which is
+    // controlled by Sheet settings and redacts all query/server information.
+    let timerFired = false;
+    browserLog.debug("browse.results.debounce.armed", { component: "ResultsGate", code: "armed", timeoutMs: 350 });
 
     const timer = setTimeout(async () => {
       if (controller.signal.aborted) return;
+      timerFired = true;
+      browserLog.debug("browse.results.debounce.fired", { component: "ResultsGate", code: "fired" });
       setIsSearching(true);
       operations.controller.send({ type: "RESULTS_STARTED", key: operationQueryKey });
       setSearchError("");
@@ -3661,12 +3870,12 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         const response = await (resultsQueryHasStatuses
           ? cachedFetchFct("/proxy/api/fct", {
               method: "POST", cache: "no-store", signal: controller.signal,
-              headers: { "Content-Type": "text/xml; charset=utf-8" }, body: resultsRequestXml,
+              headers: { "Content-Type": "text/xml; charset=utf-8", ...componentRetryHeaders(retryResults) }, body: resultsRequestXml,
             })
           : cachedFetchFct("/proxy/api/fct", {
               method: "POST", cache: "no-store",
               headers: { "Content-Type": "text/xml; charset=utf-8",
-                ...proxyDebugHeaders("results-search", `ResultsSearch:${proxyDebugFingerprint(resultsRequestXml)}`) },
+                ...proxyDebugHeaders("results-search", `ResultsSearch:${proxyDebugFingerprint(resultsRequestXml)}`), ...componentRetryHeaders(retryResults) },
               body: resultsRequestXml, signal: controller.signal,
             }));
         // Preserve the actual FCT transport response for diagnosing discrepancies
@@ -3736,12 +3945,18 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     }, 350);
 
     return () => {
+      if (!timerFired) browserLog.debug("browse.results.debounce.cancelled", {
+        component: "ResultsGate", code: "cancelled-before-dispatch",
+      });
       cancelled = true;
       clearTimeout(timer);
       controller.abort();
+      // Cleanup runs before the replacement Results effect. A canceled old
+      // request must not leave `isSearching` true if no new request can start.
+      setIsSearching(false);
       operations.controller.send({ type: "RESULTS_CANCELLED", key: operationQueryKey });
     };
-  }, [urlStateInitialized, resultsRequestXml, resultsQueryHasStatuses, resultsBatchSize, queryCountXml, resultsOffset, selectedEndpointId, endpointReadyForQuery, canExecuteMaestroQuery, operationQueryKey, operations.controller, searchPipelineRun]);
+  }, [urlStateInitialized, resultsRequestXml, resultsQueryHasStatuses, resultsBatchSize, queryCountXml, resultsOffset, queryGraphServer, endpointReadyForQuery, canExecuteMaestroQuery, operationQueryKey, operations.controller, searchPipelineRun]);
 
   // Result badges are optional SPARQL enrichment. Keep this separate from the
   // FCT search pipeline so toggling badges never reloads/flickers the result set.
@@ -3763,15 +3978,6 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   // The separate list-values request receives its columns explicitly.
   // This is the same FCT XML supplied to Results list-values enrichment.
   // Its response carries both executed SPARQL statements (page + projections).
-  const resultsListValuesXml = (() => {
-    if (!showResultBadges) return "";
-    try {
-      return listValuesQueryClone(serializeFctQuery(queryTree));
-    } catch { return ""; }
-  })();
-  // The inspector must show list-values SPARQL, never the unrelated Results
-  // SELECT. Render its real projection with the currently selected page terms
-  // even before the asynchronous enrichment reply brings execution metadata.
   const projectedPageTerms = results.filter(item => item.uri && item.termType !== "bnode").map(item => ({
     type: (item.termType === "literal" ? "literal" : "uri") as "uri" | "literal",
     value: item.uri, ...(item.datatype ? { datatype: item.datatype } : {}), ...(item.lang ? { lang: item.lang } : {}),
@@ -3781,6 +3987,13 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     ...(resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000").filter(uri => uri !== RDF_TYPE_URI).map(property => ({ property, direction: "forward" as const })) : []),
     ...(resultBadgeRolesKey ? resultBadgeRolesKey.split("\u0000").map(property => ({ property, direction: "reverse" as const })) : []),
   ];
+  const resultsListValuesXml = (() => {
+    if (!showResultBadges || !projectedPageTerms.length) return "";
+    try {
+      return mergeValuesQueryClone(serializeFctQuery(queryTree), projectionColumns,
+        projectedPageTerms.slice(0, LIST_VALUES_MAX_RESOURCES));
+    } catch { return ""; }
+  })();
   const projectionGraph = (queryTree.attributes.addr ?? "").split("@")[0];
   const resultsListValuesSparql = resultsListValuesXml && resultListValuesDebug?.xml === resultsListValuesXml
     ? resultListValuesDebug.sparql
@@ -3813,12 +4026,12 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         property, label: toLabel(property), direction: "reverse" as const, values: [{ value: "-" }],
       })),
     ];
-    const enrichmentScope = `list-values-projected-v2\u0000${selectedEndpointId}\u0000${serializeFctQuery(setQueryViewAttributes(queryTree, { offset: "0", limit: "0" }))}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
+    const enrichmentScope = `list-values-projected-v2\u0000${queryGraphServer ?? ""}\u0000${serializeFctQuery(setQueryViewAttributes(queryTree, { offset: "0", limit: "0" }))}\u0000${resultBadgePropertiesKey}\u0000${resultBadgeRolesKey}\u0000`;
     const cache = resultsEnrichmentCacheRef.current;
     // The projection endpoint accepts URI and literal terms, not blank-node
     // display labels. Blank-node Record identity comes from the primary SELECT.
-    const resources = [...new Map(results.filter((item) => item.uri && item.termType !== "bnode")
-      .map((item) => [item.uri, { type: item.termType === "literal" ? "literal" : "uri", value: item.uri,
+    const resources: ListValueResource[] = [...new Map<string, ListValueResource>(results.filter((item) => item.uri && item.termType !== "bnode")
+      .map((item): [string, ListValueResource] => [item.uri, { type: item.termType === "literal" ? "literal" : "uri", value: item.uri,
         ...(item.datatype ? { datatype: item.datatype } : {}), ...(item.lang ? { lang: item.lang } : {}) }])).values()];
     const missing = resources.filter((term) => !cache.has(enrichmentScope + term.value));
     // Do not place '-' placeholder rows in authoritative Result state.
@@ -3837,14 +4050,14 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         for (let start = 0; start < missing.length; start += maxResourcesPerRequest) {
           if (cancelled || controller.signal.aborted) return;
           const batch = missing.slice(start, start + maxResourcesPerRequest);
-          const queryXml = resultsListValuesXml;
+          const queryXml = mergeValuesQueryClone(serializeFctQuery(queryTree), projectionColumns, batch);
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store",
             headers: {
-              "Content-Type": "application/json",
+              "Content-Type": "text/xml; charset=utf-8",
               ...proxyDebugHeaders("results-enrichment", `ResultsListValues:${proxyDebugFingerprint(`${resultBadgeUrisKey}:${resultBadgePropertiesKey}:${resultBadgeRolesKey}`)}:${start / maxResourcesPerRequest + 1}`),
             },
-            body: JSON.stringify({ queryXml, resources: batch, projections: projectionColumns }),
+            body: queryXml,
             signal: controller.signal,
           });
           const xml = await response.text();
@@ -3880,7 +4093,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       }
     })();
     return () => { cancelled = true; controller.abort(); };
-  }, [showResultBadges, resultBadgeUrisKey, resultBadgePropertiesKey, resultBadgeRolesKey, selectedEndpointId, endpointReadyForQuery, resultsListValuesXml]);
+  }, [showResultBadges, resultBadgeUrisKey, resultBadgePropertiesKey, resultBadgeRolesKey, queryGraphServer, endpointReadyForQuery, resultsListValuesXml]);
 
   // Some Virtuoso endpoints return a successful grouped A-Z response while
   // omitting an initial visibly represented in the Results list. Verify such
@@ -3926,7 +4139,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         });
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("group-values-fct", "GroupsValues") },
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("group-values-fct", "GroupsValues"), ...componentRetryHeaders(retryGroups) },
           body: serializeFctQuery(groupTree),
           signal: controller.signal,
         });
@@ -3987,7 +4200,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       }
     })();
     return () => { cancelled = true; controller.abort(); };
-  }, [centralTab, search, queryCountXml, groupByPropertyUri, selectedGroupByOption?.key, effectiveGroupBatchSize, effectiveGroupBatchOffset, queryRefreshRevision, classFacets, effectiveResultsTotalCount, getPropertyPath]);
+  }, [centralTab, search, queryCountXml, groupByPropertyUri, selectedGroupByOption?.key, effectiveGroupBatchSize, effectiveGroupBatchOffset, queryRefreshRevision, retryGroups, classFacets, effectiveResultsTotalCount, getPropertyPath]);
 
   // Member lists are independently keyed by the committed group scope. A
   // Categories / provider refresh can clear the presentation state without
@@ -4110,7 +4323,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     replaceFacetAutofillCandidates("property", []);
     replaceFacetAutofillCandidates("property-in", []);
     setFacetAutofillCandidates({ property: [], "property-in": [] });
-  }, [search, queryCountXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+  }, [search, queryCountXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision]);
 
   // Categories owns its own request, debounce, cancellation, data, error and
   // loading state. It does not wait for Properties or Roles.
@@ -4123,7 +4336,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       return;
     }
     let cancelled = false;
-    const facetScopeKey = JSON.stringify([classFacetQueryXml,selectedEndpointId,queryRefreshRevision]);
+    const facetScopeKey = JSON.stringify([classFacetQueryXml,queryGraphServer,queryRefreshRevision,retryCategories]);
     const controller = facetRequests.start("categories", facetScopeKey);
     setIsLoadingClasses(true);
     setClassFacetError("");
@@ -4134,7 +4347,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           const loadCategories = async (xml: string, source: string) => {
             const response = await cachedFetchFct("/proxy/api/fct", {
               method: "POST",
-              headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", source) },
+              headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", source), ...componentRetryHeaders(retryCategories) },
               body: xml,
               signal: controller.signal,
             });
@@ -4212,7 +4425,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       // loading indicator during cleanup. A replacement effect sets it true.
       setIsLoadingClasses(false);
     };
-  }, [search, classFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision, facetRequests]);
+  }, [search, classFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryCategories, facetRequests]);
 
   // The tree request supplies relationships only, never additional category items or counts.
   // Its output is intersected with the authoritative flat class list at render time.
@@ -4230,7 +4443,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         try {
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
-            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:classes-hierarchy") },
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:classes-hierarchy"), ...componentRetryHeaders(retryCategories) },
             body: queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, true),
             signal: controller.signal,
           });
@@ -4264,7 +4477,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       })();
     }, 250);
     return () => { cancelled = true; window.clearTimeout(timer); controller.abort(); setIsLoadingCategoryTree(false); };
-  }, [categoriesTreeMode, classFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision]);
+  }, [categoriesTreeMode, classFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryCategories]);
 
   // Properties has a completely separate request lifecycle from Categories and Roles.
   useEffect(() => {
@@ -4273,7 +4486,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       return;
     }
     let cancelled = false;
-    const facetScopeKey = JSON.stringify([propertyFacetQueryXml,selectedEndpointId,queryRefreshRevision]);
+    const facetScopeKey = JSON.stringify([propertyFacetQueryXml,queryGraphServer,queryRefreshRevision,retryProperties]);
     const controller = facetRequests.start("properties", facetScopeKey);
     setIsLoadingProperties(true);
     setPropertyFacetError("");
@@ -4282,7 +4495,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         try {
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
-            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:properties") },
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:properties"), ...componentRetryHeaders(retryProperties) },
             body: propertyFacetQueryXml,
             signal: controller.signal,
           });
@@ -4313,7 +4526,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       facetRequests.cancel("properties", facetScopeKey);
       // The replacement request owns the loading flag; do not clear it on cancellation.
     };
-  }, [search, propertyFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision, facetRequests]);
+  }, [search, propertyFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryProperties, facetRequests]);
 
   // Roles has a completely separate request lifecycle from Categories and Properties.
   useEffect(() => {
@@ -4323,7 +4536,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       return;
     }
     let cancelled = false;
-    const facetScopeKey = JSON.stringify([roleFacetQueryXml,selectedEndpointId,queryRefreshRevision]);
+    const facetScopeKey = JSON.stringify([roleFacetQueryXml,queryGraphServer,queryRefreshRevision,retryRoles]);
     const controller = facetRequests.start("roles", facetScopeKey);
     setIsLoadingRoles(true);
     setRoleFacetError("");
@@ -4332,7 +4545,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         try {
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
-            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:roles") },
+            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:roles"), ...componentRetryHeaders(retryRoles) },
             body: roleFacetQueryXml,
             signal: controller.signal,
           });
@@ -4363,17 +4576,17 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       facetRequests.cancel("roles", facetScopeKey);
       // The replacement request owns the loading flag; do not clear it on cancellation.
     };
-  }, [search, roleFacetQueryXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision, facetRequests]);
+  }, [search, roleFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryRoles, facetRequests]);
 
   // Graphs is a bounded discovery widget, not an aggregate/count workload.
   // Display the graph URIs returned within the Sheet limit. If there are more
   // than the cap, the incomplete indicator explains that the list is bounded.
   // Never run COUNT(DISTINCT ?g) in parallel just to render the widget.
-  useEffect(() => { setGraphTotalCount(null); }, [queryCountXml, leftWidgetLimits.graphs, selectedEndpointId, queryRefreshRevision]);
+  useEffect(() => { setGraphTotalCount(null); }, [queryCountXml, leftWidgetLimits.graphs, queryGraphServer, queryRefreshRevision]);
 
   // Fetch only the graph page the user requested; never scan the entire result set.
   useEffect(() => {
-    if (!endpointReadyForQuery || !selectedEndpointId) {
+    if (!endpointReadyForQuery || !queryGraphServer) {
       setGraphFacets([]);
       setGraphListSparql("");
       setGraphHasMore(false);
@@ -4382,7 +4595,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       return;
     }
     let cancelled = false;
-    const facetScopeKey = JSON.stringify([leftWidgetLimits.graphs, queryCountXml, selectedEndpointId, queryRefreshRevision]);
+    const facetScopeKey = JSON.stringify([leftWidgetLimits.graphs, queryCountXml, queryGraphServer, queryRefreshRevision,retryGraphs]);
     const controller = facetRequests.start("graphs", facetScopeKey);
     setIsLoadingGraphs(true);
     setGraphListIncomplete(false);
@@ -4410,7 +4623,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         });
         const response = await maestroQueryFetch("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("graph-list", "GraphList") },
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("graph-list", "GraphList"), ...componentRetryHeaders(retryGraphs) },
           body: graphQueryXml,
           signal: controller.signal,
         });
@@ -4468,7 +4681,7 @@ setGraphFacets(graphs);
     }
     void loadGraphPage();
     return () => { cancelled = true; facetRequests.cancel("graphs", facetScopeKey); };
-  }, [leftWidgetLimits.graphs, queryCountXml, selectedEndpointId, endpointReadyForQuery, queryRefreshRevision, facetRequests]);
+  }, [leftWidgetLimits.graphs, queryCountXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryGraphs, facetRequests]);
 
 
   // Defensively merge duplicate resource rows by URI. The API normally groups
@@ -4603,7 +4816,7 @@ setGraphFacets(graphs);
   // restore). Never start either Record SELECT or graph marshalling against
   // identity metadata from a previous live query. The query's existing Results
   // subscriber/cancellation pipeline supplies the barrier; no new tokens.
-  const recordResultsReady = endpointReadyForQuery && !isSearching &&
+  const recordResultsReady = endpointReadyForQuery && operations.execution.queryPhase === "ready" && !isSearching &&
     resultsLoadedQueryIdentityRef.current === activeQueryIdentityRef.current;
   const recordGroupSelection = centralTab === "groups" && Boolean(selectedGroupRecord);
   const recordExplicitAnchor = explicitBlankNodeAnchor?.label === selectedUri;
@@ -4613,7 +4826,7 @@ setGraphFacets(graphs);
 
   // Always send the authoritative query address; endpoint selection must not
   // diverge from the graph server in the live query address.
-  const recordGraphIdentity = [selectedUri, selectedRecordTermType, selectedEndpointId,
+  const recordGraphIdentity = [selectedUri, selectedRecordTermType, queryGraphServer,
     bookmarkQueryKey, queryTree.attributes.addr ?? "", blankNodeGraphQueryXml ?? ""].join("\u0000");
   const lastRecordGraphIdentityRef = useRef("");
   useEffect(() => {
@@ -4629,7 +4842,7 @@ setGraphFacets(graphs);
     // A server ID alone does not guarantee that its registry, health check,
     // and authoritative query address have settled after URL restoration.
     // Avoid a transient "server not configured" error during that interval.
-    if (!selectedUri || !endpointReadyForQuery || !selectedEndpointId || recordIdentityPending ||
+    if (!selectedUri || !endpointReadyForQuery || !queryGraphServer || recordIdentityPending ||
         (selectedRecordTermType === "bnode" && !blankNodeGraphQueryXml) || selectedRecordTermType === "literal") {
       setLoadingRecordGraphs(false);
       return;
@@ -4676,7 +4889,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedRecordTermType, blankNodeGraphQueryXml, selectedEndpointId, endpointReadyForQuery, recordIdentityPending, queryTree.attributes.addr, queryRefreshRevision, recordGraphIdentity]);
+  }, [selectedUri, selectedRecordTermType, blankNodeGraphQueryXml, queryGraphServer, endpointReadyForQuery, recordIdentityPending, queryTree.attributes.addr, queryRefreshRevision, recordGraphIdentity]);
 
   // A graph proved by the executed FCT Record selection is displayed as a
   // fixed label, not a dropdown. It still has graph-authorship metadata.
@@ -4727,7 +4940,7 @@ setGraphFacets(graphs);
     blankNodeContext.select(selectedUri ? currentRecordDescriptionKey : "",
       selectedUri ? selectedRecordTermType : "literal");
     recordLifecycle.selectRecord(selectedUri || virtualCommon ? currentRecordDescriptionKey : "");
-    if ((!selectedUri && !virtualCommon) || !selectedEndpointId) {
+    if ((!selectedUri && !virtualCommon) || !queryGraphServer) {
       setDescribedRecord([]);
       setRecordDescriptionSnapshot(null);
       setRecordDescriptionPage(0);
@@ -4813,7 +5026,7 @@ setGraphFacets(graphs);
               );
           const response = await cachedFetchFct("/proxy/api/sparql", {
             method: "POST", cache: "no-store", signal: controller.signal,
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-blank-node-siblings", "RecordDescription") },
+            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-blank-node-siblings", "RecordDescription"), ...componentRetryHeaders(retryRecord) },
             body: JSON.stringify({ recordBlankNodes: {
               queryXml: blankRecordQueryXml,
               ...(blankNodeAnchor ? { parent: blankNodeAnchor.parent, predicate: blankNodeAnchor.predicate }
@@ -4858,6 +5071,7 @@ setGraphFacets(graphs);
           focusPredicate: recordFocusPredicate,
           graphs: selectedGraphs, limit: recordDescriptionQueryLimit,
           preferredLanguage: preferredAlphabetLanguage, signal: controller.signal,
+          retryRevision: retryRecord,
         });
         if (!cancelled) {
           setRecordDescribeIncomplete(record.incomplete);
@@ -4885,16 +5099,16 @@ setGraphFacets(graphs);
     }
     void loadDescription();
     return () => { cancelled = true; controller.abort(); recordLifecycle.releaseAbort(currentRecordDescriptionKey, "description", controller); };
-  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, blankNodeAnchor?.parent, blankNodeAnchor?.predicate, blankNodeAnchor?.depth, selectedEndpointId, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, preferredAlphabetLanguage, queryRefreshRevision, resultsRequestXml, recordIdentityPending, recordSelectionCleared, queryXml]);
+  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, blankNodeAnchor?.parent, blankNodeAnchor?.predicate, blankNodeAnchor?.depth, queryGraphServer, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, preferredAlphabetLanguage, queryRefreshRevision, resultsRequestXml, recordIdentityPending, recordSelectionCleared, queryXml]);
 
   // The separate Record graph dropdown loader already knows which named graphs
   // contain this resource. Reuse that list for optional bounded background
   // label queries; never enumerate named graphs in the initial Record SELECT.
   useEffect(() => {
     if (!selectedUri || describedRecordUri !== selectedUri || isDescribing ||
-        !recordGraphs.length || !describedRecord.length || !selectedEndpointId ||
+        !describedRecord.length || !queryGraphServer ||
         !endpointReadyForQuery) return;
-    const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`;
+    const addr = queryTree.attributes.addr ?? "";
     const labelCache = recordUriLabelCacheRef.current;
     const valueUris = [...new Set(describedRecord
       .filter((row) => /^https?:\/\//i.test(row.value))
@@ -4905,15 +5119,30 @@ setGraphFacets(graphs);
       ? [selectedRecordAuthor]
       : selectedRecordGraph
         ? recordGraphs.filter((graph) => graph.split("#", 1)[0] === selectedRecordGraph)
-        : recordGraphs;
-    if (!graphIris.length) return;
+        : []; // All graphs: do not limit linked Grant/EuroSciVoc to the Project graphs.
+    if ((selectedRecordAuthor || selectedRecordGraph) && !graphIris.length) return;
     const controller = new AbortController();
     void (async () => {
       const predicates = [
         "http://www.w3.org/2000/01/rdf-schema#label",
         "http://www.w3.org/2004/02/skos/core#prefLabel",
+        "http://www.w3.org/2008/05/skos-xl#prefLabel",
         "http://schema.org/name", "https://schema.org/name",
         "http://xmlns.com/foaf/0.1/name", "http://purl.org/dc/terms/title",
+        "http://data.europa.eu/s66#title", "http://data.europa.eu/s66#name",
+        "http://data.europa.eu/s66#legalName",
+        // EURIO explicit ontology paths: Grant -> FundingScheme -> label,
+        // and Acronym -> definition; fallback only after direct labels.
+        "http://data.europa.eu/s66#hasFundingScheme",
+        "http://data.europa.eu/s66#hasFundingSchemeProgramme",
+        "http://data.europa.eu/s66#hasFundingSchemeCall",
+        "http://data.europa.eu/s66#hasAssociatedFundingScheme",
+        "http://data.europa.eu/s66#isRoleOf",
+        "http://data.europa.eu/s66#hasFundingSchemeCategory",
+        "http://data.europa.eu/s66#roleLabel",
+        "http://data.europa.eu/s66#code",
+        "http://www.w3.org/2004/02/skos/core#notation",
+        "http://data.europa.eu/s66#definition",
       ];
       const requested = new Set(missing);
       const best = new Map<string, { rank: number; text: string }>();
@@ -4979,7 +5208,7 @@ setGraphFacets(graphs);
     })();
     return () => controller.abort();
   }, [selectedUri, describedRecordUri, describedRecord, isDescribing, recordGraphs,
-      selectedRecordGraph, selectedRecordAuthor, selectedEndpointId, endpointReadyForQuery,
+      selectedRecordGraph, selectedRecordAuthor, queryGraphServer, endpointReadyForQuery,
       queryTree.attributes.addr, queryTree.attributes.graph, preferredAlphabetLanguage]);
 
   // The formatted card may already be on screen when named-graph labels arrive.
@@ -4987,13 +5216,16 @@ setGraphFacets(graphs);
   useEffect(() => {
     const root = formattedRecordContainerRef.current;
     if (!root || !formattedRecordHtml) return;
-    const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`;
+    const addr = queryTree.attributes.addr ?? "";
     for (const element of Array.from(root.querySelectorAll<HTMLElement>("[data-maestro-record-uri]"))) {
+      // An XSLT-rendered label may include structure (participant fields, currency
+      // icons, acronym). A later generic URI-label update must not erase it.
+      if (element.dataset.maestroPreserveFormattedLabel === "true") continue;
       const uri = element.getAttribute("data-maestro-record-uri") ?? "";
       const label = recordUriLabelCacheRef.current.get(`${addr}\u0000${uri}`);
       if (label) element.textContent = label;
     }
-  }, [recordLabelRevision, formattedRecordHtml, selectedUri, selectedEndpointId,
+  }, [recordLabelRevision, formattedRecordHtml, selectedUri, queryGraphServer,
       queryTree.attributes.addr, queryTree.attributes.graph]);
 
   // Discover a record's class policy from the personal SPARQL server after its DESCRIBE data identifies rdf:type values.
@@ -5265,18 +5497,50 @@ setGraphFacets(graphs);
   // Abort obsolete Record formatter traffic when the selected Record, graph,
   // policy, or template changes. Previews share the same lifecycle.
   const recordFormatterAbortControllersRef = useRef(new Set<AbortController>());
+  const recordLocalRerenderControllerRef = useRef<AbortController | null>(null);
+  const latestRecordLabelRevisionRef = useRef(recordLabelRevision);
+  latestRecordLabelRevisionRef.current = recordLabelRevision;
+  // Preserve only the selected Record's already-approved XSLT and prepared XML.
+  // Late URI labels can then rerender the formatted card entirely in the browser,
+  // without another DESCRIBE, policy lookup, enrichment query, or Commons request.
+  const recordPreparedTemplateRef = useRef<{
+    key: string;
+    templateUri: string;
+    payload: Awaited<ReturnType<typeof loadClientPolicyTemplate>>;
+  } | null>(null);
+  const recordPreparedFormatXmlRef = useRef<{
+    key: string;
+    templateUri: string;
+    sourceXml: string;
+    queryXml: string;
+    selectedUri: string;
+    labelAddress: string;
+    labelRevision: number;
+    commonsImages: Array<{url: string; credit?: string; license?: string; source?: string; title?: string}>;
+  } | null>(null);
   useEffect(() => () => {
     for (const controller of recordFormatterAbortControllersRef.current) controller.abort();
     recordFormatterAbortControllersRef.current.clear();
+    recordLocalRerenderControllerRef.current?.abort();
+    recordLocalRerenderControllerRef.current = null;
+    recordPreparedFormatXmlRef.current = null;
+    recordPreparedTemplateRef.current = null;
   }, [currentRecordFormatKey]);
   
   
   const currentFormattedRecordHtml = formattedRecordKey === currentRecordFormatKey ? formattedRecordHtml : "";
 
   
-  async function formatSelectedRecord(templateOverride?: string, preview = false, enrichLinkedResources = false): Promise<string | null> {
+  async function formatSelectedRecord(templateOverride?: string, preview = false, enrichLinkedResources = false, localRerender = false): Promise<string | null> {
     if (!recordPolicy || !personalPoliciesReady) return null;
-    const templateUri = templateOverride || selectedRecordTemplateUri || recordPolicy.template;
+    const labelsOnly = localRerender;
+    const prepared = labelsOnly ? recordPreparedFormatXmlRef.current : null;
+    const preparedTemplate = labelsOnly ? recordPreparedTemplateRef.current : null;
+    if (labelsOnly && (!prepared || prepared.key !== currentRecordFormatKey ||
+        prepared.selectedUri !== selectedUri || !preparedTemplate ||
+        preparedTemplate.key !== currentRecordFormatKey ||
+        preparedTemplate.templateUri !== prepared.templateUri)) return null;
+    const templateUri = prepared?.templateUri || templateOverride || selectedRecordTemplateUri || recordPolicy.template;
     if (!templateUri) {
       if (!preview) { setRecordFormatError("This policy does not identify an XSLT template yet."); setFormattedRecordHtml(""); }
       return null;
@@ -5286,15 +5550,19 @@ setGraphFacets(graphs);
         describedRecordUri !== selectedUri || isDescribing) return null;
     const requestKey = currentRecordFormatKey;
     const controller = new AbortController();
+    if (localRerender) {
+      recordLocalRerenderControllerRef.current?.abort();
+      recordLocalRerenderControllerRef.current = controller;
+    }
     recordFormatterAbortControllersRef.current.add(controller);
     const isCurrentRequest = () => !controller.signal.aborted && latestRecordFormatKeyRef.current === requestKey;
     let formatStage = "Record formatting";
-    if (!preview && !enrichLinkedResources && isCurrentRequest()) {
+    if (!preview && !enrichLinkedResources && !localRerender && isCurrentRequest()) {
       setRecordFormatError(""); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setFormattedRecordKey("");
       recordLifecycle.operation("format", "OP_STARTED", currentRecordDescriptionKey, requestKey);
     }
     try {
-      if (!preview && !enrichLinkedResources) {
+      if (!preview && !enrichLinkedResources && !localRerender) {
         formatStage = "Record SHACL validation";
         const checked = await validateRecordSnapshot(recordPolicy, recordDescriptionSnapshot);
         if (!isCurrentRequest()) return null;
@@ -5304,9 +5572,9 @@ setGraphFacets(graphs);
         }
       }
       formatStage = "Record template discovery (personal SPARQL)";
-      const templatePayload = await loadClientPolicyTemplate(templateUri, controller.signal);
-      if (!preview && isCurrentRequest()) setRecordDebug((current) => ({ ...current, templateLookup: templatePayload.debugSparql }));
-      if (!preview && !enrichLinkedResources && isCurrentRequest()) setFormatterHasEnrichment(Boolean(templatePayload.enrichmentXslt));
+      const templatePayload = labelsOnly ? preparedTemplate!.payload : await loadClientPolicyTemplate(templateUri, controller.signal);
+      if (!preview && !localRerender && isCurrentRequest()) setRecordDebug((current) => ({ ...current, templateLookup: templatePayload.debugSparql }));
+      if (!preview && !enrichLinkedResources && !localRerender && isCurrentRequest()) setFormatterHasEnrichment(Boolean(templatePayload.enrichmentXslt));
       if (!isCurrentRequest()) return null;
       formatStage = "Record formatting preparation";
       // Formatting never issues a second DESCRIBE. The snapshot is exactly the
@@ -5318,11 +5586,11 @@ setGraphFacets(graphs);
         if (!preview && isCurrentRequest()) setRecordFormatError("The record description is not ready yet.");
         return null;
       }
-      const sourceXml = new DOMParser().parseFromString(snapshot.xml, "application/xml");
+      const sourceXml = new DOMParser().parseFromString(prepared?.sourceXml ?? snapshot.xml, "application/xml");
       if (sourceXml.querySelector("parsererror") || sourceXml.documentElement.localName !== "facets") {
         throw new Error("The Record viewer's DESCRIBE snapshot is not valid FCT XML.");
       }
-      if (!preview && isCurrentRequest()) {
+      if (!preview && !localRerender && isCurrentRequest()) {
         setRecordDebug((current) => ({ ...current,
           formatterXml: current.xml,
           formatterSparql: current.sparql,
@@ -5331,7 +5599,7 @@ setGraphFacets(graphs);
       // A formatter can declare an optional XSLT query transformation in RDF.
       // This is generic template execution: predicates, relationships, and
       // presentation are owned by the selected stylesheet, not by Maestro.
-      if (!preview && enrichLinkedResources && templatePayload.enrichmentXslt) {
+      if (!preview && !localRerender && enrichLinkedResources && templatePayload.enrichmentXslt) {
         formatStage = "Record enrichment (Maestro SaxonJS)";
         const enrichmentQueryDocument = await transformMaestroQueryXslt(
           templatePayload.enrichmentXslt, sourceXml, serializeFctQuery(queryTree), selectedUri, controller.signal,
@@ -5339,9 +5607,14 @@ setGraphFacets(graphs);
         const enrichmentRoot = enrichmentQueryDocument.documentElement;
         if (!enrichmentRoot || enrichmentRoot.localName !== "query") throw new Error("Formatter enrichment XSLT did not produce an FCT query.");
         if (Array.from(enrichmentRoot.getElementsByTagName("*")).some((element) => element.localName === "view")) {
+        // Only an explicitly selected Record graph/author may scope a
+        // formatter enrichment request. In "All graphs", the Record's
+        // DESCRIBE can come from a Project graph while a linked Result's DOI
+        // is asserted in another named graph. Picking recordGraphs[0] here
+        // silently removed those Result triples from merge-values.
         const activeGraph = selectedRecordAuthor || (selectedRecordGraph
           ? recordGraphs.find((uri) => uri.split("#", 1)[0] === selectedRecordGraph) ?? selectedRecordGraph
-          : recordGraphs[0]);
+          : "");
         const originalAddr = enrichmentRoot.getAttribute("addr") || queryTree.attributes.addr || "";
         const delimiter = originalAddr.indexOf("@");
         if (activeGraph && delimiter >= 0) enrichmentRoot.setAttribute("addr", `${activeGraph}@${originalAddr.slice(delimiter + 1)}`);
@@ -5401,8 +5674,8 @@ setGraphFacets(graphs);
       if (!isCurrentRequest()) return null;
       // Optional Commons discovery is added to the READ-ONLY XML envelope.
       // The XSLT still selects and lays out every photograph using XPath.
-      let commonsImages: Array<{url: string; credit?: string; license?: string; source?: string; title?: string}> = [];
-      if (!preview && templateUri.includes("DbpediaPlaceRecordTemplate")) {
+      let commonsImages: Array<{url: string; credit?: string; license?: string; source?: string; title?: string}> = prepared?.commonsImages ?? [];
+      if (!preview && !localRerender && templateUri.includes("DbpediaPlaceRecordTemplate")) {
         const rdfsLabel = "http://www.w3.org/2000/01/rdf-schema#label";
         const fctNs = "http://openlinksw.com/services/facets/1.0/";
         const label = Array.from(sourceXml.getElementsByTagNameNS(fctNs, "row"))
@@ -5433,11 +5706,26 @@ setGraphFacets(graphs);
         }
       }
       if (!isCurrentRequest()) return null;
+      // Apply the existing Record URI label cache to the prepared FCT XML.
+      // EURIO's domain XSLT reads fct:column/@label for acronyms, parties,
+      // and money, not only for generic links in the resulting HTML.
+      const labelAddress = prepared?.labelAddress ?? (queryTree.attributes.addr ?? "");
+      const cachedLabels = recordUriLabelCacheRef.current;
+      for (const object of Array.from(sourceXml.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0/", "column"))) {
+        if (object.getAttribute("datatype") !== "uri" && object.getAttribute("termType") !== "uri") continue;
+        const uri = object.textContent?.trim() ?? "";
+        if (!uri) continue;
+        const label = cachedLabels.get(`${labelAddress}\u0000${uri}`);
+        if (label) object.setAttribute("label", label);
+      }
+      const preparedXmlForReuse = new XMLSerializer().serializeToString(sourceXml);
+      const inputLabelRevision = latestRecordLabelRevisionRef.current;
+      const queryXmlForFormat = prepared?.queryXml ?? serializeFctQuery(queryTree);
       formatStage = "Record formatting (Maestro SaxonJS)";
       const document = await transformMaestroRecordXslt(
         templatePayload.templateXslt,
         sourceXml,
-        serializeFctQuery(queryTree),
+        queryXmlForFormat,
         selectedUri,
         controller.signal,
         commonsImages,
@@ -5489,15 +5777,23 @@ setGraphFacets(graphs);
           return [separator, anchor];
         }));
       }
+      for (const term of Array.from(document.body.querySelectorAll<HTMLElement>("[data-maestro-property-value]"))) {
+        if (!term.hasAttribute("resource") && !term.hasAttribute("data-maestro-record-uri")) {
+          term.dataset.maestroShiftOnly = "true";
+        }
+      }
       const uriTargets = Array.from(document.body.querySelectorAll<HTMLElement>("[data-maestro-record-uri]"));
       // URI display labels are enriched separately in discovered graphs;
       // the authoritative Record SELECT never joins those label triples.
-      const queryAddrForLabels = queryTree.attributes.addr || (selectedEndpointId ? `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}` : "");
-      const cachedLabels = recordUriLabelCacheRef.current;
       for (const target of uriTargets) {
+        // Provider-authored website / DOI links are external actions, not
+        // RDF value pivots. Keep their URL, text, and target intact.
+        if (target.matches("[data-maestro-external-link]")) continue;
         const uri = target.getAttribute("data-maestro-record-uri") ?? "";
         if (!uri) continue;
-        target.textContent = cachedLabels.get(`${queryAddrForLabels}\u0000${uri}`) ?? toLabel(uri);
+        if (target.getAttribute("data-maestro-preserve-formatted-label") !== "true") {
+          target.textContent = cachedLabels.get(`${labelAddress}\u0000${uri}`) ?? toLabel(uri);
+        }
         target.setAttribute("title", uri);
         target.setAttribute("href", "#");
         target.classList.add("cursor-pointer", "text-sky-700", "hover:underline", "dark:text-sky-400");
@@ -5704,16 +6000,10 @@ setGraphFacets(graphs);
         const existingAddress = savedQueryRoot.getAttribute("addr") ?? "";
         const addressDelimiter = existingAddress.indexOf("@");
         const endpointHint = addressDelimiter >= 0 ? existingAddress.slice(addressDelimiter + 1).trim() : "";
-        const savedEndpoint = endpointHint
-          ? fctEndpoints.find((endpoint) => endpoint.id === endpointHint || endpoint.url === endpointHint || endpoint.label === endpointHint)
-          : fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId);
-        if (!savedEndpoint) throw new Error("The Bookmark's query addr does not identify a configured graph server.");
-        const graph = addressDelimiter >= 0
-          ? existingAddress.slice(0, addressDelimiter).trim()
-          : (savedQueryRoot.getAttribute("graph")?.trim() ?? "");
-        savedQueryRoot.setAttribute("addr", `${graph}@${savedEndpoint.url}`);
-        savedQueryRoot.removeAttribute("graph");
-        //if (savedEndpoint.id !== selectedEndpointId) await synchronizeFctEndpointSelection(savedEndpoint.id);
+        // A bookmark executes where its own saved addr says, including Shared
+        // endpoints. Never change a saved HTTP/HTTPS URI through registry aliases.
+        if (!/^https?:\/\//i.test(endpointHint))
+          throw new Error("The Bookmark's saved query addr has no HTTP(S) graph server.");
 		
 		
         const savedView = Array.from(savedQueryDocument.getElementsByTagName("*")).find((element) => element.localName === "view");
@@ -5932,18 +6222,28 @@ setGraphFacets(graphs);
         return document.body.innerHTML;
       }
       if (!isCurrentRequest()) return null;
+      // Store the already-transformed input and approved stylesheet only after
+      // the current request has produced a valid, sanitized Record card.
+      if (!preview && !localRerender) {
+        recordPreparedTemplateRef.current = { key: requestKey, templateUri, payload: templatePayload };
+        recordPreparedFormatXmlRef.current = {
+          key: requestKey, templateUri, sourceXml: preparedXmlForReuse,
+          queryXml: queryXmlForFormat, selectedUri, labelAddress,
+          labelRevision: inputLabelRevision, commonsImages,
+        };
+      }
       setFormattedRecordButtonsHtml(Object.fromEntries(Object.entries(templateButtonsByParent).map(([parentId, buttons]) => [parentId, buttons.join("")])));
       const initialRecordHtml = document.body.innerHTML;
       setFormattedRecordHtml(initialRecordHtml);
       setFormattedRecordKey(requestKey);
-      setRecordControlsOpen(false);
+      if (!localRerender) setRecordControlsOpen(false);
       return initialRecordHtml;
     } catch (error) {
       if (controller.signal.aborted || !isCurrentRequest() ||
           (error instanceof Error && error.name === "AbortError")) return null;
       const detail = error instanceof Error ? error.message : "Unknown error";
       const message = `${formatStage} failed: ${detail}`;
-      if (!preview && !enrichLinkedResources) {
+      if (!preview && !enrichLinkedResources && !localRerender) {
         setRecordFormatError(message);
         setFormattedRecordHtml("");
         setFormattedRecordKey("");
@@ -5951,15 +6251,30 @@ setGraphFacets(graphs);
       }
       if (enrichLinkedResources) {
         browserLog.warn("record.stylesheet.enrichment.failed", message);
+      } else if (localRerender) {
+        browserLog.warn("record.stylesheet.local-rerender.failed", { error });
       }
       return null;
     } finally {
-      if (!preview && !enrichLinkedResources && !isCurrentRequest()) {
+      if (!preview && !enrichLinkedResources && !localRerender && !isCurrentRequest()) {
         recordLifecycle.operation("format", "OP_CANCELLED", currentRecordDescriptionKey, requestKey);
       }
       recordFormatterAbortControllersRef.current.delete(controller);
+      if (recordLocalRerenderControllerRef.current === controller) recordLocalRerenderControllerRef.current = null;
     }
   }
+
+  // A late label batch changes only the Record presentation. Rerender from the
+  // saved prepared XML and approved stylesheet; do not query the graph again.
+  useEffect(() => {
+    const prepared = recordPreparedFormatXmlRef.current;
+    if (!prepared || prepared.key !== currentRecordFormatKey ||
+        prepared.selectedUri !== selectedUri || !currentFormattedRecordHtml ||
+        prepared.labelRevision >= recordLabelRevision) return;
+    prepared.labelRevision = recordLabelRevision;
+    void formatSelectedRecord(undefined, false, false, true);
+    return () => { recordLocalRerenderControllerRef.current?.abort(); };
+  }, [recordLabelRevision, currentRecordFormatKey, currentFormattedRecordHtml, selectedUri]);
 
   // Formatters may request a second, bounded enrichment pass through their
   // graph-declared XSLT query pivot. This pipeline is independent of domain.
@@ -6153,6 +6468,8 @@ setGraphFacets(graphs);
     const root = formattedRecordContainerRef.current;
     if (!root || !formattedRecordHtml) return;
     const handleTemplateAction = (event: Event) => {
+      // DOM addEventListener exposes Event; a click has MouseEvent modifiers.
+      const shiftClick = event instanceof MouseEvent && event.shiftKey;
       const target = event.target;
       if (!(target instanceof Element)) return;
       // Providers may request that the user bookmark the calling FCT query.
@@ -6192,12 +6509,11 @@ setGraphFacets(graphs);
       // In particular: Bookmark's saved-query link, Movie's Year chip, custom
       // mui:action calls, carousel controls, and ordinary external links that
       // do not represent a value in this Record.
-      if (target.closest("#bookmark-title-link, [mui\\:href], [data-maestro-filter-property]")) return;
+      if (target.closest("#bookmark-title-link, [mui\\:href], [data-maestro-filter-property], [data-maestro-external-link]")) return;
 
-      // A formatted Record has the same semantic default as a Results badge:
-      // navigate to the things sharing this *predicate/value*, not to the
-      // object URI itself. Derive the RDF term from the authoritative Record
-      // SELECT, not from the display label, so datatypes/languages survive.
+      // Plain URI-value click opens that resource as a new query (the same
+      // action as the Record title). Shift-click retains predicate/value search.
+      // A literal cannot be a URI-root query, so preserve its typed lookup.
       const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
       const explicitAction = target.closest("[mui\\:action]");
       const link = explicitAction ? null : target.closest<HTMLAnchorElement>("a[href]");
@@ -6210,7 +6526,7 @@ setGraphFacets(graphs);
 
       const candidates = describedRecord.filter((row) => row.termType !== "bnode" &&
         (row.direction === "property" || row.direction === "property-of"));
-      const addr = queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`;
+      const addr = queryTree.attributes.addr ?? "";
       const matchesFor = (text: string, explicitUri: string) => candidates.filter((row) => {
         if (explicitUri) return row.termType === "uri" && row.value === explicitUri;
         if (normalize(row.value) === text) return true;
@@ -6255,7 +6571,12 @@ setGraphFacets(graphs);
       ]));
       if (unique.size === 1) {
         const row = [...unique.values()][0];
+        if (!shiftClick && row.termType !== "uri") return;
         event.preventDefault();
+        if (!shiftClick && row.termType === "uri") {
+          applyRecordAsRootValue(row.value);
+          return;
+        }
         navigateResultBadge(row.property, {
           value: row.value, type: row.termType,
           ...(row.datatype ? { datatype: row.datatype } : {}),
@@ -6267,7 +6588,11 @@ setGraphFacets(graphs);
       // Preserve the existing fallback for URI links not in the Record's
       // predicate/value bindings. Never replace an explicit specialized action.
       if (recordUriLink) {
-        if (/^https?:\/\//i.test(linkedUri)) { event.preventDefault(); openRecordPropertyUri(linkedUri); }
+        if (/^https?:\/\//i.test(linkedUri)) {
+          event.preventDefault();
+          if (!shiftClick) applyRecordAsRootValue(linkedUri);
+          else openRecordPropertyUri(linkedUri);
+        }
         return;
       }
       const actionElement = target.closest("[mui\\:action]");
@@ -6285,8 +6610,8 @@ setGraphFacets(graphs);
     };
     root.addEventListener("click", handleTemplateAction);
     return () => root.removeEventListener("click", handleTemplateAction);
-  }, [formattedRecordHtml, selectedUri, describedRecord, selectedEndpointId, queryTree.attributes.addr,
-      queryTree.attributes.graph, navigateResultBadge]);
+  }, [formattedRecordHtml, selectedUri, describedRecord, queryGraphServer, queryTree.attributes.addr,
+      queryTree.attributes.graph, navigateResultBadge, applyRecordAsRootValue]);
 
   // The active scope is the property-path node that currently contains the
   // authoritative <view>; at the root, scope is represented by null.
@@ -6415,6 +6740,25 @@ const displayedBreadcrumbPath =
     : activePropertyPath;
 
 const activeBreadcrumbIndex = activePropertyPath.length - 1;
+// The same getPath validation determines both the visible Shift-hover path and
+// the actual Shift-click mutation. Only an ancestor can be previewed.
+const transportedPreview = shiftKeyDown && hoveredTransportedTargetId
+  ? transportedAnchorPath(queryTree, hoveredTransportedTargetId) : null;
+const transportedPreviewIds = new Set(transportedPreview?.ids ?? []);
+const transportedFocusAtRoot = Boolean(transportedPreview && hoveredTransportedTargetId === queryTree.attributes.id);
+const hoveredTransportedAnchor = (targetId: string) => {
+  // Track the pointer independent of Shift. Pressing or releasing Shift while
+  // already hovering an ancestor immediately shows or hides the green path.
+  setHoveredTransportedTargetId(transportedAnchorPath(queryTree, targetId) ? targetId : null);
+};
+const toggleTransportedAnchorAt = (targetId: string, shiftHeld: boolean): boolean => {
+  if (!shiftHeld) return false;
+  const next = toggleTransportedAnchor(queryTree, targetId);
+  if (next !== queryTree) replaceQueryTree(next);
+  setHoveredTransportedTargetId(null);
+  return true;
+};
+
 const tutorialBreadcrumbPath = tutorialMode && facetHoverPreview?.kind === "facet" && facetHoverPreview.successorNodeId
   ? [
       ...displayedBreadcrumbPath.slice(0, activeBreadcrumbIndex + 1),
@@ -6496,12 +6840,12 @@ const makeBreadcrumbScopedTree = (
   }
   return attach(cloned.children) ? cloned : null;
 };
-const metadataRegistryKey = (tree: FctQueryTree) => `${selectedEndpointId}\u0000${serializeFctQuery(tree)}`;
+const metadataRegistryKey = (tree: FctQueryTree) => `${queryGraphServer ?? ""}\u0000${serializeFctQuery(tree)}`;
 
 // When the center-pane result set finishes loading, register its first item and
 // total count under the same one-result scoped query used by breadcrumb metadata.
 useEffect(() => {
-  const expectedLoadedIdentity = `${selectedEndpointId}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
+  const expectedLoadedIdentity = `${queryGraphServer ?? ""}\u0000${queryCountXml}\u0000${endpointReadyForQuery ? "ready" : "not-ready"}`;
   if (!endpointReadyForQuery || isSearching || isCountingResults) return;
   if (resultsLoadedQueryIdentityRef.current !== expectedLoadedIdentity) return;
   // If the center pane did not obtain a usable total, leave the registry empty
@@ -6525,7 +6869,7 @@ useEffect(() => {
     const oldestKey = metadataRegistryRef.current.keys().next().value;
     if (oldestKey) metadataRegistryRef.current.delete(oldestKey);
   }
-}, [activeLeafId, effectiveResultsTotalCount, endpointReadyForQuery, isCountingResults, isSearching, queryCountXml, queryTree, results, selectedEndpointId]);
+}, [activeLeafId, effectiveResultsTotalCount, endpointReadyForQuery, isCountingResults, isSearching, queryCountXml, queryTree, results, queryGraphServer]);
 
 useEffect(() => {
   if (!endpointReadyForQuery) {
@@ -6752,7 +7096,7 @@ useEffect(() => {
     window.clearTimeout(timer);
     controller.abort();
   };
-}, [activeLeafId, breadcrumbPreviewPathKey, effectiveResultsTotalCount, isCountingResults, isSearching, queryRevision, queryTree, results, selectedEndpointId, endpointReadyForQuery, breadcrumbBadgeMode]);
+}, [activeLeafId, breadcrumbPreviewPathKey, effectiveResultsTotalCount, isCountingResults, isSearching, queryRevision, queryTree, results, queryGraphServer, endpointReadyForQuery, breadcrumbBadgeMode]);
 
 // Derive checked state from the authoritative query tree, including path
   // properties left at the root when a breadcrumb moves the view elsewhere.
@@ -7050,7 +7394,7 @@ useEffect(() => {
       const pathNode = findPropertyPathNode(uri);
       if (pathNode) {
         // The API relocates the view safely if this path currently contains it.
-        deleteNode(pathNode.id);
+        guardedDeleteQueryNode(pathNode.id);
       } else {
         removeProperty(activeLeafId, uri);
       }
@@ -7139,32 +7483,9 @@ useEffect(() => {
     setGraphText(activeGraph);
   }, [queryTree.attributes.graph]);
 
-  // `addr` is graphURI@graphserverURI. Only the user's graph-server
-  // selection may change the latter. A first-use default or old ID is
-  // normalized once when the login-time endpoint registry is available.
-  useEffect(() => {
-    const endpoint = fctEndpoints.find((item) => item.id === selectedEndpointId);
-    if (!endpoint) return;
-    const address = queryTree.attributes.addr ?? "";
-    const separator = address.indexOf("@");
-    // A missing graph attribute means no graph binding. Never recover an old
-    // graphsite from addr after the user has explicitly cleared the field.
-    const graph = queryTree.attributes.graph?.trim() ?? "";
-    const server = separator >= 0 ? address.slice(separator + 1) : "";
-    const resolved = fctEndpoints.find((item) => item.id === server || graphServerUrlMatches(item.url, server, item.schemeInferred));
-    // The query address is authoritative for automatic/History/Providers navigation.
-    // Only chooseFctEndpoint may intentionally replace it. Never silently redirect
-    // a query to the currently displayed graph-server selection.
-    const queryEndpoint = server && fctEndpoints.find((item) =>
-      item.id === server || graphServerUrlMatches(item.url, server, item.schemeInferred));
-    if (queryEndpoint && queryEndpoint.id !== endpoint.id) {
-      setSelectedEndpointId(queryEndpoint.id);
-      return;
-    }
-    if (server && !resolved && server !== endpoint.id) return;
-    const normalized = `${graph}@${resolved?.url ?? endpoint.url}`;
-    if (address !== normalized) setQueryAttribute("addr", normalized);
-  }, [selectedEndpointId, fctEndpoints, queryTree.attributes.addr, queryTree.attributes.graph]);
+  // Every query's addr is authoritative. The graph scope, HTTP scheme and
+  // server URI are never rewritten by endpoint-menu changes or logout.
+  // Only an explicit menu action may replace the server in the query.
 
   function bindGraph(uri: string) {
     setGraphFieldEditing(false);
@@ -7402,7 +7723,27 @@ useEffect(() => {
     catch { return false; }
     if (destination.origin !== window.location.origin || !/^https?:$/.test(destination.protocol)) return false;
     const xml = destination.searchParams.get("q");
-    if (!xml || !parseFctQueryXml(xml)) return false;
+    const parsed = xml?.trim() ? parseFctQueryXml(xml) : createBlankStartupQuery();
+    if (!parsed) return false;
+    const savedAddr = (parsed.attributes.addr ?? "").trim();
+    const at = savedAddr.indexOf("@");
+    const savedServer = at >= 0 ? validGraphServerUrl(savedAddr.slice(at + 1)) : validGraphServerUrl(savedAddr);
+    let prepared = parsed;
+    if (!savedServer) {
+      const selected = chooseStartupGraphServer({
+        preferredUrl: maestroStorageGet("maestro-last-graph-server-url") ?? "",
+        loginPersonalUrl: authSession?.graphStore ?? "",
+        personalEndpoints: authSession ? readCachedPersonalGraphServers(
+          authSession.graphStore, authSession.userName ?? authSession.username ?? "") : [],
+        directory: readGraphServerDirectory(),
+      });
+      if (selected.addedDefault) collectSharedGraphServer(selected.url);
+      prepared = prepareInitialFctQuery(parsed, selected.url);
+    } else if (at < 0) {
+      prepared = prepareInitialFctQuery(parsed, savedServer);
+    }
+    const preparedXml = serializeFctQuery(prepared);
+    if (!validGraphServerUrl((prepared.attributes.addr ?? "").split("@").slice(1).join("@"))) return false;
     const restored = readShareableUiState(destination.search);
     const tab = restored?.workspaceTab ?? "browse";
     // Entering a ribbon always saves exactly the original Browse query;
@@ -7414,7 +7755,11 @@ useEffect(() => {
     resetMaestroQueryExecutionClocks();
     resetMaestroIncompleteResults();
     clearWidgetsForViewChange();
-    if (!restoreQueryAndUiState(xml, restored)) return false;
+    if (!restoreQueryAndUiState(preparedXml, restored)) return false;
+    // Legacy bookmark URLs can contain only q (no tab/state). In that case
+    // restoreQueryAndUiState() has no tab to apply: explicitly enter Browse
+    // rather than inheriting the Bookmarks Perspective that opened the link.
+    setWorkspaceTab(tab);
     setQueryRefreshRevision((revision) => revision + 1);
     return true;
   }
@@ -7506,16 +7851,18 @@ useEffect(() => {
         url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
         return url.toString().replace(/\/$/u, "");
       };
-      const personalEndpoint = fctEndpoints.find((endpoint) => {
-        try {
-          return normalizeEndpointUrl(endpoint.url) === normalizeEndpointUrl(payload.personalEndpointUrl!);
-        } catch {
-          return false;
-        }
+      // Show Bookmarks/History must not race the login registration effect.
+      // Register the exact authenticated endpoint in the personal RDF directory
+      // before replacing the live FCT query; never borrow a courtesy alias.
+      await ensureLoggedInPersonalServer();
+      const synced = await listPersonalGraphServers();
+      const actual = synced.find(entry => {
+        try { return normalizeEndpointUrl(entry.url) === normalizeEndpointUrl(payload.personalEndpointUrl!); }
+        catch { return false; }
       });
-      if (!personalEndpoint) {
-        throw new Error(`The personal SPARQL endpoint (${payload.personalEndpointUrl}) is not present in the Graphs graph.`);
-      }
+      if (!actual) throw new Error("The authenticated personal SPARQL endpoint was not found after registration.");
+      setManagedEndpoints(synced.map(asEndpointOption));
+      const personalEndpoint = asEndpointOption(actual);
       // Build the History query as a complete FCT query, then pass it through
       // the same restore path used by URL state. That path updates the live
       // query store through its API, notifying the query tree, breadcrumbs,
@@ -7983,7 +8330,7 @@ useEffect(() => {
     const replacement = siblings[0];
 
     // Delete only this relationship (and its descendants) from the query.
-    deleteNode(crumb.id);
+    if (!guardedDeleteQueryNode(crumb.id)) return;
 
     setBreadcrumbTrail((current) => {
       const crumbIndex = current.findIndex((entry) => entry.id === crumb.id);
@@ -8010,10 +8357,15 @@ useEffect(() => {
   }
 
   function boundValueNodes(node: FctQueryNode | undefined): FctQueryNode[] {
-    return (node?.children ?? []).filter((child) => child.name === "value" && (Boolean(child.text) || hasValueRange(child)));
+    return (node?.children ?? []).filter((child) => child.name === "value" && (Boolean(child.text) || hasValueRange(child) || Boolean(child.attributes.from || child.attributes.fromView)));
   }
 
   function boundValueLabel(value: FctQueryNode): string {
+    const ref=value.attributes.from ?? value.attributes.fromView;
+    if (ref) {
+      const target=findQueryNode(queryTree.children,ref);
+      return `${value.attributes.from ? "from" : "fromView"}: ${target?.attributes.label || target?.attributes.iri && toLabel(target.attributes.iri) || ref}`;
+    }
     if (hasValueRange(value)) {
       return `(${value.attributes.rangeStart ?? ""}, ${value.attributes.rangeEnd ?? ""})`;
     }
@@ -8156,7 +8508,7 @@ useEffect(() => {
   function popBreadcrumbOrBinding(crumb: { id: string; uri: string; name: string }) {
     const values = boundValueNodes(findQueryNode(queryTree.children, crumb.id));
     if (values.length > 0) {
-      deleteNode(values[values.length - 1].id);
+      guardedDeleteQueryNode(values[values.length - 1].id);
       return;
     }
     popBreadcrumbNode(crumb);
@@ -8197,6 +8549,122 @@ useEffect(() => {
 
 
   
+  // Query Tree link editing is the one UI for existing <value> nodes.
+  // No new history or reference snapshot schema is introduced.
+  function openValueReferenceEditor(parentId:string, value?:FctQueryNode) {
+    setValueReferenceError("");
+    setValueReferenceEditor({parentId,valueId:value?.id ?? null,
+      mode:value?.attributes.from !== undefined ? "from" :
+        value?.attributes.fromView !== undefined ? "fromView" : value ? "constant" : "from",
+      targetId:value?.attributes.from ?? value?.attributes.fromView ?? "",
+      text:value?.text ?? "",datatype:value?.attributes.datatype ?? "string",
+      lang:value?.attributes["xml:lang"] ?? "",op:value?.attributes.op ?? "="});
+  }
+  const valueReferenceCandidates: Array<{id:string;label:string}> = [];
+  if (queryTree.attributes.id) valueReferenceCandidates.push({id:queryTree.attributes.id,label:`Root (${queryTree.attributes.id})`});
+  const collectReferenceCandidates = (nodes:FctQueryNode[]) => {
+    for (const candidate of nodes) {
+      if ((candidate.name === "property" || candidate.name === "property-of") && candidate.id)
+        valueReferenceCandidates.push({id:candidate.id,label:`${candidate.attributes.label || toLabel(candidate.attributes.iri ?? "", candidate.name === "property" ? "Property" : "Role")} (${candidate.id})`});
+      collectReferenceCandidates(candidate.children);
+    }
+  };
+  collectReferenceCandidates(queryTree.children);
+  function commitValueReferenceEditor() {
+    const editor=valueReferenceEditor;
+    if (!editor) return;
+    try {
+      if (editor.mode !== "constant" && !editor.targetId) throw new Error("Select a query node to reference.");
+      if (editor.mode === "constant" && !editor.text.trim()) throw new Error("Enter a value, or choose from/fromView.");
+      const payload = editor.mode === "constant"
+        ? {text:editor.text,datatype:editor.datatype || "string",op:editor.op,...(editor.lang ? {lang:editor.lang} : {})}
+        : {text:"",attributes:{[editor.mode]:editor.targetId}};
+      const next=workbenchQueryTreeApi.upsertValueBinding(queryTree,editor.parentId,editor.valueId,payload);
+      inspectFctValueReferences(next);
+      replaceQueryTree(next);
+      setValueReferenceEditor(null);
+      setValueReferenceError("");
+    } catch(error) {setValueReferenceError(error instanceof Error ? error.message : String(error));}
+  }
+  /** Re-use the operating-system-style dependency warning for every deletion
+   * path; the underlying tree API independently rejects orphaning mutations. */
+  function guardedDeleteQueryNode(nodeId:string):boolean {
+    try {
+      const dependents=dependentFctValueReferences(queryTree,nodeId);
+      if (dependents.length) {setBlockedReferenceDeletion({nodeId,dependents});return false;}
+      deleteNode(nodeId);
+      return true;
+    } catch(error) {
+      toast.add({title:"Cannot delete query node",description:error instanceof Error?error.message:String(error),type:"error"});
+      return false;
+    }
+  }
+  function renderValueReferenceDialog():ReactNode {
+    const editor=valueReferenceEditor;
+    return <>
+      <Dialog open={Boolean(editor)} onOpenChange={open=>{if(!open) {setValueReferenceEditor(null);setValueReferenceError("");}}}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>{editor?.valueId ? "Edit value" : "Link a value"}</DialogTitle>
+            <DialogDescription>Compare this value to another query node in the same solution, to a relocated-view population, or to a constant. Node IDs remain stable in History.</DialogDescription>
+          </DialogHeader>
+          {editor && <div className="space-y-3">
+            <label className="block space-y-1 text-sm"><span>Value source</span>
+              <select className="w-full rounded-md border bg-background px-2 py-2" value={editor.mode}
+                onChange={event=>setValueReferenceEditor({...editor,mode:event.target.value as "from"|"fromView"|"constant"})}>
+                <option value="from">from</option>
+                <option value="fromView">fromValue</option>
+                <option value="constant">constant</option>
+              </select>
+            </label>
+            {editor.mode === "constant" ? <>
+              <label className="block space-y-1 text-sm"><span>Value</span><Input value={editor.text} onChange={event=>setValueReferenceEditor({...editor,text:event.target.value})}/></label>
+              <label className="block space-y-1 text-sm"><span>Operator</span>
+                <Select value={editor.op} onValueChange={op=>setValueReferenceEditor({...editor,op})}>
+                  <SelectTrigger aria-label="Value comparison operator"><SelectValue placeholder="Choose operator" /></SelectTrigger>
+                  <SelectContent>
+                    {([ ["=", "equals"], ["contains", "contains"], ["regex", "regular expression"],
+                      ["<", "less than"], ["<=", "less than or equal"], [">", "greater than"], [">=", "greater than or equal"] ] as const).map(([op,label])=>(
+                        <SelectItem key={op} value={op}><span className="inline-flex items-center gap-2">{renderValueOperator({id:"",name:"value",attributes:{op},children:[]})}<span>{label}</span></span></SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="block space-y-1 text-sm"><span>Datatype</span><Input value={editor.datatype} onChange={event=>setValueReferenceEditor({...editor,datatype:event.target.value})}/></label>
+              <label className="block space-y-1 text-sm"><span>Language (optional)</span><Input value={editor.lang} onChange={event=>setValueReferenceEditor({...editor,lang:event.target.value})}/></label>
+            </> : <label className="block space-y-1 text-sm"><span>Referenced node ID</span>
+              <select className="w-full rounded-md border bg-background px-2 py-2" value={editor.targetId}
+                onChange={event=>setValueReferenceEditor({...editor,targetId:event.target.value})}>
+                <option value="">Choose a node…</option>
+                {valueReferenceCandidates.map(candidate=><option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}
+              </select></label>}
+            {valueReferenceError && <p role="alert" className="text-sm text-destructive">{valueReferenceError}</p>}
+            <div className="flex justify-end gap-2"><Button variant="outline" onClick={()=>setValueReferenceEditor(null)}>Cancel</Button>
+              <Button onClick={commitValueReferenceEditor}>Apply</Button></div>
+          </div>}
+        </DialogContent>
+      </Dialog>
+      <AlertDialog open={Boolean(blockedReferenceDeletion)} onOpenChange={open=>{if(!open)setBlockedReferenceDeletion(null)}}>
+        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Cannot delete a node that is in use</AlertDialogTitle>
+          <AlertDialogDescription>Node {blockedReferenceDeletion?.nodeId} is referenced by the following query values. Remove or edit those links before deleting this node or its subtree.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <ul className="list-disc space-y-1 pl-5 text-sm">{blockedReferenceDeletion?.dependents.map(ref=><li key={ref.valueId}>
+          <button type="button" className="break-all text-left font-mono text-xs text-primary underline underline-offset-2"
+            onClick={() => {
+              const parent = findQueryNode(queryTree.children, ref.sourceId);
+              const value = parent?.children.find(child => child.name === "value" && child.id === ref.valueId);
+              if (!parent || !value) return;
+              setBlockedReferenceDeletion(null);
+              openValueReferenceEditor(parent.id, value);
+            }}>
+            {`<value id="${ref.valueId}" ${ref.kind}="${ref.targetId}"/>`}
+          </button>
+        </li>)}</ul>
+        <AlertDialogFooter><AlertDialogCancel onClick={()=>setBlockedReferenceDeletion(null)}>Close</AlertDialogCancel></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>;
+  }
+
   const rootClassNodes = queryTree.children.filter((node) => node.name === "class");
   const rootStatusNodes = queryTree.children.filter((node) => node.name === "status");
   // Prefer the Text node, otherwise attach root classes to a root Value node.
@@ -8214,6 +8682,14 @@ useEffect(() => {
     return [...Array.from(new Set([...nested, ...rootStack])).map((uri) => toLabel(uri, "Class")), ...scopedStatuses, ...rootStatuses].filter(Boolean);
   };
 
+  // Cached once for the Query Tree. <a> labels and the left Personal facet
+  // derive from the identical parent-indexed getPath resolver.
+  const queryAnchorsById = new Map(resolveTransportedFacets(queryTree).map(anchor => [anchor.id, anchor]));
+  // When an anchor's old focus is no longer active, keep its Query Tree label
+  // readable by resolving the full chain from the query root.
+  const queryTreePathIndex = indexFctPaths<FctQueryTree | FctQueryNode>(queryTree);
+  const pathLabel = (path: { iri: string; direction: "forward" | "reverse" }[]) =>
+    path.map(step => `${toLabel(step.iri, step.direction === "reverse" ? "Role" : "Property")}${step.direction === "reverse" ? " of" : ""}`).join(" › ");
   const rootPreviewNodeId = queryTree.children.find((node) => node.name === "value" && node.attributes.datatype === "uri")?.id
     ?? queryTree.children.find((node) => node.name === "text")?.id
     ?? "query-everything";
@@ -8223,6 +8699,12 @@ useEffect(() => {
   ): ReactNode => {
     // A nested <view> is the focus marker for its parent, not a separate tree row.
     if (node.name === "view" || node.uiKey === "query-view" || node.id === "query-view") return null;
+    const transportedAnchor = node.name === "a" ? queryAnchorsById.get(node.id) : undefined;
+    const transportedAnchorLabel = transportedAnchor
+      ? pathLabel(transportedAnchor.path)
+      : node.name === "a"
+        ? pathLabel(getPath(queryTreePathIndex, queryTree, node.attributes.href ?? "")?.path ?? []) || "Transported facet"
+        : null;
     const protectedNode = node.name === "text" || (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-view" || node.id === "query-view") || (node.uiKey === "query-everything" || node.id === "query-everything");
     const rootHasFocusView = queryTree.children.some((child) => child.name === "view");
     const isRoot = depth === 0;
@@ -8232,6 +8714,7 @@ useEffect(() => {
     const hasAttachedFocusView = node.children.some((child) => child.name === "view");
     const isRootFocusCarrier = isRoot && rootHasFocusView && (node.name === "text" || (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-everything" || node.id === "query-everything") || node.name === "value");
     const isFocusCarrier = hasAttachedFocusView || isRootFocusCarrier;
+    const inTransportedPreview = transportedPreviewIds.has(node.id) || (isRoot && transportedFocusAtRoot && isRootFocusCarrier && node.id === rootClassCarrierId);
     const isRootUriValue = isRoot && node.name === "value" && node.attributes.datatype === "uri";
     const SearchModeIcon = signalOptions.find((option) => option.mode === effectiveCommittedSignal)?.Icon ?? Signal;
     const NodeIcon = (node.name === "text" || node.uiKey === "query-text" || node.id === "query-text")
@@ -8240,7 +8723,9 @@ useEffect(() => {
         ? SearchModeIcon
         : (node.uiKey === "query-view" || node.id === "query-view")
         ? null
-        : node.name === "property"
+        : node.name === "a"
+          ? ExternalLink
+          : node.name === "property"
           ? BetweenHorizontalStart
           : node.name === "property-of"
             ? BetweenHorizontalEnd
@@ -8249,7 +8734,9 @@ useEffect(() => {
               : node.name === "value"
                 ? isRootUriValue ? GlobeCode : Tag
                 : null;
-    const nodeIconColor = isFocusCarrier
+    const nodeIconColor = node.name === "a"
+      ? "text-muted-foreground"
+      : isFocusCarrier
       ? "text-emerald-600 dark:text-emerald-400"
       : (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-everything" || node.id === "query-everything")
         ? "text-black dark:text-white"
@@ -8280,7 +8767,7 @@ useEffect(() => {
     const showMinus = !isRootCarrierRow || rootTextOrValue || rootClassesOnThisNode.length > 0 || rootStatusesOnThisNode.length > 0;
     const lockedNode = protectedNode && !isRootCarrierRow;
     const visibleChildren = node.children.filter((child) =>
-      child.name !== "view" && (child.uiKey !== "query-view" && child.id !== "query-view") && child.name !== "class" && child.name !== "status" && !(inlinesValues && child.name === "value" && (Boolean(child.text) || hasValueRange(child))));
+      child.name !== "view" && (child.uiKey !== "query-view" && child.id !== "query-view") && child.name !== "class" && child.name !== "status" && !(inlinesValues && child.name === "value" && (Boolean(child.text) || hasValueRange(child) || child.attributes.from || child.attributes.fromView)));
     const hasVisibleChildren = visibleChildren.length > 0;
     const isCollapsed = collapsedQueryNodeIds.has(node.id);
     const toggleCollapsed = () => setCollapsedQueryNodeIds((current) => {
@@ -8325,14 +8812,22 @@ useEffect(() => {
             {node.name === "property" || node.name === "property-of" ? (
               <Tooltip><TooltipTrigger render={<button
                 type="button"
-                className="min-w-0 break-words text-left underline-offset-2 hover:underline cursor-pointer"
-                onClick={() => navigateToPropertyPath(node.id)}
+                className={`min-w-0 break-words rounded-sm px-1 text-left underline-offset-2 hover:underline cursor-pointer ${inTransportedPreview ? "!bg-emerald-100/80 !text-emerald-900 dark:!bg-emerald-950/55 dark:!text-emerald-100" : ""}`}
+                onMouseEnter={() => hoveredTransportedAnchor(node.id)}
+                onMouseLeave={() => setHoveredTransportedTargetId(current => current === node.id ? null : current)}
+                data-maestro-anchor-preview={inTransportedPreview ? "true" : undefined}
+                onClick={(event) => {
+                  if (!toggleTransportedAnchorAt(node.id, event.shiftKey)) navigateToPropertyPath(node.id);
+                }}
+                title="Shift+click to toggle transported facet"
               >
                 <OrUidLabel uid={node.attributes.uid}>{queryNodeLabel(node)}{node.name === "property-of" ? " of" : ""}</OrUidLabel>{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
-              </button>} /><TooltipContent>{`Navigate to ${node.name === "property-of" ? "reverse-role" : "property"} scope: ${node.attributes.iri ?? queryNodeLabel(node)}`}</TooltipContent></Tooltip>
+              </button>} /><TooltipContent>{`Navigate to ${node.name === "property-of" ? "reverse-role" : "property"} scope: ${node.attributes.iri ?? queryNodeLabel(node)} · Shift+click to toggle transported facet`}</TooltipContent></Tooltip>
             ) : (
               <Tooltip><TooltipTrigger render={isRoot && (node.name === "text" || node.name === "value" || node.name === "everything")
-                ? <button type="button" onClick={handleRootBreadcrumbClick}
+                ? <button type="button" onMouseEnter={() => hoveredTransportedAnchor(queryTree.attributes.id ?? "")}
+                    onMouseLeave={() => setHoveredTransportedTargetId(current => current === queryTree.attributes.id ? null : current)}
+                    onClick={(event) => {if (!toggleTransportedAnchorAt(queryTree.attributes.id ?? "",event.shiftKey)) handleRootBreadcrumbClick();}}
                     aria-label={`Go to root node: ${queryNodeLabel(node)}`}
                     className="min-w-0 cursor-pointer break-words text-left underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     {node.name === "value" && <span className="mr-1 inline-flex align-middle">{renderValueOperator(node)}</span>}
@@ -8340,7 +8835,7 @@ useEffect(() => {
                   </button>
                 : <span className="min-w-0 break-words">
                     {node.name === "value" && <span className="mr-1 inline-flex align-middle">{renderValueOperator(node)}</span>}
-                    {(node.uiKey === "query-view" || node.id === "query-view") ? "Results view" : facetHoverPreview?.kind === "record" && node.id === rootPreviewNodeId ? facetHoverPreview.label : queryNodeLabel(node)}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
+                    {transportedAnchorLabel ?? ((node.uiKey === "query-view" || node.id === "query-view") ? "Results view" : facetHoverPreview?.kind === "record" && node.id === rootPreviewNodeId ? facetHoverPreview.label : queryNodeLabel(node))}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
                   </span>} /><TooltipContent>{isRoot ? "Go to this node" : node.attributes.iri ?? node.name}</TooltipContent></Tooltip>
             )}
             {inlineValues.map((value, index) => (
@@ -8352,9 +8847,16 @@ useEffect(() => {
                 >
                   {boundValueLabel(value)}
                 </span>} /><TooltipContent>{`${value.text ?? ""}${value.attributes.datatype ? ` (${value.attributes.datatype})` : ""}`}</TooltipContent></Tooltip>
+
               </span>
             ))}
           </span>
+          <ButtonGroup className="ml-auto shrink-0 self-start" aria-label={`Query node controls for ${queryNodeLabel(node)}`}>
+            {(node.name === "property" || node.name === "property-of") && !node.children.some(child=>child.name==="value") && (
+              <Tooltip><TooltipTrigger render={<button type="button" onClick={()=>openValueReferenceEditor(node.id)}
+                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label={`Link a value to ${queryNodeLabel(node)}`}><Link className="size-4"/></button>}/>
+                <TooltipContent>Link a value from another query node</TooltipContent></Tooltip>)}
           {showMinus && (
           <Tooltip><TooltipTrigger render={<button
             type="button"
@@ -8378,13 +8880,13 @@ useEffect(() => {
             onClick={() => {
               if (isRootCarrierRow) {
                 if (rootTextOrValue) updateSearchText("");
-                else if (topInlineStatus) deleteNode(topInlineStatus.id);
-                else if (topInlineClass) deleteNode(topInlineClass.id);
+                else if (topInlineStatus) guardedDeleteQueryNode(topInlineStatus.id);
+                else if (topInlineClass) guardedDeleteQueryNode(topInlineClass.id);
                 return;
               }
-              deleteNode(topInlineValue ? topInlineValue.id : topInlineStatus ? topInlineStatus.id : topInlineClass ? topInlineClass.id : node.id);
+              guardedDeleteQueryNode(topInlineValue ? topInlineValue.id : topInlineStatus ? topInlineStatus.id : topInlineClass ? topInlineClass.id : node.id);
             }}
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded border text-base leading-none text-muted-foreground hover:border-destructive hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-25"
+            className="flex size-7 shrink-0 items-center justify-center text-base leading-none text-muted-foreground hover:border-destructive hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-25"
           >
             −
           </button>} /><TooltipContent>{lockedNode
@@ -8400,6 +8902,13 @@ useEffect(() => {
                       ? "Remove the last class constraint; click again to remove the node"
                       : "Remove this node and all descendants"}</TooltipContent></Tooltip>
           )}
+            {(node.name === "property" || node.name === "property-of") && inlineValues.map(value=>(
+              <Tooltip key={value.id}><TooltipTrigger render={<button type="button" onClick={()=>openValueReferenceEditor(node.id,value)}
+                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label={`Edit value ${boundValueLabel(value)}`}>
+                <Pencil className="size-4"/></button>}/><TooltipContent>Edit value {boundValueLabel(value)}</TooltipContent></Tooltip>
+            ))}
+          </ButtonGroup>
         </div>
         {hasVisibleChildren && !isCollapsed && (
           <ul
@@ -8611,44 +9120,46 @@ useEffect(() => {
   // Keep Analyze's path identical to Browse, including retained muted ghost suffixes.
   const analyzeBreadcrumbTrail = tutorialBreadcrumbPath;
   const tableFocusNode = tableSlot ? findQueryNode(queryTree.children, tableSlot.id) : queryTree;
-  const analyzeTableHeaderNodes = (tableFocusNode?.children ?? [])
-    .filter((node) => (node.name === "property" || node.name === "property-of") && Boolean(node.attributes.iri))
-    .map((node) => ({
-      id: node.id,
-      uri: node.attributes.iri || "",
-      name: node.name,
-    }));
-  const analyzeTableHeadersKey = [tableSlot?.id ?? "query-root", ...analyzeTableHeaderNodes.map((node) => `${node.id}:${node.name}:${node.uri}`)].join("\u0000");
+  // First-class columns: direct relationships plus scope-qualified <a>
+  // references. Each alias keeps its exact node ID and full forward/reverse
+  // path. The remote terminal predicate is not mistaken for a local sibling.
+  const analyzeTableHeaderNodes = [
+    ...(tableFocusNode?.children ?? [])
+      .filter((node) => (node.name === "property" || node.name === "property-of") && Boolean(node.attributes.iri))
+      .map((node) => ({ id: node.id, uri: node.attributes.iri || "", name: node.name,
+        label: toLabel(node.attributes.iri || "", "Property"),
+        hops: undefined as undefined | Array<{ iri: string; direction: "forward" | "reverse" }> })),
+    ...activeTransportedFacets(queryTree).map(alias => ({
+      id: alias.id, uri: alias.target.attributes.iri || "", name: "a",
+      label: alias.path.map(hop => `${toLabel(hop.iri, hop.direction === "reverse" ? "Role" : "Property")}${hop.direction === "reverse" ? " of" : ""}`).join(" › "),
+      hops: alias.path.map(hop => ({ iri: hop.iri, direction: hop.direction })),
+    })),
+  ];
+  const analyzeTableHeadersKey = [tableSlot?.id ?? "query-root", ...analyzeTableHeaderNodes.map((node) => `${node.id}:${node.name}:${node.uri}:${JSON.stringify(node.hops)}`)].join("\u0000");
   // Compare Table retains its facet picker and independent value projection.
   // The regular Table only asks for the relationships represented by its headers.
   // Compare can select only relationships explicitly present at this focus
   // in the live <query>, not all discoverable Properties/Roles facets.
-  const compareFacetCandidates = Array.from(new Map(analyzeTableHeaderNodes.map((node) => {
-    const key = `${node.name === "property-of" ? "reverse" : "forward"}|${node.uri}`;
-    return [key, { key, label: `${toLabel(node.uri, "Property")}${node.name === "property-of" ? " of" : ""}` }];
+  const availableCompareFacets = Array.from(new Map(analyzeTableHeaderNodes.map(node => {
+    const key = node.name === "a" ? `alias:${node.id}` : `${node.name === "property-of" ? "reverse" : "forward"}|${node.uri}`;
+    return [key, { key, label: node.label }];
   })).values());
-  const availableCompareFacets = compareFacetCandidates;
-  const analyzeFacets = selectedAnalysisUri.includes("compare-table")
-    ? availableCompareFacets
-    : Array.from(new Map(analyzeTableHeaderNodes.map((node) => {
-        const key = `${node.name === "property-of" ? "reverse" : "forward"}|${node.uri}`;
-        return [key, {key, label: toLabel(node.uri, "Property") + (node.name === "property-of" ? " of" : "")}];
-      })).values());
+  const analyzeFacets = availableCompareFacets;
   const analysisFacetKey = analyzeFacets.map((item) => item.key).join("\u0000");
   const analysisResources = visibleResultsPage.filter((item) => item.termType !== "bnode").map((item) => ({
-    value: item.uri, type: item.termType ?? "uri",
+    value: item.uri, type: item.termType === "literal" ? "literal" as const : "uri" as const,
     ...(item.datatype && item.datatype !== "string" && item.termType !== "uri" ? { datatype: item.datatype } : {}),
     ...(item.lang ? { lang: item.lang } : {}),
   }));
   const analysisResourceKey = JSON.stringify(analysisResources);
-  const analysisRequestKey = JSON.stringify([selectedEndpointId, queryXml, analysisFacetKey, analysisResourceKey]);
+  const analysisRequestKey = JSON.stringify([queryGraphServer, queryXml, analysisFacetKey, analysisResourceKey]);
   const readyAnalysisValues = analysisValuesState?.requestKey === analysisRequestKey ? analysisValuesState.byUri : null;
   const effectiveCompareFacet = availableCompareFacets.some((facet) => facet.key === compareFacet)
     ? compareFacet : availableCompareFacets[0]?.key ?? "";
   const analysisPageKey = JSON.stringify(visibleResultsPage.map((item) => [item.uri, item.title, item.scopeValues]));
   // Column edits do not change the identity of the page's result rows. Keep the
   // XSLT-created table mounted and reconcile its children by their query node IDs.
-  const analysisBaseKey = JSON.stringify([selectedEndpointId, selectedAnalysisUri, tableSlot?.id ?? "query-root",
+  const analysisBaseKey = JSON.stringify([queryGraphServer, selectedAnalysisUri, tableSlot?.id ?? "query-root",
     resultsUiPage, resultsPageSize, visibleResultsPage.map((item) => [item.uri, item.title, item.termType]),
     selectedAnalysisUri.includes("compare-table") ? effectiveCompareFacet : ""]);
   const analysisSelectionPageKey = JSON.stringify([queryXml, resultsUiPage, resultsPageSize, visibleResultsPage.map((item) => [item.uri, item.termType, item.datatype, item.lang])]);
@@ -8666,7 +9177,7 @@ useEffect(() => {
       .filter(child => child.name === "class")
       .map(child => child.attributes.iri ?? "")
       .filter(Boolean)),
-    ...(classFacetsResultKey === JSON.stringify([classFacetQueryXml, selectedEndpointId, queryRefreshRevision])
+    ...(classFacetsResultKey === JSON.stringify([classFacetQueryXml, queryGraphServer, queryRefreshRevision])
       ? classFacets.filter(item => Number(item.count) > 0).map(item => item.uri) : []),
   ]));
   const viewClassKey = JSON.stringify(viewScopeClasses);
@@ -8683,7 +9194,7 @@ useEffect(() => {
       .map(node => node.attributes.iri ?? "").filter(Boolean))];
   })();
   const analyzeClassKey = JSON.stringify(analyzeFocusClasses);
-  type DiscoveredView = { uri: string; label: string; icon?: string; template: string; matchedClass: string; stylesheet: string };
+  type DiscoveredView = import("@/lib/personal-sparql-reads").DiscoveredViewProvider;
 
 
   
@@ -8714,18 +9225,29 @@ useEffect(() => {
   // Its result is scoped to the class identity and authenticated personal store.
   const viewDiscoveryScope = JSON.stringify([workspaceTab, queryXml, queryRefreshRevision,
     viewClassKey, accessSessionKey, viewPanel, policyApprovalRevision, queryMatchedProvidersKey]);
-  // One query-scoped XState snapshot owns the ribbon. Avoid a second mutable
-  // React copy that could continue displaying a previous query's providers.
-  const discoveredViews: DiscoveredView[] =
+  // Discovery can re-key while class/History evidence settles *for the same
+  // unchanged FCT query*. Preserve only the previously validated, explicitly
+  // selected provider across that revalidation. Never inherit a provider from
+  // another query, login, or policy revision; no parallel mutable provider list.
+  const retainedSelectedViewRef = useRef<{ key: string; uri: string; view: DiscoveredView } | null>(null);
+  const retentionKey = JSON.stringify([queryXml, accessSessionKey, policyApprovalRevision]);
+  const freshDiscoveredViews: DiscoveredView[] =
     workspaceTab === "view" && viewDiscoverySnapshot.context.key === viewDiscoveryScope &&
       viewDiscoverySnapshot.value === "ready"
       ? viewDiscoverySnapshot.context.items.filter(view => personalPerspectiveMatchesQuery(view.uri, queryTree)) : [];
+  const freshSelectedView = freshDiscoveredViews.find(view => view.uri === selectedViewUri);
+  if (freshSelectedView) retainedSelectedViewRef.current = { key: retentionKey, uri: selectedViewUri, view: freshSelectedView };
+  const retainedSelectedView = workspaceTab === "view" && selectedViewUri &&
+    retainedSelectedViewRef.current?.key === retentionKey && retainedSelectedViewRef.current.uri === selectedViewUri
+      ? retainedSelectedViewRef.current.view : null;
+  const discoveredViews: DiscoveredView[] = retainedSelectedView && !freshSelectedView
+    ? [...freshDiscoveredViews, retainedSelectedView] : freshDiscoveredViews;
   useEffect(() => {
     if (workspaceTab !== "view") { viewDiscoveryController.inactive(); return; }
     const classes = JSON.parse(viewClassKey) as string[];
-    if ((!classes.length && !queryContext.matchedProviders.length) || !personalStoreReady) { viewDiscoveryController.inactive(); return; }
+    if (!personalStoreReady) { viewDiscoveryController.inactive(); return; }
     viewDiscoveryController.discover(viewDiscoveryScope, (signal) =>
-      discoverViews(classes, AbortSignal.any([signal, AbortSignal.timeout(15000)]), queryContextReady ? queryContext.matchedProviders : []));
+      discoverViews(classes, signal, queryContextReady ? queryContext.matchedProviders : []));
     // Clean-up cancels a pending actor but never reselects a stale View.
     return () => viewDiscoveryController.inactive();
   }, [viewDiscoveryController, viewDiscoveryScope, viewClassKey, workspaceTab, personalStoreReady, viewPanel, queryContextReady, queryMatchedProvidersKey]);
@@ -8902,7 +9424,7 @@ useEffect(() => {
   };
   const kanbanMovesKey = JSON.stringify([kanbanMoves, kanbanColumnOrder]);
   const viewRenderInputKey = JSON.stringify([
-    viewPageKey, selectedEndpointId, resultsUiPage, effectivePageSize,
+    viewPageKey, queryGraphServer, resultsUiPage, effectivePageSize,
     fctEndpoints, endpointStatuses, viewDomainRanks, viewServerSoftware,
     viewServerDescriptions, checkingEndpointIds,
     kanbanGroupKey, kanbanMovesKey, verifiedQueryBookmarked, queryXml,
@@ -8946,7 +9468,7 @@ useEffect(() => {
         if (uris.length && verifiedQueryBookmarked) {
           try {
             const ctx = await personalContext();
-            const query = `SELECT ?resource ?status WHERE { VALUES ?resource { ${uris.map(uri => `<${uri}>`).join(" ")} } GRAPH <${ctx.base}/status> { ?resource <gttp://ggg.maestro.ecosys/ns/ui#status> ?status } }`;
+            const query = `SELECT ?resource ?status WHERE { VALUES ?resource { ${uris.map(uri => `<${uri}>`).join(" ")} } GRAPH <${resolveGraph(GRAPH.STATUS, ctx.base)}> { ?resource <gttp://ggg.maestro.ecosys/ns/ui#status> ?status } }`;
             const assertions = await selectPersonal(query, ctx);
             for (const assertion of assertions) {
               const uri = assertion.resource?.value ?? "", status = assertion.status?.value ?? "";
@@ -8966,21 +9488,26 @@ useEffect(() => {
           const option = groupByOptions.find(candidate => candidate.key === kanbanGroupKey);
           if (option && uris.length) {
             try {
-              const projectionXml = listValuesQueryClone(queryXml);
               // This is an ordinary bounded FCT list-values projection over the
               // existing page, not a persistent group="true" query edit.
               const responses = await Promise.all(Array.from({ length: Math.ceil(uris.length / LIST_VALUES_MAX_RESOURCES) }, async (_, batch) => {
                 const resources = uris.slice(batch * LIST_VALUES_MAX_RESOURCES, (batch + 1) * LIST_VALUES_MAX_RESOURCES)
                   .map(value => ({ value, type: "uri" as const }));
+                const alias = option.anchorId ? activeTransportedFacets(queryTree).find(item => item.id === option.anchorId) : undefined;
+                if (option.anchorId && !alias) throw new Error("Kanban transported facet is no longer in the active scope.");
+                const projectionXml = mergeValuesQueryClone(queryXml,
+                  [{ property: option.uri, direction: alias?.path[0]?.direction ?? option.direction,
+                    ...(alias ? { hops: alias.path.map(hop => ({ iri: hop.iri, direction: hop.direction })) } : {}) }], resources);
                 const response = await cachedFetchFct("/proxy/api/fct", {
-                  method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ queryXml: projectionXml, resources, projections: [{ property: option.uri, direction: option.direction }] }),
+                  method: "POST", cache: "no-store", headers: { "Content-Type": "text/xml; charset=utf-8" },
+                  body: projectionXml,
                 });
                 if (!response.ok) throw new Error(`Kanban facet projection HTTP ${response.status}`);
                 return parseListValuesXml(await response.text());
               }));
               for (const response of responses) for (const [uri, projections] of response) {
-                const values = projections.filter(projection => projection.property === option.uri && projection.direction === option.direction)
+                const values = projections.filter(projection => projection.property === option.uri &&
+                  projection.direction === (option.anchorId ? activeTransportedFacets(queryTree).find(item => item.id === option.anchorId)?.path[0]?.direction : option.direction))
                   .flatMap(projection => projection.values)
                   .filter(term => term.value && term.value !== "-")
                   .map(term => term.type === "uri" ? toLabel(term.value) : term.value);
@@ -9055,14 +9582,17 @@ useEffect(() => {
     setAnalysisValuesError("");
     void (async () => {
       try {
-        const columns: ListValueProjection[] = analysisFacetKey.split("\u0000").map((key) => {
+        const columns: ListValueProjection[] = analysisFacetKey.split("\u0000").filter(Boolean).map(key => {
+          if (key.startsWith("alias:")) {
+            const alias = activeTransportedFacets(queryTree).find(item => item.id === key.slice(6));
+            if (!alias) throw new Error(`The transported Analyze facet ${key} is no longer in the focus.`);
+            return { property: alias.target.attributes.iri || "", direction: alias.path[0].direction,
+              hops: alias.path.map(step => ({ iri: step.iri, direction: step.direction })) };
+          }
           const separator = key.indexOf("|");
-          return {
-            direction: key.slice(0, separator) === "reverse" ? "reverse" as const : "forward" as const,
-            property: key.slice(separator + 1),
-          };
+          return { direction: key.slice(0, separator) === "reverse" ? "reverse" as const : "forward" as const,
+            property: key.slice(separator + 1) };
         });
-        const projectionQueryXml = listValuesQueryClone(queryXml);
         // Virtuoso's list-values extension accepts at most 100 RDF terms per
         // request. Analyze pages may contain more; preserve the page selection
         // while projecting its terms through bounded, deduplicated requests.
@@ -9074,14 +9604,30 @@ useEffect(() => {
         for (let start = 0; start < uniqueResources.length; start += maxResourcesPerRequest) {
           if (controller.signal.aborted) return;
           const resources = uniqueResources.slice(start, start + maxResourcesPerRequest);
+          const projectionQueryXml = mergeValuesQueryClone(queryXml, columns, resources);
+          // Original <a> IDs are viewer-plane identifiers; merge-values gives
+          // the derived projection fresh legal FCT IDs. Reconcile those column
+          // IDs by their ordered projection occurrence before rendering.
+          const projectionDoc = new DOMParser().parseFromString(projectionQueryXml, "application/xml");
+          const projectionRoot = projectionDoc.documentElement;
+          const projectionNodes = Array.from(projectionRoot.children).filter(node =>
+            node.localName === "a" || ((node.localName === "property" || node.localName === "property-of") && node.getAttribute("column") !== "false"));
+          const projectedAliasIds = new Map(projectionNodes.map((node,index) => [
+            node.getAttribute("id") || "", analysisFacetKey.split("\u0000")[index]?.startsWith("alias:")
+              ? analysisFacetKey.split("\u0000")[index].slice(6) : "",
+          ]));
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store", signal: controller.signal,
-            headers: {"Content-Type": "application/json", ...proxyDebugHeaders("analyze-values", `AnalyzeListValues:${proxyDebugFingerprint(analysisRequestKey)}:${start / maxResourcesPerRequest + 1}`)},
-            body: JSON.stringify({queryXml: projectionQueryXml, resources, projections: columns}),
+            headers: {"Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("analyze-values", `AnalyzeListValues:${proxyDebugFingerprint(analysisRequestKey)}:${start / maxResourcesPerRequest + 1}`)},
+            body: projectionQueryXml,
           });
           const xml = await response.text();
           if (!response.ok) throw new Error(`Analyze list-values batch ${start / maxResourcesPerRequest + 1} returned HTTP ${response.status}: ${xml.slice(0, 300)}`);
-          for (const [uri, values] of parseListValuesXml(xml)) byUri.set(uri, values);
+          for (const [uri, values] of parseListValuesXml(xml)) {
+            const projected = values.map(value => ({ ...value,
+              id: projectedAliasIds.get(value.id || "") || value.id }));
+            byUri.set(uri, [...(byUri.get(uri) ?? []), ...projected]);
+          }
         }
         if (!controller.signal.aborted) setAnalysisValuesState({requestKey: analysisRequestKey, byUri});
       } catch (error) {
@@ -9096,7 +9642,7 @@ useEffect(() => {
 
   const [analyzeDiscoveryController] = useState(createMaestroAnalyzeDiscoveryController);
   const analyzeDiscoverySnapshot = useSyncExternalStore(analyzeDiscoveryController.subscribe, analyzeDiscoveryController.getSnapshot, analyzeDiscoveryController.getSnapshot);
-  const analyzeDiscoveryKey = JSON.stringify([workspaceTab, analyzeClassKey, selectedEndpointId,
+  const analyzeDiscoveryKey = JSON.stringify([workspaceTab, analyzeClassKey, queryGraphServer,
     authSession?.graphStore, authSession?.graphPrefix, queryContextKey, queryMatchedProvidersKey]);
   useEffect(() => { analyzeDiscoveryController.start(); return () => analyzeDiscoveryController.stop(); }, [analyzeDiscoveryController]);
   useEffect(() => {
@@ -9155,7 +9701,7 @@ useEffect(() => {
         // breadcrumb column. The interaction comes from the shared renderer.
         const stylesheetColumn = previous.columns.find((column) => column.kind === "breadcrumb");
         const columns = [resultColumn, ...analyzeTableHeaderNodes.map((node) => existing.get(node.id) ?? {
-          kind: "breadcrumb", nodeId: node.id, label: toLabel(node.uri, "Property"),
+          kind: "breadcrumb", nodeId: node.id, label: node.label,
           breadcrumbStyle: stylesheetColumn?.breadcrumbStyle ?? {},
           headerStyle: stylesheetColumn?.headerStyle ?? {},
         })];
@@ -9200,15 +9746,17 @@ useEffect(() => {
           node.setAttribute("id",crumb.id);
           node.setAttribute("iri",crumb.uri);
           node.setAttribute("direction",crumb.name === "property-of" ? "reverse" : "forward");
-          node.setAttribute("label",toLabel(crumb.uri, "Property"));
+          node.setAttribute("label",crumb.label);
+          if (crumb.name === "a") node.setAttribute("anchor-id",crumb.id);
         });
         // No generic facet columns in Table: only direct children of the
         // live focus. Keep the element for backwards compatibility with XSLT.
         add(root,"extra-facets");
         const selection = add(root,"selection");
-        const [direction,facet] = effectiveCompareFacet.split("|",2);
+        const [direction,facet] = effectiveCompareFacet.startsWith("alias:") ? ["", ""] : effectiveCompareFacet.split("|",2);
         selection.setAttribute("direction",direction || "forward");
         selection.setAttribute("facet",facet || "");
+        selection.setAttribute("node-id",effectiveCompareFacet.startsWith("alias:") ? effectiveCompareFacet.slice(6) : "");
         const resultRoot = add(root,"results");
         visibleResultsPage.forEach((result) => {
           const resultElement = add(resultRoot,"result");
@@ -9217,13 +9765,14 @@ useEffect(() => {
           // The independent Analyze projection supplies values even if Results
           // badges are disabled. Keep already-known badge values as a fallback.
           const byFacet = new Map<string, ScopeValue>();
-          for (const scope of result.scopeValues ?? []) byFacet.set(`${scope.direction}|${scope.property}`, scope);
-          for (const scope of readyAnalysisValues?.get(result.uri) ?? []) byFacet.set(`${scope.direction}|${scope.property}`, scope);
+          for (const scope of result.scopeValues ?? []) byFacet.set(scope.id && analyzeTableHeaderNodes.some(header=>header.id===scope.id && header.name === "a") ? `alias:${scope.id}` : `${scope.direction}|${scope.property}`, scope);
+          for (const scope of readyAnalysisValues?.get(result.uri) ?? []) byFacet.set(scope.id && analyzeTableHeaderNodes.some(header=>header.id===scope.id && header.name === "a") ? `alias:${scope.id}` : `${scope.direction}|${scope.property}`, scope);
           Array.from(byFacet.values()).forEach((scope) => scope.values.forEach((value) => {
             if (!value.value || value.value === "-") return;
             const element = add(resultElement,"value");
             element.setAttribute("property",scope.property);
             element.setAttribute("direction",scope.direction);
+            if (scope.id) element.setAttribute("node-id",scope.id);
             element.setAttribute("termType",value.type || "literal");
             element.textContent = value.value;
           }));
@@ -9434,6 +9983,7 @@ useEffect(() => {
     endpointHealthToast,
     endpointMenuError,
     graphRegistryReady,
+    graphServerDirectoryHydrated,
     graphHealthReady,
     endpointReadyForQuery,
     endpointStatuses,
@@ -9481,6 +10031,7 @@ useEffect(() => {
     groupedRoleUri,
     handleFacetShiftClick,
     handleFetchProfile,
+    handleRetryPersonalInitialization,
     handleLoginSubmit,
     handlePropertyCheckboxChange,
     configureSelectedProperties,
@@ -9630,6 +10181,7 @@ useEffect(() => {
     cancelMaestroPage,
     refreshQuery,
     renderQueryNode,
+    renderValueReferenceDialog,
     resetQuery: resetHomeQuery,
     startCategoryNameSearch,
     restoreHistoryActionItem,
@@ -9669,7 +10221,7 @@ useEffect(() => {
     selectedRecordTermType,
     selectedResult,
     selectedRoles,
-    selectedUri, recordSelectionCleared, selectBrowseResult,
+    selectedUri, recordIdentityPending, recordSelectionCleared, selectBrowseResult,
     selectedView,
     selectedViewUri,
     setActiveBlankNodeTab,
@@ -9821,9 +10373,15 @@ useEffect(() => {
     toggleAnalysisRow,
     toggleClass,
     tutorialBreadcrumbPath,
+    transportedPreviewIds,
+    transportedFocusAtRoot,
+    hoveredTransportedAnchor,
+    setHoveredTransportedTargetId,
+    toggleTransportedAnchorAt,
     tutorialMode,
     uriNode,
     urlStateInitialized,
+    urlRestoreError,
     validateSelectedRecord,
     viewDiscoveryError,
     viewDiscoveryLoading,

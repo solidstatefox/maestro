@@ -8,14 +8,13 @@ test("pending queue item positions derive from existing scheduledGraphFetch queu
   assert.match(cache, /queueIndex: number/);
   assert.match(cache, /requestQueue\.forEach\(\(job, index\)/);
   assert.match(cache, /if \(job\.owner\) browserPositions\.set\(job\.owner, index \+ 1\)/);
-  assert.match(cache, /serverQueueIndex.*> 0/);
-  assert.match(cache, /const displayPositions = new Map/);
-  assert.match(cache, /refreshPendingQueueIndexes\(\)/);
-  // A request that has already dispatched has no position in the waiting
-  // queue; rendering "0." invented a queue position that does not exist.
-  assert.match(appbar, /query\.serverQueueLaneIndex/);
-  assert.match(appbar, /`\$\{query\.serverQueueLane\}\.\$\{query\.serverQueueLaneIndex\}`/);
-  assert.match(appbar, /query\.queueIndex > 0 \? `browser\.\$\{query\.queueIndex\}` : "—"/);
-  assert.doesNotMatch(appbar, /query\.queueIndex > 0 \? query\.queueIndex : "0"/);
+  // Do not merge unrelated browser/proxy queues into a synthetic rank.
+  assert.doesNotMatch(cache, /const displayPositions = new Map/);
+  assert.match(cache, /const next = detail.state === "queued" \? browserPositions.get\(controller\) \?\? 0 : 0/);
+  assert.match(cache, /proxyDispatchConfirmed: queueIndex === 0/);
+  assert.match(appbar, /function pendingQueryAddress/);
+  assert.match(appbar, /`B:\$\{query.queueIndex\} · browser`/);
+  assert.match(appbar, /`\$\{lane\}\$\{query.serverQueueLaneNumber\}:\$\{query.serverQueueLanePosition\} · \$\{query.serverQueueLane\}`/);
+  assert.doesNotMatch(appbar, /browser\.\$\{query.queueIndex\}/);
   assert.match(appbar, /Cancel \$\{query\.label\}/);
 });

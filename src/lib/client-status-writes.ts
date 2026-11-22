@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Record-status mutations are browser-owned RDF/XState operations. The host
  * sees only ordinary SPARQL UPDATE bytes and never interprets a Status event. */
 import { personalContext, selectPersonal, updatePersonal } from "@/lib/client-personal-sparql";
@@ -14,13 +15,13 @@ function iri(value: string): string {
 }
 function observationGraph(base: string, hash: string): string {
   if (!/^sha256:[0-9a-f]{64}$/.test(hash)) throw new Error("Invalid query hash.");
-  return `${base}/status/${hash}`;
+  return `${resolveGraph(GRAPH.STATUS, base)}/${hash}`;
 }
 
 /** The client reads the graph-defined FSM and applies exactly its permitted edge. */
 async function executeTarget(resource: string, intended: string, signal?: AbortSignal, queryXml?: string): Promise<void> {
   const ctx = await personalContext();
-  const graph = `${ctx.base}/status`;
+  const graph = `${resolveGraph(GRAPH.STATUS, ctx.base)}`;
   const machines = await loadClientStatusMachines(signal);
   const machine = machineForTarget(machines, `${STATUS_RDFS}Resource`);
   const rows = await selectPersonal(`SELECT DISTINCT ?status WHERE { GRAPH ${iri(graph)} { ${iri(resource)} ${iri(MUI_STATUS)} ?status } }`, ctx, signal);
@@ -54,9 +55,16 @@ export async function recordClientLocatedPage(hash: string, uris: readonly strin
   const typeDate = iri("http://www.w3.org/2001/XMLSchema#dateTime");
   const locatedPredicate = iri(MUI_LAST_LOCATED_AT);
   const description = "Maestro's per-query resource observation and status bus. Each Results page adds distinct located resources and refreshes lastLocatedAt; Seen, Unseen, and Starred belong to those resource IRIs. Page size and offset do not change this graph's identity.";
-  await updatePersonal(`INSERT DATA { GRAPH ${g} { ${g} a ${iri(`${MUI_NS}UtilityGraph`)} ; <http://www.w3.org/2000/01/rdf-schema#label> "query hash graph" ; <http://purl.org/dc/terms/description> ${JSON.stringify(description)} . } }`, signal);
-  if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  // One transaction per page, not an unconditional metadata INSERT followed
+  // by a second DELETE/INSERT. Metadata is idempotent RDF and the per-resource
+  // timestamp is updated atomically for the received Results page.
   await updatePersonal(`DELETE { GRAPH ${g} { ?s ${locatedPredicate} ?old } }
-    INSERT { GRAPH ${g} { ?s ${locatedPredicate} "${executionTime}"^^${typeDate} } }
-    WHERE { VALUES ?s { ${unique.map(iri).join(" ")} } OPTIONAL { GRAPH ${g} { ?s ${locatedPredicate} ?old } } }`, signal);
+    INSERT { GRAPH ${g} {
+      ?s ${locatedPredicate} "${executionTime}"^^${typeDate} .
+      ${g} a ${iri(`${MUI_NS}UtilityGraph`)} ;
+        <http://www.w3.org/2000/01/rdf-schema#label> "query hash graph" ;
+        <http://purl.org/dc/terms/description> ${JSON.stringify(description)} .
+    } }
+    WHERE { VALUES ?s { ${unique.map(iri).join(" ")} }
+      OPTIONAL { GRAPH ${g} { ?s ${locatedPredicate} ?old } } }`, signal);
 }

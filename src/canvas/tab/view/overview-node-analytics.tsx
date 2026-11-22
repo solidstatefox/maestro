@@ -14,6 +14,7 @@ import { createOverviewMetricController } from "@/lib/app-lifecycle/overview-met
 import { publishedGraphAddress } from "@/lib/overview-void-metrics";
 import { uniqueOverviewPredicateOptions } from "@/lib/overview-predicate-options";
 import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
+import { TransportedDimensionSummary } from "@/canvas/tab/view/transported-dimension-summary";
 import type { OverviewPopulation } from "@/lib/overview-population";
 
 const compact = new Intl.NumberFormat(undefined, {maximumFractionDigits:3});
@@ -77,6 +78,7 @@ export function OverviewNodeAnalytics({workspace,population,populationLoading}: 
   return <section className="space-y-4 rounded-xl border border-border/80 bg-card p-4 shadow-sm sm:p-5" aria-label="Virtuoso node analytics">
     <div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><Network className="size-4 text-blue-600"/><h3 className="text-sm font-semibold">Node analytics</h3></div>
       <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] text-blue-700 dark:border-blue-900 dark:bg-blue-950 dark:text-sky-300">{capability.matches("checking")?"Checking server…":confirmed?"Virtuoso SPARQL-BI":"Unavailable"}</span></div>
+    <TransportedDimensionSummary widgets={workspace.personalWidgets}/>
     {confirmed ? <>
       <div className="inline-flex rounded-md border border-blue-200 bg-background p-0.5 text-xs dark:border-blue-900" role="group" aria-label="Node analytics mode">
         <button type="button" aria-pressed={mode==="connections"} className={`rounded px-3 py-1.5 ${mode==="connections"?"bg-blue-600 text-white":"text-muted-foreground hover:text-foreground"}`} onClick={()=>setMode("connections")}>Find connections</button>

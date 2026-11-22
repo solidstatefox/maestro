@@ -30,8 +30,13 @@ test('Record service XSLT uses browser SaxonJS only, with asynchronous evaluatio
   assert.match(caller, /const transformed\s*=\s*await executeServiceXslt\(/);
 });
 
-test('four original proxy endpoints are unchanged by this fix', () => {
-  for (const name of ['service', 'observations', 'fct', 'sparql']) {
+test('query transport remains native while telemetry and observations are registered OpenAPI operations', () => {
+  for (const name of ['service', 'fct', 'sparql']) {
     assert.match(read(`src/app/proxy/api/${name}/route.ts`), /export (?:async )?function (?:GET|POST|PUT|PATCH|DELETE)|export const (?:GET|POST|PUT|PATCH|DELETE)/);
   }
+  const service = read('src/app/proxy/api/service/route.ts');
+  assert.match(service, /subscribeQueryEvents/);
+  assert.match(service, /recordUriObservations/);
+  assert.match(read('src/lib/openapi-registry.ts'), /courtesyGraphServers/);
+  assert.doesNotMatch(read('src/lib/client-query-events.ts'), /\/proxy\/api\/events\?id=/);
 });

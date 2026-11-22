@@ -5,6 +5,7 @@
  */
 export type ServiceOperation = {
   serviceKey: string;
+  operationId: string;
   base: string;
   path: string;
   method: "GET" | "POST";
@@ -42,6 +43,24 @@ const get = (operationId:string, query:string[]=[], path:string[]=[]):{get:OpenA
     responses:{"200":{description:"Successful JSON response"}}}
 });
 const specifications: Record<string, OpenApiDocument> = {
+  // Same-origin proxy transports use a reviewed OpenAPI description and operation IDs;
+  // these paths never become network destinations and do not expose app RPC.
+  maestroTransport: {
+    openapi:"3.1.0",info:{title:"Maestro Proxy Transport",version:"1"},
+    servers:[{url:"http://localhost"}],
+    paths:{
+      "/courtesy-graph-servers":{post:{operationId:"courtesyGraphServers",
+        requestBody:{required:true,content:{"application/json":{schema:{type:"object"}}}},
+        responses:{"200":{description:"Digest check or versioned courtesy graph list"}},
+        "x-maestro-max-request-bytes":4096}},
+      "/query-events":{get:{operationId:"subscribeQueryEvents",parameters:[param("id")],
+        responses:{"200":{description:"Tab-shared SSE stream multiplexing request-scoped query queue telemetry"}}}},
+      "/uri-observations":{post:{operationId:"recordUriObservations",
+        requestBody:{required:true,content:{"application/json":{schema:{type:"object"}}}},
+        responses:{"200":{description:"URI observation acknowledgement"}},
+        "x-maestro-max-request-bytes":600000}},
+    },
+  },
   iteracompute: {
     openapi:"3.1.0",info:{title:"IteraCompute Chat Completions",version:"1"},
     servers:[{url:"https://api.iteracompute.com"}],
@@ -91,7 +110,7 @@ export function resolveOpenApiOperation(service:string,operationId:string):Servi
     for(const method of ["GET","POST"] as const){
       const operation=method==="GET"?item.get:item.post;
       if(operation?.operationId!==operationId)continue;
-      return {serviceKey,base:spec.servers[0].url,path,method,
+      return {serviceKey,operationId,base:spec.servers[0].url,path,method,
         parameters:(operation.parameters??[]).map(x=>x.name),
         pathParameters:(operation.parameters??[]).filter(x=>x.in==="path").map(x=>x.name),
         maxRequestBytes:operation["x-maestro-max-request-bytes"],

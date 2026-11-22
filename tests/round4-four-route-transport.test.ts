@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 const operations = ["auth", "graph-seed", "ontology", "otc", "otc-chat", "otc-import", "personal-facet-providers", "perspectives", "policies", "query-favorites", "record-status", "services"];
 
-test("Only the four approved Maestro HTTP proxy transports remain after cleanup", () => {
+test("Only three HTTP proxy transports remain: telemetry and observations are OpenAPI operations", () => {
   const routes = readdirSync("src/app/proxy/api", { withFileTypes: true }).filter(entry => entry.isDirectory() && existsSync(`src/app/proxy/api/${entry.name}/route.ts`)).map(entry => entry.name).sort();
-  assert.deepEqual(routes, ["fct", "observations", "service", "sparql"]);
+  assert.deepEqual(routes, ["fct", "service", "sparql"]);
 });
 
 test("Service exposes only registered OpenAPI operations; Chat SSE remains bounded", () => {

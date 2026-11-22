@@ -1,5 +1,7 @@
 "use client";
 import { toast } from "@/components/ui/toast";
+import { RECORD_EXPORT_FORMATS, snapshotRecordQuads, serializeRecordQuads, type RecordExportFormat } from "@/canvas/right/record-export";
+import { sanitizeDownloadFilename } from "@/lib/download-filename";
 
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import type { MaestroRecordSessionController } from "@/lib/app-lifecycle/record-session";
@@ -112,44 +114,47 @@ export function useRecordPageSettings() {
   return { recordDescriptionPage, setRecordDescriptionPage, recordDescriptionPageSize, setRecordDescriptionPageSize, recordDescriptionQueryLimit, setRecordDescriptionQueryLimit, pendingRecordDescriptionLimit, setPendingRecordDescriptionLimit, pendingCenterBatchLimit, setPendingCenterBatchLimit, pendingLeftPanelLimit, setPendingLeftPanelLimit, pendingGroupsBatchLimit, setPendingGroupsBatchLimit };
 }
 
-/** Download the displayed immutable Record DESCRIBE as N-Triples. */
-export function downloadRecordDescribeSnapshot(
+/** Use exactly the selected Record subject; a linked value's title must not name this download. */
+export function recordDownloadTitle(rows: readonly { property: string; value: string; direction: string }[], uri: string): string {
+  const predicates = [
+    "http://data.europa.eu/s66#title", "http://purl.org/dc/terms/title",
+    "http://www.w3.org/2000/01/rdf-schema#label", "http://www.w3.org/2004/02/skos/core#prefLabel",
+    "https://schema.org/name", "http://schema.org/name", "http://xmlns.com/foaf/0.1/name",
+  ];
+  for (const predicate of predicates) {
+    const title = rows.find(row => row.direction === "property" && row.property === predicate && row.value.trim())?.value.trim();
+    if (title) return title;
+  }
+  return decodeURIComponent(uri.split(/[\/#]/).pop() || "record");
+}
+
+/** Download one validated, term-accurate Record DESCRIBE in the user's selected MIME type. */
+export async function downloadRecordDescribeSnapshot(
   recordDescriptionSnapshot: { key: string; uri: string; xml: string; incomplete: boolean } | null,
   currentRecordDescriptionKey: string,
   selectedUri: string,
-): void {
-    const snapshot = recordDescriptionSnapshot;
-    if (!snapshot || snapshot.key !== currentRecordDescriptionKey || snapshot.uri !== selectedUri) return;
-    const parsed = new DOMParser().parseFromString(snapshot.xml, "application/xml");
-    const ns = "http://openlinksw.com/services/facets/1.0/";
-    const toTerm = (value: string, object = false): string => {
-      if (/^_:[A-Za-z][\w-]*$/.test(value)) return value;
-      if (/^https?:\/\/[^\s<>"{}|^`\\]+$/i.test(value)) return `<${value}>`;
-      if (!object) throw new Error(`Invalid RDF subject or predicate: ${value}`);
-      return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r")}"`;
-    };
-    try {
-      const lines: string[] = [];
-      for (const row of Array.from(parsed.getElementsByTagNameNS(ns, "row"))) {
-        const cells = Array.from(row.getElementsByTagNameNS(ns, "column"));
-        if (cells.length < 3) continue;
-        const [subject, predicate, object] = cells.slice(0, 3).map((c) => c.textContent?.trim() ?? "");
-        if (subject && predicate && object) lines.push(`${toTerm(subject)} ${toTerm(predicate)} ${toTerm(object, true)} .`);
-      }
-      if (!lines.length) { toast.add({ title: "No DESCRIBE triples are available to download.", type: "error" }); return; }
-      // RDF terms from the FCT projection have been normalized for display.
-      // URI-looking objects are emitted as IRIs; all others as plain literals.
-      const file = new Blob([`# Maestro Record DESCRIBE snapshot\n# Source: ${selectedUri}\n${snapshot.incomplete ? "# WARNING: Virtuoso reported an incomplete DESCRIBE.\n" : ""}${lines.join("\n")}\n`], { type: "application/n-triples;charset=utf-8" });
-      const url = URL.createObjectURL(file);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `${encodeURIComponent(selectedUri.split(/[\/#]/).pop() || "record")}-describe.nt`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (error) {
-      toast.add({ title: "Could not export the Record DESCRIBE", description: error instanceof Error ? error.message : "Could not export the Record DESCRIBE.", type: "error" });
-    }
+  format: RecordExportFormat = "ntriples",
+  title = "",
+): Promise<void> {
+  const snapshot = recordDescriptionSnapshot;
+  if (!snapshot || snapshot.key !== currentRecordDescriptionKey || snapshot.uri !== selectedUri) {
+    toast.add({ title: "Record changed before download", description: "Reload the current Record and try again.", type: "error" });
+    return;
   }
-
+  try {
+    const quads = snapshotRecordQuads(snapshot);
+    const content = await serializeRecordQuads(quads, format);
+    const { mime, extension } = RECORD_EXPORT_FORMATS[format];
+    const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${sanitizeDownloadFilename(title || selectedUri.split(/[\/#]/).pop() || "record")}-describe.${extension}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    toast.add({ title: "Could not export the Record DESCRIBE", description: error instanceof Error ? error.message : String(error), type: "error" });
+  }
+}

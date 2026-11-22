@@ -20,7 +20,7 @@ test('provider is registered as a SHACL-applicable approved facet renderer',()=>
   const provider=at('graph/sunburst/provider.ttl');
   const manifest=JSON.parse(at('graph/manifest.json'));
   const curator=at('graph/maestro-curation-providers.ttl');
-  assert.equal(manifest['sunburst/provider.ttl'],'/shacl/policies');
+  assert.equal(manifest['sunburst/provider.ttl'],'shacl-policies');
   assert.match(curator,/<gttp:\/\/ggg\.maestro\.ui\/provider\/category-sunburst>/);
   for(const required of ['a mui:Provider','a mui:InputShape, sh:NodeShape','sh:path rdf:type','a mui:FacetWidget','mui:templateContent','math:cos','math:sin','data-facet-value']) assert.ok(provider.includes(required),required);
 });

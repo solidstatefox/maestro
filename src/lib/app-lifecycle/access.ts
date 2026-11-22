@@ -15,10 +15,12 @@ export type AccessContext = {
   /** An in-flight verifier may update the gate only until a local bookmark action settles. */
   verificationPending: boolean;
   bookmarkExecutor: BookmarkCheckExecutor | null;
+  loginPending: boolean;
   policyStage: "unavailable" | "seeding" | "verifying" | "ready" | "failed";
   policyError: string;
 };
 export type AccessEvent =
+  | { type: "LOGIN_ACTIVITY"; pending: boolean }
   | { type: "SESSION_OBSERVED"; restored: boolean; sessionKey: string }
   | { type: "QUERY_CHANGED"; queryKey: string }
   | { type: "POLICY_STATUS_OBSERVED"; sessionKey: string; stage: "seeding" | "verifying" | "ready" | "failed"; error?: string }
@@ -27,7 +29,7 @@ export type AccessEvent =
   | { type: "BOOKMARK_REVOKED"; queryKey: string };
 
 const initialContext: AccessContext = {
-  sessionKey: "", queryKey: "", bookmark: "unavailable", bookmarkId: "", verificationPending: false, bookmarkExecutor: null, policyStage: "unavailable", policyError: "",
+  sessionKey: "", queryKey: "", bookmark: "unavailable", bookmarkId: "", verificationPending: false, bookmarkExecutor: null, loginPending: false, policyStage: "unavailable", policyError: "",
 };
 /** A pure context updater, not a reusable XState action. XState infers the
  * precise SESSION_OBSERVED event type at each assign(...) call site. */
@@ -55,6 +57,7 @@ export const maestroAccessMachine = setup({
   initial: "restoring",
   context: initialContext,
   on: {
+    LOGIN_ACTIVITY: { actions: assign(({ event }) => ({ loginPending: event.pending })) },
     SESSION_OBSERVED: [
       { guard: ({ event }) => !event.restored, target: ".restoring", actions: assign(({ context, event }) => updateObservedSession(context, event)) },
       { guard: ({ event }) => !!event.sessionKey, target: ".signedIn", actions: assign(({ context, event }) => updateObservedSession(context, event)) },
@@ -155,6 +158,9 @@ export function selectMaestroCapabilities(snapshot: MaestroAccessSnapshot, input
   const bookmarked = policyReady && queryMatches && snapshot.context.bookmark === "bookmarked";
   return {
     canUsePersonalStore: policyReady,
+    // XState is authoritative for every Sheet cache-clearing action.
+    canClearCaches: !snapshot.context.loginPending && snapshot.context.policyStage !== "seeding" &&
+      snapshot.context.policyStage !== "verifying" && snapshot.value !== "restoring",
     canUsePolicyProviders: policyReady,
     policyStage: sessionReady ? snapshot.context.policyStage : "unavailable",
     policyError: sessionReady ? snapshot.context.policyError : "",

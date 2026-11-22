@@ -10,10 +10,13 @@ import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 import { findGroupCarrier } from "@/lib/fct-groups-carrier";
 import { toLabel, rememberShortforms } from "@/lib/uri-labels";
 import { proxyDebugHeaders, proxyDebugFingerprint } from "@/lib/proxy-debug";
+import { UI_COMPONENT, dynamicUiComponentUrn } from "@/lib/maestro-ui-component-ids";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { cachedFetchFct, maestroQueryFetch } from "@/lib/client-query-cache";
 import { setMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
+import { componentRetryHeaders, useMaestroComponentRetry } from "@/lib/maestro-component-retry";
+import { resetMaestroQueryExecutionScope } from "@/lib/maestro-query-execution-clock";
 import { shortenCount } from "@/lib/utils";
 import { useFctQuery, serializeFctQuery, createPropertyWidgetQuery, createPersonalRoleValuesQuery, createGroupValuesQuery, createDistinctCountQuery, setQueryViewAttributes } from "@/lib/fct-query-api";
 import type { FctQueryTree, FctQueryNode, DistinctCountKind } from "@/lib/fct-query-api";
@@ -101,7 +104,14 @@ export function paginateCategoryTree(roots: CategoryTreeNode[]): CategoryTreeNod
 
 const FACET_ITEM_GAP_CLASS = "space-y-0.5";
 
+import type { TransportedFacet } from "@/lib/fct-facet-alias";
+import { createTransportedFacetQuery, activeTransportedFacets } from "@/lib/fct-facet-alias";
+
 export type PersonalWidget = {
+  /** Unique occurrence key, distinct from a repeated RDF predicate URI. */
+  key?: string;
+  /** Alias metadata passed through the SAME Personal widget pipeline. */
+  anchor?: TransportedFacet;
   uri: string;
   label: string;
   excluded: boolean;
@@ -117,7 +127,7 @@ export type PersonalWidget = {
 
 
 export type ScopeRelationship = { uri: string; direction: RelationshipDirection };
-export type GroupByOption = ScopeRelationship & { key: string; label: string; nodeId: string; memberBindingNodeId?: string; ancestorRole?: boolean };
+export type GroupByOption = ScopeRelationship & { key: string; label: string; nodeId: string; memberBindingNodeId?: string; ancestorRole?: boolean; anchorId?: string; parentId?: string };
 
 export type GroupMembersState = { results: FctResult[]; count?: number; loading: boolean; error: string };
 export type RoleWidgetStatus = { count: number; loading: boolean; error: string; sampleValue?: FctResult };
@@ -450,6 +460,8 @@ export function compareGroupValues(a: FctResult, b: FctResult): number {
 /** Each widget owns a real subscription to the authoritative query store. */
 export function PersonalWidgetQueryListener({
   propertyUri,
+  widgetKey,
+  anchorId,
   sortByCount,
   limit,
   groupBy,
@@ -458,6 +470,8 @@ export function PersonalWidgetQueryListener({
   refreshRevision,
 }: {
   propertyUri: string;
+  widgetKey?: string;
+  anchorId?: string;
   sortByCount: boolean;
   endpointReady: boolean;
   refreshRevision: number;
@@ -472,7 +486,12 @@ export function PersonalWidgetQueryListener({
   // derived XML here: the Personal pane compares against the live query XML,
   // so storing widgetQueryXml made every numeric facet look ineligible.
   const liveQueryScopeXml = serializeFctQuery(tree);
-  const widgetTree = createPropertyWidgetQuery(tree, propertyUri, "forward", undefined, true);
+  const identity = widgetKey ?? propertyUri;
+  const alias = anchorId ? activeTransportedFacets(tree).find(item => item.id === anchorId) : undefined;
+  const retryRevision = useMaestroComponentRetry(`personal:${identity}`);
+  const widgetTree = alias
+    ? createTransportedFacetQuery(tree, alias)
+    : createPropertyWidgetQuery(tree, propertyUri, "forward", undefined, true);
   const widgetQueryXml = groupBy
     ? serializeFctQuery(createGroupValuesQuery(tree, groupBy.option, { limit: groupBy.limit, offset: 0 }))
     : serializeFctQuery(setQueryViewAttributes(widgetTree, { sort: sortByCount ? "count" : "", limit: String(limit) }));
@@ -485,36 +504,43 @@ export function PersonalWidgetQueryListener({
     // Reconcile every mounted widget against the active <view> scope. A widget
     // whose filter belongs to another breadcrumb scope must not retain stale
     // values while the parent pane catches up with the new query revision.
-    if (!treeHasPropertyFilter(tree, propertyUri)) {
+    if (anchorId ? !alias : !treeHasPropertyFilter(tree, propertyUri)) {
       setPersonalWidgets((current) =>
-        current.filter((widget) => widget.uri !== propertyUri),
+        current.filter((widget) => (widget.key ?? widget.uri) !== identity),
       );
       return;
     }
     let cancelled = false;
     const controller = new AbortController();
+    resetMaestroQueryExecutionScope(`component:personal:${identity}`);
     setPersonalWidgets((current) =>
       current.map((widget) =>
-        widget.uri === propertyUri
+        (widget.key ?? widget.uri) === identity
           ? { ...widget, loading: true, error: "" }
           : widget,
       ),
     );
 
     async function refreshWidget() {
+      const sourceNode = alias?.target ?? getActiveViewPropertyFilters(tree).find(node => node.attributes.iri === propertyUri);
+      const sourceUrn = sourceNode?.id ? dynamicUiComponentUrn("property", sourceNode.id) : UI_COMPONENT.personalPane;
+      const attribution = proxyDebugHeaders(sourceUrn, `PersonalWidgetQueryListener:${propertyUri}`);
+      let httpInfo = "No HTTP response received";
       try {
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("personal-widget-values", `PersonalWidgetQueryListener:${propertyUri}`) },
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...attribution,
+            "X-Maestro-Clock-Component": `component:personal:${identity}`, ...componentRetryHeaders(retryRevision) },
           body: widgetQueryXml,
           signal: controller.signal,
         });
+        httpInfo = `HTTP ${response.status} ${response.statusText}; content-type: ${response.headers.get("content-type") || "not reported"}`;
         const data = await readFctResponse(response);
         rememberShortforms(data?.shortforms);
         if (!response.ok)
           throw new Error(data.error ?? `Failed to load ${propertyUri}.`);
-        if (!cancelled) setMaestroIncompleteResults(`personal:${propertyUri}`, { incomplete: data.incomplete, requestId: "", message: data.warning || data.sqlMessage || "" });
+        if (!cancelled) setMaestroIncompleteResults(`personal:${identity}`, { incomplete: data.incomplete, requestId: "", message: data.warning || data.sqlMessage || "" });
         const fetchedValues = distinctFacetValues(Array.isArray(data.results)
           ? data.results
           : []);
@@ -530,7 +556,7 @@ export function PersonalWidgetQueryListener({
         if (cancelled) return;
         setPersonalWidgets((current) =>
           current.map((widget) =>
-            widget.uri === propertyUri
+            (widget.key ?? widget.uri) === identity
               ? {
                   ...widget,
                   values,
@@ -554,14 +580,22 @@ export function PersonalWidgetQueryListener({
           return;
         setPersonalWidgets((current) =>
           current.map((widget) =>
-            widget.uri === propertyUri
+            (widget.key ?? widget.uri) === identity
               ? {
                   ...widget,
                   loading: false,
-                  error:
-                    error instanceof Error
-                      ? error.message
-                      : "Failed to load property values.",
+                  error: [
+                    `Personal facet update failed: ${error instanceof Error ? error.message : String(error)}`,
+                    `Component: PersonalWidgetQueryListener:${propertyUri}`,
+                    `RDF property: ${propertyUri}`,
+                    `x-maestro-debug-source: ${attribution["X-Maestro-Debug-Source"]}`,
+                    `x-maestro-debug-component: ${attribution["X-Maestro-Debug-Component"]}`,
+                    `x-maestro-debug-request: ${attribution["X-Maestro-Debug-Request"]}`,
+                    `Transport: POST /proxy/api/fct; ${httpInfo}`,
+                    `FCT endpoint: ${tree.attributes.addr || "not selected"}`,
+                    `Retry revision: ${retryRevision}`,
+                    `Cloned FCT XML (verbatim):\n${widgetQueryXml}`,
+                  ].join("\n"),
                 }
               : widget,
           ),
@@ -574,7 +608,7 @@ export function PersonalWidgetQueryListener({
       cancelled = true;
       controller.abort();
     };
-  }, [widgetQueryXml, propertyUri, setPersonalWidgets, orderLikeGroups, endpointReady, refreshRevision]);
+  }, [widgetQueryXml, identity, propertyUri, anchorId, setPersonalWidgets, orderLikeGroups, endpointReady, refreshRevision, retryRevision]);
 
   return null;
 }
@@ -606,6 +640,7 @@ export function PersonalRoleWidget({
 }) {
   const { setRoleValue } = useFctQuery();
   const uri = roleNode.attributes.iri ?? "";
+  const retryRevision = useMaestroComponentRetry(`personal-role:${uri}`);
   const [values, setValues] = useState<FctResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -656,6 +691,7 @@ export function PersonalRoleWidget({
     if (!uri || !endpointReady) return;
     let cancelled = false;
     const controller = new AbortController();
+    resetMaestroQueryExecutionScope(`component:personal-role:${uri}`);
     setLoading(true);
     setError("");
     async function loadValues() {
@@ -663,7 +699,8 @@ export function PersonalRoleWidget({
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("personal-role-widget-values", `PersonalRoleWidget:${uri}`) },
+          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("personal-role-widget-values", `PersonalRoleWidget:${uri}`),
+            "X-Maestro-Clock-Component": `component:personal-role:${uri}`, ...componentRetryHeaders(retryRevision) },
           body: widgetQueryXml,
           signal: controller.signal,
         });
@@ -689,7 +726,7 @@ export function PersonalRoleWidget({
   // page limit, and group-by state. Depending on the *object identity* of tree
   // additionally re-dispatches an identical request when parent UI state
   // reconstructs an equivalent tree (and can hide a ready Role list).
-  }, [uri, widgetQueryXml, roleOrderLikeGroups, endpointReady, refreshRevision]);
+  }, [uri, widgetQueryXml, roleOrderLikeGroups, endpointReady, refreshRevision, retryRevision]);
 
   const visibleValues = values.filter((value) => {
     const binding = groupValueBinding(value);

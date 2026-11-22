@@ -12,15 +12,17 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 const blues=["#2563eb","#0284c7","#7c3aed","#0d9488","#e11d48","#d97706","#0891b2","#4f46e5"];
 export function AnalyzeSpider({workspace}: {workspace:WorkspaceController}) {
   const axes:SpiderAxis[]=useMemo(()=>[...new Map(workspace.analyzeTableHeaderNodes.map(node=>{
-    const axis={uri:node.uri,direction:node.name==="property-of"?"reverse" as const:"forward" as const,
-      label:(node.uri.split(/[/#]/).pop() ?? node.uri) + (node.name==="property-of"?" of":"")};
+    const axis={uri:node.uri,direction:node.name==="a"?(node.hops?.[0]?.direction??"forward")
+      :node.name==="property-of"?"reverse" as const:"forward" as const,
+      label:node.label, ...(node.name==="a"?{anchorId:node.id}:{})};
     return [spiderAxisKey(axis),axis] as const;
   })).values()], [workspace.analyzeTableHeaderNodes]);
   const projection=workspace.readyAnalysisValues as Map<string,ScopeValue[]>|null;
   const results=workspace.visibleResultsPage;
   const rows:SpiderRow[]=useMemo(()=>results.map(result=>{
     const values:SpiderRow["values"]={};
-    for(const scope of projection?.get(result.uri)??[]) values[spiderAxisKey({uri:scope.property,direction:scope.direction})]=scope.values;
+    for(const scope of projection?.get(result.uri)??[]) values[spiderAxisKey({uri:scope.property,direction:scope.direction,
+      ...(workspace.analyzeTableHeaderNodes.some(header=>header.name==="a"&&header.id===scope.id)?{anchorId:scope.id}:{})})]=scope.values;
     return {uri:result.uri,label:result.title,values};
   }),[projection,results]);
   const validated=useMemo(()=>projection?validateSpiderQuery(axes,rows):null,[projection,axes,rows]);
@@ -57,7 +59,7 @@ export function AnalyzeSpider({workspace}: {workspace:WorkspaceController}) {
         <p className="text-xs text-muted-foreground">Every result on the current FCT page is a polygon. Axes are the view's Properties and Roles; all cells must pass the numeric query-validator policy.</p>
       </header>
       {workspace.analysisValuesError && <ErrorDetails prefix="Spider projection" error={workspace.analysisValuesError} />}
-      {!projection && !workspace.analysisValuesError && <p role="status" className="text-sm text-muted-foreground">Projecting the page with the existing FCT list-values view…</p>}
+      {!projection && !workspace.analysisValuesError && <p role="status" className="text-sm text-muted-foreground">Projecting the page with the FCT merge-values view…</p>}
       {corePending && <p role="status" className="text-sm text-muted-foreground">Validating Spider axes with the provider's SHACL Core shape…</p>}
       {coreError && <ErrorDetails prefix="Spider SHACL validation" error={coreError} />}
       {coreReport && dismissed!==validationKey && <ValidationNotice report={coreReport} onDismiss={()=>setDismissed(validationKey)} />}

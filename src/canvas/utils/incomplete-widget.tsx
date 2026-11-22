@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ClockFading } from "lucide-react";
+import { retryMaestroComponent } from "@/lib/maestro-component-retry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getMaestroIncompleteResults, subscribeMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 
@@ -16,11 +17,11 @@ export function IncompleteWidgetIndicator({ source }: { source: string }) {
   if (!status?.incomplete) return null;
   return (
     <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex shrink-0 items-center" role="img" aria-label="Incomplete Virtuoso results" tabIndex={0}>
+      <TooltipTrigger render={<button type="button" className="inline-flex shrink-0 cursor-pointer items-center rounded-sm hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring" onClick={(event) => { event.stopPropagation(); retryMaestroComponent(source); }} aria-label={`Retry only ${source} query`} title={`Retry only ${source} query`}>
         <ClockFading className="size-4" aria-hidden="true" />
-      </span>} />
+      </button>} />
       <TooltipContent className="z-[100] max-w-xs break-words">
-        <span className="font-medium">Incomplete Virtuoso Anytime results</span>
+        <span className="font-medium">Incomplete Virtuoso Anytime results · Click to retry this component only</span>
         <span className="mt-1 block">{status.message || "The graph server stopped the query before completion. Available rows are shown."}</span>
         {status.requestId && <span className="mt-1 block">Request: {status.requestId}</span>}
       </TooltipContent>

@@ -1,4 +1,5 @@
 "use client";
+import { maestroQueryFetch } from "@/lib/client-query-cache";
 
 import { loadPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
 
@@ -20,7 +21,7 @@ export async function deletePerspectiveEntries(kind: keyof typeof TYPES, ids: st
   const update = `DELETE { GRAPH <${graph}> { ?entry ?predicate ?object } }
 WHERE { VALUES ?entry { ${unique.map(item => `<${item}>`).join(" ")} }
   GRAPH <${graph}> { ?entry a <${TYPES[kind]}> ; ?predicate ?object . } }`;
-  const response = await fetch("/proxy/api/sparql", { method: "POST", cache: "no-store", signal,
+  const response = await maestroQueryFetch("/proxy/api/sparql", { method: "POST", cache: "no-store", signal,
     headers: { "Content-Type": "application/json" }, body: JSON.stringify({ update }) });
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as {error?: string};

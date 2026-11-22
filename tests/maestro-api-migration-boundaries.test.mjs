@@ -5,9 +5,9 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => readFileSync(resolve(root,name), 'utf8');
-test('API route surface is limited to four reviewed transports', () => {
+test('API route surface is limited to three reviewed routes with OpenAPI telemetry and observations', () => {
   const scan = (dir) => readdirSync(resolve(root,dir),{withFileTypes:true}).flatMap(entry=>entry.isDirectory()?scan(`${dir}/${entry.name}`):entry.name==='route.ts'?[`${dir}/${entry.name}`]:[]);
-  assert.deepEqual(scan('src/app').sort(), ['src/app/proxy/api/fct/route.ts','src/app/proxy/api/observations/route.ts','src/app/proxy/api/service/route.ts','src/app/proxy/api/sparql/route.ts'].sort());
+  assert.deepEqual(scan('src/app').sort(), ['src/app/proxy/api/fct/route.ts','src/app/proxy/api/service/route.ts','src/app/proxy/api/sparql/route.ts'].sort());
 });
 test('Service transport resolves only registered OpenAPI operation IDs', () => {
   const route=read('src/app/proxy/api/service/route.ts');
@@ -27,7 +27,12 @@ test('Archived root query tree appears as the live Everything/text/value stack',
   assert.match(page,/renderQueryNode\(\{[\s\S]*?id: "query-everything"/);
   assert.match(page,/\.filter\(\(node\) => node\.name !== "class"\)/);
   assert.match(controller,/const rootClassesOnThisNode = node\.id === rootClassCarrierId \? rootClassNodes/);
-  assert.match(controller,/if \(isRootCarrierRow\) \{[\s\S]*?else if \(topInlineClass\) deleteNode\(topInlineClass\.id\)/);
+  // Root-stack deletion now shares the referential-integrity guard used by
+  // other Query Tree deletion paths; do not regress to raw deleteNode calls.
+  assert.match(controller,/if \(isRootCarrierRow\) \{\s*if \(rootTextOrValue\) updateSearchText\(""\);\s*else if \(topInlineStatus\) guardedDeleteQueryNode\(topInlineStatus\.id\);\s*else if \(topInlineClass\) guardedDeleteQueryNode\(topInlineClass\.id\)/);
+  assert.match(controller,/function guardedDeleteQueryNode\(nodeId:string\):boolean \{[\s\S]*?dependentFctValueReferences\(queryTree,nodeId\)/);
+  assert.match(controller,/if \(dependents\.length\) \{setBlockedReferenceDeletion\(\{nodeId,dependents\}\);return false;\}/);
+  assert.match(controller,/<AlertDialogTitle>Cannot delete a node that is in use<\/AlertDialogTitle>/);
 });
 test('IteraCompute key stays in IndexedDB, not URL, FCT query or server registry', () => {
   const client=read('src/lib/iteracompute-credential.ts');

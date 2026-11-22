@@ -15,9 +15,13 @@ test('History and Bookmarks collections page through all ordered ODS result rows
 
 test('Both perspectives have one shared search and page-navigation toolbar with an accessible page count', () => {
   const source = read('src/canvas/tab/view/personal-perspectives.tsx');
-  assert.match(source, /PERSPECTIVE_PAGE_SIZE = 20/);
-  assert.match(source, /const totalPages = Math\.max\(1, Math\.ceil\(filtered\.length \/ PERSPECTIVE_PAGE_SIZE\)\)/);
-  assert.match(source, /filtered\.slice\(currentPage \* PERSPECTIVE_PAGE_SIZE/);
+  assert.match(source, /PERSPECTIVE_PAGE_SIZES = \[10, 20, 50, 100\] as const/);
+  assert.match(source, /const \[pageSize, setPageSize\] = useState<number>\(20\)/);
+  assert.match(source, /const totalPages = Math\.max\(1, Math\.ceil\(filtered\.length \/ pageSize\)\)/);
+  assert.match(source, /filtered\.slice\(currentPage \* pageSize/);
+  assert.match(source, /aria-label=\{`\$\{kind\} entries per page`\}/);
+  assert.match(source, /PERSPECTIVE_PAGE_SIZES\.map\(size =>/);
+  assert.match(source, /setPageSize\(Number\(event\.currentTarget\.value\)\)/);
   assert.match(source, /aria-label=\{`\$\{kind\} search and pagination`\}/);
   assert.match(source, /aria-label="Previous page"/);
   assert.match(source, /aria-label="Next page"/);
@@ -30,7 +34,9 @@ test('History and Bookmarks provider-authored rows use safe React action slots f
   const host = read('src/canvas/tab/view/personal-perspectives.tsx');
   const sanitizer = read('src/lib/discovered-view-xslt.ts');
   assert.equal((rdf.match(/data-perspective-action-slot="select"/g) ?? []).length, 2);
-  assert.equal((rdf.match(/data-perspective-action-slot="delete"/g) ?? []).length, 2);
+  assert.equal((rdf.match(/data-perspective-action-slot="delete"/g) ?? []).length, 1);
+  assert.match(rdf, /data-perspective-bookmark-actions-slot="true"/);
+  assert.match(host, /<ButtonGroup aria-label="Bookmark actions"/);
   assert.doesNotMatch(rdf, />Select<|>Delete<|>Selected<\/xsl:when>/);
   assert.match(host, /<Play className="size-4"/);
   assert.match(host, /<Trash2 className="size-4"/);

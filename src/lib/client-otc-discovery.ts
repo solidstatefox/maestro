@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 import { personalContext, personalExists, selectPersonal } from "@/lib/client-personal-sparql";
 
@@ -22,7 +23,7 @@ export async function clientListTranscoders(rulesGraph: string, signal?: AbortSi
 export async function clientListChatSurveys(signal?: AbortSignal) {
   const ctx = await personalContext();
   // Mirrors graph/manifest.json's otc-transcoders.rdf mapping.
-  const rulesGraph = `${ctx.base}/otc/transcoders`;
+  const rulesGraph = `${resolveGraph(GRAPH.OTC_TRANSCODERS, ctx.base)}`;
   const rows = await selectPersonal(`PREFIX otc: <${OTC}> PREFIX mui: <${MUI}> PREFIX dcterms: <${DCT}>
     SELECT DISTINCT ?transcoder ?title ?description WHERE { GRAPH <${rulesGraph}> {
       ?transcoder a otc:Transcoder, mui:Provider ; otc:hasRule ?rule ; mui:accepts ?shape ; mui:widget ?widget .

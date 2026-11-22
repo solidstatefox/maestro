@@ -16,6 +16,7 @@ export function useMaestroOperations(facts: {
   graphFailed: boolean;
   queryKey: string;
   queryHydrated: boolean;
+  queryRestoreError?: string;
   navigationKey: string;
   navigationUrl: string;
   navigationTab: NavigationTab;
@@ -33,11 +34,15 @@ export function useMaestroOperations(facts: {
     controller.send({ type: "GRAPH_OBSERVED", key: facts.graphKey, registryReady: facts.graphRegistryReady,
       selected: facts.graphSelected, ready: facts.graphReady, failed: facts.graphFailed });
     controller.send({ type: "QUERY_OBSERVED", key: facts.queryKey, hydrated: facts.queryHydrated, graphReady: facts.querySourceReady });
+    // The URL restoration error is terminal until an explicit retry/new visit.
+    // Never let the observer silently turn it back into "restoring".
+    if (facts.queryRestoreError && !facts.queryHydrated)
+      controller.send({ type: "QUERY_RESTORE_FAILED", key: facts.queryKey, error: facts.queryRestoreError });
     controller.send({ type: "NAVIGATION_OBSERVED", key: facts.navigationKey, url: facts.navigationUrl,
       tab: facts.navigationTab, viewPanel: facts.navigationViewPanel, hydrated: facts.queryHydrated, isProviderQuery: facts.navigationIsProvider,
       restoringHistory: facts.restoringHistory });
   }, [controller, facts.graphKey, facts.graphRegistryReady, facts.graphSelected, facts.graphReady,
-    facts.querySourceReady, facts.graphFailed, facts.queryKey, facts.queryHydrated, facts.navigationKey, facts.navigationUrl,
+    facts.querySourceReady, facts.graphFailed, facts.queryKey, facts.queryHydrated, facts.queryRestoreError, facts.navigationKey, facts.navigationUrl,
     facts.navigationTab, facts.navigationViewPanel, facts.navigationIsProvider, facts.restoringHistory]);
   useEffect(() => subscribePendingMaestroQueryDetails((items) => {
     controller.send({ type: "REQUEST_ACTIVITY", queued: items.filter(item => item.state === "queued").length,

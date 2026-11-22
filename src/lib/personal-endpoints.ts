@@ -22,3 +22,9 @@ export function personalWriteEndpoint(session: {graphStore:string;authType?:stri
   return read.toString();
 }
 
+
+/** Virtuoso HTTP Digest challenges belong to the authenticated SPARQL endpoint.
+ * Ordinary public browsing keeps its explicit FCT query addr unchanged. */
+export function personalAuthenticatedEndpoint(session: {graphStore:string;authType?:string}): string {
+  return personalWriteEndpoint(session);
+}

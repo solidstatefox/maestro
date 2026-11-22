@@ -2,49 +2,72 @@
 /** Login belongs to the browser. The CORS bridge forwards HTTP, never
  * authenticates a Maestro session or parses an RDF/WebID profile. */
 import { personalReadEndpoint, personalWriteEndpoint, type PersonalAuthSession } from "@/lib/personal-auth";
+import { authBootstrapSelect, type BootstrapBinding } from "@/lib/client-auth-bootstrap";
+import { personalRequestHeaders } from "@/lib/client-personal-request";
 import { forwardHttp } from "@/lib/client-http-forward";
 
+const LOGIN_PROBE_TIMEOUT_MS = 15_000;
+// A fixed query only tests that the personal SPARQL endpoint responds; it must
+// never enumerate the user's graphs or require the registry to be seeded first.
+
 export async function testPersonalGraph(session: PersonalAuthSession, signal?: AbortSignal): Promise<{
-  ok: boolean; connected: boolean; status?: number; readEndpoint?: string; writeEndpoint?: string; error?: string;
+  ok: boolean; connected: boolean; status?: number; readEndpoint?: string; writeEndpoint?: string; error?: string; bootstrap?: BootstrapBinding[];
 }> {
   let read: URL, write: URL;
   try {
-    read = new URL(personalReadEndpoint(session));
+    read = new URL(personalWriteEndpoint(session));
+    // Validate the selected authentication method's write URL, but do not make
+    // a mutation during an otherwise read-only connection test.
     write = new URL(personalWriteEndpoint(session));
-  } catch (error) { return {ok:false,connected:false,error:`Enter a valid read-only HTTP(S) /sparql endpoint: ${error instanceof Error ? error.message : String(error)}`}; }
-  // The login credential remains browser owned.  Read connectivity is tested
-  // against the authenticated graph server through the existing /sparql route.
-  // A transient cookie is necessary because that unmodified route expects the
-  // same session format as the pre-migration build.
-  const {setMaestroSessionCookie}=await import("@/lib/personal-auth");
-  const previous=document.cookie.match(/(?:^|;\s*)maestro_session=([^;]+)/)?.[1];
-  try {
-    setMaestroSessionCookie(session);
-    // First login has no endpoint registry yet. Its UPDATE transport does not
-    // require endpoint discovery; register the personal endpoint before the
-    // read-only SELECT probe (the graph server enforces write ACLs).
-    const base=`${session.graphPrefix.replace(/\/+$/,"")}/query`;
-    const registry=`${base}/graph`;
-    const ep=`gttp://ggg.maestro.ecosys/ids/dataservers/endpoints#personal-sparql`;
-    const valid=(value:string)=>value.length<4096&&!/[\s<>"{}|^`\\]/.test(value);
-    if(!valid(base)||!valid(read.toString()))throw new Error("Invalid personal graph or endpoint URI.");
-    const registration=`INSERT DATA { GRAPH <${registry}> { <${ep}> a <https://schema.org/EntryPoint> ; <http://www.w3.org/2000/01/rdf-schema#label> "Personal SPARQL" ; <https://schema.org/url> <${read.toString()}> . } }`;
-    const registerResponse=await fetch("/proxy/api/sparql",{method:"POST",credentials:"same-origin",cache:"no-store",signal,
-      headers:{"Content-Type":"application/json"},body:JSON.stringify({update:registration})});
-    if(!registerResponse.ok)throw new Error(`Personal graph registry write failed (HTTP ${registerResponse.status}): ${(await registerResponse.text()).slice(0,350)}`);
-    const response=await fetch("/proxy/api/sparql",{method:"POST",credentials:"same-origin",cache:"no-store",signal,
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({addr:`${session.graphPrefix.replace(/\/+$/,"")}/query@${read.toString()}`,query:"SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"})});
-    const body=await response.text();
-    if(!response.ok)return {ok:false,connected:false,status:response.status,
-      error:`Graph server read failed (HTTP ${response.status}): ${body.slice(0,350)}`};
-    return {ok:true,connected:true,status:200,readEndpoint:read.toString(),writeEndpoint:write.toString()};
-  } catch(error) {
-    return {ok:false,connected:false,error:`Could not reach graph server: ${error instanceof Error?error.message:String(error)}`};
-  } finally {
-    document.cookie=previous?`maestro_session=${previous}; path=/; SameSite=Lax`:
-      "maestro_session=; path=/; max-age=0; SameSite=Lax";
+    if (!session.graphPrefix || !/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(session.graphPrefix)) {
+      throw new Error("Enter a valid personal graph prefix URI.");
+    }
+  } catch (error) {
+    return { ok: false, connected: false, error: `Invalid personal graph configuration: ${error instanceof Error ? error.message : String(error)}` };
   }
+
+  // The same authenticated SPARQL SELECT is the connection test.
+  // The proxy answers Virtuoso's HTTP Digest challenge on this request.
+  const timeout = AbortSignal.timeout(LOGIN_PROBE_TIMEOUT_MS);
+  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  try {
+    if (requestSignal.aborted) throw requestSignal.reason;
+    const response = await fetch("/proxy/api/sparql", {
+      method: "POST",
+      cache: "no-store",
+      signal: requestSignal,
+      headers: { "Content-Type": "application/json", ...personalRequestHeaders(session) },
+      body: JSON.stringify({
+        personalRead: true,
+        addr: `${session.graphPrefix.replace(/\/+$/, "")}/query@${read.toString()}`,
+        query: authBootstrapSelect(session),
+      }),
+    });
+    if (!response.ok) {
+      const message = response.status === 401 || response.status === 403
+        ? "Authentication was rejected. Check the credentials and personal SPARQL endpoint."
+        : `Personal SPARQL connection probe failed (HTTP ${response.status}).`;
+      return { ok: false, connected: false, status: response.status, error: message };
+    }
+    // The authenticated personal SELECT route must return SPARQL Results JSON.
+    // Check the protocol response rather than treating an HTML login form as OK.
+    const payload: unknown = await response.json();
+    const results = payload as { results?: { bindings?: BootstrapBinding[] } } | null;
+    if (!results || !Array.isArray(results.results?.bindings)) {
+      return { ok: false, connected: false, status: response.status,
+        error: "Personal SPARQL endpoint returned an invalid SELECT result." };
+    }
+    return { ok: true, connected: true, status: response.status,
+      readEndpoint: read.toString(), writeEndpoint: write.toString(), bootstrap:results.results!.bindings! };
+  } catch (error) {
+    const timedOut = timeout.aborted && !signal?.aborted;
+    const cancelled = signal?.aborted;
+    return { ok: false, connected: false, error: timedOut
+      ? `Personal SPARQL connection probe timed out after ${LOGIN_PROBE_TIMEOUT_MS / 1000} seconds.`
+      : cancelled ? "Personal SPARQL connection test was cancelled."
+        : `Could not reach personal SPARQL endpoint: ${error instanceof Error ? error.message : String(error)}` };
+  }
+
 }
 
 export async function fetchWebIdProfile(profileUrl:string,signal?:AbortSignal): Promise<{avatarUrl?:string;displayName?:string}> {

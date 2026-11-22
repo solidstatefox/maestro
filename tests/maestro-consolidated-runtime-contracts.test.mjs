@@ -70,7 +70,9 @@ test('Kind, Record and Personal facet regression gates',()=>{
   // The former callback-presence gate is intentionally gone: clicking a
   // property in fullscreen must not mutate the authoritative Browse query.
   const recordPane = read('src/canvas/right/pane.tsx');
-  const fullscreenBlock = recordPane.split('if (fullscreenPane) {')[1]?.split('// Browse keeps its existing behavior')[0] || '';
+  // The fullscreen handler terminates before the new Browse-only click contract.
+  // Splitting on the retired comment would accidentally include Browse handlers.
+  const fullscreenBlock = recordPane.split('if (fullscreenPane) {')[1]?.split("// Browse's URI values now behave like the Record title:")[0] || '';
   assert.ok(fullscreenBlock, 'fullscreen click capture must be present');
   assert.match(fullscreenBlock, /event\.preventDefault\(\);\s*event\.stopPropagation\(\)/);
   assert.match(fullscreenBlock, /resolveFullscreenRecordTarget\(target, rows\)/);
@@ -81,7 +83,11 @@ test('Kind, Record and Personal facet regression gates',()=>{
   assert.match(fullscreenBlock, /intent: "pivot", kind: "value"/);
   assert.doesNotMatch(fullscreenBlock, /event\.shiftKey &&/);
   assert.doesNotMatch(fullscreenBlock, /openRecordPropertyUri\(|navigateResultBadge\(|applyRecordAsRootValue\(/);
-  // Browse retains its own property action exclusively outside fullscreen.
+  // Browse is a separate branch: plain URI-value click opens a new root query,
+  // while Shift-click retains the predicate/value query action.
+  assert.match(recordPane, /else if \(!event\.shiftKey && binding\.termType === "uri"\)/);
+  assert.match(recordPane, /applyRecordAsRootValue\(binding\.value\)/);
+  assert.match(recordPane, /navigateResultBadge\(binding\.predicate/);
   assert.match(recordPane, /if \(!fullscreenPane\) openRecordPropertyUri\(item\.property\)/);
 });
 test('URI clipboard pastes only a valid single URI and root field closes on mouseout',()=>{

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const policies = readFileSync(new URL('../graph/maestro-dbpedia-policies.ttl', import.meta.url), 'utf8');
+const policies = readFileSync(new URL('../graph/dbpedia/maestro-dbpedia-policies.ttl', import.meta.url), 'utf8');
 const recordTemplates = ['Book', 'Film', 'Organisation', 'Person', 'Place', 'Species', 'Work'];
 
 // The Record renderer requires an explicit id on every element output by an

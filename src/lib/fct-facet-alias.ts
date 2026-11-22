@@ -1,76 +1,120 @@
 "use client";
 
 import { fctQueryTreeApi, type FctQueryTree, type FctQueryNode } from "./fct-query-api";
+import { createGroupValuesQuery } from "./fct-query-derived";
+import { getPath, indexFctPaths } from "./fct-get-path";
 
 export type TransportedFacet = {
+  /** Stable identity of this <a>, independent of repeated predicate IRIs. */
   id: string;
+  /** Exact descendant relationship being transported. */
   href: string;
+  /** The selected strict ancestor owning <a>, including the query root. */
+  parentId: string;
   target: FctQueryNode;
-  /** Predicate path from the active view carrier to the referenced descendant. */
+  /** The original getPath relationship chain, not a new synthetic predicate. */
   path: Array<{ id: string; iri: string; direction: "forward" | "reverse" }>;
 };
 
 const isRelationship = (node: FctQueryNode) => node.name === "property" || node.name === "property-of";
 const hasView = (node: FctQueryNode) => node.name === "view" || node.children.some(hasView);
 
-/** Resolve only aliases at the active view scope. The target MUST be a descendant
- * of the alias's containing scope; aliases never introduce new query edges. */
-export function resolveTransportedFacets(tree: FctQueryTree): TransportedFacet[] {
-  function activeScope(nodes: FctQueryNode[]): FctQueryNode[] | null {
-    if (nodes.some(node => node.name === "view")) return nodes;
-    for (const node of nodes) {
-      if (!hasView(node)) continue;
-      const nested = activeScope(node.children);
-      if (nested) return nested;
-    }
-    return null;
-  }
-  const scope = activeScope(tree.children);
-  if (!scope) return [];
-  const find = (nodes: FctQueryNode[], id: string, ancestors: FctQueryNode[] = []): FctQueryNode[] | null => {
-    for (const node of nodes) {
-      if (node.id === id) return [...ancestors, node];
-      const nested = find(node.children, id, [...ancestors, node]);
-      if (nested) return nested;
+/** An FCT focus is the immediate parent of the authoritative <view>. */
+function activeCarrier(tree: FctQueryTree): FctQueryTree | FctQueryNode | null {
+  const find = (parent: FctQueryTree | FctQueryNode): FctQueryTree | FctQueryNode | null => {
+    if (parent.children.some(node => node.name === "view")) return parent;
+    for (const child of parent.children) {
+      if (!hasView(child)) continue;
+      const located = find(child);
+      if (located) return located;
     }
     return null;
   };
-  return scope.filter(node => node.name === "a").flatMap(alias => {
-    const href = alias.attributes.href;
-    if (!href) return [];
-    const path = find(scope, href);
-    if (!path || path.some(node => node.name === "view" || node.name === "a")) return [];
-    const target = path[path.length - 1];
-    if (!isRelationship(target)) return [];
-    return [{id:alias.id,href,target,path:path.filter(isRelationship).map(node => ({
-      id:node.id, iri:node.attributes.iri ?? "", direction:node.name === "property" ? "forward" as const : "reverse" as const,
-    }))}];
-  });
+  return find(tree);
 }
 
-/** An FCT values/counts projection built entirely from a data-plane query API
- * snapshot. The original live <view> and all live node identities are untouched. */
-export function createTransportedFacetQuery(source: FctQueryTree, targetId: string): FctQueryTree {
-  const tree = fctQueryTreeApi.getDataTree(source);
-  let carriedView: FctQueryNode | null = null;
-  const stripView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap(node => {
-    if (node.name === "view") { carriedView = node; return []; }
-    return [{...node, children:stripView(node.children)}];
-  });
-  const base = stripView(tree.children);
-  if (!carriedView) throw new Error("Cannot project a transported facet without a view.");
-  let found = false;
-  const place = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map(node => {
-    if (node.id === targetId && isRelationship(node)) {
-      found = true;
-      return { ...node, children: [
-        ...node.children.filter(child => child.name !== "value"),
-        {...carriedView!, attributes:{...carriedView!.attributes,type:"list-count",limit:"300",offset:"0",kind:"",group:""},children:[]},
-      ] };
+/** A valid preview runs only from a strict ancestor to the live focus.
+ * Ancestor and focus IDs come from getPath, so the Query Tree and breadcrumb
+ * highlight precisely the same path even with repeated predicate IRIs. */
+export function transportedAnchorPath(tree: FctQueryTree, ancestorId: string):
+  { ids: string[]; path: TransportedFacet["path"] } | null {
+  const focus = activeCarrier(tree);
+  if (!focus || focus === tree || !isRelationship(focus as FctQueryNode)) return null;
+  const index = indexFctPaths<FctQueryTree | FctQueryNode>(tree);
+  const ancestor = ancestorId === tree.attributes.id ? tree : index.byId.get(ancestorId);
+  if (!ancestor || ancestor === focus || (ancestor !== tree && !isRelationship(ancestor as FctQueryNode))) return null;
+  const resolved = getPath(index, ancestor, (focus as FctQueryNode).id);
+  if (!resolved) return null;
+  return { ids: [ancestorId, ...resolved.path.map(step => step.id)], path: resolved.path };
+}
+
+/** An alias is a viewer-plane <a> child of the selected *ancestor*, with href
+ * pointing to the *descendant focus*. Legacy sibling anchors are readable. */
+export function resolveTransportedFacets(tree: FctQueryTree): TransportedFacet[] {
+  const index = indexFctPaths<FctQueryTree | FctQueryNode>(tree);
+  const results: TransportedFacet[] = [];
+  const visit = (parent: FctQueryTree | FctQueryNode) => {
+    for (const child of parent.children) {
+      if (child.name === "a") {
+        const href = child.attributes.href;
+        if (!href) continue;
+        const parentId = "id" in parent ? parent.id : parent.attributes.id;
+        // A transported facet is attached to an ancestor *scope*, not to
+        // whichever descendant happens to carry <view> at this moment.
+        // Resolve it regardless of the active focus so Return, History,
+        // Perspectives, Analyze and query restoration share one identity.
+        const resolved = getPath(index, parent, href);
+        if (resolved && isRelationship(resolved.target as FctQueryNode))
+          results.push({ id: child.id, href, parentId, target: resolved.target as FctQueryNode, path: resolved.path });
+      } else if (isRelationship(child)) visit(child);
     }
-    return {...node,children:place(node.children)};
-  });
-  const children = place(base);
-  if (!found) throw new Error(`The transported Personal facet target ${targetId} is not a relationship in the FCT query.`);
-  return {...tree,children};
+  };
+  visit(tree);
+  return results;
+}
+
+/** Toggle exactly this ancestor's alias, not a same-IRI neighbor. */
+export function toggleTransportedAnchor(tree: FctQueryTree, ancestorId: string): FctQueryTree {
+  if (!transportedAnchorPath(tree, ancestorId)) return tree;
+  const focus = activeCarrier(tree) as FctQueryNode;
+  const existing = resolveTransportedFacets(tree).find(item => item.parentId === ancestorId && item.href === focus.id);
+  if (existing) {
+    const prune = (nodes: FctQueryNode[]): FctQueryNode[] => nodes
+      .filter(node => node.id !== existing.id)
+      .map(node => ({ ...node, children: prune(node.children) }));
+    return { ...tree, children: prune(tree.children) };
+  }
+  const anchor: FctQueryNode = {
+    id: `transported-anchor-${ancestorId}-${focus.id}`,
+    name: "a", attributes: { href: focus.id }, children: [],
+  };
+  if (ancestorId === tree.attributes.id) return { ...tree, children: [...tree.children, anchor] };
+  const add = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map(node =>
+    node.id === ancestorId && isRelationship(node)
+      ? { ...node, children: [...node.children, anchor] }
+      : { ...node, children: add(node.children) });
+  return { ...tree, children: add(tree.children) };
+}
+
+/** An alias's values travel through the ordinary Personal facet values query,
+ * selecting the original descendant property (by ID), not a synthetic alias
+ * property. The viewer-only <a> remains excluded from every derived query. */
+export function createTransportedFacetQuery(source: FctQueryTree, alias: TransportedFacet): FctQueryTree {
+  // A transported facet must count its *ancestor* population, grouped by
+  // the full descendant path. Enumerating the terminal predicate at its own
+  // focus would count DOI values instead of the Projects owning those DOIs.
+  return createGroupValuesQuery(fctQueryTreeApi.getDataTree(source), {
+    key: `alias:${alias.id}`, uri: alias.target.attributes.iri ?? "",
+    direction: alias.target.name === "property-of" ? "reverse" : "forward",
+    label: alias.path.map(step => step.iri).join(" › "),
+    nodeId: alias.href, anchorId: alias.id, parentId: alias.parentId,
+  }, { limit: 1000, offset: 0 });
+}
+
+/** The scope of an alias is the node which owns <a>, not the terminal value. */
+export function activeTransportedFacets(tree: FctQueryTree): TransportedFacet[] {
+  const carrier = activeCarrier(tree);
+  if (!carrier) return [];
+  const id = "id" in carrier ? carrier.id : carrier.attributes.id;
+  return resolveTransportedFacets(tree).filter(alias => alias.parentId === id);
 }

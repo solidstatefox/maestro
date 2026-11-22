@@ -23,7 +23,7 @@ test('all subscribed personal provider clients use the readiness capability rath
  const facets=read('src/canvas/left/personal-widget-cards.tsx');
  const view=read('src/canvas/tab/view/page.tsx');
  assert.match(appbar,/!workspace\.authSession \|\| !workspace\.accessCapabilities\.canUsePersonalStore/);
- assert.match(facets,/if \(!workspace\.accessCapabilities\.canUsePersonalStore\) return null/);
+ assert.doesNotMatch(facets,/if \(!workspace\.accessCapabilities\.canUsePersonalStore\) return null/);
  assert.match(facets,/sessionActive=\{workspace\.accessCapabilities\.canUsePersonalStore\}/);
  assert.match(view,/PersonalPerspectives active=\{workspace\.accessCapabilities\.canUsePersonalStore\}/);
  assert.doesNotMatch(view,/PersonalPerspectives active=\{workspace\.accessController\.getSnapshot\(\)\.value === "signedIn"\}/);

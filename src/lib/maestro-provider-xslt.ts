@@ -22,10 +22,13 @@ export function createProviderXsltContext(options: {
   metadata?: Record<string, string>;
   facetValues?: Record<string, string[]>;
 }): string {
+  // Keep the exact live XML only for resolving viewer-plane <a> references.
+  // No <a> is ever passed as a data-plane WHERE constraint to a provider.
+  const exact = xmlDoc(options.queryXml, "live FCT query");
   const detachedQueryXml = snapshotFctQueryXml(options.queryXml, "data");
   const live = xmlDoc(detachedQueryXml, "FCT query snapshot");
   if (live.documentElement.localName !== "query") throw new Error("The provider requires an FCT query root.");
-  const context = xmlDoc(`<mctx:context xmlns:mctx="${MAESTRO_CONTEXT_NS}"><mctx:query/><mctx:describe/><mctx:results/><mctx:component/><mctx:metadata/><mctx:facet-values/><mctx:query-text/></mctx:context>`, "provider context");
+  const context = xmlDoc(`<mctx:context xmlns:mctx="${MAESTRO_CONTEXT_NS}"><mctx:query/><mctx:describe/><mctx:results/><mctx:component/><mctx:metadata/><mctx:facet-values/><mctx:transported-facets/><mctx:query-text/></mctx:context>`, "provider context");
   const attach = (name: string, source?: XMLDocument): void => {
     if (source) context.getElementsByTagNameNS(MAESTRO_CONTEXT_NS, name)[0].appendChild(context.importNode(source.documentElement, true));
   };
@@ -40,6 +43,46 @@ export function createProviderXsltContext(options: {
     entry.setAttribute("name", name);
     entry.textContent = value;
     metadata.appendChild(entry);
+  }
+  // Every View / Analyze provider sees the same scope-qualified transported
+  // facet descriptors. This is generic host metadata, not provider-specific
+  // RDF logic. The path is resolved by original FCT element identity, and
+  // exposes every forward/reverse hop for the existing merge-values engine.
+  // Record (DESCRIBE) intentionally has no transported facet dependency.
+  if (!options.describeXml) {
+    const envelope = context.getElementsByTagNameNS(MAESTRO_CONTEXT_NS, "transported-facets")[0];
+    const elements = Array.from(exact.getElementsByTagName("*"));
+    const focus = elements.find(item => item.localName === "view")?.parentElement;
+    if (focus) {
+      const byId = new Map(elements.map(item => [item.getAttribute("id"), item]));
+      for (const child of Array.from(focus.children).filter(item => item.localName === "a")) {
+        const id = child.getAttribute("id") ?? "";
+        const target = byId.get(child.getAttribute("href"));
+        if (!id || !target || target === focus) continue;
+        const path: Element[] = [];
+        let node: Element | null = target;
+        while (node && node !== focus) {
+          if (node.localName !== "property" && node.localName !== "property-of" || !node.getAttribute("iri")) break;
+          path.unshift(node);
+          node = node.parentElement;
+        }
+        if (node !== focus || !path.length || path.length > 16) continue;
+        const facet = context.createElementNS(MAESTRO_CONTEXT_NS, "mctx:facet");
+        facet.setAttribute("id", id);
+        facet.setAttribute("key", `alias:${id}`);
+        facet.setAttribute("target-id", target.getAttribute("id") ?? "");
+        facet.setAttribute("iri", path[path.length - 1].getAttribute("iri") ?? "");
+        facet.setAttribute("direction", path[0].localName === "property-of" ? "reverse" : "forward");
+        for (const step of path) {
+          const hop = context.createElementNS(MAESTRO_CONTEXT_NS, "mctx:hop");
+          hop.setAttribute("id", step.getAttribute("id") ?? "");
+          hop.setAttribute("iri", step.getAttribute("iri") ?? "");
+          hop.setAttribute("direction", step.localName === "property-of" ? "reverse" : "forward");
+          facet.appendChild(hop);
+        }
+        envelope.appendChild(facet);
+      }
+    }
   }
   const facets = context.getElementsByTagNameNS(MAESTRO_CONTEXT_NS, "facet-values")[0];
   for (const [key, values] of Object.entries(options.facetValues ?? {})) {

@@ -1,0 +1,15 @@
+{
+  "state-machines": "{base}/state-machines",
+  "status": "{base}/status",
+  "shacl-policies": "{base}/shacl/policies",
+  "appbar": "{base}/appbar",
+  "bookmarks": "{base}#bookmarks",
+  "history": "{base}#history",
+  "ontology-cache": "{base}/ontology-cache",
+  "graphs": "{base}/graph",
+  "kinds": "{base}/kinds",
+  "otc-transcoders": "{base}/otc/transcoders",
+  "policy-approvals": "{base}#policy-approvals",
+  "ontology": "{base}/ontology",
+  "graph-servers": "{base}/graph/servers"
+}

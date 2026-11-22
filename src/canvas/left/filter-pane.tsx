@@ -1,5 +1,6 @@
 "use client";
 import { ErrorDetails } from "@/components/ui/error-details";
+import { retryMaestroComponent } from "@/lib/maestro-component-retry";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 
 import { renderPersonalWidgetCards } from "@/canvas/left/personal-widget-cards";
@@ -17,7 +18,6 @@ import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
 import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
 import { OrUidLabel } from "@/components/ui/or-uid-label";
 
-import { TransportedPersonalFacets } from "@/canvas/left/transported-facet";
 import { personalFacetInspectorQueries, PersonalRoleWidget } from "@/canvas/left/filter";
 import { RDF_TYPE_URI, GROUP_BY_FACET_HIGHLIGHT_CLASSES } from "@/canvas/utils/query-controller";
 
@@ -32,7 +32,7 @@ import { selectedFacetCount } from "@/lib/selected-facet-presentation";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { GraphUriTree, buildGraphUriTree, graphTreeParentKeys } from "@/canvas/left/graph-uri-tree";
 import { ButtonGroup } from "@/components/ui/button-group";
 
@@ -195,6 +195,15 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
     approvalRevision: workspace.policyApprovalRevision,
     sessionKey: workspace.accessController.getSnapshot().context.sessionKey,
   });
+  // The provider declares an existing host capability, not an FCT mutation.
+  // An explicit user switch-off wins over the provider default for this scope.
+  const manualTreeOverride = useRef(new Set<string>());
+  const classTreeScope = `${workspace.accessController.getSnapshot().context.sessionKey}|${classPresentation.provider?.uri??""}|${queryTree.attributes.id??""}`;
+  useEffect(() => {
+    if (classPresentation.wantsClassTree && !categoriesTreeMode && !manualTreeOverride.current.has(classTreeScope)) {
+      setQueryAttribute("classTree", "true");
+    }
+  }, [classPresentation.wantsClassTree, categoriesTreeMode, classTreeScope, setQueryAttribute]);
   const sortedGraphFacets = useMemo(() => [...graphFacets].sort((a, b) => {
     const comparison = (a.label || a.uri).localeCompare(b.label || b.uri);
     return graphSort === "label-desc" ? -comparison : comparison;
@@ -210,7 +219,6 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       toggle={workspace.toggleLiveStatusFilter} revision={workspace.policyApprovalRevision}
                       onNavigate={() => workspace.navigateFacetHeaderToProperty("gttp://ggg.maestro.ecosys/ns/ui#status")}
                       queryXml={workspace.queryXml} />}
-                    <TransportedPersonalFacets navigate={navigateToPropertyPath} endpointReady={endpointReadyForQuery} />
                     {propertyUsageScope(queryTree) && <>
                       <PropertyUsageWidget tree={queryTree} direction="subject" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
                       <PropertyUsageWidget tree={queryTree} direction="object" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
@@ -227,7 +235,9 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                             { id: "tree", label: "Toggle category tree", icon: <Network className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
                           type="button"
                           aria-pressed={categoriesTreeMode}
-                          onClick={() => { setQueryAttribute("classTree", categoriesTreeMode ? "false" : "true"); setExpandedCategoryNodes(new Set()); setClassesPage(0); }}
+                          onClick={() => { if (categoriesTreeMode) manualTreeOverride.current.add(classTreeScope);
+                            else manualTreeOverride.current.delete(classTreeScope);
+                            setQueryAttribute("classTree", categoriesTreeMode ? "false" : "true"); setExpandedCategoryNodes(new Set()); setClassesPage(0); }}
                           className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${categoriesTreeMode ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`}
                           aria-label={categoriesTreeMode ? "Show categories as a flat list" : "Show categories as a superclass tree"}
                         >{categoriesTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{categoriesTreeMode ? "Show flat category list" : "Show category tree (superclass path of each category, up to the root)"}</TooltipContent></Tooltip> },
@@ -270,7 +280,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                         </span>} /><TooltipContent>{classFacetError || classFacetWarning || undefined}</TooltipContent></Tooltip>
                       </header>
                       {classFacetError && endpointReadyForQuery ? (
-                        <ErrorDetails prefix="Categories" error={classFacetError} />
+                        <ErrorDetails prefix="Categories" error={classFacetError} onRetry={() => retryMaestroComponent("categories")} />
                       ) : visibleClassDisplayFacets.length === 0 && selectedClassDisplayFacets.length === 0 && !isLoadingClasses && !categoriesIncomplete ? (
                         <p className="text-xs text-muted-foreground">No classes found for this query.</p>
                       ) : (
@@ -424,6 +434,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                           <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByRole ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1">
+                                <IncompleteWidgetIndicator source={`personal-role:${uri}`} />
                                 <Tooltip><TooltipTrigger render={<button
                                   type="button"
                                   className={`cursor-pointer text-left text-sm font-semibold underline-offset-2 hover:underline ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === uri && facetHoverPreview.direction === "reverse" ? "text-purple-700 dark:text-purple-300" : ""}`}
@@ -431,7 +442,6 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                   onMouseLeave={clearTutorialPreview}
                                   onClick={() => navigateToPropertyPath(roleNode.id)}
                                 >
-                                  <span className="mr-1 inline-flex align-middle"><IncompleteWidgetIndicator source={`personal-role:${uri}`} /></span>
                                   {isGroupByRole && <UsersRound className="mr-1 inline size-4 shrink-0" aria-label="Group by" />}
                                   {excluded && <CircleSlash className="mr-1 inline size-3.5" aria-label="Excluded" />}
                                   <OrUidLabel uid={roleNode.attributes.uid}>{label}</OrUidLabel>

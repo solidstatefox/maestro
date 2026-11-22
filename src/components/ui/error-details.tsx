@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
-import { AlertTriangle, Check, Copy } from "lucide-react";
+import { AlertTriangle, Check, Copy, RotateCw } from "lucide-react";
+import { ButtonGroup } from "@/components/ui/button-group";
+import { Button } from "@/components/ui/button";
 import { cn } from "cn";
 
 /** Summarize a remote error without losing the original diagnostics. Never display
@@ -21,10 +23,17 @@ export function shortErrorName(details: string): string {
   return head.length > 66 ? `${head.slice(0, 63).trimEnd()}…` : head;
 }
 
+/** Gateway failures are typically transient; other errors remain diagnostic-only.
+ * The retry callback is supplied by the request owner, never by this generic UI. */
+export function isRetryableGatewayError(error: string): boolean {
+  return /\b(?:HTTP\s*|status\s*)(?:502|503|504)\b/i.test(error) ||
+    /\b(?:502|503|504)\s+(?:bad gateway|service unavailable|gateway time-?out)\b/i.test(error);
+}
+
 /** Shared error affordance: compact label, full diagnostic popover, and copy/check feedback.
  * Render in the same place as an existing inline error; errors remain selectable and accessible.
  */
-export function ErrorDetails({ error, prefix, className }: { error: string; prefix?: string; className?: string }) {
+export function ErrorDetails({ error, prefix, className, onRetry }: { error: string; prefix?: string; className?: string; onRetry?: () => void }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => { setCopied(false); }, [error]);
   if (!error) return null;
@@ -48,12 +57,17 @@ export function ErrorDetails({ error, prefix, className }: { error: string; pref
         <Popover.Popup className="w-[min(36rem,calc(100vw-2rem))] rounded-lg border bg-popover p-3 text-popover-foreground shadow-xl outline-none">
           <div className="mb-2 flex items-start justify-between gap-2">
             <strong className="min-w-0 text-sm">{prefix ? `${prefix}: ${summary}` : summary}</strong>
-            <button type="button" onClick={() => void copy()} title={copied ? "Copied" : "Copy full error"}
-              aria-label={copied ? "Error copied" : "Copy full error"}
-              className="inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-accent">
-              {copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
-              {copied ? "Copied" : "Copy"}
-            </button>
+            <ButtonGroup aria-label="Error actions" className="shrink-0">
+              <Button type="button" variant="outline" size="xs" onClick={() => void copy()} title={copied ? "Copied" : "Copy full error"}
+                aria-label={copied ? "Error copied" : "Copy full error"}>
+                {copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+                {copied ? "Copied" : "Copy"}
+              </Button>
+              {onRetry && isRetryableGatewayError(error) && <Button type="button" variant="outline" size="xs"
+                onClick={onRetry} title="Retry this component only" aria-label="Retry this component only">
+                <RotateCw className="size-3.5" aria-hidden="true" />Retry
+              </Button>}
+            </ButtonGroup>
           </div>
           <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 font-mono text-xs select-text">{fullDiagnostic}</pre>
         </Popover.Popup>

@@ -12,7 +12,7 @@ import { toLabel } from "@/lib/uri-labels";
 
 import { MaestroAnalysisDataTable, type MaestroDataColumn, type MaestroDataRow } from "@/components/maestro-analysis-data-table";
 
-import { Check, Download } from "lucide-react";
+import { Check, Download, ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
 import { readOverviewPopulation, type OverviewPopulation } from "@/lib/overview-population";
 import { OverviewNodeAnalytics } from "@/canvas/tab/view/overview-node-analytics";
@@ -91,7 +91,8 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                       headerStyle: col.headerStyle,
                       heading: col.kind === "result" && !isCompareAnalysis ? "Results" : col.kind === "breadcrumb" ? (() => {
                         const header = analyzeTableHeaderNodes.find((crumb) => crumb.id === col.nodeId);
-                        return header ? renderPathBreadcrumb(header, activeBreadcrumbIndex + 1, true, col.breadcrumbStyle) : col.label;
+                        return header?.name === "a" ? <span className="inline-flex items-center gap-1"><ExternalLink className="size-3.5 shrink-0 text-emerald-600" aria-hidden="true"/>{header.label}</span>
+                          : header ? renderPathBreadcrumb(header, activeBreadcrumbIndex + 1, true, col.breadcrumbStyle) : col.label;
                       })() : col.kind === "value" && /^[a-z][a-z0-9+.-]*:/i.test(col.label) ? toLabel(col.label, "OBJECT") : col.label,
                     }))}
                     rows={analysisTable.rows.map((row, rowIndex): MaestroDataRow => ({
@@ -107,7 +108,8 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                           const direction = header.name === "property-of" ? "reverse" : "forward";
                           const currentResult = visibleResultsPage.find((item) => item.uri === row.uri);
                           const scopes = [...(currentResult?.scopeValues ?? []), ...(readyAnalysisValues?.get(row.uri) ?? [])];
-                          const scope = [...scopes].reverse().find((value) => value.property === header.uri && value.direction === direction);
+                          const scope = [...scopes].reverse().find(value => header.name === "a"
+                            ? value.id === header.id : value.property === header.uri && value.direction === direction);
                           const values = scope?.values.filter((value) => value.value && value.value !== "-") ?? [];
                           return values.length && scope ? <div key={index} className="flex flex-wrap gap-0.5">{values.map((value, j) => renderScopeValueBadge(scope, value, j, {valueOnly: true, style: cell.badgeStyle}))}</div>
                             : <span key={index} className="text-muted-foreground">—</span>;

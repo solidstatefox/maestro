@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** RDF/SHACL-discovered, effective-approval-gated regex facet derivations. */
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { readClientPolicyApprovals } from "@/lib/client-policy-approvals";
@@ -14,12 +15,13 @@ export async function discoverApprovedRegexDerivations(property: string,
   signal?: AbortSignal): Promise<DerivedRegexField[]> {
   if (!validIri(property)) throw new Error("Invalid spawning facet IRI.");
   const ctx = await personalContext();
-  const graph = `${ctx.base}/shacl/policies`;
+  const graph = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`;
   const rows = await selectPersonal(`PREFIX mui: <${MUI}> PREFIX sh: <${SH}>
     PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
-    SELECT DISTINCT ?provider ?pattern ?resultIri ?fieldLabel ?capture WHERE {
+    SELECT DISTINCT ?provider ?pattern ?sourceValuePredicate ?resultIri ?fieldLabel ?capture WHERE {
       GRAPH <${graph}> {
         ?provider a mui:Provider ; mui:accepts ?shape ; mui:sourcePattern ?pattern ; mui:derivedField ?field .
+        OPTIONAL { ?provider mui:sourceValuePredicate ?sourceValuePredicate }
         ?shape a mui:InputShape .
         { ?shape sh:property/sh:path <${property}> }
         UNION { ?shape sh:or/rdf:rest*/rdf:first/sh:property/sh:path <${property}> }
@@ -35,8 +37,10 @@ export async function discoverApprovedRegexDerivations(property: string,
     if (!approved.has(row.provider?.value || "")) continue;
     const iri=row.resultIri?.value || "", label=row.fieldLabel?.value || "",
       pattern=row.pattern?.value || "", capture=row.capture?.value || "";
-    if (!validIri(iri) || !label.trim() || !pattern || pattern.length > 2000 || !/^[1-9]$/.test(capture)) continue;
-    fields.push({iri,label,pattern,capture});
+    const sourceValuePredicate = row.sourceValuePredicate?.value || "";
+    if (!validIri(iri) || !label.trim() || !pattern || pattern.length > 2000 || !/^[1-9]$/.test(capture) ||
+        (sourceValuePredicate && !validIri(sourceValuePredicate))) continue;
+    fields.push({iri,label,pattern,capture,...(sourceValuePredicate ? {sourceValuePredicate} : {})});
   }
   return [...new Map(fields.map(field => [field.iri,field] as const)).values()];
 }

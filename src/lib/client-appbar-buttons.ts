@@ -1,5 +1,6 @@
 "use client";
 
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { providerFctQuery } from "@/lib/provider-fct-query";
@@ -17,8 +18,8 @@ const XSD = "http://www.w3.org/2001/XMLSchema#";
 const VFCT = "https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#";
 const IRI = /^[a-z][a-z0-9+.-]*:[^\s<>\"{}|^`\\]+$/i;
 const iri = (v: string) => { if (!IRI.test(v)) throw new Error("Invalid IRI"); return `<${v}>`; };
-const graph = (ctx: PersonalContext) => iri(`${ctx.base}/appbar`);
-const bookmarks = (ctx: PersonalContext) => iri(`${ctx.base}#bookmarks`);
+const graph = (ctx: PersonalContext) => iri(resolveGraph(GRAPH.APPBAR, ctx.base));
+const bookmarks = (ctx: PersonalContext) => iri(resolveGraph(GRAPH.BOOKMARKS, ctx.base));
 export type AppbarButton = { uri: string; action: string; icon: string; tooltip: string; url: string };
 
 async function listButtons(ctx: PersonalContext): Promise<AppbarButton[]> {
@@ -56,14 +57,14 @@ async function ensureProviderBookmarks(ctx: PersonalContext) {
   ] as const;
   const endpoint = ctx.session.graphStore;
   const base = ctx.base;
-  const bookmarkGraph = iri(`${base}#bookmarks`);
+  const bookmarkGraph = iri(`${resolveGraph(GRAPH.BOOKMARKS, base)}`);
   const appbarGraph = graph(ctx);
   const loginTimestamp = new Date().toISOString();
-  const historyGraph = iri(`${base}#history`);
+  const historyGraph = iri(`${resolveGraph(GRAPH.HISTORY, base)}`);
   const entries = await Promise.all(catalog.map(async (entry) => {
     // Use precisely the same builder and source graph as live Providers navigation.
-    const source = entry.kind === "transcoders" ? `${ctx.base}/otc/transcoders`
-      : entry.kind === "formats" ? "$ALL$" : `${ctx.base}/shacl/policies`;
+    const source = entry.kind === "transcoders" ? `${resolveGraph(GRAPH.OTC_TRANSCODERS, ctx.base)}`
+      : entry.kind === "formats" ? "$ALL$" : `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`;
     const seed = { name: "query", attributes: {}, children: [] } as FctQueryTree;
     const queryXml = serializeFctQuery(providerFctQuery(seed, entry.kind, source, endpoint, 30));
     const url = new URL(window.location.origin);

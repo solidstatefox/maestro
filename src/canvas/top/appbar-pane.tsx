@@ -1,4 +1,5 @@
 "use client";
+import { currentBootstrapButtons } from "@/lib/client-auth-bootstrap";
 import { clientQueryFavorites } from "@/lib/client-query-favorites";
 import { manageAppbarButtons } from "@/lib/client-appbar-buttons";
 import { ErrorDetails } from "@/components/ui/error-details";
@@ -34,8 +35,10 @@ import { Label } from "@/components/ui/label";
 import { Check, ChevronDown, Network, Link, CirclePlay, AtSign, X, LoaderCircle, ArrowLeft, ArrowRight, ClockArrowRight, Clock1, Clock2, Clock3, Clock4, Clock5, Clock6, Clock7, Clock8, Clock9, Clock10, Clock11, Clock12, Home, CornerDownLeft, RotateCw, RefreshCw, Bookmark, User, LogOut, KeyRound, Eye, EyeOff, Info, WandSparkles } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
-import { AuthType, clearPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
+import { AuthType, clearPersonalAuthSession, disconnectPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
+import { cancelPersonalInitialization } from "@/lib/personal-initialization";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
+import { graphServerUrlMatches } from "@/lib/graph-server-health";
 
 import { Button } from "@/components/ui/button";
 import { noteMaestroClipboardCopy } from "@/lib/recent-clipboard";
@@ -49,6 +52,24 @@ const MAESTRO_ALPHABET_LANGUAGES = maestroLanguages;
 // every icon into the appbar's initial bundle. Validate persisted names too.
 const availableAppbarIconNames = new Set<string>(iconNames);
 const BOOKMARK_CLOCKS = [Clock1, Clock2, Clock3, Clock4, Clock5, Clock6, Clock7, Clock8, Clock9, Clock10, Clock11, Clock12] as const;
+
+/** Queue presentation is factual, not an invented global queue rank.
+ * Proxy numbered lanes are *projected waiting addresses*, not worker IDs. */
+function pendingQueryAddress(query: PendingMaestroQuery): { text: string; detail: string } {
+  if (query.serverQueueIndex && query.serverQueueIndex > 0 && query.serverQueueLane &&
+      query.serverQueueLaneNumber && query.serverQueueLanePosition) {
+    const lane = query.serverQueueLane === "heavy" ? "H" : "L";
+    return { text: `${lane}${query.serverQueueLaneNumber}:${query.serverQueueLanePosition} · ${query.serverQueueLane}`,
+      detail: `Proxy queue #${query.serverQueueIndex}; projected ${query.serverQueueLane} lane ${query.serverQueueLaneNumber}, position ${query.serverQueueLanePosition}, class-local ordinal ${query.serverQueueLaneIndex ?? "unknown"}. This is a queue projection, not a running socket or worker ID. Server: ${query.queueServer || "unreported"}` };
+  }
+  if (query.state === "queued" && query.queueIndex > 0) {
+    return { text: `B:${query.queueIndex} · browser`, detail: `Browser waiting position ${query.queueIndex}. Not admitted to proxy scheduling: no proxy lane ID exists yet.` };
+  }
+  if (query.proxyDispatchConfirmed) return { text: "Dispatched", detail: "Proxy telemetry confirmed dispatch; this request has no waiting-queue address." };
+  if (query.state === "active") return { text: "Browser admitted", detail: "Left the browser waiting queue. Telemetry and request setup may still be in progress; proxy position and dispatch are not yet confirmed." };
+  return { text: "Preparing", detail: "Request setup in progress; it has not entered a waiting queue." };
+}
+
 
 /*
 const sampleResults = [
@@ -183,25 +204,20 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
   useEffect(() => {
     if (!workspace.authSession || !workspace.accessCapabilities.canUsePersonalStore) { setAppbarButtons([]); return; }
     let mounted = true;
+    const update = () => { if (mounted) setAppbarButtons(currentBootstrapButtons()); };
     const refresh = async () => {
       try {
         const payload = await manageAppbarButtons({action:"list"});
         if (mounted) setAppbarButtons(payload.buttons ?? []);
       } catch (error) {
-        if (mounted) toast.add({ title: "Could not load appbar providers", description: error instanceof Error ? error.message : String(error), type: "error" });
+        if (mounted) toast.add({title:"Could not refresh appbar",description:error instanceof Error?error.message:String(error),type:"error"});
       }
     };
-    void manageAppbarButtons({action:"ensure-providers"})
-      .then(async () => {
-        if (mounted) workspace.setBookmarkCheckRevision((revision) => revision + 1);
-        return refresh();
-      })
-      .catch(error => {
-        if (mounted) toast.add({ title: "Automatic Providers bookmarks failed", description: error instanceof Error ? error.message : "The personal graph update failed.", type: "error" });
-        void refresh();
-      });
-    window.addEventListener("maestro:appbar-buttons-updated", refresh);
-    return () => { mounted = false; window.removeEventListener("maestro:appbar-buttons-updated", refresh); };
+    update();
+    window.addEventListener("maestro:auth-bootstrap-updated",update);
+    window.addEventListener("maestro:appbar-buttons-updated",refresh);
+    return () => { mounted=false;window.removeEventListener("maestro:auth-bootstrap-updated",update);
+      window.removeEventListener("maestro:appbar-buttons-updated",refresh); };
   }, [workspace.authSession, workspace.accessCapabilities.canUsePersonalStore]);
   const openPinnedBookmark = (url: string) => {
     try {
@@ -269,6 +285,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     deleteCurrentQueryHistory,
     endpointChecksCompleted,
     endpointChecksTotal,
+    checkingEndpointIds,
     endpointMenuError,
     endpointStatuses,
     exitEverywhere,
@@ -284,9 +301,10 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     graphProbe,
     graphProbeIdentity,
     graphText,
-    graphRegistryReady,
+    graphServerDirectoryHydrated,
     groupBatchSize,
     handleFetchProfile,
+    handleRetryPersonalInitialization,
     handleLoginSubmit,
     handleTestConnection,
     historyActionItems,
@@ -451,15 +469,16 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     workspace.accessCapabilities.policyStage !== "failed";
   const showCancel = pendingQueryCount > 0 || queryActivityPending;
   const liveServer = (queryTree.attributes.addr ?? "").split("@").slice(1).join("@");
-  const activeGraphServer = fctEndpoints.find(endpoint =>
-    endpoint.url === liveServer || endpoint.id === liveServer ||
-    (endpoint.schemeInferred && endpoint.url.replace(/^https?:\/\//, "") === liveServer.replace(/^https?:\/\//, "")));
-  const displayedEndpointId = activeGraphServer?.id ?? selectedEndpointId;
-  const displayedEndpointStatus = activeGraphServer ? endpointStatuses[activeGraphServer.id] : selectedEndpointStatus;
+  const activeGraphServer = fctEndpoints.find(endpoint => liveServer &&
+    (endpoint.id === liveServer || graphServerUrlMatches(endpoint.url, liveServer, endpoint.schemeInferred)));
+  const displayedEndpointId = activeGraphServer?.id ?? "";
+  const displayedEndpointStatus = activeGraphServer ? endpointStatuses[activeGraphServer.id] : undefined;
+  const displayedEndpointLabel = activeGraphServer?.label ?? (liveServer.trim() || "Select a graph server");
+  const displayedEndpointChecking = Boolean(activeGraphServer && checkingEndpointIds[activeGraphServer.id]);
   return (
 <header ref={headerLayoutRef} id={UI_COMPONENT.appbar} className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-4 py-2">
         <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-2">
-          <ButtonGroup aria-label="Graph navigation" className="shrink-0">
+          <ButtonGroup aria-label="Graph navigation" className="shrink-0 [&>button:not(:first-child)]:!ml-0 [&>button:not(:first-child)]:!border-l-0">
             {returnButtonVisible && <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon"
               aria-label="Return to previous context" onClick={() => { if (!workspace.returnToPreviousContext()) toast.add({ title: "Could not restore the previous context", type: "error" }); }}
               className="h-9 w-auto gap-1.5 border-blue-500/60 bg-blue-600 px-3 text-white hover:bg-blue-700 hover:text-white focus-visible:ring-blue-500">
@@ -476,7 +495,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               if (centralTab === "groups") setCentralTab("results");
               setSearchPipelineRun((current) => current + 1);
             }} aria-label="Reset query to home" className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground"><Home className="size-4" aria-hidden="true" /></Button>} /><TooltipContent>Reset query</TooltipContent></Tooltip>
-            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onClick={() => { if (showCancel) cancelMaestroPage(); else void refreshMaestroPage(); }} aria-label={showCancel ? "Cancel pending queries" : "Refresh current query"} className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground">{showCancel ? <X className="size-4" aria-hidden="true" /> : <RotateCw className="size-4" aria-hidden="true" />}</Button>} /><TooltipContent className={showCancel ? "!max-w-none max-w-[min(32rem,calc(100vw-1rem))] p-2" : ""}>{showCancel ? <div className="w-[min(29rem,calc(100vw-2rem))]"><div className="px-1 pb-2 text-xs font-semibold">Pending queries</div><div className="max-h-64 overflow-y-auto">{pendingQueryDetails.length ? pendingQueryDetails.map((query) => <div key={query.id} className="flex items-center gap-2 border-t border-border/40 px-1 py-1.5"><span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground" aria-label={query.queueIndex > 0 ? `Queue position ${query.queueIndex}` : "Active or awaiting dispatch"}>{query.serverQueueIndex && query.serverQueueIndex > 0 && query.serverQueueLane && query.serverQueueLaneIndex ? `${query.serverQueueLane}.${query.serverQueueLaneIndex}` : query.queueIndex > 0 ? `browser.${query.queueIndex}` : "—"}</span><span className="min-w-0 flex-1 truncate text-xs" title={query.label}>{query.label}</span><button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded hover:bg-accent" aria-label={`Cancel ${query.label}`} title={`Cancel ${query.label}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); cancelIndividualMaestroQuery(query.id); }}><X className="size-3.5" aria-hidden="true" /></button></div>) : <span className="px-1 text-xs text-muted-foreground">Loading before dispatch</span>}</div></div> : "Refresh query (check selected graph server only if not green)"}</TooltipContent></Tooltip>
+            <Tooltip disableHoverablePopup={false}><TooltipTrigger render={<Button type="button" variant="outline" size="icon" onClick={() => { if (showCancel) cancelMaestroPage(); else void refreshMaestroPage(); }} aria-label={showCancel ? "Cancel pending queries" : "Refresh current query"} className="size-9 text-muted-foreground hover:bg-accent hover:text-foreground">{showCancel ? <X className="size-4" aria-hidden="true" /> : <RotateCw className="size-4" aria-hidden="true" />}</Button>} /><TooltipContent className={showCancel ? "!max-w-none max-w-[min(32rem,calc(100vw-1rem))] p-2" : ""}>{showCancel ? <div className="w-[min(29rem,calc(100vw-2rem))]"><div className="px-1 pb-2 text-xs font-semibold">Pending queries</div><div className="max-h-64 overflow-y-auto">{pendingQueryDetails.length ? pendingQueryDetails.map((query) => <div key={query.id} className="flex items-center gap-2 border-t border-border/40 px-1 py-1.5"><span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground" aria-label={pendingQueryAddress(query).detail} title={pendingQueryAddress(query).detail}>{pendingQueryAddress(query).text}</span><span className="min-w-0 flex-1 truncate text-xs" title={query.label}>{query.label}</span><button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded hover:bg-accent" aria-label={`Cancel ${query.label}`} title={`Cancel ${query.label}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); cancelIndividualMaestroQuery(query.id); }}><X className="size-3.5" aria-hidden="true" /></button></div>) : <span className="px-1 text-xs text-muted-foreground">Loading before dispatch</span>}</div></div> : "Refresh query (check selected graph server only if not green)"}</TooltipContent></Tooltip>
           </ButtonGroup>
 
           {/* One address: [graph]@[graph server], with no gap around the at-sign. */}
@@ -581,7 +600,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
             </Label>
             <div className="flex min-w-0 basis-[30ch] max-w-[min(54%,34rem)] shrink items-stretch">
               <ButtonGroup aria-label="Graph server selection, discovery, and refresh" className="group/graph-server-input min-w-0 flex-1 border-0 shadow-none [&>select]:min-w-0 [&>select]:flex-1 [&>select]:rounded-none [&>select]:border-0 [&>select]:bg-background [&>select]:px-2 [&>select]:py-2 [&>select]:text-sm">
-                    {!graphRegistryReady ? (
+                    {!graphServerDirectoryHydrated ? (
                       endpointMenuError ? <button type="button" className="px-2 text-xs text-destructive hover:underline" onClick={() => setEndpointReloadRevision((revision) => revision + 1)}>Retry graph servers</button>
                       : <div role="status" aria-busy="true" aria-label="Loading graph servers" className="flex h-9 min-w-32 items-center gap-2 px-2">
                           <Skeleton className="size-4 rounded-full" /><Skeleton className="h-4 w-24" />
@@ -591,12 +610,12 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                         id="fct-endpoint"
                         title="Choose which FCT endpoint receives queries"
                         type="button"
-                        disabled={isCheckingEndpoints || fctEndpoints.length === 0}
+                        disabled={fctEndpoints.length === 0}
                         aria-label="Choose graph server"
                         className="flex w-full min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap rounded-none bg-transparent px-2 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <span title={endpointHealthDetails(displayedEndpointStatus)}><EndpointStatusIcon status={displayedEndpointStatus} /></span>
-                        <span className="min-w-0 truncate whitespace-nowrap">{fctEndpoints.find((endpoint) => endpoint.id === displayedEndpointId)?.label ?? (fctEndpoints.length ? "Select a graph server" : "No endpoints configured")}</span>
+                        <span title={displayedEndpointChecking ? "Checking current FCT graph server…" : endpointHealthDetails(displayedEndpointStatus)}>{displayedEndpointChecking ? <LoaderCircle aria-label="Checking graph server" className="size-4 shrink-0 animate-spin text-muted-foreground" /> : <EndpointStatusIcon status={displayedEndpointStatus} />}</span>
+                        <span className="min-w-0 truncate whitespace-nowrap">{displayedEndpointLabel}</span>
                         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                       </button></DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="z-50 w-max min-w-max max-w-[calc(100vw-2rem)]">
@@ -897,11 +916,11 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                         {(authSession.userName || "U")[0]}
                       </AvatarFallback>
                       <AvatarBadge className={`${graphInitializationPending ? "bg-amber-500 animate-pulse motion-reduce:animate-none" : workspace.accessCapabilities.policyStage === "failed" ? "bg-destructive" : "bg-emerald-500"} ring-2 ring-background`}>
-                        <span className="sr-only">{graphInitializationPending ? "Graph loading in progress" : workspace.accessCapabilities.policyStage === "failed" ? "Graph loading failed" : "Logged in"}</span>
+                        <span className="sr-only">{graphInitializationPending ? "Graph loading in progress" : workspace.accessCapabilities.policyStage === "failed" ? "Personal initialization failed" : "Logged in"}</span>
                       </AvatarBadge>
                     </Avatar>
                   </span>} />
-                  <TooltipContent>{graphInitializationPending ? "Graph loading in progress" : workspace.accessCapabilities.policyStage === "failed" ? "Graph loading failed" : "Connected"}</TooltipContent>
+                  <TooltipContent>{graphInitializationPending ? "Graph loading in progress" : workspace.accessCapabilities.policyStage === "failed" ? `Personal initialization failed: ${workspace.accessCapabilities.policyError || "Verification unavailable"}` : "Connected"}</TooltipContent>
                 </Tooltip>
               </button>
             </DropdownMenuTrigger>
@@ -925,7 +944,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                       <div className="flex items-center gap-1.5 pt-0.5">
                         <span className={`size-1.5 rounded-full ${graphInitializationPending ? "bg-amber-500 animate-pulse motion-reduce:animate-none" : workspace.accessCapabilities.policyStage === "failed" ? "bg-destructive" : "bg-emerald-500"}`} />
                         <span className="text-[10px] text-muted-foreground uppercase font-mono font-medium tracking-wide">
-                          {workspace.accessCapabilities.policyStage === "ready" ? "Connected" : workspace.accessCapabilities.policyStage === "failed" ? "Graph loading failed" : "Graph loading in progress"}
+                          {workspace.accessCapabilities.policyStage === "ready" ? "Connected" : workspace.accessCapabilities.policyStage === "failed" ? `Initialization failed: ${workspace.accessCapabilities.policyError || "Unknown reason"}` : "Graph loading in progress"}
                         </span>
                       </div>
                     </div>
@@ -938,6 +957,10 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   </span>
                 </div>
               </DropdownMenuLabel>
+              {workspace.accessCapabilities.policyStage === "failed" && <DropdownMenuItem
+                onClick={() => void handleRetryPersonalInitialization()}
+                className="cursor-pointer gap-2"
+              ><RotateCw className="size-4"/><span>Retry initialization</span></DropdownMenuItem>}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => setLoginDialogOpen(true)}
@@ -949,20 +972,21 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={async () => {
-                  await clearPersonalAuthSession();
+                  cancelPersonalInitialization();
+                  disconnectPersonalAuthSession();
                   setAuthSession(null);
                   setPersonalPoliciesReady(true);
                   setPersonalPoliciesSeedError("");
                   setAuthRestoreIssue(false);
-                  // Back to a plain, personal-store-free page: drop History tracking and reload the public Datasites list.
+                  // Logout withdraws personal write capabilities; public reads and
+                  // the browser-owned Shared/courtesy server directory are unchanged.
                   historyVisitQueryRef.current = "";
                   historyVisitIdRef.current = "";
                   pendingHistoryVisitRef.current = null;
                   setHistoryBookmarkId("");
-                  setEndpointReloadRevision((r) => r + 1);
                   toast.add({
-                    title: "Logged out",
-                    description: "Personal graph server session cleared.",
+                    title: "Disconnected",
+                    description: "Personal access paused. Remembered credentials are kept for automatic reconnection.",
                     type: "info",
                   });
                   setBookmarkCheckRevision((r) => r + 1);
@@ -970,7 +994,24 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                 className="cursor-pointer text-destructive focus:text-destructive gap-2"
               >
                 <LogOut className="size-4" />
-                <span>Log out</span>
+                <span>Disconnect</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={async () => {
+                  cancelPersonalInitialization();
+                  clearPersonalAuthSession();
+                  setAuthSession(null);
+                  setPersonalPoliciesReady(true);
+                  setPersonalPoliciesSeedError("");
+                  setAuthRestoreIssue(false);
+                  setHistoryBookmarkId("");
+                  setBookmarkCheckRevision(r => r + 1);
+                  toast.add({ title: "Account forgotten", description: "Remembered personal credentials were erased from this browser.", type: "info" });
+                }}
+                className="cursor-pointer text-destructive focus:text-destructive gap-2"
+              >
+                <KeyRound className="size-4" />
+                <span>Forget Account</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1217,9 +1258,6 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   Cancel
                 </Button>
                 <div className="flex gap-2">
-                  <Button type="button" variant="secondary" disabled={loginTesting} onClick={handleTestConnection}>
-                    {loginTesting ? "Testing…" : "Test Connection"}
-                  </Button>
                   <Button type="submit" disabled={loginTesting}>
                     {loginTesting ? "Connecting…" : "Connect"}
                   </Button>

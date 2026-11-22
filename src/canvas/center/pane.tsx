@@ -1,6 +1,7 @@
 "use client";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ErrorDetails } from "@/components/ui/error-details";
+import { retryMaestroComponent } from "@/lib/maestro-component-retry";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { Ban } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -312,8 +313,8 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
               </div>
 
               {/* An active alphabet restriction must remain visible and toggleable even when
-                  subsequent filters eliminate its count or the alphabet preflight fails. */}
-              {workspaceTab === "browse" && centralTab === "results" && (alphabetPreflight === "available" || Boolean(alphabetIndex)) && (
+                  subsequent filters eliminate its count or the grouped count request fails. */}
+              {workspaceTab === "browse" && centralTab === "results" && (alphabetPreflight === "available" || alphabetPreflight === "checking" || Boolean(alphabetIndex)) && (
                 <div id="maestro-alphabet" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2" aria-label="Alphabetical browse by selected label properties">
                   {!isLoadingAlphabet && <IncompleteWidgetIndicator source="alphabet" />}
                   <ToggleGroup type="multiple" value={parseAlphabetSelections(alphabetIndex).map(value => value.replace(/^!/, ""))} onValueChange={() => {}} className="flex flex-wrap items-center gap-1">
@@ -332,7 +333,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                     </ToggleGroupItem>
                   ))}
                   </ToggleGroup>
-                  {isLoadingAlphabet && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Fetching alphabet" category="alphabet" clockScope="alphabet" requestWaves={26} /></span>}
+                  {isLoadingAlphabet && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Fetching alphabet" category="alphabet" clockScope="alphabet" requestWaves={1} /></span>}
                   
                 </div>
               )}
@@ -408,8 +409,8 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                       <Toggle pressed={querySourceFormat === "alphabet-xml"} onPressedChange={(pressed) => { if (pressed) { setQuerySourceFormat("alphabet-xml"); } }} className="rounded-none border-0 px-3 py-1.5 text-xs">Alphabet XML</Toggle>
                       <Toggle pressed={querySourceFormat === "alphabet-sparql"} onPressedChange={(pressed) => { if (pressed) { setQuerySourceFormat("alphabet-sparql"); } }} className="rounded-none border-0 px-3 py-1.5 text-xs">Alphabet SPARQL</Toggle>
                       {showResultBadges && <>
-                        <Toggle pressed={querySourceFormat === "list-values-xml"} onPressedChange={(pressed) => { if (pressed) { setQuerySourceFormat("list-values-xml"); } }} className="h-auto min-w-0 whitespace-normal rounded-none border-0 px-3 py-1.5 text-xs">List-Values XML</Toggle>
-                        <Toggle pressed={querySourceFormat === "list-values-sparql"} onPressedChange={(pressed) => { if (pressed) { setQuerySourceFormat("list-values-sparql"); } }} className="h-auto min-w-0 whitespace-normal rounded-none border-0 px-3 py-1.5 text-xs">List-Values SPARQL</Toggle>
+                        <Toggle pressed={querySourceFormat === "list-values-xml"} onPressedChange={(pressed) => { if (pressed) { setQuerySourceFormat("list-values-xml"); } }} className="h-auto min-w-0 whitespace-normal rounded-none border-0 px-3 py-1.5 text-xs">Merged Values XML</Toggle>
+                        <Toggle pressed={querySourceFormat === "list-values-sparql"} onPressedChange={(pressed) => { if (pressed) { setQuerySourceFormat("list-values-sparql"); } }} className="h-auto min-w-0 whitespace-normal rounded-none border-0 px-3 py-1.5 text-xs">Merged Values SPARQL</Toggle>
                       </>}
                       <Toggle pressed={querySourceFormat === "response"} onPressedChange={(pressed) => { if (pressed) { setQuerySourceFormat("response"); } }} className="rounded-none border-0 px-3 py-1.5 text-xs">FCT response</Toggle>
                     </ButtonGroup>
@@ -429,8 +430,8 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                     filename={querySourceFormat === "xml" ? "fct-query.xml"
                       : querySourceFormat === "sparql" ? "query.sparql"
                       : querySourceFormat === "alphabet-xml" ? "alphabet-query.xml"
-                      : querySourceFormat === "list-values-xml" && showResultBadges ? "results-list-values.xml"
-                      : querySourceFormat === "list-values-sparql" && showResultBadges ? "results-list-values.sparql"
+                      : querySourceFormat === "list-values-xml" && showResultBadges ? "results-merge-values.xml"
+                      : querySourceFormat === "list-values-sparql" && showResultBadges ? "results-merge-values.sparql"
                       : querySourceFormat === "response" ? "results-fct-response.xml"
                       : "alphabet-query.sparql"}
                   />
@@ -555,7 +556,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                     </Tooltip>
                   </ButtonGroup>
                 </div>
-                {searchError && endpointReadyForQuery && <ErrorDetails prefix="Results" error={searchError} className="mt-2" />}
+                {searchError && endpointReadyForQuery && <ErrorDetails prefix="Results" error={searchError} className="mt-2" onRetry={() => retryMaestroComponent("results")} />}
                 </>)}
               </div>}
             </CenterPaneBody>

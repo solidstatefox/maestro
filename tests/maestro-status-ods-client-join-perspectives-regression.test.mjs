@@ -32,6 +32,7 @@ const statusRows = [
 function statusHarness({match=['urn:A','urn:C'],incomplete=false, total=4}={}) {
   const personalQueries=[], remoteQueries=[], compilations=[];
   const mocks = {
+    '@/lib/constants/graphs':{ GRAPH:{STATUS:'status',SHACL_POLICIES:'shacl-policies'}, resolveGraph:(key,base)=>base+'/'+(key==='shacl-policies'?'shacl/policies':key) },
     '@/lib/client-personal-sparql': {
       personalContext: async () => ({base:personalBase,addr:`${personalBase}@https://demo.openlinksw.com/sparql`}),
       selectPersonal: async query => {
@@ -56,7 +57,7 @@ function statusHarness({match=['urn:A','urn:C'],incomplete=false, total=4}={}) {
     '@/lib/fct-sparql-translator': {compileFctXmlToSparql:() => ({})},
     '@/lib/client-provider-provenance': {isClientQueryBookmarked:async()=>true},
     '@/lib/upstream-error': {describeUpstreamError:()=>'',sanitizeUpstreamDiagnostic:x=>x},
-    '@/canvas/utils/fct-response': {parseFctResponse:()=>({}),parseListValuesXml:()=>new Map(),listValuesQueryClone:()=>''},
+    '@/canvas/utils/fct-response': {parseFctResponse:()=>({}),parseListValuesXml:()=>new Map(),mergeValuesQueryClone:()=>''},
   };
   // Compile an actual VALUES-headed source projection for the test transport.
   mocks['@/lib/fct-sparql-translator'].compileFctXmlToSparql = (...args) => {
@@ -97,6 +98,10 @@ test('Status refuses to silently truncate oversized personal graphs',async()=>{
 test('Perspective discovery uses bounded one-hop ontology closure and approved provider filtering',async()=>{
   const queries=[];
   const mocks={
+    '@/lib/constants/graphs':{ GRAPH:{SHACL_POLICIES:'shacl-policies',STATUS:'status'}, resolveGraph:(key,base)=>base+'/'+(key==='shacl-policies'?'shacl/policies':key) },
+    '@/lib/client-query-cache': {maestroQueryFetch:async()=>{
+      throw Error('Unexpected record-probe fetch during ontology-only discovery');
+    }},
     '@/lib/client-personal-sparql': {
       personalContext:async()=>({base:personalBase}),
       selectPersonal:async query=>{

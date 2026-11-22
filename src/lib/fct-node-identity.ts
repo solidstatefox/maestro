@@ -21,8 +21,15 @@ export type IdentifiedQueryTree<T extends IdentifiedQueryNode = IdentifiedQueryN
  * A modulo test fails for values such as 46 (1a); no candidate-by-candidate loop. */
 export function nextLetterLeadingFctCounter(n: number): number {
   if (!Number.isSafeInteger(n) || n < 10) throw new RangeError("Invalid FCT ID counter.");
-  let p = 36 ** Math.floor(Math.log(n) / Math.log(36)); if (p > n) p /= 36; else if (n >= 36 * p) p *= 36;
-  const next = n < 10 * p ? 10 * p : n; if (!Number.isSafeInteger(next)) throw new RangeError("FCT ID counter exhausted the safe integer range."); return next;
+  // Base-36 block boundaries are a, a0, a00, ... (decimal 10, 360,
+  // 12960, ...). Integer multiplication avoids floating-log rounding at
+  // powers of 36; at most 11 iterations cover Number.MAX_SAFE_INTEGER.
+  let place = 1;
+  while (place <= Math.floor(n / 36)) place *= 36;
+  const minimum = 10 * place;
+  const next = n < minimum ? minimum : n;
+  if (!Number.isSafeInteger(next)) throw new RangeError("FCT ID counter exhausted the safe integer range.");
+  return next;
 }
 
 /** A canonical base-36 FCT ID must begin with a letter (a-z). The initial
@@ -77,10 +84,14 @@ export function ensureFctQueryIds<T extends IdentifiedQueryNode>(tree: Identifie
   tree.children.forEach(collect);
   let counter = nextLetterLeadingFctCounter(Math.max(offset(tree.attributes.ctr), highestId + 1));
   const used = new Set<string>();
+  // Reuse one reserved-ID set across allocations. Rebuilding the union on
+  // each new node made normalizing a large query tree quadratic.
+  const unavailable = new Set(reserved);
   const allocate = (): string => {
-    const allocated = allocateLetterLeadingFctId(String(counter), "decimal", new Set([...reserved, ...used]));
+    const allocated = allocateLetterLeadingFctId(String(counter), "decimal", unavailable);
     counter = parseFctIdCounter(allocated.counter, "decimal");
     used.add(allocated.id);
+    unavailable.add(allocated.id);
     return allocated.id;
   };
   const take = (requested?: string): string => {
@@ -126,12 +137,14 @@ export function ensureFctQueryIds<T extends IdentifiedQueryNode>(tree: Identifie
   nextGroup = nextLetterLeadingFctCounter(nextGroup);
   nextRelation = nextLetterLeadingFctCounter(nextRelation);
   const assignedRids = new Set<string>();
+  const unavailableRids = new Set(allRids);
   const ensureRelations = (nodes: T[]): T[] => nodes.map((node) => {
     const attributes = { ...node.attributes };
     if (node.name === "property" || node.name === "property-of") {
       if (!isValidFctNodeId(attributes.rid) || assignedRids.has(attributes.rid)) {
-        const next = allocateLetterLeadingFctId(serializeFctIdCounter(nextRelation, "base36"), "base36", new Set([...allRids, ...assignedRids]));
+        const next = allocateLetterLeadingFctId(serializeFctIdCounter(nextRelation, "base36"), "base36", unavailableRids);
         attributes.rid = next.id;
+        unavailableRids.add(next.id);
         nextRelation = parseFctIdCounter(next.counter, "base36");
       }
       assignedRids.add(attributes.rid);

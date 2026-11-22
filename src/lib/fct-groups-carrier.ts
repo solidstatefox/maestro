@@ -37,6 +37,19 @@ export function findGroupCarrier(tree: FctQueryTree): GroupCarrier | null {
 }
 
 export function groupKeyFromCarrier(tree: FctQueryTree): string {
+  // An ancestor <a group="true"> is a viewer-plane group dimension. The
+  // derived FCT query will group the original ancestor population by values
+  // reached along the descendant getPath, never by an invented local edge.
+  const aliasGroup = (nodes: FctQueryNode[]): string | null => {
+    for (const node of nodes) {
+      if (node.name === "a" && node.attributes.group === "true") return `alias:${node.id}`;
+      const nested = aliasGroup(node.children);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  const alias = aliasGroup(tree.children);
+  if (alias) return alias;
   const scope = findGroupCarrier(tree);
   const selected = scope?.siblings.find((node) =>
     (node.name === "property" || node.name === "property-of") && node.attributes.group === "true");
@@ -129,4 +142,16 @@ export function ungroupForMembers(tree: FctQueryTree): FctQueryTree {
 
 export function groupSyntheticId(uri: string, direction: "forward" | "reverse"): string {
   return `${GROUP_PREFIX}${direction}-${encodeURIComponent(uri)}`;
+}
+
+/** Group selection is exclusive. Alias grouping stays on viewer-plane <a>;
+ * data-plane FCT clones strip that marker, and query/view identity survives. */
+export function markTransportedGroup(tree: FctQueryTree, anchorId: string | null): FctQueryTree {
+  const rewrite = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map(node => {
+    const attributes = {...node.attributes};
+    delete attributes.group;
+    if (anchorId && node.name === "a" && node.id === anchorId) attributes.group = "true";
+    return {...node, attributes, children:rewrite(node.children)};
+  });
+  return {...tree, children:rewrite(tree.children)};
 }

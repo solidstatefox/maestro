@@ -1,7 +1,8 @@
+import { withPersonalProxyCredentials } from "@/lib/client-personal-request";
 import { maestroLanguageHeader } from "./maestro-language";
 import { readMaestroConcurrency } from "./maestro-concurrency";
 import { maestroQueryClockScope } from "./maestro-query-execution-clock";
-import { unwrapMaestroQueryEvents } from "./client-query-events";
+import { subscribeMaestroQueryEvents } from "./client-query-events";
 import { setMaestroIncompleteResults } from "./maestro-incomplete-results";
 import { applyFctQueryTimeout, configuredTimeoutMs } from "./maestro-query-timeouts";
 /**
@@ -50,25 +51,74 @@ function rememberMemoryResponse(key: string, record: CachedResponseRecord): void
   memoryCacheBytes += size;
 }
 let dbPromise: Promise<IDBDatabase> | null = null;
+// A blocked IndexedDB upgrade/open cannot prevent any FCT request from
+// reaching the proxy. The cache is an optional accelerator, never a query gate.
+const CLIENT_CACHE_OPEN_TIMEOUT_MS = 1200;
+const CLIENT_CACHE_LOOKUP_TIMEOUT_MS = 400;
 
 function getDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
+  const attempt = new Promise<IDBDatabase>((resolve, reject) => {
     if (typeof window === "undefined" || !window.indexedDB) {
       reject(new Error("IndexedDB is not available"));
       return;
     }
-    const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+    let settled = false;
+    let request: IDBOpenDBRequest;
+    const deadline = setTimeout(() => finish(null, new Error("Query cache IndexedDB open timed out")), CLIENT_CACHE_OPEN_TIMEOUT_MS);
+    const finish = (db: IDBDatabase | null, error?: Error) => {
+      if (settled) {
+        // A browser may complete an open after our deadline. Do not leak a
+        // connection that could block another tab's database upgrade.
+        db?.close();
+        return;
+      }
+      settled = true;
+      clearTimeout(deadline);
+      if (error) reject(error);
+      else resolve(db!);
+    };
+    try {
+      request = window.indexedDB.open(DB_NAME, DB_VERSION);
+    } catch (error) {
+      finish(null, error instanceof Error ? error : new Error("IndexedDB open failed"));
+      return;
+    }
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: "key" });
-      }
+      if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME, { keyPath: "key" });
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB open failed"));
+    request.onsuccess = () => finish(request.result);
+    request.onerror = () => finish(null, request.error ?? new Error("IndexedDB open failed"));
+    request.onblocked = () => finish(null, new Error("Query cache IndexedDB open blocked"));
+  });
+  dbPromise = attempt.catch((error: unknown) => {
+    dbPromise = null; // an unavailable optional cache may be retried later
+    throw error;
   });
   return dbPromise;
+}
+
+/** Bound cache preflight separately from the actual query execution deadline.
+ * A slow/blocked IndexedDB read must fall through to the existing FCT proxy.
+ * Late cache results are ignored and must never replace a newer query. */
+function lookupCachedResponseWithDeadline(key: string, signal?: AbortSignal | null): Promise<Response | null> {
+  if (signal?.aborted) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let done = false;
+    const settle = (response: Response | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(deadline);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(response);
+    };
+    const onAbort = () => settle(null);
+    const deadline = setTimeout(() => settle(null), CLIENT_CACHE_LOOKUP_TIMEOUT_MS);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) { settle(null); return; }
+    void getClientCachedResponse(key).then(settle, () => settle(null));
+  });
 }
 
 export function computeClientCacheKey(url: string, init?: RequestInit): string | null {
@@ -85,7 +135,11 @@ export function computeClientCacheKey(url: string, init?: RequestInit): string |
     // Endpoint selection mutation should not be cached
     if ((bodyStr.includes('"selectEndpointId"') || bodyStr.includes('"selectEndpointUrl"'))) return null;
     const language = new Headers(init?.headers).get("x-maestro-language") ?? "";
-    return `POST::${url}::lang=${language}::${bodyStr}`;
+    // The FCT route now emits authoritative page labels for text and list
+    // results. A new cache namespace avoids replaying pre-fix URI-only cards
+    // from IndexedDB after logout/login (without clearing unrelated user data).
+    const responseRevision = url.includes("/proxy/api/fct") ? "fct-labels-v2::" : "";
+    return `POST::${responseRevision}${url}::lang=${language}::${bodyStr}`;
   }
   return null;
 }
@@ -169,7 +223,7 @@ export async function clearClientQueryCache(): Promise<void> {
 /** In-flight Maestro query operations, shared by query listeners and the Refresh/Abort control. */
 const pendingQueryControllers = new Set<AbortController>();
 export type PendingMaestroQuery = { id: number; label: string; state: "preparing" | "queued" | "active";
-  queueIndex: number; serverQueueIndex?: number; queueServer?: string; serverQueueLane?: "light" | "heavy"; serverQueueLaneIndex?: number };
+  queueIndex: number; serverQueueIndex?: number; queueServer?: string; serverQueueLane?: "light" | "heavy"; serverQueueLaneIndex?: number; serverQueueLaneNumber?: number; serverQueueLanePosition?: number; proxyDispatchConfirmed?: boolean };
 const pendingQueryDetails = new Map<AbortController, PendingMaestroQuery>();
 // Link the public request signal to its tracked controller so dispatch status
 // reflects the existing browser scheduler without creating a second queue.
@@ -181,16 +235,24 @@ const pendingQueryDetailListeners = new Set<(queries: PendingMaestroQuery[]) => 
 let lastPendingDetails: PendingMaestroQuery[] = [];
 function pendingDetailsEqual(a: readonly PendingMaestroQuery[], b: readonly PendingMaestroQuery[]): boolean {
   return a.length === b.length && a.every((item, index) =>
-    item.id === b[index].id && item.label === b[index].label && item.state === b[index].state && item.queueIndex === b[index].queueIndex && item.serverQueueIndex === b[index].serverQueueIndex && item.queueServer === b[index].queueServer);
+    item.id === b[index].id && item.label === b[index].label && item.state === b[index].state && item.queueIndex === b[index].queueIndex && item.serverQueueIndex === b[index].serverQueueIndex && item.queueServer === b[index].queueServer &&
+    item.serverQueueLane === b[index].serverQueueLane && item.serverQueueLaneIndex === b[index].serverQueueLaneIndex &&
+    item.serverQueueLaneNumber === b[index].serverQueueLaneNumber && item.serverQueueLanePosition === b[index].serverQueueLanePosition &&
+    item.proxyDispatchConfirmed === b[index].proxyDispatchConfirmed);
 }
 /** Render the authoritative scheduler's waiting order, not registration order.
  * Active/pre-dispatch entries have no queue position and follow the queued rows. */
 function orderedPendingQueryDetails(): PendingMaestroQuery[] {
   return [...pendingQueryDetails.values()].sort((a, b) => {
-    const aQueued = a.queueIndex > 0;
-    const bQueued = b.queueIndex > 0;
-    if (aQueued !== bQueued) return aQueued ? -1 : 1;
-    return aQueued ? a.queueIndex - b.queueIndex || a.id - b.id : a.id - b.id;
+    // Sort by *reported* stage then its own reported index; do not turn this
+    // presentation order into a fictitious combined queue position.
+    const stage = (item: PendingMaestroQuery) => item.serverQueueIndex && item.serverQueueIndex > 0 ? 0
+      : item.queueIndex > 0 ? 1 : item.proxyDispatchConfirmed ? 3 : 2;
+    const diff = stage(a) - stage(b);
+    if (diff) return diff;
+    const aPosition = a.serverQueueIndex && a.serverQueueIndex > 0 ? a.serverQueueIndex : a.queueIndex;
+    const bPosition = b.serverQueueIndex && b.serverQueueIndex > 0 ? b.serverQueueIndex : b.queueIndex;
+    return aPosition - bPosition || a.id - b.id;
   });
 }
 function notifyPendingQueryDetails() {
@@ -250,6 +312,7 @@ export function abortPendingMaestroQueries(): void {
     // Old request finalizers must not consume capacity in the next pipeline.
     browserQueueGeneration++;
     activeProxyRequests = 0;
+    activeBackgroundProxyRequests = 0;
   } finally {
     schedulerTearingDown = false;
     // The X must immediately revert to Refresh, even before abort finalizers run.
@@ -304,6 +367,13 @@ type ScheduledRequest = {
   abort: () => void;
 };
 let activeProxyRequests = 0;
+let activeBackgroundProxyRequests = 0;
+// A tab-shared telemetry SSE stream occupies one HTTP/1.1 connection.
+// Reserve another connection for a foreground Results/SPARQL request even when
+// all background facet/count/alphabet requests start earlier. Chrome generally
+// permits six connections per HTTP/1.1 origin. The Sheet's *lower* user limit
+// still applies; a one-connection setting cannot support preemption.
+const MAX_BROWSER_BACKGROUND_CONNECTIONS = 4;
 let browserQueueGeneration = 0;
 const requestQueue: ScheduledRequest[] = [];
 let schedulerTearingDown = false;
@@ -311,29 +381,16 @@ let schedulerTearingDown = false;
  * 0 means dispatched (or not yet admitted); positive positions are the
  * actual one-based waiting order after interactive-priority insertion. */
 function refreshPendingQueueIndexes(): void {
-  // There are two real scheduling stages: requests still waiting in the
-  // browser transport, and requests admitted to the proxy but waiting for its
-  // heavy/light slot. The latter already have authoritative proxy-wide
-  // positions. Merge those two disjoint waiting sets here (never in React)
-  // and give each visible pending item a *unique* one-based ordinal. Running
-  // requests and requests awaiting their first scheduling event have none.
+  // The only browser queue positions are indexes into the actual browser
+  // scheduler. Proxy positions are owned by the remote heavy/light scheduler,
+  // reported separately by telemetry. Never manufacture a cross-stage index.
   const browserPositions = new Map<AbortController, number>();
   requestQueue.forEach((job, index) => {
     if (job.owner) browserPositions.set(job.owner, index + 1);
   });
-  const waiting = [...pendingQueryDetails.entries()].flatMap(([controller, detail]) => {
-    if (detail.state === "active") {
-      return detail.serverQueueIndex && detail.serverQueueIndex > 0
-        ? [{ controller, stage: 0, position: detail.serverQueueIndex, id: detail.id }]
-        : [];
-    }
-    const browserPosition = browserPositions.get(controller);
-    return browserPosition ? [{ controller, stage: 1, position: browserPosition, id: detail.id }] : [];
-  }).sort((a, b) => a.stage - b.stage || a.position - b.position || a.id - b.id);
-  const displayPositions = new Map(waiting.map((item, index) => [item.controller, index + 1]));
   let changed = false;
   for (const [controller, detail] of pendingQueryDetails) {
-    const next = displayPositions.get(controller) ?? 0;
+    const next = detail.state === "queued" ? browserPositions.get(controller) ?? 0 : 0;
     if (detail.queueIndex !== next) {
       pendingQueryDetails.set(controller, { ...detail, queueIndex: next });
       changed = true;
@@ -352,13 +409,24 @@ function dispatchScheduledRequests(): void {
   for (let i = 0; i < requestQueue.length && activeProxyRequests < limit;) {
     const job = requestQueue[i];
     if (job.signal?.aborted) { requestQueue.splice(i, 1); job.abort(); continue; }
+    const backgroundLimit = limit <= 1 ? 1 : Math.min(limit - 1, MAX_BROWSER_BACKGROUND_CONNECTIONS);
+    if (job.background && activeBackgroundProxyRequests >= backgroundLimit) {
+      // A waiting foreground request can pass blocked background work. Never
+      // occupy the last browser network slot with another optional facet.
+      i++;
+      continue;
+    }
     requestQueue.splice(i, 1);
     refreshPendingQueueIndexes();
     const generation = browserQueueGeneration;
     activeProxyRequests++;
+    if (job.background) activeBackgroundProxyRequests++;
     void job.run().then(job.resolve, job.reject).finally(() => {
       job.signal?.removeEventListener("abort", job.abort);
-      if (generation === browserQueueGeneration) activeProxyRequests = Math.max(0, activeProxyRequests - 1);
+      if (generation === browserQueueGeneration) {
+        activeProxyRequests = Math.max(0, activeProxyRequests - 1);
+        if (job.background) activeBackgroundProxyRequests = Math.max(0, activeBackgroundProxyRequests - 1);
+      }
       dispatchScheduledRequests();
     });
   }
@@ -381,6 +449,9 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
       dispatchScheduledRequests();
     };
     const clockScope = maestroQueryClockScope(init?.headers ? new Headers(init.headers) : undefined);
+    const scopedHeader = new Headers(init?.headers).get("x-maestro-clock-component") ?? "";
+    const componentClockScope = scopedHeader.startsWith("component:") && scopedHeader.length <= 512
+      ? scopedHeader as `component:${string}` : null;
     const owner = init?.signal ? pendingQueryOwnerBySignal.get(init.signal) : undefined;
     const job: ScheduledRequest = { background, owner, signal: init?.signal, run: () => {
       started = true;
@@ -391,17 +462,38 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
         refreshPendingQueueIndexes();
       }
       const headers = new Headers(init?.headers);
-      headers.set("x-maestro-query-events", "1");
-      const onServerQueuePosition = (queueIndex: number, server: string, lane?: "light" | "heavy", laneIndex?: number) => {
+      const telemetryId = crypto.randomUUID();
+      headers.set("x-maestro-telemetry-id", telemetryId);
+      const onServerQueuePosition = (queueIndex: number, server: string, lane?: "light" | "heavy", laneIndex?: number,
+        laneNumber?: number, lanePosition?: number) => {
         if (!owner) return;
         const item = pendingQueryDetails.get(owner);
         if (!item) return;
         pendingQueryDetails.set(owner, { ...item,
-          serverQueueIndex: queueIndex, queueServer: server, serverQueueLane: lane, serverQueueLaneIndex: laneIndex, state: "active" });
+          serverQueueIndex: queueIndex, queueServer: server, serverQueueLane: lane, serverQueueLaneIndex: laneIndex,
+          serverQueueLaneNumber: laneNumber, serverQueueLanePosition: lanePosition,
+          proxyDispatchConfirmed: queueIndex === 0, state: "active" });
         refreshPendingQueueIndexes();
+        // Proxy position and lane can change without any browser waiting index
+        // changing. Publish the authoritative telemetry update independently.
+        notifyPendingQueryDetails();
       };
-      return fetch(input, { ...init, headers }).then(response =>
-        unwrapMaestroQueryEvents(response, clockScope, init?.signal, onServerQueuePosition));
+      return (async () => {
+        // The independent SSE subscription is ready before dispatch, so the
+        // first queue/dispatch event cannot race ahead of its listener.
+        const channel = await subscribeMaestroQueryEvents(telemetryId, clockScope,
+          init?.signal, onServerQueuePosition, componentClockScope).catch(() => null);
+        if (channel) headers.set("x-maestro-telemetry-stream-id", channel.streamId);
+        try {
+          // The response remains ordinary FCT XML or SPARQL JSON/RDF; never
+          // consume it as a telemetry stream and never wrap it in JSON.
+          return await fetch(input, { ...init, headers });
+        } finally {
+          // Release only this request's clocks/listener, not the shared
+          // browser-tab telemetry connection used by concurrent FCT requests.
+          channel?.close();
+        }
+      })();
     }, resolve, reject, abort };
     if (init?.signal?.aborted) { reject(new DOMException("Query canceled", "AbortError")); return; }
     init?.signal?.addEventListener("abort", abort, { once: true });
@@ -421,13 +513,20 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
   });
 }
 
-/** Data-request errors are diagnostic, not endpoint connectivity status. */
+/** A fresh FCT transport outcome is evidence about the *actual* graph server.
+ * Proxy 5xx application errors do not imply a transport outage, so inspect the
+ * small failure body before emitting a health observation. Cached responses
+ * and optional status projections are deliberately excluded. */
 export const MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS = "maestro:graph-server-request-success";
+export const MAESTRO_GRAPH_SERVER_TRANSPORT_FAILURE = "maestro:graph-server-transport-failure";
+const CONNECTIVITY_ERROR = /\b(?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_HAS_EXPIRED|ERR_TLS_[A-Z_]+)\b|connect(?:ion)? (?:timed? ?out|refused)|unable to get local issuer certificate/i;
 async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const destination = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  const scoped = await withPersonalProxyCredentials(destination, init);
+  init = scoped.init;
+
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const body = typeof init?.body === "string" ? init.body : "";
-  // Most FCT requests use JSON.stringify({ queryXml }). Regexing the JSON
-  // directly misses addr=\"...\" and discards valid success evidence.
   let fctXml = body;
   if (body.trimStart().startsWith("{")) {
     try {
@@ -438,17 +537,25 @@ async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit)
   const isFctQuery = /\/proxy\/api\/fct(?:[/?]|$)/.test(url) &&
     (init?.method ?? "GET").toUpperCase() === "POST" &&
     /<(?:(?:[A-Za-z][\w.-]*):)?query(?:\s|>)/.test(fctXml);
-  // A query's addr is authoritative. Don't mark an unrelated personal
-  // SPARQL endpoint healthy because an FCT proxy request completed.
   const isStatusProjection = /<view\b[^>]*\btype\s*=\s*["']list-status["']/i.test(fctXml);
   const address = isFctQuery && !isStatusProjection ? fctXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "" : "";
   const endpointUrl = address.includes("@") ? address.slice(address.indexOf("@") + 1).replace(/&amp;/g, "&") : "";
   const response = await scheduledGraphFetch(input, init);
-  if (!init?.signal?.aborted && typeof window !== "undefined") {
-    // A proxy cache hit and a federated Status projection do not prove the
-    // underlying graph server responded to this request.
-    if (response.status === 200 && endpointUrl && response.headers.get("X-Maestro-Cache") !== "HIT") {
+  if (!init?.signal?.aborted && typeof window !== "undefined" && endpointUrl &&
+      response.headers.get("X-Maestro-Cache") !== "HIT" &&
+      response.headers.get("X-Maestro-Client-Cache") !== "HIT") {
+    if (response.status === 200) {
       window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, { detail: { endpointUrl } }));
+    } else if (response.status >= 500) {
+      // Only read the unsuccessful response's clone. It must remain available
+      // in full to the FCT XML/error renderer. No success-body processing.
+      const failureBody = await response.clone().text().catch(() => "");
+      const diagnostic = failureBody.slice(0, 3072);
+      if (CONNECTIVITY_ERROR.test(diagnostic)) {
+        window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_TRANSPORT_FAILURE, {
+          detail: { endpointUrl, status: response.status, diagnostic: diagnostic.slice(0, 1024), at: Date.now() },
+        }));
+      }
     }
   }
   return response;
@@ -462,9 +569,30 @@ async function maestroQueryFetchImpl(input: RequestInfo | URL, init?: RequestIni
   const timeoutMs = configuredTimeoutMs(source);
   if (!timeoutMs) return monitoredProxyFetch(input, { ...init, headers });
   headers.set("x-maestro-query-timeout-ms", String(timeoutMs));
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method === "POST" && /\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) {
+    // The proxy starts the upstream deadline after its heavy/light scheduler
+    // grants a slot. A browser AbortSignal.timeout started here would charge
+    // the *browser queue* and the telemetry handshake against the query budget,
+    // yielding spurious `signal timed out` errors on busy Personal counts.
+    // Preserve the caller's AbortSignal for cancellation/navigation.
+    if (url.includes("/proxy/api/fct") && typeof init?.body === "string") {
+      let body = init.body;
+      if (body.trimStart().startsWith("{")) {
+        try {
+          const parsed = JSON.parse(body) as Record<string, unknown>;
+          if (typeof parsed.queryXml === "string") {
+            parsed.queryXml = applyFctQueryTimeout(source, parsed.queryXml);
+            body = JSON.stringify(parsed);
+          }
+        } catch { /* unmodified body is validated by FCT route */ }
+      } else body = applyFctQueryTimeout(source, body);
+      return monitoredProxyFetch(input, { ...init, body, headers });
+    }
+    return monitoredProxyFetch(input, { ...init, headers });
+  }
   const signal = init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
-  // The timeout signal is a new AbortSignal. Preserve the existing request's
-  // tracked owner so the scheduler (and X/Refresh hover) can attribute it.
   const owner = init?.signal ? pendingQueryOwnerBySignal.get(init.signal) : undefined;
   if (owner) pendingQueryOwnerBySignal.set(signal, owner);
   try { return await monitoredProxyFetch(input, { ...init, headers, signal }); }
@@ -518,12 +646,15 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
       (/<(?:[\w.-]+:)?status\b/i.test(init.body) || init.body.includes("urn:maestro:providers:"))) {
     return track(await monitoredProxyFetch(input, init));
   }
+  const scoped = await withPersonalProxyCredentials(urlStr, init);
+  if (scoped.authenticated) return track(await monitoredProxyFetch(input, scoped.init));
   const key = computeClientCacheKey(urlStr, init);
   if (!key) {
     return track(await monitoredProxyFetch(input, init));
   }
 
-  const cached = await getClientCachedResponse(key);
+  const cached = requestHeaders.get("x-maestro-component-retry") === "1" ? null
+    : await lookupCachedResponseWithDeadline(key, init?.signal);
   if (cached) {
     return track(cached);
   }

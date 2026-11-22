@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /**
  * Shapes-driven Kinds discovery at login deliberately uses ordinary SPARQL.
  * There is no FCT <query>/<view> (and hence no browsed virtual data graph or
@@ -34,7 +35,7 @@ export async function loadMaestroKinds(signal?: AbortSignal): Promise<void> {
     // registered mui:KindProvider resources participate without a build step.
     // OPTIONAL retains provider-declared text/blank Kinds without regexes.
     const query = `SELECT DISTINCT ?provider ?kind ?pattern WHERE {
-      GRAPH ${iri(`${ctx.base}/shacl/policies`)} {
+      GRAPH ${iri(`${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`)} {
         ?provider ${iri(RDF_TYPE)} ${iri(`${MUI}KindProvider`)} ;
                   ${iri(`${MUI}widget`)} ?kind .
         ?kind ${iri(RDF_TYPE)} ${iri(`${MUI}Kind`)} .

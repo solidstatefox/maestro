@@ -16,7 +16,8 @@ import { readRecordGraphAuthors } from "@/lib/record-authors";
 import { recordGraphFctQuery, loadCompleteRecordGraphList } from "@/lib/record-graph-marshalling";
 import { readRecordGraphDiscoveryLimits } from "@/lib/record-graph-limits";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
-import { downloadRecordDescribeSnapshot } from "@/canvas/right/record";
+import { downloadRecordDescribeSnapshot, recordDownloadTitle } from "@/canvas/right/record";
+import type { RecordExportFormat } from "@/canvas/right/record-export";
 import { transformMaestroRecordXslt } from "@/lib/maestro-xslt";
 import { queryDigest } from "@/canvas/controllers/personal-record-status";
 import type { RecordPolicyOption } from "@/canvas/right/format";
@@ -398,7 +399,7 @@ export function useRecordPivotWorkspace(
     describedRoleCount: describedProperties.filter(r => r.direction === "property-of").length,
     describedRoleRows: visible.filter(r => r.direction === "property-of"),
     displayedRecord: describedRecord, displayedRecordPage: page, displayedRecordPageCount: pageCount,
-    downloadRecordDescribe: () => downloadRecordDescribeSnapshot(snapshot, currentRecordDescriptionKey, selectedUri),
+    downloadRecordDescribe: (format: RecordExportFormat = "ntriples") => downloadRecordDescribeSnapshot(snapshot, currentRecordDescriptionKey, selectedUri, format, recordDownloadTitle(describedRecord, selectedUri)),
     formattedRecordButtonsHtml: own.formattedRecordButtonsHtml,
     formattedRecordContainerRef: own.formattedRecordContainerRef,
     invokeRecordService: async () => { /* Services are never invoked against session 0 from a pivot. */ },

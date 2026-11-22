@@ -1,6 +1,7 @@
 import { annotateMaestroRecordRdfa } from "@/lib/maestro-record-rdfa";
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 import { snapshotFctQueryXml } from "@/lib/fct-query-api";
+import { executeRecordXsltSandboxQueries } from "@/lib/record-xslt-sparql-sandbox";
 
 /** Independent, bounded client-memory cache for completed Record XSLT output.
  * Identity includes the exact stylesheet, Record, FCT response, live query and
@@ -106,8 +107,21 @@ export async function transformMaestroRecordXslt(
   }
 
 
-  // Cache the complete *rendered* markup, not the RDF query or JSX portals.
-  // Rebuild DOM on a hit so pagination and delegated handlers remain isolated.
+  // Provider-authored SPARQL is evaluated in the generic read-only browser
+  // sandbox before rendering. This is an explicit two-pass XSLT protocol:
+  // the provider emits mctx:requests, Maestro executes the bounded SELECTs,
+  // then supplies their RDF bindings to that same XSLT. No EURIO predicates
+  // are hardcoded into the generic Record service.
+  const phaseParam = Array.from(stylesheet.getElementsByTagNameNS("http://www.w3.org/1999/XSL/Transform", "param"))
+    .some(node => node.getAttribute("name") === "maestroPhase");
+  if (phaseParam) {
+    const planned = await transformWithMaestroSaxon(stylesheetText, new XMLSerializer().serializeToString(envelope),
+      { recordUri, sandboxPhase: "queries", signal, outputLimit: 160_000 });
+    const enrichment = await executeRecordXsltSandboxQueries(planned, queryDocument, describedRecord, signal);
+    if (enrichment) envelope.documentElement.appendChild(envelope.importNode(enrichment, true));
+  }
+  // Cache only after enrichment: newly changed RDF labels must not reuse
+  // HTML produced from stale sandbox results.
   const sourceXml = new XMLSerializer().serializeToString(envelope);
   const cacheKey = `${recordUri.length}:${recordUri}${stylesheetText.length}:${stylesheetText}${sourceXml}`;
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");

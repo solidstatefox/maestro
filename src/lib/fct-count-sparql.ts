@@ -1,4 +1,5 @@
 import { effectiveMaestroLanguage, validMaestroLanguage } from "./maestro-language";
+import { inspectFctValueReferences, type ReferenceNode } from "./fct-value-references";
 import { MAESTRO_KIND_IDS, normalizeMaestroKind, maestroKindSparql } from "./maestro-kinds";
 import { ALL_GRAPHS } from "./graph-address-mode";
 import type { FctQueryNode, FctQueryTree } from "./fct-query";
@@ -6,7 +7,14 @@ import { normalizeFctValue } from "./fct-value-policy";
 import { buildVirtuosoFullTextExpression } from "./virtuoso-full-text";
 import { guardedNumericRangeFilter, numericFacetBinding, NUMERIC_FACET_PROJECTION } from "./virtuoso-numeric-coercion";
 
+type CountReferenceResolver = {
+  rootId: string;
+  subjects: ReadonlyMap<string, string>;
+  omitted: ReadonlySet<string>;
+  buildPopulation: (targetId: string, valueId: string, inherited: ReadonlySet<string>, member: string) => string;
+};
 type CompilerState = {
+  references?: CountReferenceResolver;
   nextVariable: number;
   viewVariable: string | null;
   patterns: string[];
@@ -53,7 +61,21 @@ function nextVariable(state: CompilerState): string {
 }
 
 function appendValueFilter(node: FctQueryNode, subject: string, state: CompilerState): void {
-  if (node.attributes.enabled === "false") return;
+  if (node.attributes.enabled === "false" || state.references?.omitted.has(node.id)) return;
+  if (node.attributes.from !== undefined || node.attributes.fromView !== undefined) {
+    const from = node.attributes.from;
+    if (from !== undefined) {
+      const name = from === state.references?.rootId ? "?fct0" : state.references?.subjects.get(from);
+      if (!name) state.errors.push(`Malformed FCT Query: unknown from reference "${from}".`);
+      else state.patterns.push(`FILTER (BOUND(${name}) && sameTerm(${subject}, ${name}))`);
+    } else {
+      if (!state.references) { state.errors.push("Missing fromView count compiler context."); return; }
+      const member = `?maestroPopulation${state.nextVariable++}`;
+      state.patterns.push(state.references.buildPopulation(node.attributes.fromView!, node.id, state.references.omitted, member));
+      state.patterns.push(`FILTER (sameTerm(${subject}, ${member}))`);
+    }
+    return;
+  }
   const start = node.attributes.rangeStart?.trim();
   const end = node.attributes.rangeEnd?.trim();
   if (start !== undefined || end !== undefined) {
@@ -135,7 +157,7 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
       const branches: string[] = [];
       for (const member of members) {
         const branchState: CompilerState = { nextVariable: base, viewVariable: state.viewVariable,
-          patterns: [], errors: state.errors, relationBindings: new Map(state.relationBindings) };
+          patterns: [], errors: state.errors, relationBindings: new Map(state.relationBindings), references: state.references };
         compileNodes([{ ...member, attributes: Object.fromEntries(Object.entries(member.attributes).filter(([key]) => key !== "uid")) }], subject, branchState);
         if (branchState.viewVariable) state.viewVariable = branchState.viewVariable;
         next = Math.max(next, branchState.nextVariable);
@@ -154,6 +176,8 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
       case "property":
       case "property-of": {
         if (node.attributes.derive === "regex") {
+          const reference = state.references?.subjects.get(node.id);
+          if (reference) state.patterns.push(`BIND(${subject} AS ${reference})`);
           const source = state.relationBindings.get(node.attributes.pid || "");
           const pattern = node.attributes.pattern || "";
           const capture = node.attributes.capture || "";
@@ -161,9 +185,20 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
             state.errors.push("Derived regex facet is missing a bound spawning facet or a valid capture.");
             break;
           }
+          const sourceValuePredicate = node.attributes.sourceValuePredicate || "";
+          const predicate = sourceValuePredicate ? iriTerm(sourceValuePredicate) : null;
+          if (sourceValuePredicate && !predicate) {
+            state.errors.push("Derived regex sourceValuePredicate must be a valid RDF predicate IRI.");
+            break;
+          }
+          const lexicalSource = predicate ? nextVariable(state) : source;
+          if (predicate) {
+            state.patterns.push(`${source} ${predicate} ${lexicalSource} .`);
+            state.patterns.push(`FILTER (isLiteral(${lexicalSource}))`);
+          }
           const related = nextVariable(state);
-          state.patterns.push(`FILTER (REGEX(STR(${source}), "${escapeSparqlString(pattern)}"))`);
-          state.patterns.push(`BIND(REPLACE(STR(${source}), "${escapeSparqlString(pattern)}", "$${capture}") AS ${related})`);
+          state.patterns.push(`FILTER (REGEX(STR(${lexicalSource}), "${escapeSparqlString(pattern)}"))`);
+          state.patterns.push(`BIND(REPLACE(STR(${lexicalSource}), "${escapeSparqlString(pattern)}", "$${capture}") AS ${related})`);
           if (node.attributes.rid) state.relationBindings.set(node.attributes.rid, related);
           compileNodes(node.children, related, state);
           break;
@@ -174,6 +209,7 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
           break;
         }
         const related = nextVariable(state);
+        const reference = state.references?.subjects.get(node.id);
         if (node.attributes.rid) state.relationBindings.set(node.attributes.rid, related);
         const relationshipPattern = node.name === "property"
           ? `${subject} ${predicate} ${related} .`
@@ -185,6 +221,7 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
           break;
         }
         state.patterns.push(relationshipPattern);
+        if (reference) state.patterns.push(`BIND(${node.name === "property-of" ? related : subject} AS ${reference})`);
         // Candidate facet counts must mirror the click action: the candidate
         // relationship constrains the current focus resources, so count the
         // distinct active-view variable rather than every related object. A
@@ -237,6 +274,11 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
         }
         break;
       }
+      case "a":
+        // <a> is a viewer-only transported facet descriptor. The existing
+        // population is unchanged by its presence; only explicit alias
+        // projection requests resolve the referenced relationship path.
+        break;
       default:
         state.errors.push(`The FCT <${node.name}> node is not supported by the count-query compiler.`);
     }
@@ -253,12 +295,47 @@ export type FacetCountExtension = {
 
 /** Compile the app's supported FCT query-tree subset directly to a scalar SPARQL count. */
 export function buildFctCountSparql(tree: FctQueryTree, extension?: FacetCountExtension, kindDirection?: "property" | "role", probeKind?: string, temporalPredicate?: string, effectiveLanguage = effectiveMaestroLanguage()): string | null {
+  // The scalar/count compiler must honor the same declarative node references
+  // as the Results compiler. Otherwise a valid from/fromView would silently
+  // yield an unrelated count or disable every numeric-domain preflight.
+  const { byId, referencedSubjects } = inspectFctValueReferences(tree as ReferenceNode);
+  const rootId = tree.attributes.id;
+  const subjects = new Map([...referencedSubjects].map(([id, name]) => [id, `?${name}`]));
+  const graphAddress = tree.attributes.addr ?? "";
+  const graphDelimiter = graphAddress.indexOf("@");
+  const scopedGraph = graphDelimiter >= 0 ? graphAddress.slice(0, graphDelimiter).trim() : "";
+  const buildPopulation: CountReferenceResolver["buildPopulation"] = (targetId, valueId, inherited, member) => {
+    if (inherited.has(valueId) || inherited.size > 20) throw new Error(`Malformed FCT Query: cyclic fromView reference at ${valueId}.`);
+    if (!byId.has(targetId)) throw new Error(`Malformed FCT Query: missing fromView node "${targetId}".`);
+    const omitted = new Set([...inherited, valueId]);
+    const clone = structuredClone(tree);
+    const relocatedView: FctQueryNode = { id: "", name: "view", attributes: { type: "list" }, children: [] };
+    const relocate = (node: FctQueryTree | FctQueryNode) => {
+      node.children = node.children.filter(child => child.name !== "view");
+      for (const child of node.children) relocate(child);
+      const id = "id" in node ? node.id : node.attributes.id;
+      if (id === targetId) node.children.push(structuredClone(relocatedView));
+    };
+    relocate(clone);
+    const inner: CompilerState = {nextVariable: 1, viewVariable: null, patterns: [], errors: [],
+      relationBindings: new Map(), references: {rootId, subjects, omitted, buildPopulation}};
+    compileNodes(clone.children, "?fct0", inner);
+    if (inner.errors.length) throw new Error(inner.errors.join(" "));
+    if (!inner.viewVariable) throw new Error(`Malformed FCT Query: fromView target "${targetId}" has no population.`);
+    if (!inner.patterns.some(pattern => /(?:\s|^)<[^>]+>\s|bif:contains/.test(pattern)))
+      inner.patterns.unshift("?fct0 ?maestroAnyPredicate ?maestroAnyValue .");
+    const body = inner.patterns.join("\n    ");
+    const scopedBody = scopedGraph && scopedGraph !== ALL_GRAPHS
+      ? `GRAPH ${iriTerm(scopedGraph)} {\n      ${body}\n    }` : body;
+    return `{ SELECT DISTINCT (${inner.viewVariable} AS ${member}) WHERE {\n    ${scopedBody}\n  } }`;
+  };
   const state: CompilerState = {
     nextVariable: 0,
     viewVariable: null,
     patterns: [],
     errors: [],
     relationBindings: new Map(),
+    references: {rootId, subjects, omitted:new Set(), buildPopulation},
   };
   const root = "?fct0";
   state.nextVariable = 1;

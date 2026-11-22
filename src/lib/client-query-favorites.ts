@@ -170,7 +170,7 @@ async function postFavorites(request: Request, ctx: PersonalContext) {
       if (!historyId || typeof body.stateUrl !== "string") return json({ error: "A History item ID and state URL are required." }, { status: 400 });
       const stateUrl = body.stateUrl.trim();
       if (stateUrl && !/^https?:\/\//i.test(stateUrl)) return json({ error: "The History state URL must use HTTP or HTTPS." }, { status: 400 });
-      await writePersonal(`DELETE { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ?old } } INSERT { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ${sparqlString(stateUrl)} } } WHERE { OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ?old } } }`);
+      await writePersonal(`DELETE { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ?old } } INSERT { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ${sparqlString(stateUrl)} } } WHERE { OPTIONAL { GRAPH ${graph} { ${iri(historyId)} <${historyState}> ?old } } FILTER(!BOUND(?old) || STR(?old) != ${sparqlString(stateUrl)}) }`);
       return json({ updated: true, historyId });
     }
 

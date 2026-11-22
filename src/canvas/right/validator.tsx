@@ -27,7 +27,14 @@ export async function validateRecordSnapshot(
     signal?: AbortSignal,
   ): Promise<ShaclValidationReport> {
     const xml = new DOMParser().parseFromString(snapshot.xml, "application/xml");
-    if (xml.querySelector("parsererror")) throw new Error("Cannot validate malformed Record DESCRIBE XML.");
+    const parserError = xml.querySelector("parsererror");
+    if (parserError) throw new Error(`Cannot validate malformed Record DESCRIBE XML.
+Parser: ${parserError.textContent ?? "Unknown XML parse error"}
+Snapshot URI: ${snapshot.uri}
+Snapshot key: ${snapshot.key}
+Snapshot complete: ${!snapshot.incomplete}
+Raw DESCRIBE XML (verbatim):
+${snapshot.xml}`);
     const ns = "http://openlinksw.com/services/facets/1.0/";
     const triples = Array.from(xml.getElementsByTagNameNS(ns, "row")).flatMap((row) => {
       const cells = Array.from(row.getElementsByTagNameNS(ns, "column"));

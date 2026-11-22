@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Read-only provider and policy diagnostic inventory. Personal RDF is the
  * authority. A missing SHACL ValidationReport is inconclusive (amber), never
  * inferred as passing from approval, presence or type alone. */
@@ -14,7 +15,7 @@ export type ProviderDiagnostic = {
 };
 export async function readClientProviderDiagnostics(signal?: AbortSignal): Promise<ProviderDiagnostic[]> {
   const ctx = await personalContext();
-  const graph = `${ctx.base}/shacl/policies`, otcGraph = `${ctx.base}/otc/transcoders`, approvalGraph = `${ctx.base}#policy-approvals`;
+  const graph = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`, otcGraph = `${resolveGraph(GRAPH.OTC_TRANSCODERS, ctx.base)}`, approvalGraph = `${resolveGraph(GRAPH.POLICY_APPROVALS, ctx.base)}`;
   // Provider definitions are seeded in both the SHACL policy graph and the
   // OTC provider graph; curators are also providers via their ontology class.
   // SHACL ValidationReport is not automatically persisted by a validator.

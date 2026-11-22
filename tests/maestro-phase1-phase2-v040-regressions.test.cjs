@@ -67,7 +67,7 @@ test('fullscreen Record actions are independent and popup layers above explorer'
 });
 
 test('Place hero scales without cropping; map and property groups are bounded', () => {
-  const ttl = read('graph/maestro-dbpedia-policies.ttl');
+  const ttl = read('graph/dbpedia/maestro-dbpedia-policies.ttl');
   const groups = read('src/components/ui/record-value-pages.tsx');
   assert.match(ttl, /object-contain/);
   assert.match(ttl, /zoom="9"/);

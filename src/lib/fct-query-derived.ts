@@ -24,6 +24,8 @@ type GroupByOption = {
   nodeId: string;
   memberBindingNodeId?: string;
   ancestorRole?: boolean;
+  anchorId?: string;
+  parentId?: string;
 };
 export type DistinctCountKind = "property" | "class" | "role" | "value";
 const COUNT_QUERY_LIMIT = 1000;
@@ -265,6 +267,62 @@ function findQueryView(nodes: FctQueryNode[]): FctQueryNode | null {
  * Each group's members are then built by createGroupMemberQuery, which clones
  * the source query, binds the heading value to the property and keeps the view
  * on the result resources. */
+/** Project the ancestor population from a transported path, using original
+ * relationship IDs. This remains a derived FCT query; the live <view> never
+ * leaves its focus. Both heading COUNT and member SELECT run server-side. */
+function projectTransportedGroup(
+  source: FctQueryTree, option: GroupByOption,
+  value?: QueryResultValue, paging?: {limit:number;offset:number},
+): FctQueryTree {
+  if (!option.anchorId || !option.parentId) throw new Error("A transported group needs its anchor and parent identities.");
+  const clean = ungroupForMembers(source);
+  let originalView: FctQueryNode | undefined;
+  const stripView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap(node => {
+    if (node.name === "view") { originalView = node; return []; }
+    return [{...node,children:stripView(node.children)}];
+  });
+  const contents = stripView(clean.children);
+  if (!originalView) throw new Error("The transported group requires an active view.");
+  const isValues = value === undefined;
+  const view: FctQueryNode = { ...originalView, attributes: {
+    ...originalView.attributes, type: FCT_VIEW_TYPES.LIST,
+    sort: isValues ? "count" : "",
+    limit: String(paging?.limit ?? (isValues ? 30 : Number(originalView.attributes.limit) || 100)),
+    offset: String(paging?.offset ?? 0),
+    ...(isValues ? { transportedGroupTarget: option.nodeId } : {}),
+  }, children: [] };
+  // A remote grouping target binds the original relation from the ancestor
+  // path. Its attribute never enters the live query and is validated by the
+  // FCT compiler's explicit derived-query permission.
+  const selected = value ? groupValueBinding(value) : undefined;
+  const selectedValue: FctQueryNode | undefined = selected ? {
+    id: `transported-group-value-${option.nodeId}`,
+    name: "value", attributes: {...(selected.datatype ? {datatype:selected.datatype} : {}),
+      ...(selected.lang ? {"xml:lang":selected.lang} : {})},
+    text:selected.text, children:[],
+  } : undefined;
+  let targetSeen = false;
+  let parentSeen = false;
+  const project = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map(node => {
+    let children = project(node.children);
+    const attrs = {...node.attributes};
+    if (node.id === option.nodeId && (node.name === "property" || node.name === "property-of")) {
+      targetSeen = true;
+      if (isValues) attrs.group = "true";
+      else children = [...children.filter(child => child.name !== "value"), selectedValue!];
+    }
+    if (node.id === option.parentId) {
+      parentSeen = true;
+      children.push(view);
+    }
+    return {...node, attributes:attrs, children};
+  });
+  let children = project(contents);
+  if (option.parentId === clean.attributes.id) { parentSeen = true; children = [...children,view]; }
+  if (!targetSeen || !parentSeen) throw new Error("The transported group path is no longer in the live FCT query.");
+  return {...clean, children};
+}
+
 export function createGroupValuesQuery(
   sourceTree: FctQueryTree,
   option: GroupByOption,
@@ -274,6 +332,7 @@ export function createGroupValuesQuery(
   // headings with the *same derived FCT query* as the corresponding Personal
   // facet. This is the working pre-grouped-LIST contract: the value/count
   // pairs on the left and in the center are the same population.
+  if (option.anchorId) return projectTransportedGroup(sourceTree, option, undefined, paging);
   const clean = ungroupForMembers(sourceTree);
   const selected = findQueryNode(clean.children, option.nodeId);
   let groups: FctQueryTree;
@@ -306,6 +365,7 @@ export function createGroupMemberQuery(
   option: GroupByOption,
   groupValue: QueryResultValue,
 ): FctQueryTree {
+  if (option.anchorId) return projectTransportedGroup(sourceTree, option, groupValue);
   let tree: FctQueryTree = ungroupForMembers({
     ...sourceTree,
     attributes: { ...sourceTree.attributes },

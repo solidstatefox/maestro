@@ -1,10 +1,11 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 /** A neutral host for approved, SHACL-applicable facet presentation providers.
  * Provider XSLT owns shapes, ordering, palette, labels, controls and geometry.
  * The host permits one safe interaction: delegating an RDF-term checkbox toggle.
  */
-import { useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { readClientPolicyApprovals } from "@/lib/client-policy-approvals";
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
@@ -15,16 +16,17 @@ import { InputGroup, InputGroupAddon, InputGroupText } from "@/components/ui/inp
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ChevronDown } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Slider } from "@/components/ui/slider";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
 const validIri = (value: string) => value.length > 0 && value.length <= 4096 && /^[a-z][a-z0-9+.-]*:[^\s<>\"{}|^`\\]+$/i.test(value);
 const icons = new Set<string>(iconNames);
-type Provider = { uri: string; label: string; icon: string; stylesheet: string };
+type Provider = { uri: string; label: string; icon: string; stylesheet: string; requestsClassTree: boolean };
 export type FacetPresentation = {
   active: boolean; provider: Provider | null; providers: Provider[];
   phase: "idle" | "loading" | "ready" | "error";
-  error: string; toggle: () => void; select: (uri: string) => void;
+  error: string; wantsClassTree: boolean; toggle: () => void; select: (uri: string) => void;
 };
 
 export function useFacetPresentation({direction, predicate, enabled, approvalRevision, sessionKey}: {
@@ -46,17 +48,19 @@ export function useFacetPresentation({direction, predicate, enabled, approvalRev
         const rows = await selectPersonal(`PREFIX mui: <${MUI}>
           PREFIX sh: <http://www.w3.org/ns/shacl#>
           PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-          SELECT DISTINCT ?provider ?label ?icon ?stylesheet WHERE {
-            GRAPH <${ctx.base}/shacl/policies> {
+          SELECT DISTINCT ?provider ?label ?icon ?stylesheet ?requestsClassTree WHERE {
+            GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
               ?provider a mui:Provider ; mui:accepts ?shape ; mui:widget ?widget .
               ?shape a mui:InputShape ; sh:path <${predicate}> ; mui:facetDirection "${direction}" .
               ?widget a mui:FacetWidget ; mui:templateContent ?stylesheet .
               OPTIONAL { ?provider rdfs:label ?label }
               OPTIONAL { ?provider mui:icon ?icon }
+              OPTIONAL { ?provider mui:requestsClassTree ?requestsClassTree }
             }
           } LIMIT 50`, ctx, controller.signal);
         const candidates = rows.map(row => ({uri:row.provider?.value??"",label:row.label?.value??"Facet view",
-          icon:row.icon?.value??"chart-pie",stylesheet:row.stylesheet?.value??""}))
+          icon:row.icon?.value??"chart-pie",stylesheet:row.stylesheet?.value??"",
+          requestsClassTree:row.requestsClassTree?.value==="true"}))
           .filter(row => validIri(row.uri) && row.stylesheet.length > 0 && row.stylesheet.length <= 250000);
         const decisions = await readClientPolicyApprovals(candidates.map(row=>row.uri), controller.signal);
         if (controller.signal.aborted) return;
@@ -74,7 +78,7 @@ export function useFacetPresentation({direction, predicate, enabled, approvalRev
   const providers = enabled && state.key === key && state.phase === "ready" ? state.providers : [];
   const provider = providers.find(row=>choice.scope===scope && row.uri===choice.uri) ?? providers[0] ?? null;
   const active = !!provider && (choice.scope!==scope || choice.active);
-  return {provider, providers, active, phase:state.key === key ? state.phase : "idle", error:state.key === key ? state.error : "",
+  return {provider, providers, active, wantsClassTree:active && Boolean(provider?.requestsClassTree), phase:state.key === key ? state.phase : "idle", error:state.key === key ? state.error : "",
     toggle:()=> { if (!provider) return; setChoice({scope, uri:provider.uri,active:!active}); },
     select:(uri:string)=> {if(providers.some(row=>row.uri===uri))setChoice({scope,uri,active:true});}};
 }
@@ -134,6 +138,8 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
 }) {
   const [result,setResult]=useState<{key:string;html:string;error:string}>({key:"",html:"",error:""});
   const [labelStyle,setLabelStyle]=useState<"arc"|"radial">("arc");
+  const [maxRadius,setMaxRadius]=useState(200);
+  const radiusControlId = useId();
   const [hoverDescription,setHoverDescription]=useState("");
   const surfaceRef=useRef<HTMLDivElement>(null);
   const tooltipRef=useRef<HTMLDivElement>(null);
@@ -220,7 +226,7 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
   };
   if(result.key!==key)return <p role="status" className="text-xs text-muted-foreground">Rendering facet presentation…</p>;
   if(result.error)return <ErrorDetails prefix="Facet rendering" error={result.error} />;
-  return <div className="flex w-full min-w-0 flex-1 flex-col">
+  return <div className="flex w-full min-w-0 flex-none flex-col gap-1">
     <div className="flex w-full flex-wrap items-center justify-center gap-2 px-2 pt-1">
       {/* Follow the Record header's Graph selector: muted leading label, a
           single outlined shell, and a plain chevron dropdown trigger. */}
@@ -259,9 +265,16 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
             className="inline-flex h-8 min-w-14 items-center justify-center border-l border-input px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=on]:bg-accent data-[state=on]:text-foreground">Arc</ToggleGroupItem>
         </ToggleGroup>
       </InputGroup>
+      <div className="flex min-w-[160px] flex-1 max-w-56 items-center gap-2" role="group" aria-label="Sunburst maximum radius">
+        <label htmlFor={radiusControlId} className="whitespace-nowrap text-xs text-muted-foreground">Max radius</label>
+        <Slider id={radiusControlId} aria-label="Maximum sunburst radius" min={90} max={200} step={2}
+          value={[maxRadius]} onValueChange={values=>setMaxRadius(values[0]??200)} className="min-w-16 flex-1" />
+        <output htmlFor={radiusControlId} className="min-w-11 text-right text-xs tabular-nums text-muted-foreground">{maxRadius}px</output>
+      </div>
     </div>
     <div ref={surfaceRef}
-      className="w-full min-w-0 flex-1 [&_svg]:mx-auto [&_svg]:block [&_svg]:max-w-[800px] [&_svg]:overflow-visible"
+      className="mx-auto w-full max-w-[420px] min-w-0 flex-none [&_svg]:mx-auto [&_svg]:block [&_svg]:h-auto [&_svg]:max-w-full [&_svg]:overflow-visible"
+      style={{maxWidth:`${maxRadius*2+20}px`}}
       data-facet-provider={provider?.uri}
       onPointerOver={(event:PointerEvent<HTMLDivElement>)=>{hoverBranch(event.target);
         if((event.target as Element).closest?.("[data-facet-value]"))positionTooltip(event.clientX,event.clientY);}}

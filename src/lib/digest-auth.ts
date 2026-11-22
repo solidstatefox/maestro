@@ -27,6 +27,7 @@ function decodeBasic(authorization: string | undefined): { user: string; pass: s
 
 function buildDigestHeader(method: string, url: URL, creds: { user: string; pass: string }, challenge: Record<string, string>): string {
   const algorithm = (challenge.algorithm || "MD5").toUpperCase();
+  if (!["MD5", "MD5-SESS", "SHA-256", "SHA-256-SESS"].includes(algorithm)) throw new Error("Unsupported Virtuoso Digest algorithm.");
   const hashName = algorithm.startsWith("SHA-256") ? "sha256" : "md5";
   const hash = (value: string) => createHash(hashName).update(value).digest("hex");
   const realm = challenge.realm ?? "";
@@ -65,46 +66,50 @@ export function authNote(response: Response): string {
 const redact = (header: string) => (header ? header.replace(/nonce="[^"]*"|opaque="[^"]*"/gi, "").slice(0, 160) : "none sent");
 
 /**
- * fetch() for Virtuoso's authenticated endpoints. Sends the Basic Authorization header first (as Maestro always
- * has) and falls back to HTTP Digest, which /sparql-auth and /sparql-graph-crud-auth use behind OpenLink's gateway:
- *  1. Basic answered 401 with a Digest challenge  -> answer that challenge.
- *  2. Basic answered 401 with no challenge at all -> some gateways only issue the challenge to requests that carry
- *     no Authorization header, so repeat the request without it to obtain the challenge, then answer it.
- * Request bodies must be strings (they are re-sent).
+ * Virtuoso Digest challenge/response. Basic is a LOCAL carrier for the saved
+ * username/password; it must never be sent to the remote server, particularly
+ * when an existing Virtuoso installation is configured over HTTP.
+ * The initial request is unauthenticated; only the computed Digest response is
+ * transmitted upstream. Bearer requests are not Digest and remain unchanged.
  */
 export async function fetchWithDigestFallback(input: URL | string, init: RequestInit & { headers: Record<string, string> }): Promise<Response> {
   const url = typeof input === "string" ? new URL(input) : input;
   const method = init.method ?? "GET";
-  const first = await fetch(url, init);
-  if (first.status !== 401) return first;
-
+  const safeInit = { ...init, redirect: "manual" as const };
   const creds = decodeBasic(init.headers.Authorization ?? init.headers.authorization);
-  const basicChallenge = first.headers.get("www-authenticate") ?? "";
-  if (!creds) {
-    authNotes.set(first, `${method} ${url.pathname} -> 401; server challenge: ${redact(basicChallenge)}; no Basic credentials were available to answer it`);
-    return first;
-  }
-
-  let challenge = parseChallenge(basicChallenge);
-  let probeNote = "";
-  if (!challenge) {
-    await first.arrayBuffer().catch(() => undefined);
-    const { Authorization: _a, authorization: _b, ...withoutAuth } = init.headers;
-    const probe = await fetch(url, { ...init, headers: withoutAuth });
-    const probeChallenge = probe.headers.get("www-authenticate") ?? "";
-    challenge = parseChallenge(probeChallenge);
-    if (!challenge) {
-      if (probe.status === 401) authNotes.set(probe, `${method} ${url.pathname} -> 401 with Basic credentials (challenge: ${redact(basicChallenge)}) and 401 without credentials (challenge: ${redact(probeChallenge)}); no Digest challenge to answer`);
-      return probe;
+  if (!creds) return fetch(url, safeInit);
+  const { Authorization: _a, authorization: _b, ...withoutAuth } = init.headers;
+  // Intentionally omit Basic credentials from the first upstream request.
+  const challengeResponse = await fetch(url, { ...safeInit, headers: withoutAuth });
+  const challengeHeader = challengeResponse.headers.get("www-authenticate") ?? "";
+  if (challengeResponse.status !== 401) {
+    if (challengeResponse.ok) {
+      await challengeResponse.arrayBuffer().catch(() => undefined);
+      return new Response("Expected a Digest authentication challenge from Virtuoso; the endpoint did not authenticate these credentials.", {status:502});
     }
-    await probe.arrayBuffer().catch(() => undefined);
-    probeNote = " (challenge obtained from a request without credentials)";
-  } else {
-    await first.arrayBuffer().catch(() => undefined);
+    return challengeResponse;
   }
-
-  const headers = { ...init.headers, Authorization: buildDigestHeader(method, url, creds, challenge) };
-  const second = await fetch(url, { ...init, headers });
-  if (second.status === 401) authNotes.set(second, `${method} ${url.pathname} -> 401 even after a Digest response${probeNote}; check the username/password and the account's rights on this endpoint`);
-  return second;
+  const challenge = parseChallenge(challengeHeader);
+  if (!challenge) {
+    authNotes.set(challengeResponse, `${method} ${url.pathname} -> 401 without a supported Digest challenge (${redact(challengeHeader)})`);
+    return challengeResponse;
+  }
+  await challengeResponse.arrayBuffer().catch(() => undefined);
+  const headers = { ...withoutAuth, Authorization: buildDigestHeader(method, url, creds, challenge) };
+  let authenticated = await fetch(url, { ...safeInit, headers });
+  // RFC 7616 stale=true means the credentials were not rejected: Virtuoso
+  // provided a fresh nonce. Retry exactly once without prompting Alice.
+  if (authenticated.status === 401) {
+    const renewed = parseChallenge(authenticated.headers.get("www-authenticate") ?? "");
+    if (renewed?.stale?.toLowerCase() === "true" && renewed.nonce !== challenge.nonce) {
+      await authenticated.arrayBuffer().catch(() => undefined);
+      authenticated = await fetch(url, {
+        ...safeInit,
+        headers: { ...withoutAuth, Authorization: buildDigestHeader(method, url, creds, renewed) },
+      });
+    }
+  }
+  if (authenticated.status === 401)
+    authNotes.set(authenticated, `${method} ${url.pathname} -> 401 after Digest response; check the credentials, nonce and endpoint permissions`);
+  return authenticated;
 }

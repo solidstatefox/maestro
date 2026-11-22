@@ -269,3 +269,16 @@
     schema:url <https://kaiko.getalp.org/sparql> ;
     dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/libraries-and-humanities> ;
     schema:position "38"^^xsd:integer .
+
+# European data endpoints (consolidated from eu-data/endpoints.ttl)
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#cordis-eurio> a schema:EntryPoint ;
+ rdfs:label "CORDIS · EURIO SPARQL"@en ;
+ schema:url <https://cordis.europa.eu/datalab/sparql> ;
+ dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+ schema:position "39"^^xsd:integer .
+
+<gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry#eu-data-portal> a schema:EntryPoint ;
+ rdfs:label "European Data Portal · DCAT-AP SPARQL"@en ;
+ schema:url <https://data.europa.eu/data/sparql> ;
+ dcterms:isPartOf <gttp://ggg.maestro.ecosys/ids/dataservers/most-reliable-endpoint-registry> ;
+ schema:position "40"^^xsd:integer .

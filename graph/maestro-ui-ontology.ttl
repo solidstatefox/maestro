@@ -314,6 +314,10 @@ mui:lastNewCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ; rd
 mui:FacetProvider a owl:Class ; rdfs:subClassOf mui:Provider ;
   rdfs:label "Facet provider"@en ;
   rdfs:comment "An approvable provider which supplies one or more facet presentations. mui:widget describes its implementation, not its catalog membership."@en .
+# Declarative host capability. Providers request hierarchy, but Maestro's
+# XState/FCT controller owns classTree and respects a user's manual override.
+mui:requestsClassTree a owl:DatatypeProperty ; rdfs:domain mui:FacetProvider ;
+  rdfs:range xsd:boolean ; rdfs:label "Request Categories tree mode"@en .
 mui:FacetWidget a owl:Class ; rdfs:label "Facet widget"@en .
 mui:PersonalFacetWidget a owl:Class ; rdfs:subClassOf mui:FacetWidget ; rdfs:label "Personal facet widget"@en .
 mui:DateRangeFacetWidget a owl:Class ; rdfs:subClassOf mui:PersonalFacetWidget ; rdfs:label "Date/time range facet"@en .

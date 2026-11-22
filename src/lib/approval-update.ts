@@ -1,4 +1,6 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
+import { maestroQueryFetch } from "@/lib/client-query-cache";
 
 import { loadPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
 import { loadClientStatusMachines } from "@/lib/status-machine-client";
@@ -19,7 +21,7 @@ export async function changeApprovals(uris: string[], status: "Approved" | "Pend
   const auth=await loadPersonalAuthSession();
   if(!auth || auth.graphPrefix.replace(/\/+$/,"")!==graphPrefix.replace(/\/+$/, ""))throw new Error("Personal login changed; authenticate again.");
   const base=graphForPrefix(auth.graphPrefix);
-  const shapes=`${base}/shacl/policies`, otc=`${base}/otc/transcoders`, graph=`${base}/status`;
+  const shapes=`${resolveGraph(GRAPH.SHACL_POLICIES, base)}`, otc=`${resolveGraph(GRAPH.OTC_TRANSCODERS, base)}`, graph=`${resolveGraph(GRAPH.STATUS, base)}`;
   const machines=await loadClientStatusMachines(signal);
   const values=resources.map(iri).join(" ");
   // Verify the target is a seeded Provider, curator or ClassPolicy.
@@ -52,7 +54,7 @@ export async function changeApprovals(uris: string[], status: "Approved" | "Pend
       }
       OPTIONAL { GRAPH <${graph}> { ?subject mui:status ?current } }
     } LIMIT 5000`;
-  const select=await fetch("/proxy/api/sparql",{method:"POST",cache:"no-store",signal,
+  const select=await maestroQueryFetch("/proxy/api/sparql",{method:"POST",cache:"no-store",signal,
     headers:{"Content-Type":"application/json"},body:JSON.stringify({addr:`${shapes}@${auth.graphStore}`,query})});
   const data=await select.json() as {error?:string;results?:{bindings?:Array<Record<string,{value:string}>>}};
   if(!select.ok || data.error) throw new Error(data.error||`Approval verification failed (HTTP ${select.status}).`);
@@ -90,7 +92,7 @@ export async function changeApprovals(uris: string[], status: "Approved" | "Pend
   // reliably. Do not concatenate DELETE/INSERT and INSERT DATA with semicolons:
   // a rejected multi-statement request otherwise prevents FSM approval entirely.
   for (const update of updates) {
-    const response=await fetch("/proxy/api/sparql",{method:"POST",cache:"no-store",signal,
+    const response=await maestroQueryFetch("/proxy/api/sparql",{method:"POST",cache:"no-store",signal,
       headers:{"Content-Type":"application/json","Accept":"application/json"},
       body:JSON.stringify({update,bookmarkQueryXml:bookmarkedQueryXml})});
     if(!response.ok){

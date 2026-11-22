@@ -1,9 +1,13 @@
 "use client";
 
+import { DEFAULT_RECORD_TABLE, DEFAULT_RECORD_ROW, DEFAULT_RECORD_PROPERTY_CELL, DEFAULT_RECORD_VALUE_CELL, DEFAULT_RECORD_PROPERTY_BUTTON, DEFAULT_RECORD_VALUE_BUTTON } from "@/canvas/right/default-record-row-style";
+
+
 import { browserLog } from "@/lib/maestro-client-logging";
 
 import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
+import { FormattedRecordSkeleton } from "@/canvas/right/formatted-record-skeleton";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 import { classifyRecordValue, RECORD_VALUE_KINDS, type RecordValueKind } from "@/lib/record-explorer-query";
 import { normalizeMaestroKind } from "@/lib/maestro-kinds";
@@ -35,8 +39,13 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { RECORD_EXPORT_FORMATS, type RecordExportFormat } from "@/canvas/right/record-export";
 
-import { Check, ChevronDown, ChevronRight, LoaderCircle, ClipboardCheck, ClockFading, Download, Eye, Expand } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, LoaderCircle, ClipboardCheck, ClockFading, Download, Eye, Expand, FileSearch } from "lucide-react";
+import { retryMaestroComponent } from "@/lib/maestro-component-retry";
 import { shortenCount } from "@/lib/utils";
 
 import { RightPaneFrame, RightPaneBody } from "@/canvas/workspace-pane-shells";
@@ -157,6 +166,8 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     if(typeof window!=="undefined")try{window.localStorage.setItem("maestro:kind:record",kind);}catch{}
   };
   const [xsltPortals, setXsltPortals] = useState<ReturnType<typeof getMaestroComponentPortals>>([]);
+  const [recordExportOpen, setRecordExportOpen] = useState(false);
+  const [recordExportFormat, setRecordExportFormat] = useState<RecordExportFormat>("turtle");
   const fullscreenFormattedRef = useRef<HTMLDivElement>(null);
   const rdfaHostRef = useRef<HTMLElement>(null);
   const {
@@ -237,6 +248,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     selectedResult,
     selectedUri,
     recordSelectionCleared,
+    recordIdentityPending,
     setActiveBlankNodeTab,
     chooseBlankNodeCandidate,
     setDescribedRecord,
@@ -405,8 +417,9 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
       }
       return;
     }
-    // Browse keeps its existing behavior; no fullscreen-specific query
-    // mutations or session rewrites are installed in the normal Record pane.
+    // Browse's URI values now behave like the Record title: plain click opens
+    // that resource as the root query. Shift-click keeps the historical
+    // predicate/value lookup. Fullscreen remains entirely independent.
     const rows: RecordStatement[] = describedRecord.map(row => ({ predicate: row.property,
       direction: row.direction, value: row.value, termType: row.termType,
       ...(row.datatype ? { datatype: row.datatype } : {}),
@@ -425,12 +438,18 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
       return;
     }
     if (binding && binding.value && sessionIndex === 0 && interactionMode === "pointer" && target.closest("a,button,[role=button]")) {
+      // A literal/blank node has no ordinary root-URI navigation; its existing
+      // predicate/value action is available only via Shift+click.
+      if (binding.termType !== "uri" && !event.shiftKey) return;
       event.preventDefault(); event.stopPropagation();
       if (binding.termType === "bnode") {
         if (binding.direction === "property" && selectedRecordTermType === "uri") {
           setExplicitBlankNodeAnchor({ label: binding.value, parent: selectedUri, predicate: binding.predicate });
           setSelectedUri(binding.value);
         }
+      } else if (!event.shiftKey && binding.termType === "uri") {
+        clearTutorialPreview();
+        applyRecordAsRootValue(binding.value);
       } else {
         navigateResultBadge(binding.predicate, { value: binding.value, type: binding.termType,
           ...(binding.datatype ? { datatype: binding.datatype } : {}),
@@ -440,7 +459,18 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     }
   }, [describedRecord, interactionMode, fullscreenPane, onRdfaAction, sessionIndex,
       openRecordPropertyUri, selectedRecordTermType, selectedUri, setExplicitBlankNodeAnchor,
-      setSelectedUri, navigateResultBadge]);
+      setSelectedUri, navigateResultBadge, applyRecordAsRootValue, clearTutorialPreview]);
+
+  useEffect(() => {
+    const host = rdfaHostRef.current;
+    if (!host || fullscreenPane) return;
+    const update = (event: KeyboardEvent) => { host.dataset.maestroRecordShift = event.shiftKey ? "true" : "false"; };
+    const clear = () => { host.dataset.maestroRecordShift = "false"; };
+    document.addEventListener("keydown", update);
+    document.addEventListener("keyup", update);
+    window.addEventListener("blur", clear);
+    return () => { document.removeEventListener("keydown", update); document.removeEventListener("keyup", update); window.removeEventListener("blur", clear); };
+  }, [fullscreenPane]);
 
   return (
 <>
@@ -482,15 +512,15 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                   {recordFormatEnabled && Boolean(currentFormattedRecordHtml) && formattedRecordButtonsHtml.record_title_icon && (
                     <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_title_icon }} />
                   )}
-                  {recordDescribeIncomplete && <Tooltip><TooltipTrigger render={<span role="img" tabIndex={0} aria-label="Incomplete record description" className="inline-flex shrink-0"><ClockFading className="size-4" /></span>} /><TooltipContent>Virtuoso returned an incomplete DESCRIBE for this record.</TooltipContent></Tooltip>}
-                  {selectedUri && (fullscreenPane || sessionIndex > 0) ? <span title={selectedUri} className="truncate">{sessionIndex > 0 ? toLabel(selectedUri) : (selectedResult?.title ?? selectedGroupRecord?.title ?? toLabel(selectedUri))}</span> : selectedUri ? (
+                  {recordDescribeIncomplete && <Tooltip><TooltipTrigger render={<button type="button" onClick={() => retryMaestroComponent("record")} aria-label="Retry only this Record DESCRIBE" title="Retry only this Record DESCRIBE" className="inline-flex shrink-0 items-center rounded-sm hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"><ClockFading className="size-4" /></button>} /><TooltipContent>Virtuoso returned an incomplete DESCRIBE. Click to retry this Record without refreshing Browse.</TooltipContent></Tooltip>}
+                  {selectedUri && (fullscreenPane || sessionIndex > 0) ? <span title={selectedUri} className="truncate">{selectedUri}</span> : selectedUri ? (
                     <Tooltip><TooltipTrigger render={<button
                       type="button"
                       className={`cursor-pointer text-left underline-offset-2 hover:underline ${facetHoverPreview?.kind === "record" && facetHoverPreview.uri === selectedUri ? "text-purple-700 dark:text-purple-300" : ""}`}
                       onClick={() => { if (selectedRecordTermType !== "bnode") { clearTutorialPreview(); applyRecordAsRootValue(selectedUri); } }}
                       onMouseEnter={() => beginRecordHoverPreview(selectedUri, selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri)))}
                       onMouseLeave={clearTutorialPreview}
-                    >{selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri))}</button>} /><TooltipContent>{`Set ${selectedUri} as the root record value`}</TooltipContent></Tooltip>
+                    >{selectedUri}</button>} /><TooltipContent>{`Set ${selectedUri} as the root record value`}</TooltipContent></Tooltip>
                   ) : recordSelectionCleared ? "Common values across the result set" : "Record"}
                   </h2>
                   </div>
@@ -517,7 +547,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                       ]}
                     />
                     <Tooltip>
-                      <TooltipTrigger render={<button type="button" onClick={downloadRecordDescribe}
+                      <TooltipTrigger render={<button type="button" onClick={() => setRecordExportOpen(true)}
                         disabled={selectedRecordTermType === "bnode" || !recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || isDescribing}
                         aria-label="Download Record DESCRIBE RDF" title="Download Record DESCRIBE RDF"
                         className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:opacity-100 disabled:pointer-events-none disabled:opacity-40">
@@ -526,6 +556,24 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                       <TooltipContent>Download DESCRIBE RDF</TooltipContent>
                     </Tooltip>
                   </div>}
+                  <Dialog open={recordExportOpen} onOpenChange={setRecordExportOpen}>
+                    <DialogContent showCloseButton>
+                      <DialogHeader><DialogTitle>Download Record DESCRIBE</DialogTitle>
+                        <DialogDescription>Choose the RDF serialization and MIME type. Downloads use the complete, validated Record snapshot and preserve RDF term identities.</DialogDescription>
+                      </DialogHeader>
+                      <label htmlFor="record-rdf-format" className="text-sm font-medium">RDF serialization</label>
+                      <Select value={recordExportFormat} onValueChange={(format) => setRecordExportFormat(format as RecordExportFormat)}>
+                        <SelectTrigger id="record-rdf-format" aria-label="Record download MIME type"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(RECORD_EXPORT_FORMATS).map(([id, entry]) => <SelectItem key={id} value={id}>{entry.name} — {entry.mime} (.{entry.extension})</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <DialogFooter>
+                        <Button type="button" variant="outline" onClick={() => setRecordExportOpen(false)}>Cancel</Button>
+                        <Button type="button" onClick={() => { void downloadRecordDescribe(recordExportFormat); setRecordExportOpen(false); }}><Download className="mr-1 size-4"/>Download</Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
                   </div>
                   {recordControlsOpen && selectedUri && <p className="min-w-0 w-full break-all text-xs leading-tight text-muted-foreground">{selectedUri}</p>}
                 </div>
@@ -616,7 +664,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                   {formattedRecordButtonsHtml.record_button_bar && <div className="contents" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_button_bar }} />}
                 </div>}
                 <ValidationNotice report={recordValidation} onDismiss={() => setRecordValidation(null)} />
-                {recordDescriptionError && endpointReadyForQuery && <ErrorDetails prefix="Record SELECT" error={recordDescriptionError} className="mt-2" />}
+                {recordDescriptionError && endpointReadyForQuery && <ErrorDetails prefix="Record SELECT" error={recordDescriptionError} className="mt-2" onRetry={() => retryMaestroComponent("record")} />}
                 {recordFormatError && recordFormatError !== recordDescriptionError && !hasVisibleValidationWarning(recordValidation) && <ErrorDetails prefix="Record formatter" error={recordFormatError} className="mt-2" />}
                 {!isDescribing && describedRecordUri === selectedUri &&
                  recordDescriptionSnapshot?.key === currentRecordDescriptionKey && (
@@ -660,8 +708,18 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                 )}
                 </CollapsibleContent>
               </Collapsible>
-              {selectedRecordTermType !== "bnode" && recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && !recordDescriptionError && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && (!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || (!currentFormattedRecordHtml && !recordFormatError)))) ? (
-                <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground" role="status"><ElapsedStatus label={recordPolicy && selectedRecordTemplateUri ? "Loading record (formatted)" : "Loading record"} category="record" clockScope={recordPolicy && selectedRecordTemplateUri ? "policies" : isDescribing ? "record" : "policies"} /></div>
+              {(recordIdentityPending || (!selectedUri && !recordSelectionCleared)) ? (
+                <FormattedRecordSkeleton
+                  label={recordIdentityPending ? "Waiting for Results" : "No Record selected — select a result to inspect its properties and roles"}
+                  pending={recordIdentityPending}
+                  state="unconfirmed"
+                />
+              ) : selectedRecordTermType !== "bnode" && recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && !recordDescriptionError && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && (!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || (!currentFormattedRecordHtml && !recordFormatError)))) ? (
+                <FormattedRecordSkeleton
+                  label={recordPolicy && selectedRecordTemplateUri ? "Loading record (formatted)" : "Loading record"}
+                  clockScope={recordPolicy && selectedRecordTemplateUri ? "policies" : isDescribing ? "record" : "policies"}
+                  state="loading"
+                />
               ) : selectedRecordTermType !== "bnode" && currentFormattedRecordHtml ? (
                 <>
                   <div ref={formattedRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
@@ -726,7 +784,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                 )}
                 {visibleProperties.length > 0 && <section>
                   <h3 className="mb-2 text-sm font-semibold">Properties</h3>
-                  <table className="w-full border-collapse text-left text-sm">
+                  <table className={DEFAULT_RECORD_TABLE}>
                     <thead>
                       <tr className="border-b text-muted-foreground">
                         <th className="w-[1%] whitespace-nowrap px-3 py-2 font-medium">Name</th>
@@ -735,14 +793,14 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                     </thead>
                     <tbody>
                       {visibleProperties.map((item) => (
-                        <tr key={`${item.property}`} data-maestro-predicate={item.property} data-maestro-direction={item.direction} className="border-b">
-                          <td className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium">
-                            <button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"
+                        <tr key={`${item.property}`} data-maestro-predicate={item.property} data-maestro-direction={item.direction} className={DEFAULT_RECORD_ROW}>
+                          <td className={DEFAULT_RECORD_PROPERTY_CELL}>
+                            <button type="button" className={DEFAULT_RECORD_PROPERTY_BUTTON}
                               about={item.property} data-maestro-predicate={item.property} data-maestro-direction={item.direction}
                               title={`Open ${item.property} as a URI query`}
                               onClick={() => { if (!fullscreenPane) openRecordPropertyUri(item.property); }}>{toLabel(item.property)}</button>
                           </td>
-                          <td className="break-all px-3 py-3 align-top">
+                          <td className={DEFAULT_RECORD_VALUE_CELL}>
                             <RecordValuePages pageSize={5} id={`${item.property}-values`}>
                               {item.values.map((value, index) => (
                                 <div key={`${item.property}-${value.termType}-${value.value}-${index}`}
@@ -763,21 +821,22 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                                   className="min-w-0 break-all">
                             {value.termType === "bnode" ? (
                               item.direction === "property" && selectedRecordTermType === "uri" ?
-                                <button type="button" className="cursor-pointer text-primary hover:underline" title="Open blank-node Record and its sibling nodes" onClick={() => {
-                                  if (fullscreenPane) return;
+                                <button type="button" className="text-primary" data-maestro-shift-only="true" title="Shift-click to open the blank-node Record" onClick={(event) => {
+                                  if (fullscreenPane || !event.shiftKey) return;
                                   setExplicitBlankNodeAnchor({ label: value.value, parent: selectedUri, predicate: item.property });
                                   setSelectedUri(value.value);
                                 }}>{value.value}</button> : <span title={value.value}>{value.value}</span>
                             ) : (
                               <Tooltip><TooltipTrigger render={<button type="button"
-                                className="cursor-pointer break-all text-left font-inherit hover:underline underline-offset-2"
-                                onClick={() => { if (!fullscreenPane) navigateResultBadge(item.property, {
+                                data-maestro-shift-only={value.termType === "uri" ? undefined : "true"}
+                                className={value.termType === "uri" ? DEFAULT_RECORD_VALUE_BUTTON : "break-all text-left font-inherit"}
+                                onClick={(event) => { if (!fullscreenPane && event.shiftKey) navigateResultBadge(item.property, {
                                   value: value.value, type: value.termType,
                                   ...(value.datatype ? { datatype: value.datatype } : {}),
                                   ...(value.lang ? { lang: value.lang } : {}),
                                 }, item.direction === "property-of" ? "reverse" : "forward"); }}
                               ><span className="break-all">{value.termType === "uri"
-                                ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`}\u0000${value.value}`) ?? value.value)
+                                ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr ?? ""}\u0000${value.value}`) ?? value.value)
                                 : value.value}</span></button>} /><TooltipContent>{`${toLabel(item.property)}${item.direction === "property-of" ? " of" : ""}: ${value.value}${value.lang ? ` @${value.lang}` : ""}${value.datatype ? `^^${value.datatype}` : ""}`}</TooltipContent></Tooltip>
                             )}
                                 </div>
@@ -791,7 +850,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                 </section>}
                 {visibleRoles.length > 0 && <section className="mt-6">
                   <h3 className="mb-2 text-sm font-semibold">Roles</h3>
-                  <table className="w-full border-collapse text-left text-sm">
+                  <table className={DEFAULT_RECORD_TABLE}>
                     <thead>
                       <tr className="border-b text-muted-foreground">
                         <th className="w-[1%] whitespace-nowrap px-3 py-2 font-medium">Name</th>
@@ -800,14 +859,14 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                     </thead>
                     <tbody>
                       {visibleRoles.map((item) => (
-                        <tr key={`${item.property}-of`} data-maestro-predicate={item.property} data-maestro-direction={item.direction} className="border-b">
-                          <td className="w-[1%] whitespace-nowrap px-3 py-3 align-top font-medium">
-                            <button type="button" className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"
+                        <tr key={`${item.property}-of`} data-maestro-predicate={item.property} data-maestro-direction={item.direction} className={DEFAULT_RECORD_ROW}>
+                          <td className={DEFAULT_RECORD_PROPERTY_CELL}>
+                            <button type="button" className={DEFAULT_RECORD_PROPERTY_BUTTON}
                               about={item.property} data-maestro-predicate={item.property} data-maestro-direction={item.direction}
                               title={`Open ${item.property} as a URI query`}
                               onClick={() => { if (!fullscreenPane) openRecordPropertyUri(item.property); }}>{toLabel(item.property)} of</button>
                           </td>
-                          <td className="break-all px-3 py-3 align-top">
+                          <td className={DEFAULT_RECORD_VALUE_CELL}>
                             <RecordValuePages pageSize={5} id={`${item.property}-of-values`}>
                               {item.values.map((value, index) => (
                                 <div key={`${item.property}-${value.termType}-${value.value}-${index}`}
@@ -828,21 +887,22 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                                   className="min-w-0 break-all">
                             {value.termType === "bnode" ? (
                               item.direction === "property" && selectedRecordTermType === "uri" ?
-                                <button type="button" className="cursor-pointer text-primary hover:underline" title="Open blank-node Record and its sibling nodes" onClick={() => {
-                                  if (fullscreenPane) return;
+                                <button type="button" className="text-primary" data-maestro-shift-only="true" title="Shift-click to open the blank-node Record" onClick={(event) => {
+                                  if (fullscreenPane || !event.shiftKey) return;
                                   setExplicitBlankNodeAnchor({ label: value.value, parent: selectedUri, predicate: item.property });
                                   setSelectedUri(value.value);
                                 }}>{value.value}</button> : <span title={value.value}>{value.value}</span>
                             ) : (
                               <Tooltip><TooltipTrigger render={<button type="button"
-                                className="cursor-pointer break-all text-left font-inherit hover:underline underline-offset-2"
-                                onClick={() => { if (!fullscreenPane) navigateResultBadge(item.property, {
+                                data-maestro-shift-only={value.termType === "uri" ? undefined : "true"}
+                                className={value.termType === "uri" ? DEFAULT_RECORD_VALUE_BUTTON : "break-all text-left font-inherit"}
+                                onClick={(event) => { if (!fullscreenPane && event.shiftKey) navigateResultBadge(item.property, {
                                   value: value.value, type: value.termType,
                                   ...(value.datatype ? { datatype: value.datatype } : {}),
                                   ...(value.lang ? { lang: value.lang } : {}),
                                 }, item.direction === "property-of" ? "reverse" : "forward"); }}
                               ><span className="break-all">{value.termType === "uri"
-                                ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr || `${queryTree.attributes.graph?.trim() ?? ""}@${fctEndpoints.find((endpoint) => endpoint.id === selectedEndpointId)?.url ?? ""}`}\u0000${value.value}`) ?? value.value)
+                                ? (recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr ?? ""}\u0000${value.value}`) ?? value.value)
                                 : value.value}</span></button>} /><TooltipContent>{`${toLabel(item.property)}${item.direction === "property-of" ? " of" : ""}: ${value.value}${value.lang ? ` @${value.lang}` : ""}${value.datatype ? `^^${value.datatype}` : ""}`}</TooltipContent></Tooltip>
                             )}
                                 </div>

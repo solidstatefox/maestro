@@ -12,9 +12,9 @@ const base = {
 };
 const allows = (overrides) => graphAutoFillAllowsQuery({ ...base, ...overrides });
 
-test('pending graph selection gates initial query only while it can resolve', () => {
-  assert.equal(allows({}), false);
-  assert.equal(allows({ probeState: 'empty' }), false);
+test('pending optional graph selection cannot gate the live query', () => {
+  assert.equal(allows({}), true);
+  assert.equal(allows({ probeState: 'empty' }), true);
   assert.equal(allows({ probeState: 'no-graph' }), true);
 });
 
@@ -25,9 +25,9 @@ test('timeout or unsupported graph enumeration never blocks a healthy live query
   assert.equal(allows({ graphFieldEditing: true }), true);
 });
 
-test('stale probe completions cannot authorize a different live query', () => {
-  assert.equal(allows({ probeIdentity: 'previous-query', probeState: 'error' }), false);
-  assert.equal(allows({ probeIdentity: 'previous-query', probeState: 'no-graph' }), false);
+test('a stale optional graph probe cannot gate an otherwise valid live query', () => {
+  assert.equal(allows({ probeIdentity: 'previous-query', probeState: 'error' }), true);
+  assert.equal(allows({ probeIdentity: 'previous-query', probeState: 'no-graph' }), true);
   assert.equal(allows({ probeIdentity: 'query@server:1', probeState: 'error' }), true);
 });
 
@@ -55,7 +55,7 @@ test('auto-fill errors remain a toast, not a two-pane fatal error', () => {
 
 test('graph auto-fill reuse follows the existing paging-independent FCT identity', () => {
   const controller = read('src/canvas/utils/workspace-controller.tsx');
-  assert.match(controller, /graphProbeIdentity = `\$\{bookmarkQueryKey\}\\u0000\$\{selectedEndpointId\}\\u0000\$\{queryRefreshRevision\}`/);
+  assert.match(controller, /graphProbeIdentity = `\$\{bookmarkQueryKey\}\\u0000\$\{queryGraphServer \?\? ""\}\\u0000\$\{queryRefreshRevision\}`/);
   assert.match(controller, /The query XML is captured when the canonical identity changes/);
   assert.doesNotMatch(controller, /graphAutoFill, graphProbeIdentity, queryXml\]/);
 });

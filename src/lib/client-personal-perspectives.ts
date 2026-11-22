@@ -1,4 +1,6 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
+import { maestroQueryFetch } from "@/lib/client-query-cache";
 
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { readClientPolicyApprovals } from "@/lib/client-policy-approvals";
@@ -34,7 +36,7 @@ async function acceptedPerspectiveClasses(
         SELECT DISTINCT ?child ?parent WHERE {
           VALUES ?child { ${batch.map(uri => `<${uri}>`).join(" ")} }
           GRAPH <${ontology}> { ?child rdfs:subClassOf ?parent }
-        } LIMIT 1001`, ctx, signal);
+        } LIMIT 1001`, ctx, signal,"urn:maestro:component:view-discover");
       if (rows.length >= 1001)
         throw new Error("Personal ontology subclass expansion was truncated; cannot safely discover Perspectives.");
       for (const row of rows) {
@@ -56,7 +58,7 @@ export async function discoverClientPerspectives(classes: string[], signal?: Abo
   const additional = [...new Set(queryProviders.filter(safe))].slice(0, 100);
   if (!requested.length && !additional.length) return [];
   const ctx = await personalContext();
-  const shapes = `${ctx.base}/shacl/policies`, ontology = `${ctx.base}/ontology-cache`;
+  const shapes = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`, ontology = `${resolveGraph(GRAPH.ONTOLOGY_CACHE, ctx.base)}`;
   const accepted = requested.length ? await acceptedPerspectiveClasses(ctx, ontology, requested, signal) : [];
   const rows = await selectPersonal(`PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
     SELECT DISTINCT ?provider ?kind ?label ?stylesheet WHERE {
@@ -68,7 +70,7 @@ export async function discoverClientPerspectives(classes: string[], signal?: Abo
       }
       FILTER(${accepted.length ? `?target IN (${accepted.map(uri=>`<${uri}>`).join(", ")})` : "false"}
         ${additional.length ? ` || ?provider IN (${additional.map(uri=>`<${uri}>`).join(", ")})` : ""})
-    } ORDER BY ?label LIMIT 20`, ctx, signal);
+    } ORDER BY ?label LIMIT 20`, ctx, signal,"urn:maestro:component:view-discover");
   const possible = [...new Map(rows.map(row => ({
     uri: row.provider?.value ?? "", kind: row.kind?.value ?? "",
     label: row.label?.value || row.kind?.value || "",
@@ -76,7 +78,7 @@ export async function discoverClientPerspectives(classes: string[], signal?: Abo
   })).filter(row => safe(row.uri) && (row.kind === "bookmarks" || row.kind === "history") &&
     row.stylesheet.length > 0 && row.stylesheet.length <= 250_000)
     .map(row => [row.uri, row] as const)).values()];
-  const approvals = await readClientPolicyApprovals(possible.map(item => item.uri), signal);
+  const approvals = await readClientPolicyApprovals(possible.map(item => item.uri), signal,"urn:maestro:component:view-discover");
   const approved = new Set(approvals.filter(item => item.status === "Approved").map(item => item.uri));
   return possible.filter(item => approved.has(item.uri)).map(({ uri, kind, label }) => ({
     uri, kind: kind as PersonalPerspectiveKind, label,
@@ -94,7 +96,7 @@ export async function discoverMatchedClientPerspectives(
   const contextual = [...new Set(queryProviders.filter(safe))].slice(0, 100);
   if (!requested.length && !contextual.length) return [];
   const ctx = await personalContext();
-  const shapes = `${ctx.base}/shacl/policies`, ontology = `${ctx.base}/ontology-cache`;
+  const shapes = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`, ontology = `${resolveGraph(GRAPH.ONTOLOGY_CACHE, ctx.base)}`;
   const accepted = requested.length ? await acceptedPerspectiveClasses(ctx, ontology, requested, signal) : [];
   const candidates = requested.length ? await selectPersonal(`PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
     SELECT DISTINCT ?provider ?kind ?target ?stylesheet WHERE { GRAPH <${shapes}> {
@@ -103,7 +105,7 @@ export async function discoverMatchedClientPerspectives(
       ?template a mui:PerspectiveWidget ; (mui:templateContent|rdf:value) ?stylesheet .
     }
     FILTER(?target IN (${accepted.map(uri => `<${uri}>`).join(", ")}))
-    } LIMIT 100`,ctx,signal) : [];
+    } LIMIT 100`,ctx,signal,"urn:maestro:component:view-discover") : [];
   const providers = candidates.map(row=>({
     uri:row.provider?.value??"",kind:row.kind?.value??"",target:row.target?.value??"",stylesheet:row.stylesheet?.value??"",
   })).filter(item=>safe(item.uri)&&safe(item.target)&&(item.kind==="bookmarks"||item.kind==="history")&&
@@ -131,8 +133,8 @@ export async function discoverMatchedClientPerspectives(
             VALUES ?provider { ${providerValues} }
             ${validGraph ? `GRAPH <${graph}> { ${pattern} }` : pattern}
             FILTER(?recordClass IN (${requested.map(uri => `<${uri}>`).join(", ")})) }`;
-          const response=await fetch("/proxy/api/sparql",{method:"POST",credentials:"same-origin",cache:"no-store",signal,
-            headers:{"Content-Type":"application/json"},body:JSON.stringify({addr:address,query})});
+          const response=await maestroQueryFetch("/proxy/api/sparql",{method:"POST",credentials:"same-origin",cache:"no-store",signal,
+            headers:{"Content-Type":"application/json","x-maestro-debug-source":"urn:maestro:component:view-discover","x-maestro-debug-component":"view-perspectives:record-match"},body:JSON.stringify({addr:address,query})});
           if(response.ok){
             const data = await response.json() as {results?:{bindings?:Array<{provider?:{value?:string}}>}};
             const matched = new Set((data.results?.bindings??[]).map(row=>row.provider?.value??"").filter(Boolean));

@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Browser-owned OTC execution. The graph server supplies RDF, SPARQL and
  * persistence; Liquid/SHACL/LLM orchestration executes entirely in the SPA.
  * No Maestro-specific RPC is used. */
@@ -74,7 +75,7 @@ async function sourceQuery(ctx:PersonalContext,query:string,graph:string|undefin
 async function approved(ctx:PersonalContext,rulesGraph:string,provider:string,signal?:AbortSignal):Promise<void>{
   const matches=await selectPersonal(`SELECT ?isProvider ?approved WHERE {
     GRAPH ${iri(rulesGraph)} { ${iri(provider)} a <${MUI}Provider> . BIND(true AS ?isProvider) }
-    OPTIONAL { GRAPH <${ctx.base}/status> { ${iri(provider)} <${MUI}status> <${MUI}Approved> . BIND(true AS ?approved) } }
+    OPTIONAL { GRAPH <${resolveGraph(GRAPH.STATUS, ctx.base)}> { ${iri(provider)} <${MUI}status> <${MUI}Approved> . BIND(true AS ?approved) } }
   } LIMIT 2`,ctx,signal);
   if(!matches.length)throw new Error("Selected OTC transcoder is not a provider in the requested rules graph.");
   if(matches.some(row=>row.approved?.value==="true"||row.approved?.value==="1"))return;

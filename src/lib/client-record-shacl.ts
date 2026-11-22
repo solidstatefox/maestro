@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /**
  * Standards-based SHACL Core validation for a specifically identified focus node.
  *
@@ -86,7 +87,7 @@ function dataTerm(iriOrBlank: string, bnodeId: (label: string) => string) {
 export async function readClientShaclShapeTriples(shapeUri: string, signal?: AbortSignal): Promise<BindingRow[]> {
   if (!goodIri(shapeUri)) throw new Error("Invalid SHACL shape IRI.");
   const ctx = await personalContext();
-  const shapesGraph = `${ctx.base}/shacl/policies`;
+  const shapesGraph = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`;
   if (!goodIri(shapesGraph)) throw new Error("Invalid personal SHACL graph IRI.");
   const max = 5000;
   const sparql = `PREFIX sh: <${SH}> PREFIX rdf: <${RDF}>

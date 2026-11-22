@@ -1,8 +1,9 @@
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 import { getUserGraph } from "@/lib/personal-sparql";
 
 /** All mui:status triples (Record, Hidden and policy) live in this one graph. */
 export function getPersonalStatusGraph(request: Request): string {
-  return `${getUserGraph(request)}/status`;
+  return resolveGraph(GRAPH.STATUS, getUserGraph(request));
 }
 
 /** Per-query observation metadata does not contain mui:status triples. */

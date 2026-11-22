@@ -58,3 +58,7 @@ report.*.*.*.*.json
 
 # Generated MapLibre worker assets
 /public/maplibre-worker/
+
+# Maestro build and development logs
+/logs/
+/log/

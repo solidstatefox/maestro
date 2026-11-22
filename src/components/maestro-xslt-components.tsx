@@ -18,12 +18,12 @@ import { RecordValuePages } from "@/components/ui/record-value-pages";
 
 const SCALAR_NUMBERS = new Set([
   "zoom", "longitude", "latitude", "minZoom", "maxZoom", "bearing", "pitch",
-  "duration", "delay", "count", "pageSize", "step", "min", "max", "value", "defaultValue",
+  "duration", "delay", "count", "pageSize", "maxPageSize", "step", "min", "max", "value", "defaultValue",
 ]);
 const SCALAR_BOOLEANS = new Set([
   "disabled", "checked", "defaultChecked", "open", "defaultOpen", "required",
   "showZoom", "showCompass", "showFullscreen", "closeButton", "asChild", "modal",
-  "loop", "multiple", "readOnly", "autoFocus", "inset", "collapsible",
+  "loop", "multiple", "readOnly", "autoFocus", "inset", "collapsible", "pageSizeSelect",
 ]);
 const JSON_PROPERTIES = new Set(["center", "bounds", "padding", "offset", "position"]);
 const BLOCKED_ATTRIBUTES = /^(?:on[A-Za-z]|srcDoc$|dangerouslySetInnerHTML$|ref$|key$)/i;
@@ -36,7 +36,9 @@ const ALLOWED_URL = /^(?:https?:\/\/|\/(?!\/)|#|\?)/i;
 const portalChildBlueprints = new WeakMap<Element, readonly ReactNode[]>();
 
 const PROP_ALIASES: Record<string,string> = {
-  class: "className", classname: "className", tabindex: "tabIndex", for: "htmlFor",
+  class: "className", classname: "className", pagesize: "pageSize",
+  maxpagesize: "maxPageSize", pagesizeselect: "pageSizeSelect",
+  listtag: "listTag", listclassname: "listClassName", tabindex: "tabIndex", for: "htmlFor",
   showzoom: "showZoom", showcompass: "showCompass", showfullscreen: "showFullscreen",
   closebutton: "closeButton", defaultopen: "defaultOpen", defaultchecked: "defaultChecked",
   readonly: "readOnly", autofocus: "autoFocus", aschild: "asChild",

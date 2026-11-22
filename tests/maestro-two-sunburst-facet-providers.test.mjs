@@ -8,8 +8,8 @@ test('both Sunbursts are independently seeded, curated, approval-gated mui:Facet
   const manifest=JSON.parse(read('graph/manifest.json'));
   const curator=read('graph/maestro-curation-providers.ttl');
   const host=read('src/canvas/left/facet-presentation.tsx');
-  assert.equal(manifest['sunburst/provider.ttl'], '/shacl/policies');
-  assert.equal(manifest['sunburst-chartkit/provider.ttl'], '/shacl/policies');
+  assert.equal(manifest['sunburst/provider.ttl'], 'shacl-policies');
+  assert.equal(manifest['sunburst-chartkit/provider.ttl'], 'shacl-policies');
   for (const name of providers) {
     const path = name === 'category-sunburst' ? 'graph/sunburst/provider.ttl' : 'graph/sunburst-chartkit/provider.ttl';
     const rdf=read(path);

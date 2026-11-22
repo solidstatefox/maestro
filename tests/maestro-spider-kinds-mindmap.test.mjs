@@ -15,7 +15,7 @@ test('radial names use the shadcn labeled 250px rings without a custom SVG label
 });
 test('Spider is a discoverable seeded analysis provider and declares a numeric query-validation policy',()=>{
   const manifest=JSON.parse(read('graph/manifest.json'));
-  assert.equal(manifest['spider/provider.ttl'],'/shacl/policies');
+  assert.equal(manifest['spider/provider.ttl'],'shacl-policies');
   const rdf=read('graph/spider/provider.ttl');
   assert.match(rdf,/a mui:Provider, ma:Analysis, sh:NodeShape/);
   assert.match(rdf,/ma:lucideIcon "chart-radar"/);

@@ -5,6 +5,7 @@
  */
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
+import { componentRetryHeaders } from "@/lib/maestro-component-retry";
 import type { RdfTermKind, RecordValueTerm } from "@/lib/bnode";
 
 export type RecordDescriptionRequest = {
@@ -18,6 +19,7 @@ export type RecordDescriptionRequest = {
   limit: number;
   preferredLanguage: string;
   signal: AbortSignal;
+  retryRevision?: number;
 };
 
 export type RecordDescriptionResponse = {
@@ -28,7 +30,12 @@ export type RecordDescriptionResponse = {
   debug: string;
 };
 
-const escapeXml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+/** XML 1.0 text must not contain C0 controls, U+FFFE/U+FFFF or
+ * unpaired UTF-16 surrogates. Virtuoso can return all of these in labels. */
+export const cleanRecordXmlText = (value: string): string => value.replace(
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD"
+).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, "\uFFFD");
+const escapeXml = (value: string) => cleanRecordXmlText(value).replace(/&/g, "&amp;").replace(/</g, "&lt;")
   .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 
 type Binding = { type: string; value: string; datatype?: string; "xml:lang"?: string };
@@ -57,7 +64,7 @@ export async function loadRecordDescription(request: RecordDescriptionRequest): 
     try {
       const response = await cachedFetchFct("/proxy/api/sparql", {
         method: "POST", cache: "no-store", signal,
-        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-select-language", "RecordDescription") },
+        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-select-language", "RecordDescription"), ...componentRetryHeaders(request.retryRevision ?? 0) },
         body: requestBody,
       });
       data = await response.json() as Result;

@@ -1,5 +1,6 @@
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Authenticated SPARQL transport and user-scoped in-memory machine registry. */
-import { getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
+import { getUserGraph, queryPersonalSparql } from "@/lib/personal-sparql";
 import { getPersonalStatusGraph } from "@/lib/personal-status-graph";
 import { compileStatusMachines, statusMachineRows, statusMachineSelect, type CompiledStatusMachine } from "@/lib/status-machine-runtime";
 
@@ -7,7 +8,7 @@ const cache=new Map<string,{until:number;machines:CompiledStatusMachine[]}>();
 /** Re-seeding must invalidate machine definitions and instance permissions. */
 export function invalidateServerStatusMachines():void {cache.clear();}
 export async function loadServerStatusMachines(request:Request):Promise<CompiledStatusMachine[]> {
-  const graph=getShapesGraph(request);
+  const graph=resolveGraph(GRAPH.STATE_MACHINES, getUserGraph(request));
   const user=getPersonalStatusGraph(request);
   const key=`${graph}\u0000${user}`;
   const hit=cache.get(key);

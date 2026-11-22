@@ -1,7 +1,10 @@
+import { GRAPH, resolveGraph, type GraphKey } from "@/lib/constants/graphs";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { permittedGraphServerTarget, checkGraphServerDestination } from "./graph-server-target";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { graphForPrefix, personalReadEndpoint, personalWriteEndpoint } from "./personal-auth";
+import { graphForPrefix, personalAuthenticatedEndpoint, personalWriteEndpoint } from "./personal-auth";
 import { authNote, fetchWithDigestFallback } from "./digest-auth";
 import { parseRdfDocument } from "./rdf-to-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
@@ -50,30 +53,31 @@ export function assertPersonalSession(request?: Request): PersonalSession {
   return session;
 }
 
-/** Extract the authenticated personal graph server session from request cookies or headers. */
+/** Request-scoped transport credentials. No Maestro cookie, login ticket, or
+ * proxy-issued identity. The upstream graph server authenticates each request. */
 export function getPersonalSession(request?: Request): PersonalSession | null {
   if (!request) return null;
-  const cookie = request.headers.get("cookie") ?? "";
-  const match = cookie.match(/(?:^|;\s*)maestro_session=([^;]+)/);
-  if (match) {
-    try {
-      const parsed = JSON.parse(decodeURIComponent(match[1])) as PersonalSession & { graphsitePrefix?: string };
-      return { ...parsed, graphPrefix: parsed.graphPrefix || parsed.graphsitePrefix || "" };
-    } catch {
-      return null;
-    }
-  }
-  const headerStore = request.headers.get("x-personal-graph-store");
-  const headerPrefix = request.headers.get("x-personal-graph");
-  const authHeader = request.headers.get("authorization") || request.headers.get("x-personal-auth") || undefined;
-  if (headerStore && headerPrefix) {
-    return {
-      graphStore: headerStore,
-      graphPrefix: headerPrefix,
-      authHeader,
-    };
-  }
-  return null;
+  const graphStore = request.headers.get("x-personal-graph-store") ?? "";
+  const graphPrefix = request.headers.get("x-personal-graph") ?? "";
+  const authHeader = request.headers.get("x-personal-auth") ?? "";
+  const authType = request.headers.get("x-personal-auth-type") ?? "";
+  if (!graphStore || !graphPrefix || !authHeader ||
+      !["sparql-auth", "sparql-oauth", "sparql-webid"].includes(authType) ||
+      !/^(?:Basic|Bearer)\s+[^\r\n]+$/i.test(authHeader)) return null;
+  try {
+    const endpoint = new URL(graphStore);
+    const prefix = new URL(graphPrefix);
+    if (!["http:","https:"].includes(endpoint.protocol) ||
+        prefix.origin !== endpoint.origin || endpoint.username || endpoint.password ||
+        !/\/sparql\/?$/i.test(endpoint.pathname) || endpoint.hash ||
+        prefix.username || prefix.password || graphPrefix.length > 4096) return null;
+    if (authType === "sparql-auth" && !/^Basic /i.test(authHeader)) return null;
+    if (authType !== "sparql-auth" && !/^Bearer /i.test(authHeader)) return null;
+    // Bearer tokens must never cross a cleartext public network.
+    if (authType !== "sparql-auth" && endpoint.protocol !== "https:" &&
+        !["localhost", "127.0.0.1", "::1"].includes(endpoint.hostname)) return null;
+  } catch { return null; }
+  return { graphStore, graphPrefix, authHeader, authType };
 }
 
 /** Read and validate the file-to-Graph mapping. */
@@ -109,9 +113,8 @@ export function graphForFile(filename: string, request?: Request): string {
   if (/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(rawPath)) {
     return rawPath;
   }
-  const graph = getUserGraph(request);
-  const local = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
-  return `${graph}${local}`;
+  if (!Object.values(GRAPH).includes(rawPath as GraphKey)) throw new Error(`Unknown graph registry key in manifest: ${rawPath}`);
+  return resolveGraph(rawPath as GraphKey, getUserGraph(request));
 }
 
 /** The user's Maestro graph: <graphPrefix>/query (no fragment). */
@@ -153,7 +156,7 @@ type SparqlJson = { results?: { bindings?: Record<string, { type?: string; value
 
 /** All personal SPARQL reads use the read-only /sparql URL entered at login. */
 export function personalSparqlUrl(request?: Request): URL {
-  return new URL(personalReadEndpoint(assertPersonalSession(request)));
+  return new URL(personalAuthenticatedEndpoint(assertPersonalSession(request)));
 }
 
 /** All personal SPARQL writes use the authentication method selected at login. */
@@ -183,7 +186,8 @@ export class PersonalSparqlHttpError extends Error {
 export async function queryPersonalSparql(query: string, timeoutMs = 20000, request?: Request): Promise<SparqlJson> {
   assertPersonalSession(request);
   const endpoint = personalSparqlUrl(request);
-  const response = await fetch(endpoint, {
+  await checkGraphServerDestination(endpoint.toString());
+  const response = await fetchWithDigestFallback(endpoint, {
     method: "POST",
     headers: personalSparqlHeaders(request, "application/x-www-form-urlencoded; charset=UTF-8"),
     body: new URLSearchParams({ query }).toString(),
@@ -205,7 +209,8 @@ export async function queryPersonalSparql(query: string, timeoutMs = 20000, requ
 export async function askPersonalSparql(query: string, timeoutMs = 20000, request?: Request): Promise<boolean> {
   assertPersonalSession(request);
   const endpoint = personalSparqlUrl(request);
-  const response = await fetch(endpoint, {
+  await checkGraphServerDestination(endpoint.toString());
+  const response = await fetchWithDigestFallback(endpoint, {
     method: "POST",
     headers: personalSparqlHeaders(request, "application/x-www-form-urlencoded; charset=UTF-8"),
     body: new URLSearchParams({ query }).toString(),
@@ -227,6 +232,7 @@ export async function askPersonalSparql(query: string, timeoutMs = 20000, reques
 export async function updatePersonalSparql(update: string, timeoutMs = 30000, request?: Request): Promise<string> {
   assertPersonalSession(request);
   const endpoint = personalSparqlWriteUrl(request);
+  await checkGraphServerDestination(endpoint.toString());
   const response = await fetchWithDigestFallback(endpoint, {
     method: "POST",
     headers: personalSparqlHeaders(request, "application/sparql-update", "text/plain, application/json;q=0.9"),
@@ -255,76 +261,94 @@ function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-let seedEndpointsPromise: Promise<FctEndpoint[]> | null = null;
+type PublicSeedSnapshot = { endpoints: FctEndpoint[]; digest: string };
+let publicSeedCache: PublicSeedSnapshot | null = null;
+let publicSeedInFlight: { digest: string; promise: Promise<PublicSeedSnapshot> } | null = null;
 
-/**
- * Endpoint list for visitors who are not logged in: read straight from the local ./graph/dataserver-seed.ttl
- * (the same document that seeds the personal registry after login). No personal graph server is contacted.
+/** The proxy's flat-file list is a courtesy, not an execution allowlist.
+ * Checking a digest reads only the small manifest-selected flat-file bytes,
+ * never parses Turtle, hits a personal SPARQL endpoint, or downloads a list.
+ * Recompute on each check so edits are seen without a process restart.
  */
-export function getSeedFctEndpoints(): Promise<FctEndpoint[]> {
-  if (seedEndpointsPromise) return seedEndpointsPromise;
-  const promise = (async (): Promise<FctEndpoint[]> => {
-    const content = await readFile(resolve(getGraphDirectory(), "dataserver-seed.ttl"), "utf8");
-    const triples = await parseRdfDocument(content, ".ttl", "http://localhost/dataserver-seed");
-    const objects = (subject: string, predicate: string) => triples.filter((t) => t.subject.value === subject && t.predicate.value === predicate).map((t) => t.object);
-    const first = (subject: string, predicate: string) => objects(subject, predicate)[0]?.value;
-    const order = (subject: string, predicate: string) => { const n = Number(first(subject, predicate)); return Number.isFinite(n) ? n : 9999; };
-    const isType = (subject: string, type: string) => objects(subject, `${RDF_NS}type`).some((o) => o.value === type);
-    const servers = [...new Set(triples.map((t) => t.subject.value))].filter((subject) => isType(subject, `${SCHEMA_NS}EntryPoint`));
-    const rows = servers.flatMap((server) => {
-      const label = first(server, `${RDFS_NS}label`)?.trim() ?? "";
-      const url = normalizeGraphServerUri(first(server, `${SCHEMA_NS}url`)?.trim() ?? "");
-      if (!label || !/^https?:\/\//i.test(url)) return [];
-      const group = first(server, `${DCTERMS_NS}isPartOf`);
-      const groupName = (group && isType(group, `${SKOS_NS}Collection`) ? first(group, `${RDFS_NS}label`)?.trim() : "") || "Endpoints";
-      return [{ label, url, schemeInferred: !/^https?:\/\//i.test(first(server, `${SCHEMA_NS}url`)?.trim() ?? ""), group: groupName, groupOrder: group ? order(group, `${SCHEMA_NS}position`) : 9999, serverOrder: order(server, `${SCHEMA_NS}position`) }];
-    });
-    rows.sort((a, b) => a.groupOrder - b.groupOrder || a.serverOrder - b.serverOrder || a.label.localeCompare(b.label));
-    const seen = new Set<string>();
-    const endpoints: FctEndpoint[] = [];
-    for (const row of rows) {
-      const id = row.group === "Endpoints" ? slugify(row.label) : slugify(`${row.group}-${row.label}`);
-      if (seen.has(id)) continue;
-      seen.add(id);
-      endpoints.push({ id, label: row.label, url: row.url, group: row.group, schemeInferred: row.schemeInferred });
-    }
-    return endpoints;
-  })();
-  seedEndpointsPromise = promise;
-  promise.catch(() => { if (seedEndpointsPromise === promise) seedEndpointsPromise = null; });
-  return promise;
+async function courtesySeedFiles(): Promise<{ sources: { file: string; content: string }[]; digest: string }> {
+  const files = Object.entries(getGraphManifest())
+    .filter(([file, dest]) => dest === "/graph" && /\.(?:ttl|n3)$/i.test(file))
+    .map(([file]) => file).sort();
+  if (!files.includes("dataserver-seed.ttl")) throw new Error("Missing graph-server courtesy seed list.");
+  const allSources = await Promise.all(files.map(async file => ({
+    file, content: await readFile(resolve(getGraphDirectory(), file), "utf8"),
+  })));
+  // The flat-file catalog can be spread across manifest-selected RDF files.
+  // Only documents declaring an EntryPoint participate. This cheap text test
+  // avoids reparsing unrelated ontology/label documents for digest checks.
+  const sources = allSources.filter(({ content }) => /\bEntryPoint\b/.test(content));
+  const hasher = createHash("sha256");
+  for (const {file,content} of sources) hasher.update(file).update("\0").update(content).update("\0");
+  const digest = `sha256:${hasher.digest("hex")}`;
+  return {sources,digest};
 }
 
-/** Logged in: read endpoint records from the existing personal RDF registry without mutating it.
- * Graph uploads happen explicitly via the browser SPARQL graph-seed workflow, never during
- * normal FCT refresh, endpoint discovery, or query execution. Logged-out
- * visitors use the local seed file only. */
-export async function getConfiguredFctEndpoints(request?: Request): Promise<FctEndpoint[]> {
-  if (!getPersonalSession(request)) {
-    const seeded = await getSeedFctEndpoints();
-    // A locally seeded Personal SPARQL entry must never be selected or probed by visitors.
-    return seeded.filter((endpoint) => endpoint.id !== "personal-sparql" && endpoint.label.trim().toLowerCase() !== "personal sparql");
-  }
-  const dataserversGraph = getDataserversGraph(request);
-  const legacyNs = `${dataserversGraph}#`;
-  const query = `PREFIX rdf: <${RDF_NS}>\nPREFIX rdfs: <${RDFS_NS}>\nPREFIX dcterms: <${DCTERMS_NS}>\nPREFIX skos: <${SKOS_NS}>\nPREFIX schema: <${SCHEMA_NS}>\nSELECT DISTINCT ?server ?name ?url ?groupName ?groupOrder ?serverOrder WHERE { GRAPH <${dataserversGraph}> { { ?server rdf:type schema:EntryPoint ; rdfs:label ?name ; schema:url ?url . OPTIONAL { ?server schema:position ?serverOrder } OPTIONAL { ?server dcterms:isPartOf ?group . ?group rdf:type skos:Collection ; rdfs:label ?groupName . OPTIONAL { ?group schema:position ?groupOrder } } } UNION { ?server rdf:type <${legacyNs}Dataserver> ; <${legacyNs}serverName> ?name ; <${legacyNs}serverURL> ?url . OPTIONAL { ?server <${legacyNs}serverOrder> ?serverOrder } OPTIONAL { ?server <${legacyNs}inGroup> ?group . ?group <${legacyNs}groupName> ?groupName . OPTIONAL { ?group <${legacyNs}groupOrder> ?groupOrder } } } } } ORDER BY COALESCE(?groupOrder, 9999) COALESCE(?serverOrder, 9999) STR(?name)`;
-  const payload = await queryPersonalSparql(query, 20000, request);
-  const endpoints: FctEndpoint[] = [];
-  for (const binding of payload.results?.bindings ?? []) {
-    const label = binding.name?.value?.trim() ?? "";
-    const rawUrl = binding.url?.value?.trim() ?? "";
-    const url = normalizeGraphServerUri(rawUrl);
-    const group = binding.groupName?.value?.trim() || "Endpoints";
-    if (!label || !/^https?:\/\//i.test(url)) continue;
-    const id = group === "Endpoints" ? slugify(label) : slugify(`${group}-${label}`);
-    endpoints.push({ id, label, url, group, schemeInferred: !/^https?:\/\//i.test(rawUrl) });
-  }
-  const seen = new Set<string>();
-  return endpoints.filter((endpoint) => {
-    if (seen.has(endpoint.id)) return false;
-    seen.add(endpoint.id);
-    return true;
-  });
+async function publicSeedSnapshot(): Promise<PublicSeedSnapshot> {
+  const {sources,digest} = await courtesySeedFiles();
+  if (publicSeedCache?.digest === digest) return publicSeedCache;
+  if (publicSeedInFlight?.digest === digest) return publicSeedInFlight.promise;
+
+  const promise = (async () => {
+    const parsed = await Promise.all(sources.map(async ({file,content}) => ({
+      file, triples: await parseRdfDocument(content, ".ttl", `http://localhost/maestro-public/${file}`),
+    })));
+    const triples = parsed.flatMap(({triples}) => triples);
+    const objects = (subject: string, predicate: string) => triples
+      .filter(t => t.subject.value === subject && t.predicate.value === predicate).map(t => t.object);
+    const first = (subject: string, predicate: string) => objects(subject, predicate)[0]?.value;
+    const order = (subject: string, predicate: string) => {
+      const n = Number(first(subject, predicate)); return Number.isFinite(n) ? n : 9999;
+    };
+    const isType = (subject: string, type: string) => objects(subject, `${RDF_NS}type`).some(o => o.value === type);
+    const servers = [...new Set(triples.map(t => t.subject.value))]
+      .filter(subject => isType(subject, `${SCHEMA_NS}EntryPoint`));
+    const rows = servers.flatMap(server => {
+      const label = first(server, `${RDFS_NS}label`)?.trim() ?? "";
+      const rawUrl = first(server, `${SCHEMA_NS}url`)?.trim() ?? "";
+      const url = normalizeGraphServerUri(rawUrl);
+      if (!label || !permittedGraphServerTarget(url)) return [];
+      const group = first(server, `${DCTERMS_NS}isPartOf`);
+      const groupName = (group && isType(group, `${SKOS_NS}Collection`)
+        ? first(group, `${RDFS_NS}label`)?.trim() : "") || "Endpoints";
+      return [{ label, url, schemeInferred: !/^https?:\/\//i.test(rawUrl), group: groupName,
+        groupOrder: group ? order(group, `${SCHEMA_NS}position`) : 9999,
+        serverOrder: order(server, `${SCHEMA_NS}position`) }];
+    });
+    rows.sort((a,b) => a.groupOrder-b.groupOrder || a.serverOrder-b.serverOrder || a.label.localeCompare(b.label));
+    const seenUrls = new Set<string>();
+    const usedIds = new Set<string>();
+    const endpoints: FctEndpoint[] = [];
+    for (const row of rows) {
+      if (seenUrls.has(row.url) || row.label.toLowerCase() === "personal sparql") continue;
+      seenUrls.add(row.url);
+      const base = row.group === "Endpoints" ? slugify(row.label) : slugify(`${row.group}-${row.label}`);
+      let id = base;
+      for (let suffix=2;usedIds.has(id);suffix++) id = `${base}-${suffix}`;
+      usedIds.add(id);
+      endpoints.push({id,label:row.label,url:row.url,group:row.group,schemeInferred:row.schemeInferred});
+    }
+    return {endpoints,digest};
+  })();
+  publicSeedInFlight = {digest,promise};
+  void promise.then(snapshot => {
+    if (publicSeedInFlight?.digest === digest) { publicSeedCache = snapshot; publicSeedInFlight = null; }
+  }, () => { if (publicSeedInFlight?.digest === digest) publicSeedInFlight = null; });
+  return promise;
+}
+export const getCourtesyGraphServerSnapshot = publicSeedSnapshot;
+export const getSeedFctEndpoints = async (): Promise<FctEndpoint[]> => (await publicSeedSnapshot()).endpoints;
+// A check compares raw flat-file content only; a list request is what parses RDF.
+export const getCourtesyGraphServerDigest = async (): Promise<string> => (await courtesySeedFiles()).digest;
+
+/** Registry is a courtesy directory only. No authenticated SPARQL lookup is
+ * needed for a public read, and a Shared server never needs registration. */
+export async function getConfiguredFctEndpoints(_request?: Request): Promise<FctEndpoint[]> {
+  return getSeedFctEndpoints();
 }
 
 /** Select only the graph server explicitly declared by the current FCT query.
@@ -335,8 +359,10 @@ export function resolveFctEndpointFromAddr(endpoints: FctEndpoint[], addr: unkno
   if (separator < 0) return null;
   const server = normalizeGraphServerUri(addr.slice(separator + 1).trim());
   if (!server) return null;
+  if (!permittedGraphServerTarget(server)) return null;
   const configured = resolveConfiguredFctEndpoint(endpoints, server);
-  return configured ? { ...configured, url: server } : null;
+  return configured ? { ...configured, url: server }
+    : { id: `shared:${encodeURIComponent(server)}`, label: server, url: server, group: "Shared" };
 }
 
 /** Extract the address from serialized FCT query XML for auxiliary operations. */

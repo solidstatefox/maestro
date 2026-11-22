@@ -4,7 +4,12 @@ import { ErrorDetails } from "@/components/ui/error-details";
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 import { createProviderXsltContext } from "@/lib/maestro-provider-xslt";
-import { parseFctResponse } from "@/canvas/utils/fct-response";
+import { parseFctResponse, groupValueBinding } from "@/canvas/utils/fct-response";
+import { parseFctQueryXml } from "@/canvas/utils/query-controller";
+import { serializeFctQuery } from "@/lib/fct-query-api";
+import { activeTransportedFacets } from "@/lib/fct-facet-alias";
+import { createGroupValuesQuery } from "@/lib/fct-query-derived";
+import { toLabel } from "@/lib/uri-labels";
 
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -27,6 +32,68 @@ export function BookmarkCharts({ queryXml, providerUri, stylesheet, onBrowse }: 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const kind = providerUri === BOOKMARK_ACTIVITY_URI ? "activity" : "tags";
+  // A Bookmark Analysis has fixed native dimensions (activity/tags). Its
+  // additional transported dimensions belong to the SAME ancestor FCT scope
+  // and use the canonical Group By query builder, never a local-predicate
+  // substitution. No additional work occurs when there is no active <a>.
+  const aliases = useMemo(() => {
+    const tree = parseFctQueryXml(queryXml);
+    return tree ? activeTransportedFacets(tree).map(alias => ({
+      id: alias.id, parentId: alias.parentId, targetId: alias.href,
+      uri: alias.target.attributes.iri || "",
+      direction: alias.target.name === "property-of" ? "reverse" as const : "forward" as const,
+      label: alias.path.map(hop => `${toLabel(hop.iri, hop.direction === "reverse" ? "Role" : "Property")}${hop.direction === "reverse" ? " of" : ""}`).join(" › "),
+    })) : [];
+  }, [queryXml]);
+  const [selectedAlias, setSelectedAlias] = useState("");
+  const [aliasRows, setAliasRows] = useState<{label:string;count:number}[]>([]);
+  const [aliasLoading, setAliasLoading] = useState(false);
+  const [aliasError, setAliasError] = useState("");
+  useEffect(() => setSelectedAlias(""), [queryXml]);
+  useEffect(() => {
+    if (!selectedAlias) { setAliasRows([]); setAliasError(""); setAliasLoading(false); return; }
+    const tree = parseFctQueryXml(queryXml);
+    const alias = tree && activeTransportedFacets(tree).find(item => item.id === selectedAlias);
+    if (!tree || !alias) { setAliasRows([]); setAliasError("The transported facet is no longer in the current Bookmark scope."); return; }
+    const controller = new AbortController();
+    setAliasRows([]); setAliasError(""); setAliasLoading(true);
+    void (async () => {
+      try {
+        const counts = new Map<string,{label:string;count:number}>();
+        const size = 500;
+        for (let offset=0; offset<=4500; offset+=size) {
+          if (controller.signal.aborted) return;
+          const query = createGroupValuesQuery(tree, {
+            key: `alias:${alias.id}`, uri: alias.target.attributes.iri || "",
+            direction: alias.target.name === "property-of" ? "reverse" : "forward",
+            label: alias.path.map(hop => hop.iri).join(" › "),
+            nodeId: alias.href, anchorId: alias.id, parentId: alias.parentId,
+          }, { limit:size, offset });
+          const response = await cachedFetchFct("/proxy/api/fct", {
+            method:"POST", cache:"no-store", signal:controller.signal,
+            headers:{"Content-Type":"text/xml; charset=utf-8"}, body:serializeFctQuery(query),
+          });
+          const raw = await response.text();
+          if (!response.ok) throw new Error(`Bookmark transported facet HTTP ${response.status}: ${raw.slice(0,250)}`);
+          const parsed = parseFctResponse(raw);
+          if (parsed.incomplete || parsed.error) throw new Error(parsed.error || "The transported Bookmark groups are incomplete.");
+          for (const item of parsed.results) {
+            const count = Number(item.columns?.[1]?.value);
+            if (!Number.isSafeInteger(count) || count <= 0) continue;
+            const identity = JSON.stringify(groupValueBinding(item));
+            const prev = counts.get(identity);
+            if (!prev) counts.set(identity,{label:item.title || item.uri,count});
+          }
+          if (parsed.results.length < size) break;
+          if (offset===4500) throw new Error("Bookmark transported facet exceeds the bounded 5,000-group projection.");
+        }
+        if (!controller.signal.aborted) setAliasRows([...counts.values()].sort((a,b)=>b.count-a.count).slice(0,100));
+      } catch (cause) {
+        if (!controller.signal.aborted) setAliasError(cause instanceof Error ? cause.message : "Transported Bookmark analysis failed.");
+      } finally { if (!controller.signal.aborted) setAliasLoading(false); }
+    })();
+    return () => controller.abort();
+  }, [selectedAlias, queryXml]);
   useEffect(() => {
     const controller = new AbortController();
     setRows([]); setError(""); setLoading(true);
@@ -86,10 +153,32 @@ export function BookmarkCharts({ queryXml, providerUri, stylesheet, onBrowse }: 
     count: rows.filter(r => Number.isInteger(Number(r.hour)) && periodFor(Number(r.hour)) === period).reduce((a,r)=>a+r.count,0),
   })), [rows]);
   const tags = useMemo(() => rows.filter(r=>r.label).sort((a,b)=>b.count-a.count).slice(0,100).map(r=>({label:r.label,count:r.count})),[rows]);
+  const aliasChoice = aliases.length > 0 ? <div className="flex items-center gap-2 text-xs">
+    <label htmlFor="bookmark-analysis-transported-axis">Analysis dimension</label>
+    <select id="bookmark-analysis-transported-axis" className="max-w-full rounded border bg-background px-2 py-1"
+      value={selectedAlias} onChange={event => setSelectedAlias(event.target.value)}>
+      <option value="">{kind === "activity" ? "Bookmark activity" : "Bookmark tags"}</option>
+      {aliases.map(alias => <option key={alias.id} value={alias.id}>{alias.label}</option>)}
+    </select>
+  </div> : null;
+  if (selectedAlias) return <section className="flex min-h-0 w-full flex-col gap-3 p-4" aria-label="Bookmark transported facet analysis">
+    {aliasChoice}
+    <h2 className="text-sm font-medium">Bookmarks grouped by {aliases.find(alias=>alias.id===selectedAlias)?.label ?? "transported facet"}</h2>
+    <p className="text-xs text-muted-foreground">Distinct bookmarks per remote value, traversing the complete anchored FCT relationship path.</p>
+    {aliasLoading ? <p className="text-sm text-muted-foreground">Loading transported groups…</p>
+      : aliasError ? <ErrorDetails prefix="Bookmark transported facet" error={aliasError}/>
+      : aliasRows.length ? <div className="min-h-64 w-full" style={{height:Math.min(660,Math.max(240,aliasRows.length*30))}}>
+        <ResponsiveContainer width="100%" height="100%"><BarChart data={aliasRows.slice(0,20)} layout="vertical" margin={{top:10,right:24,bottom:12,left:0}}>
+          <XAxis type="number" allowDecimals={false}/><YAxis type="category" dataKey="label" width={180} tick={{fontSize:10}}/>
+          <Tooltip formatter={value=>[value,"Bookmarks"]}/><Bar dataKey="count" fill="var(--chart-1)" maxBarSize={20}/>
+        </BarChart></ResponsiveContainer>
+      </div> : <MaestroEmptyResults title="No transported facet groups" description="The anchored path has no values in these bookmarks." onBrowse={onBrowse}/>}
+  </section>;
   if (loading) return <p className="p-4 text-sm text-muted-foreground">Analyzing bookmarks…</p>;
   if (error) return <ErrorDetails prefix="Bookmark analysis" error={error} className="m-4" />;
   if (!rows.length) return <MaestroEmptyResults title="No bookmark analysis results" description="No bookmarked records match this analysis. Try the default Browse perspective." onBrowse={onBrowse}/>;
   if (kind === "tags") return <section className="min-h-0 w-full p-4" aria-label="Bookmark tags pie chart">
+    {aliasChoice}
     <h2 className="mb-2 text-sm font-medium">Bookmark tags</h2>
     <p className="mb-4 text-xs text-muted-foreground">Distinct matching bookmarks per tag. A bookmark with several tags contributes to each tag.</p>
     <div className="h-[min(65vh,560px)] min-h-64 w-full" role="img" aria-label={tags.map(t=>`${t.label}: ${t.count}`).join(", ")}>
@@ -101,6 +190,7 @@ export function BookmarkCharts({ queryXml, providerUri, stylesheet, onBrowse }: 
     </div>
   </section>;
   return <section className="flex min-h-0 w-full flex-col gap-4 p-4" aria-label="Bookmark activity histogram">
+    {aliasChoice}
     <h2 className="text-sm font-medium">Bookmarking activity</h2>
     <p className="text-xs text-muted-foreground">Distinct bookmarks in the current faceted query. Time periods: Morning 07–11, Afternoon 12–17, Twilight 05–06 and 18–19, Evening 20–04 (timestamp hour).</p>
     {([{label:"By day of week",data:days},{label:"By time of day",data:periods}] as const).map(chart=><div key={chart.label} className="min-h-64 w-full" style={{height:280}}>

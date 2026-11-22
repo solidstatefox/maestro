@@ -18,7 +18,7 @@ test("two matching shadcn resizable handles are siblings of the three workspace 
   const shells = read("src/canvas/workspace-pane-shells.tsx");
   assert.equal(workspace.match(/<ResizableHandle withHandle className="shrink-0" \/>/g)?.length, 2);
   assert.match(workspace, /\(!urlStateInitialized \|\| workspaceTab === "browse"\) && <ResizableHandle/);
-  assert.match(workspace, /\(!urlStateInitialized \|\| workspaceTab === "browse"\) && \(skeletons\.record/);
+  assert.match(workspace, /\(!urlStateInitialized \|\| workspaceTab === "browse"\) && \(\s*skeletons\.record/);
   assert.ok(workspace.indexOf('<ResizableHandle withHandle') < workspace.indexOf('<CenterCanvasPanel'));
   assert.doesNotMatch(right, /<ResizableHandle/);
   assert.doesNotMatch(shells, /overflow-hidden border-r/);
@@ -51,7 +51,8 @@ test("Categories metadata is read-only, scoped to personal ontology/cache graphs
   const metadata = read("src/lib/client-ontology-metadata.ts");
   assert.match(metadata, /selectPersonal\(/);
   assert.match(metadata, /const ctx=await personalContext\(\)/);
-  assert.match(metadata, /ontology-cache/);
+  assert.match(metadata, /resolveGraph\(GRAPH\.ONTOLOGY_CACHE,\s*ctx\.base\)/);
+  assert.match(metadata, /resolveGraph\(GRAPH\.ONTOLOGY,\s*ctx\.base\)/);
   assert.match(metadata, /VALUES \?g/);
   assert.doesNotMatch(metadata, /updatePersonal\(|LOAD <|await fetch\(/);
   assert.ok(!read("src/app/proxy/api/service/route.ts").includes('ingestOntologyDocuments'));

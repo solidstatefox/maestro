@@ -27,7 +27,9 @@ test('TODO #63: preparing request is not mislabeled queued and real queue slots 
   assert.match(source,/state: "preparing" \| "queued" \| "active"/);
   assert.match(source,/state: "preparing", queueIndex: 0/);
   assert.match(source,/state: "queued"/);
-  assert.match(source,/displayPositions\.get\(controller\) \?\? 0/);
+  assert.match(source,/const next = detail\.state === "queued" \? browserPositions\.get\(controller\) \?\? 0 : 0/);
+  assert.doesNotMatch(source,/displayPositions\.get\(controller\)/);
+  assert.match(source,/serverQueueIndex: queueIndex/);
 });
 test('TODO #65: personal SPARQL update errors distinguish foreign/dynamic graphs',()=>{
   const source=read('src/app/proxy/api/sparql/route.ts');

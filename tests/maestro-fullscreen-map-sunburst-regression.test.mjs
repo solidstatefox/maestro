@@ -20,7 +20,9 @@ test('fullscreen Record is an explicit XState presentation with pointer and wand
 });
 
 test('fullscreen Record click-capture blocks Browse property mutation and supports Wand on empty-valued predicates', () => {
-  const fullscreen = pane.split('if (fullscreenPane) {')[1]?.split('// Browse keeps its existing behavior')[0] || '';
+  // Keep this test scoped to fullscreen; the Browse handler deliberately
+  // supports distinct plain-click and Shift-click behavior below this boundary.
+  const fullscreen = pane.split('if (fullscreenPane) {')[1]?.split("// Browse's URI values now behave like the Record title:")[0] || '';
   assert.match(fullscreen, /event\.preventDefault\(\);\s*event\.stopPropagation\(\)/);
   assert.match(fullscreen, /interactionMode === "wand"/);
   assert.match(fullscreen, /onRdfaAction\(\{ sessionIndex, statement: picked\.statement, intent: "wand", kind: picked\.kind \}\)/);

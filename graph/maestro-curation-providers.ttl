@@ -83,4 +83,6 @@ _:curatedProviderList33 rdf:first <gttp://ggg.maestro.ui/provider/category-sunbu
 _:curatedProviderList34 rdf:first <gttp://ggg.maestro.ecosys/analyze/sankey-d3> ;
     rdf:rest _:curatedProviderList35 .
 _:curatedProviderList35 rdf:first <gttp://ggg.maestro.ui/provider/category-sunburst-chartkit> ;
+    rdf:rest _:curatedProviderList36 .
+_:curatedProviderList36 rdf:first <gttp://ggg.maestro.ecosys/eu-data/provider/involved-party> ;
     rdf:rest rdf:nil .

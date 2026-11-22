@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { buildRecordServiceDiscoveryQueries, safeRecordServiceIri } from "@/lib/record-service-discovery-query";
@@ -11,7 +12,7 @@ export async function discoverRecordServices(types: string[], signal?: AbortSign
   const classes = [...new Set(types.filter(safeRecordServiceIri))].slice(0,100);
   if (!classes.length) return [];
   const ctx = await personalContext();
-  const graph = `${ctx.base}/shacl/policies`;
+  const graph = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`;
   const queries = buildRecordServiceDiscoveryQueries(graph, classes);
   const byService = new Map<string,RecordService>();
   // The authenticated transport enforces a 10 KB read limit when a server

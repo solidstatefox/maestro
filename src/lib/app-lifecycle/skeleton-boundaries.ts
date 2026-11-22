@@ -37,33 +37,15 @@ export function selectWorkspaceSkeletonBoundaries(facts: WorkspaceSkeletonFacts)
   const graphSelector: LoadingBoundary = !facts.registryReady
     ? facts.endpointFailed ? "error" : "loading"
     : facts.endpointReady ? "ready" : facts.endpointFailed || facts.graphPhase === "unavailable" ? "error" : "loading";
-  // Once hydration is complete, both checking and unavailable graph servers
-  // project the stable zero-data panes. A retry does not reintroduce a skeleton.
-  const graphNotReady = shell === "ready" && graphSelector !== "ready";
-  // Named-graph discovery is a query-scope prerequisite, NOT a failed server
-  // health check. A green selector remains ready even when auto-fill times out.
-  const discoveryBlocked = facts.discoveryPending === true;
-  // Discovery errors are advisory. A successful health check, not optional
-  // graph enumeration, determines whether browsing is permitted.
-  const facets: LoadingBoundary = shell === "loading" ? "loading"
-    : graphNotReady ? "degraded"
-    : discoveryBlocked || (facts.facetsLoading && !facts.facetContentPresent && !facts.facetFailed) ? "loading" : "ready";
-  // Browse relies on the selected server and the live-query subscriber. View and
-  // Analyze retain their own content/empty/error handling and are not suppressed
-  // by unrelated personal-store discovery or an endpoint health probe.
-  const results: LoadingBoundary = shell === "loading" ? "loading"
-    : facts.tab !== "browse" ? "ready"
-    : graphNotReady ? "degraded"
-    : discoveryBlocked || facts.queryPhase === "readyToExecute" ||
-      (!facts.initialQueryStarted && (facts.queryPhase === "restoring" ||
-       facts.queryPhase === "waitingForServer")) ? "loading" : "ready";
-  // No selected Record means an empty Record pane, not a loading skeleton.
-  const record: LoadingBoundary = shell === "loading" ? "loading"
-    : facts.tab === "browse" && graphNotReady ? "degraded"
-    : !facts.recordSelected || facts.tab !== "browse" ? "ready"
-    : facts.recordReady ? "ready"
-    : facts.recordFailed ? "error"
-    : facts.recordLoading ? "loading" : "ready";
+  // Hydrated panes are *always* mounted. The actual Categories, Results and
+  // Record widgets own their individual queued/running/empty/error states and
+  // the existing ElapsedStatus clocks. A separate skeleton must never replace
+  // those widgets, hide an error, or unmount their timers on a health change.
+  // During hydration only, the static shell is shown because no restored FCT
+  // query or selected endpoint exists yet.
+  const facets: LoadingBoundary = shell === "loading" ? "loading" : "ready";
+  const results: LoadingBoundary = shell === "loading" ? "loading" : "ready";
+  const record: LoadingBoundary = shell === "loading" ? "loading" : "ready";
   return { shell, graphSelector, facets, results, record };
 }
 

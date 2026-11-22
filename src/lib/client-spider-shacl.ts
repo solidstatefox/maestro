@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Execute the provider's declared Spider numeric SHACL Core shape against
  * every current result/axis cell. No numeric policy is hard-coded in TS: the
  * authoritative sh:property, sh:minCount/maxCount, nodeKind and pattern are
@@ -46,7 +47,7 @@ export async function validateSpiderCore(axes: readonly SpiderAxis[], rows: read
   // Read the declared provider policy itself, including its blank-node
   // property shape, rather than maintaining an alternative TS policy.
   const bindings = await selectPersonal(`PREFIX sh: <${SH}>
-SELECT ?s ?p ?o WHERE { GRAPH <${ctx.base}/shacl/policies> {
+SELECT ?s ?p ?o WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
   { BIND(<${shapeUri}> AS ?s) ?s ?p ?o }
   UNION { <${shapeUri}> sh:property ?s . ?s ?p ?o }
 } } LIMIT 129`, ctx, signal) as Row[];

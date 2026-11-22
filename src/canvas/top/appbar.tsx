@@ -5,7 +5,7 @@ import { BadgeQuestionMark, BadgeCheck, BadgeX, BadgeAlert } from "lucide-react"
 export type EndpointStatus = {
   id: string;
   status: number | null;
-  state: "ok" | "server-error" | "http-error" | "timeout" | "unreachable" | "probe-error";
+  state: "ok" | "degraded" | "server-error" | "http-error" | "timeout" | "unreachable" | "probe-error";
   testedUrl?: string;
   diagnostic?: string;
   attempts?: Array<{ url: string; status: number | null; state: string; method?: string; query?: string;
@@ -31,7 +31,8 @@ export function EndpointStatusIcon({ status }: { status?: EndpointStatus }) {
   if (!status) return <BadgeQuestionMark aria-label="Not yet polled" className="size-4 shrink-0 text-muted-foreground" />;
   const httpStatus = status.status;
   if (httpStatus === 200 && status.state === "ok") return <BadgeCheck aria-label="HTTP 200 OK" className="size-4 shrink-0 text-green-600" />;
-  if (status.state === "probe-error") return <BadgeQuestionMark aria-label="SPARQL health probe inconclusive" className="size-4 shrink-0 text-muted-foreground" />;
+  if (status.state === "degraded") return <BadgeAlert aria-label="Graph server connection degraded" className="size-4 shrink-0 text-amber-500" />;
+  if (status.state === "probe-error") return <BadgeAlert aria-label="SPARQL health probe inconclusive" className="size-4 shrink-0 text-amber-500" />;
   if (httpStatus !== null && httpStatus >= 500) return <BadgeX aria-label={`HTTP ${httpStatus}`} className="size-4 shrink-0 text-red-600" />;
   if (httpStatus !== null && httpStatus >= 400) return <BadgeAlert aria-label={`HTTP ${httpStatus}`} className="size-4 shrink-0 text-orange-500" />;
   // A failed probe with no HTTP response must not be mistaken for "never polled".

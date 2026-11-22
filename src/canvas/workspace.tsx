@@ -7,7 +7,7 @@ import { BrowseRibbon } from "@/canvas/tab/browse/ribbon";
 import { ViewRibbon } from "@/canvas/tab/view/ribbon";
 import { AnalyzeRibbon } from "@/canvas/tab/analyze/ribbon";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 
 import maestroLanguages from "@/data/maestro-languages.json";
 
@@ -19,17 +19,22 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Toaster, toast } from "@/components/ui/toast";
 
 import { clearClientQueryCache } from "@/lib/client-query-cache";
+import { selectMaestroCapabilities } from "@/lib/app-lifecycle/access";
 
 import { clearMaestroStorage } from "@/lib/maestro-storage";
 import { Progress } from "@/components/ui/progress";
-import { AppbarLoadingSkeleton, RibbonLoadingSkeleton, FacetsLoadingSkeleton, ResultsLoadingSkeleton, RecordLoadingSkeleton } from "@/canvas/workspace-skeleton";
+import { FacetsLoadingSkeleton, ResultsLoadingSkeleton } from "@/canvas/workspace-skeleton";
+import { CenterPaneFrame, CenterPaneBody } from "@/canvas/workspace-pane-shells";
 import { GraphUnavailableFacets, GraphUnavailableResults, GraphUnavailableRecord } from "@/canvas/workspace-unavailable";
 import { selectWorkspaceSkeletonBoundaries, selectLeftPaneSkeletonWidgets } from "@/lib/app-lifecycle/skeleton-boundaries";
-import { resolveTransportedFacets } from "@/lib/fct-facet-alias";
+import { activeTransportedFacets } from "@/lib/fct-facet-alias";
 import { propertyUsageScope } from "@/lib/property-usage-query";
 import { AppLifecycleDiagnostics } from "@/canvas/diagnostics/app-lifecycle-diagnostics";
 import { ResizableHandle, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
+import { Button } from "@/components/ui/button";
+import { FileWarning } from "lucide-react";
+import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import { fctQueryExecutionAddress } from "@/lib/fct-query-clone";
 
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
@@ -97,6 +102,8 @@ const TEXT_SEARCH_NAME_PROPERTIES = [
 ] as const;
 
 import { useWorkspaceController } from "@/canvas/utils/workspace-controller";
+import { readShareableUiState } from "@/canvas/utils/query-controller";
+import type { LeftSkeletonPane } from "@/lib/app-lifecycle/skeleton-boundaries";
 import { createBreadcrumbRenderers } from "@/canvas/top/breadcrumb-renderers";
 import { RootAutocompleteQueryInspector } from "@/canvas/top/root-autocomplete-query-inspector";
 import { AppBarSection } from "@/canvas/top/appbar-pane";
@@ -108,6 +115,21 @@ import { RightCanvasPanel } from "@/canvas/right/pane";
 export function MaestroWorkspace() {
   const workspace = useWorkspaceController();
   const [analyzeRibbonPanel, setAnalyzeRibbonPanel] = useState<"analytics" | "trail">("analytics");
+  // The arriving share URL may specify Configure, but the controller begins at
+  // Filters until its canonical restore commits the FCT query and UI.
+  // Project only the *skeleton* from the arriving URL to avoid a wrong-pane
+  // flash; never mutate the query, graph-server selection, or saved pane state.
+  const [arrivalLeftPane, setArrivalLeftPane] = useState<{
+    pane: LeftSkeletonPane;
+    focusListOrder?: "Properties" | "Roles";
+  } | null>(null);
+  useLayoutEffect(() => {
+    const state = readShareableUiState(window.location.search);
+    if (state?.defaultLeftTab === "facets" || state?.defaultLeftTab === "personal" || state?.defaultLeftTab === "community") {
+      setArrivalLeftPane({ pane: state.defaultLeftTab,
+        focusListOrder: state.focusListOrder === "Roles" || state.focusListOrder === "Properties" ? state.focusListOrder : undefined });
+    }
+  }, []);
   const { renderRootBreadcrumb, renderPathBreadcrumb } = createBreadcrumbRenderers(workspace);
   const {
     FACET_PAGE_SIZE,
@@ -574,6 +596,7 @@ export function MaestroWorkspace() {
     tutorialMode,
     uriNode,
     urlStateInitialized,
+    urlRestoreError,
     validateSelectedRecord,
     viewDiscoveryError,
     viewDiscoveryLoading,
@@ -596,6 +619,8 @@ export function MaestroWorkspace() {
   // The visible left pane defines which facet data is relevant. Loading a
   // Configure-only Properties query must not hide an otherwise ready Filters
   // pane (nor make Filters look ready before Categories/Graphs have loaded).
+  const restoringLeftPane = !urlStateInitialized ? (arrivalLeftPane?.pane ?? defaultLeftTab) : defaultLeftTab;
+  const restoringFocusOrder = !urlStateInitialized ? (arrivalLeftPane?.focusListOrder ?? focusListOrder) : focusListOrder;
   const configuring = defaultLeftTab === "facets";
   const filtering = defaultLeftTab === "personal";
   const leftPaneLoading = configuring
@@ -627,12 +652,12 @@ export function MaestroWorkspace() {
     }
   }
   const leftSkeletonWidgets = selectLeftPaneSkeletonWidgets({
-    pane: defaultLeftTab,
-    focusListOrder,
+    pane: restoringLeftPane,
+    focusListOrder: restoringFocusOrder,
     showStatus: workspace.accessCapabilities.canShowStatusFacet,
     showPropertyUsage: Boolean(propertyUsageScope(queryTree)),
     focusWidgetsSuppressed,
-    transported: resolveTransportedFacets(queryTree).map(alias => ({
+    transported: activeTransportedFacets(queryTree).map(alias => ({
       key: alias.id,
       title: alias.path.map(step => toLabel(step.iri, "Property")).join(" › "),
     })),
@@ -679,7 +704,7 @@ export function MaestroWorkspace() {
   };
   collectQueryClasses(queryTree.children);
   // Use the identical live ribbon in both ready and loading layouts.
-  const workspaceRibbon = !urlStateInitialized ? <RibbonLoadingSkeleton /> : (!workspace.accessCapabilities.canUsePersonalStore || workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewProvider={viewProvider} setViewProvider={setViewProvider} onSelectProvider={workspace.selectViewProvider} onFeaturesEntered={workspace.enterViewFeatures} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setViewPanel("perspectives"); setSelectedViewUri(uri); setViewProvider(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} queryMatchedProviders={workspace.queryMatchedProviders} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <MaestroHoverExpand active={analyzeRibbonPanel} onChange={(panel) => {
+  const workspaceRibbon = !urlStateInitialized ? <div role={urlRestoreError ? "alert" : "status"} aria-live="polite" className="flex min-h-12 shrink-0 items-center gap-3 border-b px-4 py-2"><span className="text-sm font-semibold">Browse</span><span className="text-xs text-muted-foreground">{urlRestoreError ? "Share URL restoration failed" : "Restoring query…"}</span></div> : (!workspace.accessCapabilities.canUsePersonalStore || workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewProvider={viewProvider} setViewProvider={setViewProvider} onSelectProvider={workspace.selectViewProvider} onFeaturesEntered={workspace.enterViewFeatures} selectedViewUri={selectedViewUri} onSelectView={(uri) => { setViewPanel("perspectives"); setSelectedViewUri(uri); setViewProvider(null); }} viewDiscoveryLoading={viewDiscoveryLoading} queryClassUris={queryClassUris} queryMatchedProviders={workspace.queryMatchedProviders} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <MaestroHoverExpand active={analyzeRibbonPanel} onChange={(panel) => {
     if (panel === "analytics" || panel === "trail") setAnalyzeRibbonPanel(panel);
   }} panels={[{ id: "trail", label: "Trail", content: <nav aria-label="Analyze breadcrumbs" className="flex w-max min-w-full flex-nowrap items-start gap-2">{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb,index)=>renderPathBreadcrumb(crumb,index))}</nav> }, { id: "analytics", label: "Analytics", content: <AnalyzeRibbon analysisDefinitions={analysisDefinitions} selectedAnalysisUri={selectedAnalysisUri} analyzeHistogram={analyzeHistogram} isCompareAnalysis={isCompareAnalysis} firstBreadcrumbLabel={tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : undefined} firstResultTitle={visibleResultsPage[0]?.title} onSelectAnalysis={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(false); }} onSelectHistogram={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(true); }} /> }]} />);
   return (
@@ -691,7 +716,7 @@ export function MaestroWorkspace() {
         <button type="button" className="shrink-0 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:opacity-50" disabled={isRefreshingFailedEndpoint} onClick={() => void refreshFailedEndpointAndRetry()}>{isRefreshingFailedEndpoint ? "Refreshing…" : "Refresh"}</button>
         <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" aria-label="Dismiss health check error" onClick={() => setEndpointHealthToast(null)}>×</button>
       </div>}
-      <AlertDialog open={clearCacheDialogOpen} onOpenChange={setClearCacheDialogOpen}>
+      <AlertDialog open={clearCacheDialogOpen && workspace.accessCapabilities.canClearCaches} onOpenChange={setClearCacheDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Clear Maestro cache?</AlertDialogTitle>
@@ -699,7 +724,12 @@ export function MaestroWorkspace() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={async () => {
+            <AlertDialogAction variant="destructive" disabled={!workspace.accessCapabilities.canClearCaches} onClick={async (event) => {
+              if (!selectMaestroCapabilities(workspace.accessController.getSnapshot()).canClearCaches) {
+                event.preventDefault();
+                toast.add({ title: "Cache clearing unavailable", description: "Wait until login and graph seeding finish.", type: "warning" });
+                return;
+              }
               try {
                 await clearClientQueryCache();
                 await clearMaestroStorage();
@@ -734,20 +764,33 @@ export function MaestroWorkspace() {
           <Progress className="h-full rounded-none bg-muted" value={endpointChecksTotal > 0 ? (endpointChecksCompleted / endpointChecksTotal) * 100 : 0} indeterminate={endpointChecksTotal === 0 || endpointChecksCompleted === 0} aria-label="FCT endpoint check progress" />
         </div>
       )}
-      {urlStateInitialized && endpointReadyForQuery && personalWidgets.map((widget) => (
+      {urlStateInitialized && endpointReadyForQuery && personalWidgets.filter((widget) => {
+        if (!widget.anchor) return true;
+        // The previous Browse widgets can survive for one render after a ribbon
+        // replaces the FCT tree. Never mount an alias listener for a stale path.
+        return activeTransportedFacets(queryTree).some((candidate) =>
+          candidate.id === widget.anchor?.id && candidate.parentId === widget.anchor.parentId &&
+          candidate.href === widget.anchor.href &&
+          candidate.path.length === widget.anchor.path.length &&
+          candidate.path.every((hop, index) => hop === widget.anchor?.path[index]));
+      }).map((widget) => (
         <PersonalWidgetQueryListener
-          key={widget.uri}
+          key={widget.key ?? widget.uri}
+          widgetKey={widget.key ?? widget.uri}
+          anchorId={widget.anchor?.id}
           propertyUri={widget.uri}
-          sortByCount={centralTab === "groups" && groupByPropertyUri === `forward:${widget.uri}`}
+          sortByCount={centralTab === "groups" && groupByPropertyUri === (widget.anchor ? `alias:${widget.anchor.id}` : `forward:${widget.uri}`)}
           limit={leftWidgetLimits.personalFacets}
-          groupBy={centralTab === "groups" && selectedGroupByOption && groupedPersonalFacetUri === widget.uri ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined}
+          groupBy={centralTab === "groups" && selectedGroupByOption && groupedPersonalFacetUri === widget.uri &&
+            (selectedGroupByOption.anchorId ? selectedGroupByOption.anchorId === widget.anchor?.id : !widget.anchor)
+            ? { option: selectedGroupByOption, limit: groupBatchSize } : undefined}
           setPersonalWidgets={setPersonalWidgets}
           endpointReady={endpointReadyForQuery}
           refreshRevision={queryRefreshRevision}
         />
       ))}
 
-      {skeletons.shell === "loading" ? <AppbarLoadingSkeleton /> : <AppBarSection workspace={workspace} />}
+      <AppBarSection workspace={workspace} />
 
       <Dialog open={workspace.accessCapabilities.canUsePersonalStore && isRdfLoaderOpen} onOpenChange={(open) => { if (!isRdfLoading) setIsRdfLoaderOpen(open); }}>
         <DialogContent aria-labelledby="rdf-loader-title" className="w-full max-w-xl p-5">
@@ -881,14 +924,11 @@ export function MaestroWorkspace() {
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 
-          <ResizablePanelGroup key={urlStateInitialized ? workspaceTab : "restoring"} direction="horizontal" className="min-h-0 flex-1">
+          <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
             {skeletons.facets === "loading" ? <FacetsLoadingSkeleton
-              pane={defaultLeftTab}
+              pane={restoringLeftPane}
               widgets={leftSkeletonWidgets}
-              interactive={urlStateInitialized}
-              onShowFilters={commitConfigureFacetChanges}
-              onConfigureProperties={() => { workspace.setFocusListOrder("Properties"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }}
-              onConfigureRoles={() => { workspace.setFocusListOrder("Roles"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }}
+              workspace={workspace}
             /> : skeletons.facets === "degraded"
               ? <GraphUnavailableFacets pane={defaultLeftTab}
                 onShowFilters={commitConfigureFacetChanges}
@@ -896,13 +936,32 @@ export function MaestroWorkspace() {
                 onConfigureRoles={() => { workspace.setFocusListOrder("Roles"); setDefaultLeftTab("facets"); }} />
               : <LeftCanvasPanel workspace={workspace} />}
             <ResizableHandle withHandle className="shrink-0" />
-            {skeletons.results === "loading" ? <ResultsLoadingSkeleton wide={urlStateInitialized && workspaceTab !== "browse"} />
+            {!urlStateInitialized && urlRestoreError ? (
+              <CenterPaneFrame><CenterPaneBody>
+              <section role="alert" className="flex min-h-0 flex-1 flex-col overflow-auto px-6 py-4" aria-label="Share URL restoration error">
+                <MaestroEmptyResults
+                  title="Could not restore the Share URL"
+                  media={<FileWarning aria-hidden="true"/>}
+                  description={<>
+                    {urlRestoreError}
+                    <span className="mt-2 block text-xs">The incoming URL is preserved. FCT execution remains blocked until a valid query is restored.</span>
+                  </>}
+                  actions={<>
+                    <Button type="button" variant="default" size="sm"
+                      className="bg-black text-white hover:bg-zinc-800 focus-visible:ring-zinc-500 dark:bg-black dark:text-white dark:hover:bg-zinc-800"
+                      onClick={() => window.location.reload()}>Retry</Button>
+                    <Button type="button" variant="outline" size="sm"
+                      onClick={() => window.location.assign(window.location.pathname)}>New Query</Button>
+                  </>}
+                />
+              </section>
+              </CenterPaneBody></CenterPaneFrame>
+            ) : skeletons.results === "loading" ? <ResultsLoadingSkeleton wide={urlStateInitialized && workspaceTab !== "browse"} />
               : skeletons.results === "degraded" ? <GraphUnavailableResults wide={urlStateInitialized && workspaceTab !== "browse"} />
               : <CenterCanvasPanel workspace={workspace} />}
             {(!urlStateInitialized || workspaceTab === "browse") && <ResizableHandle withHandle className="shrink-0" />}
-            {(!urlStateInitialized || workspaceTab === "browse") && (skeletons.record === "loading"
-              ? <RecordLoadingSkeleton /> : skeletons.record === "degraded"
-              ? <GraphUnavailableRecord /> : <RightCanvasPanel workspace={workspace} />)}
+            {(!urlStateInitialized || workspaceTab === "browse") && (
+              skeletons.record === "degraded" ? <GraphUnavailableRecord /> : <RightCanvasPanel workspace={workspace} />)}
           </ResizablePanelGroup>
 
       </div>

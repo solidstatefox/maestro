@@ -44,7 +44,7 @@ const FORBIDDEN_EXTENSIONS = /(?:http:\/\/saxon\.sf\.net\/|http:\/\/saxonica\.co
 export async function transformWithMaestroSaxon(
   stylesheetText: string,
   sourceXml: string,
-  options: { recordUri?: string; outputLimit?: number; signal?: AbortSignal; providerExecutableMarkup?: boolean } = {},
+  options: { recordUri?: string; outputLimit?: number; signal?: AbortSignal; providerExecutableMarkup?: boolean; sandboxPhase?: "queries" } = {},
 ): Promise<string> {
   if (options.signal?.aborted) throw new DOMException("Transformation canceled", "AbortError");
   if (stylesheetText.length > 250000 || XMLValidator.validate(stylesheetText) !== true ||
@@ -61,9 +61,9 @@ export async function transformWithMaestroSaxon(
   const result = saxon.XPath.evaluate(`transform(map {
     'stylesheet-text': $stylesheet,
     'source-node': parse-xml($source),
-    'stylesheet-params': map { QName('', 'recordUri'): $recordUri },
+    'stylesheet-params': map { QName('', 'recordUri'): $recordUri ${options.sandboxPhase ? ", QName('', 'maestroPhase'): $maestroPhase" : ""} },
     'delivery-format': 'serialized'
-  })?output`, null, { params: { stylesheet: stylesheetText, source: sourceXml, recordUri: options.recordUri ?? "" } });
+  })?output`, null, { params: { stylesheet: stylesheetText, source: sourceXml, recordUri: options.recordUri ?? "", maestroPhase: options.sandboxPhase ?? "" } });
   if (options.signal?.aborted) throw new DOMException("Transformation canceled", "AbortError");
   // SaxonJS may return a singleton sequence, depending on the XPath runtime.
   const value = Array.isArray(result) && result.length === 1 ? result[0] : result;

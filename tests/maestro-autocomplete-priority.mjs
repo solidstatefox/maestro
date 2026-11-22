@@ -67,6 +67,7 @@ const scheduler = loadTs("src/lib/graph-server-query-scheduler.ts", {
     currentProxyClient: () => "test-client",
     getProxyClientPreferences: () => ({ lightPerServer: 1, heavyPerServer: 1 }),
   },
+  "./proxy-query-events": { proxyQueuePositionNotifier: () => undefined },
 });
 assert.equal(scheduler.classifyMaestroRequest("/proxy/api/sparql",new Headers(),'{"requestClass":"autocomplete"}'),"autocomplete");
 assert.equal(scheduler.weightMaestroQuery("SELECT DISTINCT ?uri ?label", "autocomplete"),"light");

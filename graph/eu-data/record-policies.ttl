@@ -1,0 +1,76 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix eurio: <http://data.europa.eu/s66#> .
+@prefix schema: <https://schema.org/> .
+
+# Eleven class-specific policies for Maestro's existing Record resolver.
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#Project> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Research project Record policy"@en ;
+  mui:forClass <http://data.europa.eu/s66#Project> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#ProjectRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#Organisation> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Research organisation Record policy"@en ;
+  mui:forClass <http://data.europa.eu/s66#Organisation> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#OrganisationRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#Person> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Researcher Record policy"@en ;
+  mui:forClass <http://data.europa.eu/s66#Person> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#PersonRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#Grant> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Grant Record policy"@en ;
+  mui:forClass <http://data.europa.eu/s66#Grant> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#GrantRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#Result> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Research result Record policy"@en ;
+  mui:forClass <http://data.europa.eu/s66#Result> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#ResultRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#Role> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Participation role Record policy"@en ;
+  mui:forClass <http://data.europa.eu/s66#Role> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#RoleRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#Dataset> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Dataset Record policy"@en ;
+  mui:forClass <http://www.w3.org/ns/dcat#Dataset> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#DatasetRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#Distribution> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Dataset distribution Record policy"@en ;
+  mui:forClass <http://www.w3.org/ns/dcat#Distribution> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#DistributionRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#DataService> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Data service Record policy"@en ;
+  mui:forClass <http://www.w3.org/ns/dcat#DataService> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#DataServiceRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#Catalog> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Data catalogue Record policy"@en ;
+  mui:forClass <http://www.w3.org/ns/dcat#Catalog> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#CatalogRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#CatalogRecord> a mui:ClassPolicy ;
+  rdfs:label "EU Data · Catalogue record Record policy"@en ;
+  mui:forClass <http://www.w3.org/ns/dcat#CatalogRecord> ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#CatalogRecordRecord> ;
+  mui:widget mui:RecordViewerWidget .

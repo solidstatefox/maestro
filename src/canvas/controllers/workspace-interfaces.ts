@@ -79,6 +79,7 @@ export type PersonalWidgetCardsWorkspace = Pick<WorkspaceController,
   | "facetHoverPreview"
   | "findPropertyPathNode"
   | "groupByOptions"
+  | "groupByPropertyUri"
   | "groupedPersonalFacetUri"
   | "navigateIntoRelationship"
   | "navigateToPropertyPath"
@@ -86,6 +87,7 @@ export type PersonalWidgetCardsWorkspace = Pick<WorkspaceController,
   | "personalWidgets"
   | "queryTree"
   | "removeProperty"
+  | "replaceQueryTree"
   | "scrollToGroupForFacetValue"
   | "setCentralTab"
   | "setFacetCandidateCounts"
@@ -283,6 +285,7 @@ export type LeftPaneDirectWorkspace = Pick<WorkspaceController,
 
 export type RecordPaneWorkspace = Pick<WorkspaceController,
   | "recordSelectionCleared"
+  | "recordIdentityPending"
   | "accessCapabilities"
   | "RECORD_DESCRIPTION_PAGE_SIZE"
   | "activeBlankNodeTab"
@@ -386,6 +389,7 @@ export type RecordPaneWorkspace = Pick<WorkspaceController,
 
 export type SettingsPaneWorkspace = Pick<WorkspaceController,
   | "accessCapabilities"
+  | "accessController"
   | "queryConcurrency"
   | "changeQueryConcurrency"
   | "authSession"
@@ -503,6 +507,7 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "deleteCurrentQueryHistory"
   | "endpointChecksCompleted"
   | "endpointChecksTotal"
+  | "checkingEndpointIds"
   | "endpointMenuError"
   | "endpointStatuses"
   | "exitEverywhere"
@@ -519,9 +524,11 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "graphProbe"
   | "graphProbeIdentity"
   | "graphRegistryReady"
+  | "graphServerDirectoryHydrated"
   | "graphText"
   | "groupBatchSize"
   | "handleFetchProfile"
+  | "handleRetryPersonalInitialization"
   | "handleLoginSubmit"
   | "handleTestConnection"
   | "historyActionItems"

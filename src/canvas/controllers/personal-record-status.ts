@@ -46,6 +46,10 @@ export function usePersonalRecordStatus({ enabled, results, selectedUri, results
   const [federatedCounts, setFederatedCounts] = useState<Record<StatusFacetName, number> | null>(null);
   const [federatedQuery, setFederatedQuery] = useState("");
   const [statusRevision, setStatusRevision] = useState(0);
+  // An XState/query refresh creates a new page identity, but a React render,
+  // status count update or Strict Mode effect replay must not write the *same*
+  // located page again. Reuse its pending write before performing page reads.
+  const locatedPageWritesRef = useRef(new Map<string, Promise<void>>());
   const previousViewedRecordRef = useRef("");
   const viewedRef = useRef(new Set<string>());
   const pageUris = useMemo(() => [...new Set(results.filter((r) => r.uri && r.termType !== "bnode" && /^(https?:|gttp:|gttps:)/i.test(r.uri)).map((r) => r.uri))], [results]);
@@ -81,10 +85,21 @@ export function usePersonalRecordStatus({ enabled, results, selectedUri, results
       try {
         // Commit the received page before page-local reads. Do not abort this
         // server mutation when navigating rapidly: every received page counts.
-        const executionTime = new Date().toISOString();
         const batches = Array.from({ length: Math.ceil(uris.length / 150) }, (_, index) => uris.slice(index * 150, (index + 1) * 150));
-        // All batches must finish writing even when a user immediately pages on.
-        await Promise.all(batches.map((batch) => recordClientLocatedPage(hash, batch, executionTime)));
+        const observationKey = `${hash}\u0000${pageIdentity}\u0000${pageKey}`;
+        let recorded = locatedPageWritesRef.current.get(observationKey);
+        if (!recorded) {
+          const executionTime = new Date().toISOString();
+          // Do not abort committed observations on navigation; all batches of
+          // a received page are one logical execution.
+          recorded = Promise.all(batches.map(batch => recordClientLocatedPage(hash, batch, executionTime))).then(() => undefined);
+          locatedPageWritesRef.current.set(observationKey, recorded);
+          void recorded.catch(() => { if (locatedPageWritesRef.current.get(observationKey) === recorded)
+            locatedPageWritesRef.current.delete(observationKey); });
+          if (locatedPageWritesRef.current.size > 100)
+            locatedPageWritesRef.current.delete(locatedPageWritesRef.current.keys().next().value!);
+        }
+        await recorded;
         if (controller.signal.aborted) return;
         const pages = await Promise.all(batches.map((batch) => readClientRecordPage(batch, controller.signal)));
         if (controller.signal.aborted) return;

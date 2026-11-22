@@ -1,4 +1,5 @@
 "use client";
+import { PerspectiveCalendarHeatmap } from "@/canvas/tab/view/perspective-calendar-heatmap";
 import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import { ErrorDetails } from "@/components/ui/error-details";
 
@@ -11,6 +12,7 @@ import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import { createPortal } from "react-dom";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import { Input } from "@/components/ui/input";
 import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
 import { toLabel } from "@/lib/uri-labels";
@@ -39,7 +41,8 @@ type Collection = { provider: Provider & { stylesheet: string }; rows: Entry[] }
 type IconSlot = { element: HTMLElement; icon: IconName };
 type PinSlot = { element: HTMLElement; id: string; pinned: boolean };
 type ActionSlot = { element: HTMLElement; id: string; action: "select" | "delete"; selected: boolean };
-const PERSPECTIVE_PAGE_SIZE = 20;
+type BookmarkActionSlot = { element: HTMLElement; id: string; pinned: boolean; pinEnabled: boolean };
+const PERSPECTIVE_PAGE_SIZES = [10, 20, 50, 100] as const;
 
 /** A shortcut points to a saved Bookmark IRI. Resolve that exact identity first.
  * For pre-existing providers whose action IRI no longer matches the returned
@@ -91,10 +94,13 @@ function rootResourceQuery(xml: string): string | null {
   root.appendChild(view);
   return new XMLSerializer().serializeToString(doc);
 }
-export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBrowse }: { active: boolean; kind: "bookmarks" | "history"; providerUri: string; queryXml: string; onBrowse: () => void }) {
+export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBrowse, onOpenShareUrl }: { active: boolean; kind: "bookmarks" | "history"; providerUri: string; queryXml: string; onBrowse: () => void; onOpenShareUrl: (url: string) => boolean }) {
   const [collection, setCollection] = useState<Collection | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<number>(20);
+  const [calendarDay, setCalendarDay] = useState<string | null>(null);
+  const onCalendarFilter = useCallback((date: string | null) => { setCalendarDay(date); setPage(0); }, []);
   const [selected, setSelected] = useState<string[]>([]);
   const [html, setHtml] = useState("");
   const [renderedSignature, setRenderedSignature] = useState("");
@@ -108,6 +114,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
   const [iconSlots, setIconSlots] = useState<IconSlot[]>([]);
   const [pinSlots, setPinSlots] = useState<PinSlot[]>([]);
   const [actionSlots, setActionSlots] = useState<ActionSlot[]>([]);
+  const [bookmarkActionSlots, setBookmarkActionSlots] = useState<BookmarkActionSlot[]>([]);
   const [matchingResources, setMatchingResources] = useState<{ scope: string; ids: Set<string> } | null>(null);
   const [scopeLoading, setScopeLoading] = useState(false);
   const scopedQuery = useMemo(() => typeof DOMParser === "undefined" ? null : rootResourceQuery(queryXml), [queryXml]);
@@ -221,14 +228,14 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
   const filtered = useMemo(() => [...(collection?.rows ?? [])]
     .filter(row => !scopedQuery || (matchingResources?.scope === scopedQuery && matchingResources.ids.has(row.uri)))
     .sort((a,b) => Number(Boolean(bookmarkShortcut(b, appbarButtons, collection?.rows ?? []))) - Number(Boolean(bookmarkShortcut(a, appbarButtons, collection?.rows ?? []))))
-    .filter(row => [row.label, row.description, row.url, row.created, ...(row.tags ?? []), row.queryXml].some(v => v.toLowerCase().includes(search.toLowerCase().trim()))),
-    [collection, search, appbarButtons, scopedQuery, matchingResources]);
+    .filter(row => (!calendarDay || row.created.slice(0,10) === calendarDay) && [row.label, row.description, row.url, row.created, ...(row.tags ?? []), row.queryXml].some(v => v.toLowerCase().includes(search.toLowerCase().trim()))),
+    [collection, search, calendarDay, appbarButtons, scopedQuery, matchingResources]);
   // Both approved mui:Providers render one page at a time from the *complete*
   // retrieved collection. Paging happens after FCT scope and search filtering.
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PERSPECTIVE_PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(Math.max(0, page), totalPages - 1);
-  const visible = useMemo(() => filtered.slice(currentPage * PERSPECTIVE_PAGE_SIZE,
-    (currentPage + 1) * PERSPECTIVE_PAGE_SIZE), [filtered, currentPage]);
+  const visible = useMemo(() => filtered.slice(currentPage * pageSize,
+    (currentPage + 1) * pageSize), [filtered, currentPage, pageSize]);
   // A previously rendered XSLT collection must never be shown under a new
   // FCT scope or search. Rendering is async and can complete after a ribbon
   // or query change; identify the *source* of the markup, not its React node.
@@ -280,9 +287,35 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
   // XSLT owns the card layout; React mounts the user-selected Lucide icon into
   // its sanitized, inert placeholder. No icon markup or code comes from RDF.
   useEffect(() => {
+    // Older personally stored XSLT may have separate pin/delete slots. Adapt
+    // those inert DOM placeholders to the new single action group in-place;
+    // no reseeding, new SPARQL query, or destructive migration is required.
+    if (kind === "bookmarks") {
+      for (const article of resultsRef.current?.querySelectorAll<HTMLElement>("article") ?? []) {
+        if (article.querySelector("[data-perspective-bookmark-actions-slot]")) continue;
+        const legacyDelete = article.querySelector<HTMLElement>("[data-perspective-action-slot='delete']");
+        if (!legacyDelete) continue;
+        const id = legacyDelete.dataset.perspectiveId ?? "";
+        if (!collection?.rows.some(row => row.uri === id)) continue;
+        const mount = document.createElement("span");
+        mount.className = "inline-flex shrink-0 self-start";
+        mount.dataset.perspectiveBookmarkActionsSlot = "true";
+        mount.dataset.perspectiveId = id;
+        const legacyPin = article.querySelector<HTMLElement>("[data-perspective-pin-slot]");
+        legacyPin?.remove();
+        legacyDelete.replaceWith(mount);
+      }
+    }
     const slots = Array.from(resultsRef.current?.querySelectorAll<HTMLElement>("[data-perspective-appbar-icon]") ?? [])
       .map(element => ({ element, icon: element.dataset.perspectiveAppbarIcon ?? "" }))
       .filter((item): item is IconSlot => validAppbarIcons.has(item.icon));
+    setBookmarkActionSlots(Array.from(resultsRef.current?.querySelectorAll<HTMLElement>("[data-perspective-bookmark-actions-slot='true'][data-perspective-id]") ?? []).flatMap(element => {
+      const id = element.dataset.perspectiveId ?? "";
+      const row = collection?.rows.find(entry => entry.uri === id);
+      if (!row || kind !== "bookmarks") return [];
+      const pinned = Boolean(bookmarkShortcut(row, appbarButtons, collection!.rows));
+      return [{ element, id, pinned, pinEnabled: pinned || appbarButtons.length < 5 }];
+    }));
     setIconSlots(slots);
     const matching = resultsRef.current?.querySelectorAll<HTMLElement>("[data-perspective-pin-slot='true'][data-perspective-pin-id]") ?? [];
     setPinSlots(Array.from(matching).flatMap(element => {
@@ -315,11 +348,13 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
     try {
       const url = new URL(row.url, window.location.origin);
       if (url.origin === window.location.origin && (url.protocol === "http:" || url.protocol === "https:")) {
-        window.location.assign(url.href); return;
+        if (onOpenShareUrl(url.href)) return;
+        setError("The saved link could not be restored as a Maestro query. Verify its FCT q and addr.");
+        return;
       }
     } catch { /* A legacy entry may have no valid saved URL. */ }
     setError("This entry has no usable Maestro share URL. Open it through the existing History/Bookmarks navigation.");
-  }, [collection]);
+  }, [collection, onOpenShareUrl]);
   const tryAtThisHost = useCallback((id: string) => {
     const row = collection?.rows.find(entry => entry.uri === id);
     if (!row?.url) return;
@@ -330,11 +365,13 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
       // URL.origin carries the scheme, hostname and port together. All query,
       // ribbon and history parameters are preserved from the saved bookmark.
       const rewritten = new URL(saved.pathname + saved.search + saved.hash, current.origin);
-      window.location.assign(rewritten.href);
+      if (!onOpenShareUrl(rewritten.href)) {
+        setError("The saved query cannot be restored at this host; check its FCT q and addr.");
+      }
     } catch (error) {
       setError(`This entry has no usable Maestro share URL: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [collection]);
+  }, [collection, onOpenShareUrl]);
   if (!active) return null;
   return <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
     <div className="flex min-w-0 shrink-0 items-center gap-2 border-b px-2 py-2" aria-label={`${kind} search and pagination`}>
@@ -342,6 +379,12 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
       <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Reload perspective" onClick={() => setRevision(v => v + 1)}><RefreshCw className="size-4"/></Button>} /><TooltipContent>Reload {kind}</TooltipContent></Tooltip>
       {selected.length > 0 && <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm" aria-label={`Delete ${selected.length} selected entries`} onClick={() => void remove(selected)} className="shrink-0 text-destructive hover:bg-destructive/10"><Trash2 className="size-4"/></Button>} /><TooltipContent>Delete selected ({selected.length})</TooltipContent></Tooltip>}
       <nav aria-label={`${kind} pagination`} className="ml-auto flex shrink-0 items-center gap-1 border-l pl-2">
+        <label htmlFor={`${kind}-perspective-page-size`} className="whitespace-nowrap text-xs text-muted-foreground">Per page</label>
+        <select id={`${kind}-perspective-page-size`} aria-label={`${kind} entries per page`} value={pageSize}
+          onChange={event => { setPageSize(Number(event.currentTarget.value)); setPage(0); }}
+          className="rounded-md border border-input bg-background px-2 py-1 text-xs">
+          {PERSPECTIVE_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
+        </select>
         <Button type="button" variant="outline" size="icon-sm" aria-label="Previous page" disabled={currentPage === 0 || !scopeIsReady || loading} onClick={() => setPage(Math.max(0, currentPage - 1))}><ChevronLeft className="size-4" aria-hidden="true"/></Button>
         <span className="min-w-[5.5rem] whitespace-nowrap text-center text-xs text-muted-foreground" aria-live="polite">Page {currentPage + 1} of {totalPages}</span>
         <Button type="button" variant="outline" size="icon-sm" aria-label="Next page" disabled={currentPage >= totalPages - 1 || !scopeIsReady || loading} onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}><ChevronRight className="size-4" aria-hidden="true"/></Button>
@@ -352,10 +395,24 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
       : loading && !collection ? <p className="p-5 text-sm text-muted-foreground">Loading {kind}…</p>
       : !collection ? <MaestroEmptyResults onBrowse={onBrowse} title="No perspective data" description="No saved entries were loaded. Try the default Browse perspective."/>
       : <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1" aria-busy={loading || scopeLoading}>
-        <p className="mb-1 text-xs text-muted-foreground">{!scopeIsReady ? (scopeLoading ? "Filtering by current query…" : "Current query scope unavailable") : `${filtered.length} matching entries · ${filtered.length ? `${currentPage * PERSPECTIVE_PAGE_SIZE + 1}–${Math.min((currentPage + 1) * PERSPECTIVE_PAGE_SIZE, filtered.length)}` : "0"} shown`}</p>
+        <PerspectiveCalendarHeatmap rows={collection.rows} queryXml={queryXml} onDayFilter={onCalendarFilter} />
+        <p className="mb-1 text-xs text-muted-foreground">{!scopeIsReady ? (scopeLoading ? "Filtering by current query…" : "Current query scope unavailable") : `${filtered.length} matching entries · ${filtered.length ? `${currentPage * pageSize + 1}–${Math.min((currentPage + 1) * pageSize, filtered.length)}` : "0"} shown`}</p>
         {!scopeIsReady && <p role="status" className="mt-2 rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">{scopeLoading ? "Checking saved entries against the current FCT query…" : "Cannot establish which saved entries match this query. See the error above and retry."}</p>}
         {scopeIsReady && !scopeLoading && filtered.length === 0 && <MaestroEmptyResults onBrowse={onBrowse} title={`No ${kind} entries found`} description="No saved entries match this query. Try the default Browse perspective."/>}
         <div ref={resultsRef} aria-busy={!scopeIsReady || renderedSignature !== contentSignature} className="maestro-discovered-view" onClick={event => {
+          if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0) {
+            const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[href]");
+            if (anchor && anchor.target !== "_blank" && !anchor.hasAttribute("download")) {
+              try {
+                const url = new URL(anchor.href, window.location.origin);
+                if (url.origin === window.location.origin && url.searchParams.has("q")) {
+                  event.preventDefault();
+                  if (!onOpenShareUrl(url.href)) setError("The saved link could not be restored as a Maestro query.");
+                  return;
+                }
+              } catch { /* An invalid external anchor follows native handling. */ }
+            }
+          }
           const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-perspective-id]");
           if (!button) return;
           const id = button.dataset.perspectiveId ?? "";
@@ -371,6 +428,33 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
           else if (button.dataset.perspectiveDelete === "true") void remove([id]);
           else if (button.dataset.perspectiveSelect === "true") setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
         }} dangerouslySetInnerHTML={{ __html: scopeIsReady && renderedSignature === contentSignature ? html : "" }}/>
+        {bookmarkActionSlots.map(slot => createPortal(
+          <ButtonGroup aria-label="Bookmark actions" className="shrink-0 self-start">
+            <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm"
+              aria-label={slot.pinned ? "Unpin from appbar" : "Pin to appbar"}
+              disabled={!slot.pinEnabled}
+              onClick={event => {
+                event.stopPropagation();
+                const entry = collection?.rows.find(row => row.uri === slot.id);
+                if (!entry || !collection) return;
+                const shortcut = bookmarkShortcut(entry, appbarButtons, collection.rows);
+                if (shortcut) void editAppbar("remove", slot.id, shortcut.uri);
+                else if (appbarButtons.length < 5) {
+                  setAppbarCandidate(slot.id); setAppbarTooltip(entry.label); setAppbarIcon("bookmark");
+                }
+              }}
+              className="size-7 text-muted-foreground hover:text-foreground">
+              {slot.pinned ? <PinOff className="size-4" aria-hidden="true"/> : <Pin className="size-4" aria-hidden="true"/>}
+            </Button>} /><TooltipContent>{slot.pinned ? "Unpin from appbar" : "Pin to appbar"}</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm"
+              aria-label="Delete bookmark"
+              onClick={event => { event.stopPropagation(); void remove([slot.id]); }}
+              className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
+              <Trash2 className="size-4" aria-hidden="true"/>
+            </Button>} /><TooltipContent>Delete bookmark</TooltipContent></Tooltip>
+          </ButtonGroup>,
+          slot.element,
+        ))}
         {actionSlots.map(slot => createPortal(
           <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm"
             data-perspective-id={slot.id}

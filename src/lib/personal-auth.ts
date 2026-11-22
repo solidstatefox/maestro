@@ -25,7 +25,7 @@ export interface PersonalAuthSession {
   authHeader?: string;
 }
 
-export { personalReadEndpoint, personalWriteEndpoint } from "./personal-endpoints";
+export { personalReadEndpoint, personalWriteEndpoint, personalAuthenticatedEndpoint } from "./personal-endpoints";
 
 export interface PublicSessionPayload {
   graphStore: string;
@@ -45,8 +45,13 @@ export function graphForPrefix(prefix: string): string {
 }
 
 const STORAGE_KEY = "maestro_personal_auth_v1";
+let cachedAuthRaw: string | null = null;
+let cachedAuthSession: PersonalAuthSession | null = null;
+// Disconnect pauses automatic local credential recovery only until reload or
+// a new verified login. It never destroys the remembered encrypted record.
+let disconnectedForThisPage = false;
+
 const DEVICE_KEY_NAME = "maestro_device_salt";
-const COOKIE_NAME = "maestro_session";
 export const AUTH_EXPECTED_KEY = "maestro_login_expected_v1";
 
 /** Generate or retrieve a persistent client-side encryption key for local credential storage. */
@@ -85,7 +90,7 @@ async function getStorageCryptoKey(): Promise<CryptoKey> {
 
 /** Encrypt arbitrary string data with AES-GCM before saving to localStorage/sessionStorage. */
 export async function encryptSecret(plainText: string): Promise<string> {
-  if (typeof window === "undefined" || !window.crypto?.subtle) return btoa(plainText);
+  if (typeof window === "undefined" || !window.crypto?.subtle) throw new Error("Encrypted credential storage needs Web Crypto.");
   try {
     const key = await getStorageCryptoKey();
     const iv = window.crypto.getRandomValues(new Uint8Array(12));
@@ -101,15 +106,14 @@ export async function encryptSecret(plainText: string): Promise<string> {
     combined.set(cipherBytes, iv.length);
     return btoa(String.fromCharCode(...combined));
   } catch {
-    return btoa(plainText);
+    throw new Error("Could not encrypt remembered credentials.");
   }
 }
 
 /** Decrypt AES-GCM ciphertext from storage. */
 export async function decryptSecret(cipherBase64: string): Promise<string> {
-  if (typeof window === "undefined" || !window.crypto?.subtle) {
-    try { return atob(cipherBase64); } catch { return ""; }
-  }
+  if (typeof window === "undefined" || !window.crypto?.subtle)
+    throw new Error("Web Crypto is required to decrypt remembered credentials.");
   try {
     const binary = atob(cipherBase64);
     const combined = new Uint8Array(binary.length);
@@ -124,7 +128,7 @@ export async function decryptSecret(cipherBase64: string): Promise<string> {
     );
     return new TextDecoder().decode(decryptedBuffer);
   } catch {
-    try { return atob(cipherBase64); } catch { return ""; }
+    throw new Error("Remembered credentials could not be decrypted.");
   }
 }
 
@@ -172,29 +176,16 @@ export function buildAuthHeader(
   return "";
 }
 
-/** Update the browser session cookie so all proxy routes receive the personal graph credentials. */
-export function setMaestroSessionCookie(session: PersonalAuthSession | null) {
-  if (typeof document === "undefined") return;
-  if (!session) {
-    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
-    return;
-  }
-  const payload: PublicSessionPayload = {
-    graphStore: session.graphStore,
-    graphPrefix: session.graphPrefix,
-    authType: session.authType,
-    authHeader: buildAuthHeader(session) || undefined,
-    userName: session.displayName || session.userName || session.username,
-    userAvatar: session.avatarUrl,
-  };
-  const maxAge = 60 * 60 * 24 * 400; // Persistent, rolling lifetime; cookie renewed on page load/focus.
-  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(JSON.stringify(payload))}; path=/; SameSite=Lax; ${maxAge ? `max-age=${maxAge}` : ""}`;
+/** Retire legacy credential-bearing cookies, never create new ones. */
+export function clearLegacyMaestroSessionCookie(): void {
+  if (typeof document !== "undefined") document.cookie = "maestro_session=; path=/; max-age=0; SameSite=Lax";
 }
 
 /** Save session locally (encrypted in localStorage if rememberMe is true, else sessionStorage). */
 export async function savePersonalAuthSession(
   session: PersonalAuthSession,
   rememberMeOverride?: boolean,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (typeof window === "undefined") return;
   const isRemember = true; // Persist until explicit logout; session-only auth is no longer offered.
@@ -208,56 +199,37 @@ export async function savePersonalAuthSession(
     webId: session.webId || session.webIdUri,
     webIdUri: session.webIdUri || session.webId,
     displayName: session.displayName || session.userName || session.username || "",
-    authHeader: session.authHeader || buildAuthHeader(session),
+    authHeader: buildAuthHeader(session),
   };
 
   const encryptedPassword = effectiveSession.password ? await encryptSecret(effectiveSession.password) : undefined;
   const encryptedToken = effectiveSession.token ? await encryptSecret(effectiveSession.token) : undefined;
 
+  const { authHeader: _neverPersistHeader, ...persistable } = effectiveSession;
   const storagePayload = {
-    ...effectiveSession,
+    ...persistable,
     password: encryptedPassword,
     token: encryptedToken,
     oauthToken: encryptedToken,
   };
   const serialized = JSON.stringify(storagePayload);
 
+  if (signal?.aborted) throw new Error("Authentication initialization was cancelled before credentials were stored.");
   window.localStorage.setItem(STORAGE_KEY, serialized);
+  disconnectedForThisPage = false;
+  cachedAuthRaw = serialized; cachedAuthSession = effectiveSession;
   window.localStorage.setItem(AUTH_EXPECTED_KEY, "1");
   window.sessionStorage.removeItem(STORAGE_KEY);
 
-  setMaestroSessionCookie(effectiveSession);
+  clearLegacyMaestroSessionCookie();
 }
 
 /** Restore stored session on page load. */
 export async function loadPersonalAuthSession(): Promise<PersonalAuthSession | null> {
-  if (typeof window === "undefined") return null;
+  if (typeof window === "undefined" || disconnectedForThisPage) return null;
   const raw = window.localStorage.getItem(STORAGE_KEY) || window.sessionStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    // The 400-day proxy cookie survives a server deployment/restart and normal
-    // browser restarts even if the local encrypted-session entry is missing.
-    // Prefer the encrypted local session when available; use this only as a
-    // recovery path for an existing cookie, never to create a login.
-    const match = document.cookie.match(/(?:^|;\s*)maestro_session=([^;]+)/);
-    if (!match) return null;
-    try {
-      const cookieSession = JSON.parse(decodeURIComponent(match[1])) as PublicSessionPayload;
-      if (!cookieSession.graphStore || !cookieSession.graphPrefix || !cookieSession.authType || !cookieSession.authHeader) return null;
-      const restored: PersonalAuthSession = {
-        authType: cookieSession.authType,
-        graphStore: cookieSession.graphStore,
-        graphPrefix: cookieSession.graphPrefix,
-        authHeader: cookieSession.authHeader,
-        userName: cookieSession.userName,
-        avatarUrl: cookieSession.userAvatar,
-        rememberMe: true,
-      };
-      await savePersonalAuthSession(restored, true);
-      return restored;
-    } catch {
-      return null;
-    }
-  }
+  if (!raw) { cachedAuthRaw = null; cachedAuthSession = null; clearLegacyMaestroSessionCookie(); return null; }
+  if (raw === cachedAuthRaw && cachedAuthSession) return cachedAuthSession;
   try {
     const parsed = JSON.parse(raw) as PersonalAuthSession;
     const decryptedPassword = parsed.password ? await decryptSecret(parsed.password) : undefined;
@@ -273,17 +245,19 @@ export async function loadPersonalAuthSession(): Promise<PersonalAuthSession | n
       webId: parsed.webId || parsed.webIdUri,
       webIdUri: parsed.webIdUri || parsed.webId,
       password: decryptedPassword,
-      authHeader: parsed.authHeader || buildAuthHeader(parsed),
+      authHeader: buildAuthHeader({ ...parsed, password: decryptedPassword, token: decryptedToken, oauthToken: decryptedToken }),
     };
     session.rememberMe = true;
     if (window.sessionStorage.getItem(STORAGE_KEY)) {
       // Migrate legacy session-only logins so the next browser restart retains them.
       await savePersonalAuthSession(session, true);
     } else {
-      setMaestroSessionCookie(session);
+      clearLegacyMaestroSessionCookie();
     }
+    cachedAuthRaw = raw; cachedAuthSession = session;
     return session;
   } catch (error) {
+    cachedAuthRaw = null; cachedAuthSession = null;
     browserLog.warn("auth.saved-session.decrypt-failed", error);
     return null;
   }
@@ -292,8 +266,21 @@ export async function loadPersonalAuthSession(): Promise<PersonalAuthSession | n
 /** Clear active session from storage and cookies. */
 export function clearPersonalAuthSession(): void {
   if (typeof window === "undefined") return;
+  disconnectedForThisPage = false;
+  cachedAuthRaw = null; cachedAuthSession = null;
   window.localStorage.removeItem(STORAGE_KEY);
   window.localStorage.removeItem(AUTH_EXPECTED_KEY);
   window.sessionStorage.removeItem(STORAGE_KEY);
-  setMaestroSessionCookie(null);
+  clearLegacyMaestroSessionCookie();
+  window.dispatchEvent(new Event("maestro:personal-session-cleared"));
+}
+
+/** Withdraw active personal capabilities without forgetting Alice's credentials.
+ * The next page launch silently authenticates using the remembered record. */
+export function disconnectPersonalAuthSession(): void {
+  if (typeof window === "undefined") return;
+  disconnectedForThisPage = true;
+  cachedAuthRaw = null; cachedAuthSession = null;
+  clearLegacyMaestroSessionCookie();
+  window.dispatchEvent(new Event("maestro:personal-session-cleared"));
 }

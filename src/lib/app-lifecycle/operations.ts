@@ -3,7 +3,7 @@ import { assign, createActor, setup } from "xstate";
 /** Phase C: the UI control plane, not a second query engine.
  * Graph health, FCT XML, aborts, and the proxy scheduler remain authoritative. */
 export type GraphPhase = "unknown" | "checking" | "ready" | "unavailable";
-export type QueryPhase = "restoring" | "waitingForServer" | "readyToExecute" | "executing" | "ready" | "failed" | "cancelled";
+export type QueryPhase = "restoring" | "restoreFailed" | "waitingForServer" | "readyToExecute" | "executing" | "ready" | "failed" | "cancelled";
 export type RequestPhase = "idle" | "queued" | "active";
 export type NavigationTab = "browse" | "view" | "analyze";
 export type NavigationViewPanel = "trail" | "perspectives" | "providers";
@@ -13,6 +13,7 @@ export type GraphEvent = {
 };
 export type QueryEvent =
   | { type: "QUERY_OBSERVED"; key: string; hydrated: boolean; graphReady: boolean }
+  | { type: "QUERY_RESTORE_FAILED"; key: string; error: string }
   | { type: "RESULTS_STARTED" | "RESULTS_SUCCEEDED" | "RESULTS_FAILED" | "RESULTS_CANCELLED"; key: string };
 export type RequestEvent = { type: "REQUEST_ACTIVITY"; queued: number; active: number };
 export type NavigationEvent =
@@ -28,7 +29,7 @@ export type NavigationEvent =
 export type MaestroOperationsEvent = GraphEvent | QueryEvent | RequestEvent | NavigationEvent;
 
 type GraphContext = { key: string };
-type QueryContext = { key: string; hydrated: boolean; graphReady: boolean };
+type QueryContext = { key: string; hydrated: boolean; graphReady: boolean; restoreError: string };
 type RequestContext = { queued: number; active: number };
 type NavigationContext = {
   key: string; lastUrl: string; returnUrl: string; pendingEntryUrl: string;
@@ -37,7 +38,7 @@ type NavigationContext = {
   returnVisible: boolean; historyPending: "backward" | "forward" | null;
 };
 const emptyGraph: GraphContext = { key: "" };
-const emptyQuery: QueryContext = { key: "", hydrated: false, graphReady: false };
+const emptyQuery: QueryContext = { key: "", hydrated: false, graphReady: false, restoreError: "" };
 const emptyRequests: RequestContext = { queued: 0, active: 0 };
 const emptyNavigation: NavigationContext = {
   key: "", lastUrl: "", returnUrl: "", pendingEntryUrl: "",
@@ -68,22 +69,32 @@ const queryMachine = setup({
   id: "maestro-query-lifecycle", initial: "restoring", context: emptyQuery,
   on: {
     QUERY_OBSERVED: [
+      // A failed URL restore must not be turned back into an infinite spinner
+      // just because graph observations or another React render arrive.
+      { guard: ({ context, event }) => !event.hydrated && context.key === event.key && Boolean(context.restoreError),
+        target: ".restoreFailed",
+        actions: assign(({ event }) => ({ key: event.key, hydrated: false, graphReady: event.graphReady })) },
       { guard: ({ event }) => !event.hydrated, target: ".restoring",
-        actions: assign(({ event }) => ({ key: event.key, hydrated: event.hydrated, graphReady: event.graphReady })) },
+        actions: assign(({ event }) => ({ key: event.key, hydrated: false, graphReady: event.graphReady, restoreError: "" })) },
       { guard: ({ event }) => !event.graphReady, target: ".waitingForServer",
-        actions: assign(({ event }) => ({ key: event.key, hydrated: event.hydrated, graphReady: event.graphReady })) },
+        actions: assign(({ event }) => ({ key: event.key, hydrated: true, graphReady: false, restoreError: "" })) },
       { guard: ({ context, event }) => context.key !== event.key || !context.hydrated || !context.graphReady,
         target: ".readyToExecute",
-        actions: assign(({ event }) => ({ key: event.key, hydrated: event.hydrated, graphReady: event.graphReady })) },
-      { actions: assign(({ event }) => ({ key: event.key, hydrated: event.hydrated, graphReady: event.graphReady })) },
+        actions: assign(({ event }) => ({ key: event.key, hydrated: true, graphReady: true, restoreError: "" })) },
+      { actions: assign(({ event }) => ({ key: event.key, hydrated: event.hydrated, graphReady: event.graphReady, restoreError: "" })) },
     ],
+    QUERY_RESTORE_FAILED: {
+      guard: ({ context, event }) => !context.hydrated && Boolean(event.error),
+      target: ".restoreFailed",
+      actions: assign(({ event }) => ({ key: event.key, restoreError: event.error, hydrated: false })),
+    },
     RESULTS_STARTED: {
       guard: ({ context, event }) => context.key === event.key && context.hydrated && context.graphReady,
       target: ".executing",
     },
   },
   states: {
-    restoring: {}, waitingForServer: {}, readyToExecute: {},
+    restoring: {}, restoreFailed: {}, waitingForServer: {}, readyToExecute: {},
     executing: { on: {
       RESULTS_SUCCEEDED: { guard: ({ context, event }) => context.key === event.key, target: "ready" },
       RESULTS_FAILED: { guard: ({ context, event }) => context.key === event.key, target: "failed" },
@@ -301,7 +312,7 @@ export function selectMaestroExecution(snapshot: MaestroOperationsSnapshot, inpu
   return {
     canExecuteQuery: input.hydrated && graphReady && snapshot.query.key === input.queryKey &&
       snapshot.query.graphReady && snapshot.query.hydrated &&
-      snapshot.query.phase !== "restoring" && snapshot.query.phase !== "waitingForServer",
+      snapshot.query.phase !== "restoring" && snapshot.query.phase !== "restoreFailed" && snapshot.query.phase !== "waitingForServer",
     queryPhase: snapshot.query.key === input.queryKey ? snapshot.query.phase : "waitingForServer" as QueryPhase,
     graphPhase: snapshot.graph.key === input.graphKey ? snapshot.graph.phase : "checking" as GraphPhase,
   };

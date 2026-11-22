@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import type { ProviderKind } from "@/lib/provider-catalog-xslt";
@@ -12,12 +13,12 @@ export type ClientApproval = {uri:string;status:"Approved"|"Pending"|null;catego
  * A provider is Approved by a direct status assertion OR a version-matched
  * grant from any currently Approved curator. No inferred triples are written.
  * This lookup is browser-side; graph-server ACLs enforce protected writes. */
-export async function readClientPolicyApprovals(uris: string[], signal?: AbortSignal): Promise<ClientApproval[]> {
+export async function readClientPolicyApprovals(uris: string[], signal?: AbortSignal, requestSource?: string): Promise<ClientApproval[]> {
   const distinct = [...new Set(uris)];
   if (distinct.some(uri => !validIri(uri)) || distinct.length > 500) throw new Error("Invalid policy identifiers.");
   if (!distinct.length) return [];
   const ctx = await personalContext();
-  const shapes = `${ctx.base}/shacl/policies`, otc = `${ctx.base}/otc/transcoders`, status = `${ctx.base}/status`;
+  const shapes = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`, otc = `${resolveGraph(GRAPH.OTC_TRANSCODERS, ctx.base)}`, status = `${resolveGraph(GRAPH.STATUS, ctx.base)}`;
   const output = new Map<string,ClientApproval>();
   for (let offset = 0; offset < distinct.length; offset += 20) {
     const batch = distinct.slice(offset,offset+20);
@@ -47,7 +48,7 @@ export async function readClientPolicyApprovals(uris: string[], signal?: AbortSi
         }
         BIND(true AS ?curated)
       }
-    }`,ctx,signal);
+    }`,ctx,signal,requestSource);
     for (const uri of batch) {
       const matches = rows.filter(row => row.policy?.value===uri);
       const present = (key:string) => matches.some(row => ["true","1"].includes(row[key]?.value ?? ""));

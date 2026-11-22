@@ -19,7 +19,8 @@ test("Record label batches bound URI and graph sets without losing any pair", ()
   assert.equal(seen.size, uris.length * graphs.length);
 });
 
-test("empty URI or graph sets generate no enrichment requests", () => {
+test("empty URI set skips lookup; All graphs keeps bounded URI batches", () => {
   assert.deepEqual([...recordLabelBatches([], ["urn:graph"])], []);
-  assert.deepEqual([...recordLabelBatches(["urn:resource"], [])], []);
+  const batches = [...recordLabelBatches(Array.from({length: 26}, (_, i) => `urn:resource:${i}`), [])];
+  assert.deepEqual(batches.map(batch => [batch.uris.length, batch.graphs.length]), [[24,0],[2,0]]);
 });

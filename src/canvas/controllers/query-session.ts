@@ -9,6 +9,9 @@ import type { FctUiResultSummary } from "@/lib/fct-query-api";
 export function useQuerySessionState() {
   const [selectedUri, setSelectedUri] = useState("");
   const [urlStateInitialized, setUrlStateInitialized] = useState(false);
+  // Diagnostic only. The XState query actor owns the terminal failure phase;
+  // this message lets the shell offer recovery without exposing raw query XML.
+  const [urlRestoreError, setUrlRestoreError] = useState("");
   const [querySourceFormat, setQuerySourceFormat] = useState<"xml" | "sparql" | "alphabet-xml" | "alphabet-sparql" | "list-values-xml" | "list-values-sparql" | "response">("xml");
   const [sparqlQuery, setSparqlQuery] = useState("");
   const [sparqlExecutionAddr, setSparqlExecutionAddr] = useState("");
@@ -40,6 +43,8 @@ export function useQuerySessionState() {
     setSelectedUri,
     urlStateInitialized,
     setUrlStateInitialized,
+    urlRestoreError,
+    setUrlRestoreError,
     querySourceFormat,
     setQuerySourceFormat,
     sparqlQuery,

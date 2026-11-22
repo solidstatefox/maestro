@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-const graph = readFileSync(new URL("../graph/maestro-dbpedia-policies.ttl", import.meta.url), "utf8");
+const graph = readFileSync(new URL("../graph/dbpedia/maestro-dbpedia-policies.ttl", import.meta.url), "utf8");
 
 // Each rdf:value literal is a self-contained XSLT stylesheet. Named template
 // calls must be resolvable inside that stylesheet, not merely in a sibling

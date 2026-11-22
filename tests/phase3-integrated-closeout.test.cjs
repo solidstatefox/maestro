@@ -43,36 +43,26 @@ test('hierarchy normalization preserves distinct parent edges', () => {
   assert.equal(output.length,2);
 });
 
-test('proxy SSE adapter accepts CRLF frames split between chunk boundaries', async () => {
-  const {unwrapMaestroQueryEvents} = loadTS('src/lib/client-query-events.ts', {
-    './maestro-query-execution-clock': {beginMaestroQueryExecution: () => () => {}}
-  });
-  const positions=[];
-  const frame='event:queue-position\r\ndata:{"queryId":1,"queueIndex":2,"server":"local"}\r\n\r\nevent:result\r\ndata:{"status":200,"headers":[],"body":"ok"}\r\n\r\n';
-  const text = new TextEncoder().encode(frame);
-  const stream = new ReadableStream({start(controller){
-    // Deliberately split at CRLF boundary to verify incremental decoding.
-    const cut = frame.indexOf('\r\n')+1;
-    controller.enqueue(text.slice(0,cut));
-    controller.enqueue(text.slice(cut, cut+8));
-    controller.enqueue(text.slice(cut+8));
-    controller.close();
-  }});
-  const resp = new Response(stream,{headers:{'Content-Type':'text/event-stream'}});
-  const result=await unwrapMaestroQueryEvents(resp,null,null,(index,server)=>positions.push([index,server]));
-  assert.equal(result.status,200);
-  assert.equal(await result.text(),'ok');
-  assert.equal(JSON.stringify(positions),'[[2,"local"]]');
+test('separate /events reader normalizes CRLF boundaries and does not reconstruct query responses', () => {
+  const source = fs.readFileSync(path.join(root,'src/lib/client-query-events.ts'),'utf8');
+  assert.ok(source.includes('buffer = buffer.replace(/\\r\\n/g, "\\n")'));
+  assert.ok(source.includes('buffer.indexOf("\\n\\n")'));
+  assert.doesNotMatch(source,/new Response\(data\.body/);
 });
 
-test('one central queue-index tracker owns combined client and server position display', () => {
+test('one queue tracker reports browser slots separately from telemetry-owned proxy lanes', () => {
   const source = fs.readFileSync(path.join(root,'src/lib/client-query-cache.ts'),'utf8');
   assert.match(source,/serverQueueIndex.*> 0/);
   assert.match(source,/requestQueue\.forEach/);
-  assert.match(source,/displayPositions = new Map/);
+  assert.match(source,/const browserPositions = new Map<AbortController, number>\(\)/);
+  assert.match(source,/browserPositions\.set\(job\.owner, index \+ 1\)/);
+  assert.match(source,/const next = detail\.state === "queued" \? browserPositions\.get\(controller\) \?\? 0 : 0/);
   assert.match(source,/serverQueueIndex: queueIndex/);
+  assert.match(source,/serverQueueLaneNumber: laneNumber, serverQueueLanePosition: lanePosition/);
   assert.match(source,/refreshPendingQueueIndexes\(\)/);
-  assert.match(source,/a\.stage - b\.stage \|\| a\.position - b\.position/);
+  assert.match(source,/notifyPendingQueryDetails\(\)/);
+  assert.doesNotMatch(source,/const displayPositions = new Map/);
+  assert.match(source,/return aPosition - bPosition \|\| a\.id - b\.id/);
 });
 
 test('Personal Perspectives HTML requires matching query/render signature', () => {
@@ -100,7 +90,11 @@ test('auxiliary sampled Record metadata cannot override FCT result labels', () =
 
 test('Role value requests depend on the serialized FCT query, not a transient tree identity', () => {
   const source=fs.readFileSync(path.join(root,'src/canvas/left/filter.tsx'),'utf8');
-  assert.match(source,/\[uri, widgetQueryXml, roleOrderLikeGroups, endpointReady, refreshRevision\]/);
+  // The serialized FCT XML remains the query identity; the explicit retry
+  // epoch is an independent request trigger, not the transient tree object.
+  assert.match(source,/\[uri, widgetQueryXml, roleOrderLikeGroups, endpointReady, refreshRevision, retryRevision\]/);
+  assert.match(source,/useMaestroComponentRetry\(`personal-role:\$\{uri\}`\)/);
+  assert.match(source,/componentRetryHeaders\(retryRevision\)/);
   assert.doesNotMatch(source,/\[uri, widgetQueryXml, tree, roleOrderLikeGroups/);
 });
 

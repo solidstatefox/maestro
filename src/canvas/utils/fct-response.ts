@@ -19,6 +19,7 @@ export type EnrichedTerm = {
 };
 
 export type ScopeValue = {
+  id?: string;
   property: string;
   label: string;
   direction: RelationshipDirection;
@@ -62,19 +63,96 @@ export type FctResult = {
   lang?: string;
 };
 
-export type ListValueProjection = { property: string; direction: "forward" | "reverse" };
+export type ListValueProjection = { property: string; direction: "forward" | "reverse"; path?: string[];
+  hops?: Array<{ iri: string; direction: "forward" | "reverse" }> };
+export type ListValueResource = { type: "uri" | "literal"; value: string; datatype?: string; lang?: string };
+const FCT_XML_NS = "http://openlinksw.com/services/facets/1.0";
+const XML_NS = "http://www.w3.org/XML/1998/namespace";
 
-/** Make a read-only clone of the live FCT query for value enrichment.
- * Projection columns are passed separately to the proxy and are never added
- * as FCT relationship nodes or custom attributes. */
-export function listValuesQueryClone(xml: string): string {
+/** Detached population-preserving merge-values request. Its columns are XML
+ * relationship nodes plus view-plane anchors for multihop values, never FCT
+ * WHERE constraints. A normal list-values query retains ordinary FCT scope.
+ * This does not mutate the live query or introduce implicit uid unions.
+ */
+export function mergeValuesQueryClone(xml: string, columns: readonly ListValueProjection[] = [], resources?: readonly ListValueResource[]): string {
   const document = new DOMParser().parseFromString(snapshotFctQueryXml(xml, "data"), "application/xml");
   if (document.querySelector("parsererror")) throw new Error("Invalid FCT query XML.");
-  const view = Array.from(document.getElementsByTagNameNS("http://openlinksw.com/services/facets/1.0", "view"))[0]
-    ?? Array.from(document.getElementsByTagName("view"))[0];
-  if (!view || !view.parentElement) throw new Error("The live query has no view carrier.");
-  view.setAttribute("type", FCT_VIEW_TYPES.LIST_VALUES);
-  view.removeAttribute("badges");
+  const root = document.documentElement;
+  const originalView = Array.from(root.getElementsByTagName("*")).find(node => node.localName === "view");
+  if (!originalView?.parentElement) throw new Error("The live query has no view carrier.");
+  const focus = originalView.parentElement;
+  // Save the original bindings before replacing the source population.
+  const existingFacets = Array.from(focus.children).filter(node => node.localName === "property" || node.localName === "property-of");
+  const findExisting = (hops: readonly { iri: string; direction: "forward" | "reverse" }[]): Element | undefined => {
+    let candidates = existingFacets;
+    let found: Element | undefined;
+    for (const hop of hops) {
+      found = candidates.find(node => node.localName === (hop.direction === "reverse" ? "property-of" : "property") && node.getAttribute("iri") === hop.iri);
+      if (!found) return undefined;
+      candidates = Array.from(found.children);
+    }
+    return found;
+  };
+  // FCT IDs are base36 letters-first. Preserve the original counter's high
+  // water mark, allocate fresh IDs for derived nodes and anchors only.
+  const used = new Set(Array.from(root.getElementsByTagName("*")).map(node => node.getAttribute("id")).filter(Boolean));
+  let counter = Number.parseInt(root.getAttribute("ctr") || "a", 36);
+  if (!Number.isSafeInteger(counter) || counter < 10) counter = 10;
+  const alloc = () => {
+    while (true) {
+      let id = counter.toString(36);
+      counter++;
+      if (!/^[a-z]/.test(id)) { counter = 10 * 36 ** (id.length - 1); continue; }
+      if (used.has(id)) continue;
+      used.add(id); return id;
+    }
+  };
+  if (resources) {
+    if (!resources.length || resources.length > 100) throw new Error("merge-values resource pages require 1–100 terms.");
+    root.replaceChildren();
+    for (const term of resources) {
+      const value = document.createElementNS(FCT_XML_NS, "value");
+      value.setAttribute("id", alloc());
+      value.setAttribute("datatype", term.type === "uri" ? "uri" : term.datatype || "string");
+      if (term.lang) { value.setAttribute("datatype", "string"); value.setAttributeNS(XML_NS, "xml:lang", term.lang); }
+      value.textContent = term.value;
+      root.appendChild(value);
+    }
+  } else originalView.remove();
+  const carrier = resources ? root : focus;
+  const view = document.createElementNS(FCT_XML_NS, "view");
+  view.setAttribute("id", alloc());
+  view.setAttribute("type", FCT_VIEW_TYPES.MERGE_VALUES);
+  view.setAttribute("limit", resources ? String(resources.length) : originalView.getAttribute("limit") || "100");
+  view.setAttribute("offset", resources ? "0" : originalView.getAttribute("offset") || "0");
+  carrier.appendChild(view);
+  if (columns.length > 24) throw new Error("merge-values supports at most 24 projection columns.");
+  for (const column of columns) {
+    const hops = column.hops?.length ? column.hops : (column.path?.length ? column.path : [column.property]).map((iri, index) => ({
+      iri, direction: index === 0 ? column.direction : "forward" as const,
+    }));
+    if (!hops.length || hops.length > 16) throw new Error("Invalid merge-values projection path length.");
+    const original = findExisting(hops);
+    let current: Element = carrier;
+    for (const [index, hop] of hops.entries()) {
+      if (!/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(hop.iri)) throw new Error("Invalid merge-values predicate IRI.");
+      const node = document.createElementNS(FCT_XML_NS, hop.direction === "reverse" ? "property-of" : "property");
+      node.setAttribute("id", alloc());
+      node.setAttribute("iri", hop.iri);
+      if (hops.length > 1 && index === 0) node.setAttribute("column", "false");
+      current.appendChild(node);
+      current = node;
+    }
+    if (original) for (const value of Array.from(original.children).filter(child => child.localName === "value"))
+      current.appendChild(document.importNode(value, true));
+    if (hops.length > 1) {
+      const anchor = document.createElementNS(FCT_XML_NS, "a");
+      anchor.setAttribute("id", alloc());
+      anchor.setAttribute("href", current.getAttribute("id")!);
+      carrier.appendChild(anchor);
+    }
+  }
+  root.setAttribute("ctr", counter.toString(36));
   return new XMLSerializer().serializeToString(document);
 }
 
@@ -89,10 +167,11 @@ export function parseListValuesXml(xml: string): Map<string, ScopeValue[]> {
   const rows = Array.from(root.getElementsByTagName("*")).filter((node) => node.localName === "row");
   for (const row of rows) {
     const cols = Array.from(row.children).filter((node) => node.localName === "column");
-    const resource = cols[0]?.textContent?.trim() ?? "";
+    const resource = cols[0]?.textContent ?? "";
     if (!resource) continue;
     const scoped = cols.slice(2).flatMap((col): ScopeValue[] => {
       const property = col.getAttribute("property") || "";
+      const id = col.getAttribute("id") || undefined;
       if (!property) return [];
       const direction: RelationshipDirection = col.getAttribute("direction") === "reverse" ? "reverse" : "forward";
       const values = Array.from(col.children).filter((node) => node.localName === "value").map((node): EnrichedTerm => {
@@ -101,7 +180,7 @@ export function parseListValuesXml(xml: string): Map<string, ScopeValue[]> {
         return { value: node.textContent ?? "", type: rdfBindingKind(datatype),
           ...(datatype ? { datatype } : {}), ...(lang ? { lang } : {}) };
       });
-      return [{ property, direction, label: toLabel(property), values: values.length ? values : [{ value: "-" }] }];
+      return [{ id, property, direction, label: toLabel(property), values: values.length ? values : [{ value: "-" }] }];
     });
     map.set(resource, scoped);
   }
@@ -139,7 +218,7 @@ export type ParsedFctResponse = {
 
 export function parseFctResponse(xmlText: string): ParsedFctResponse {
   const document = new DOMParser().parseFromString(xmlText, "application/xml");
-  if (document.querySelector("parsererror")) throw new Error("The FCT API returned malformed XML.");
+  if (document.querySelector("parsererror")) throw new Error(`The FCT API returned malformed XML.\n\nRaw response XML (verbatim):\n${xmlText}`);
   const byLocalName = (root: ParentNode, name: string) => Array.from(root.childNodes).filter((node): node is Element => node.nodeType === 1 && (node as Element).localName === name);
   const root = document.documentElement;
   const getText = (name: string) => byLocalName(root, name)[0]?.textContent?.trim() ?? "";

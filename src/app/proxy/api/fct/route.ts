@@ -1,3 +1,4 @@
+import { fetchWithDigestFallback } from "@/lib/digest-auth";
 import { isBlankNodeTerm } from "@/lib/bnode";
 import { normalizeMaestroConcurrency } from "@/lib/maestro-concurrency";
 import { clientFromRequest, newProxyClientId, MAESTRO_CLIENT_COOKIE, saveProxyClientPreferences } from "@/lib/maestro-proxy-client-preferences";
@@ -5,7 +6,7 @@ import { rescheduleMaestroQueries } from "@/lib/graph-server-query-scheduler";
 import { getUserGraph, getShapesGraph, graphForFile, queryPersonalSparql, PersonalSparqlHttpError } from "@/lib/personal-sparql";
 import { currentProxyClient, withProxyClient } from "@/lib/maestro-proxy-client-preferences";
 import { weightMaestroQuery } from "@/lib/graph-server-query-scheduler";
-import { streamProxyQuery, MAESTRO_EVENT_HEADER } from "@/lib/proxy-query-stream";
+import { withProxyQueryTelemetry } from "@/lib/proxy-query-telemetry";
 import { traceVirtuosoDispatch } from "@/lib/proxy-query-events";
 import { createHash } from "node:crypto";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
@@ -21,7 +22,8 @@ import { XMLParser } from "fast-xml-parser";
 import { compileFctXmlToSparql as compileFctXmlBase, type SparqlJsonResults, type SparqlBindingTerm } from "@/lib/fct-sparql-translator";
 import { validMaestroLanguage } from "@/lib/maestro-language";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
-import { getConfiguredFctEndpoints, getPersonalSession, personalSparqlHeaders, personalSparqlUrl, normalizeGraphServerUri, resolveConfiguredFctEndpoint } from "@/lib/personal-sparql";
+import { getConfiguredFctEndpoints, getPersonalSession, personalSparqlHeaders, personalSparqlUrl, normalizeGraphServerUri } from "@/lib/personal-sparql";
+import { permittedGraphServerTarget, checkGraphServerDestination } from "@/lib/graph-server-target";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
 import { probeSparqlEndpoint } from "@/lib/sparql-health-probe";
 import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
@@ -68,9 +70,14 @@ function uriFallbackLabel(uri: string): string {
 }
 
 /**
- * Reproduce FCT's label-wrapper architecture: first fetch RDF terms in the
- * list query, then resolve labels through Virtuoso's virtrdf:label inference
- * graph instead of invoking the SQL-only fct_label() function in SPARQL.
+ * Resolve display names for the already-selected FCT page. This never
+ * re-evaluates the population, and is independent of the Personal session.
+ *
+ * In particular, do NOT use DEFINE input:inference "facets" here: unlike the
+ * main query, this optional label lookup must work against endpoints which
+ * do not publish a rule set named "facets" (including CORDIS). A failed lookup
+ * previously returned a valid FCT result with URI-derived titles, hiding the
+ * actual rdfs:label values from the center Results cards.
  */
 async function resolveFctLabels(
   endpoint: string,
@@ -92,20 +99,23 @@ async function resolveFctLabels(
   const safeUris = uris.filter((uri) => !/[<>"{}|^`]/u.test(uri) && !/\s/u.test(uri) && !uri.includes("\\"));
   if (!safeUris.length) return labels;
   const values = safeUris.map((uri) => `<${uri}>`).join(" ");
+  // Restrict both sides with VALUES. Besides avoiding a broad predicate scan,
+  // this keeps the request to the selected page, not the original FCT WHERE.
   const query = [
-    'DEFINE input:inference "facets"',
     "SELECT ?s ?p ?label WHERE {",
     `  VALUES ?s { ${values} }`,
-    "  ?s ?p ?label .",
-    "  FILTER (?p IN (",
-    `    <${VIRTRDF_LABEL}>,`,
-    "    <http://www.w3.org/2000/01/rdf-schema#label>,",
-    "    <http://www.w3.org/2004/02/skos/core#prefLabel>,",
-    "    <http://xmlns.com/foaf/0.1/name>,",
-    "    <http://purl.org/dc/terms/title>,",
-    "    <http://purl.org/dc/elements/1.1/title>,",
+    "  VALUES ?p {",
+    "    <http://www.w3.org/2000/01/rdf-schema#label>",
+    "    <http://data.europa.eu/s66#title>",
+    "    <http://www.w3.org/2004/02/skos/core#prefLabel>",
+    "    <http://xmlns.com/foaf/0.1/name>",
+    "    <http://purl.org/dc/terms/title>",
+    "    <http://purl.org/dc/elements/1.1/title>",
     "    <https://schema.org/name>",
-    "  ))",
+    "    <http://schema.org/name>",
+    `    <${VIRTRDF_LABEL}>`,
+    "  }",
+    "  ?s ?p ?label .",
     "  FILTER (isLiteral(?label))",
     "}",
     "ORDER BY STR(?s)",
@@ -119,13 +129,15 @@ async function resolveFctLabels(
 
     const candidates = new Map<string, { predicate: string; label: SparqlBindingTerm }[]>();
     const predicatePriority = new Map<string, number>([
-      [VIRTRDF_LABEL, 0],
-      ["http://www.w3.org/2000/01/rdf-schema#label", 1],
+      ["http://www.w3.org/2000/01/rdf-schema#label", 0],
+      ["http://data.europa.eu/s66#title", 1],
       ["http://www.w3.org/2004/02/skos/core#prefLabel", 2],
       ["http://xmlns.com/foaf/0.1/name", 3],
       ["http://purl.org/dc/terms/title", 4],
       ["http://purl.org/dc/elements/1.1/title", 5],
       ["https://schema.org/name", 6],
+      ["http://schema.org/name", 7],
+      [VIRTRDF_LABEL, 8],
     ]);
     for (const row of parsed.results?.bindings ?? []) {
       const subject = row.s?.value;
@@ -160,10 +172,10 @@ async function resolveFctLabels(
 type ExecutedSparql = { response: Response; text: string; key: string };
 const inFlightFctSparql = new Map<string, Promise<ExecutedSparql>>();
 
-async function executeSparql(endpoint: string, query: string, accept = "application/sparql-results+json, application/json;q=0.9", timeoutMs = 20000, requestSignal?: AbortSignal, bypassCache = false): Promise<ExecutedSparql> {
+async function executeSparql(endpoint: string, query: string, accept = "application/sparql-results+json, application/json;q=0.9", timeoutMs = 20000, requestSignal?: AbortSignal, bypassCache = false, authorization?: string): Promise<ExecutedSparql> {
   const url = endpoint;
   const key = queryCacheKey("sparql", url, `${accept}\\u0000${query}`);
-  const cached = bypassCache ? undefined : getQueryCache<string>(key);
+  const cached = (bypassCache || authorization) ? undefined : getQueryCache<string>(key);
   if (cached !== undefined) {
     return {
       response: new Response(cached, { status: 200, headers: { "Content-Type": accept.toLowerCase().includes("xml") || accept.toLowerCase().includes("rdf") ? "application/rdf+xml; charset=utf-8" : "application/sparql-results+json; charset=utf-8" } }),
@@ -172,20 +184,23 @@ async function executeSparql(endpoint: string, query: string, accept = "applicat
     };
   }
   const pendingKey = `${currentProxyClient()}:${key}`;
-  const pending = requestSignal ? undefined : inFlightFctSparql.get(pendingKey);
+  const pending = (requestSignal || authorization) ? undefined : inFlightFctSparql.get(pendingKey);
   if (pending) return pending;
 
   const requestPromise = (async (): Promise<ExecutedSparql> => {
+    await checkGraphServerDestination(endpoint);
     const response = await withGraphServerSlot(
       endpoint, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive", requestSignal,
-      () => traceVirtuosoDispatch(() => fetch(url, {
+      () => traceVirtuosoDispatch(() => (authorization ? fetchWithDigestFallback : fetch)(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         Accept: accept,
+        ...(authorization ? {Authorization:authorization} : {}),
       },
       body: new URLSearchParams({ query, ...(timeoutMs >= 1000 ? { timeout: String(timeoutMs) } : {}) }).toString(),
       cache: "no-store",
+      redirect: "manual",
       signal: requestSignal
         ? AbortSignal.any([requestSignal, AbortSignal.timeout(Math.max(120000, timeoutMs * 3))])
         : AbortSignal.timeout(Math.max(120000, timeoutMs * 3)),
@@ -193,7 +208,7 @@ async function executeSparql(endpoint: string, query: string, accept = "applicat
     const text = await response.text();
     return { response, text, key };
   })();
-  if (!requestSignal) inFlightFctSparql.set(pendingKey, requestPromise);
+  if (!requestSignal && !authorization) inFlightFctSparql.set(pendingKey, requestPromise);
   try {
     return await requestPromise;
   } finally {
@@ -221,7 +236,14 @@ function xmlAttributeValue(value: string): string {
 const FCT_NS = "http://openlinksw.com/services/facets/1.0/";
 
 function xmlText(value: unknown): string {
-  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  // RDF literal content can contain XML 1.0-illegal controls (e.g. U+0019 in
+  // an upstream CORDIS title). Escaping five markup characters is not enough.
+  // Replace only illegal code points; preserve valid astral Unicode pairs.
+  // No XML numeric character reference can represent these controls either.
+  return String(value ?? "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|\p{Surrogate}/gu, "\uFFFD")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
 function fctError(message: string, status: number, details?: string): Response {
@@ -343,9 +365,11 @@ function validProjectionIri(value: string): boolean {
   return /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|^`\\\u0000-\u001f]+$/u.test(value);
 }
 
-/** Read display-only projections from the transport payload, not the FCT XML.
+/** Validate projection facets already compiled from self-contained FCT XML.
  * Their order determines the returned value-column order. */
-function readListValueProjections(input: unknown): Array<{ property: string; direction: "forward" | "reverse"; path?: string[] }> {
+type FctValueColumn = { id: string; property: string; direction: "forward" | "reverse"; path?: string[];
+  hops?: Array<{ id: string; iri: string; direction: "forward" | "reverse" }>; boundValues?: SparqlBindingTerm[] };
+function readListValueProjections(input: unknown): FctValueColumn[] {
   if (input === undefined) return [];
   if (!Array.isArray(input) || input.length > 24) throw new Error("list-values projections must be an array of at most 24 columns.");
   return input.map((raw: unknown) => {
@@ -358,8 +382,29 @@ function readListValueProjections(input: unknown): Array<{ property: string; dir
     if (path !== undefined && (!Array.isArray(path) || path.length === 0 || path.length > 16 ||
       path.some((step: unknown) => typeof step !== "string" || !validProjectionIri(step))))
       throw new Error("A list-values projection path needs 1–16 valid predicate IRIs.");
-    return { property: item.property as string, direction: item.direction as "forward" | "reverse",
-      ...(path !== undefined ? { path: path as string[] } : {}) };
+    const rawBoundValues = item.boundValues as SparqlBindingTerm[] | undefined;
+    if (rawBoundValues !== undefined && (!Array.isArray(rawBoundValues) || rawBoundValues.length > 24 ||
+        rawBoundValues.some((value: unknown) => {
+          if (!value || typeof value !== "object" || Array.isArray(value)) return true;
+          const term = value as Record<string, unknown>;
+          if ((term.type !== "uri" && term.type !== "literal") || typeof term.value !== "string" || term.value.length > 4096) return true;
+          if (term.type === "uri" && !validProjectionIri(term.value)) return true;
+          if (term.datatype !== undefined && (term.type !== "literal" || typeof term.datatype !== "string" || !validProjectionIri(term.datatype))) return true;
+          if (term["xml:lang"] !== undefined && (term.type !== "literal" || typeof term["xml:lang"] !== "string" || !/^[A-Za-z]+(?:-[A-Za-z0-9]+)*$/.test(term["xml:lang"]))) return true;
+          return false;
+        }))) throw new Error("Invalid bound RDF terms in list-values projection.");
+    if (typeof item.id !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(item.id))
+      throw new Error("Invalid FCT projected column ID.");
+    const hops = item.hops;
+    if (hops !== undefined && (!Array.isArray(hops) || hops.length < 1 || hops.length > 16 ||
+      hops.some((hop: unknown) => !hop || typeof hop !== "object" || Array.isArray(hop) ||
+        typeof (hop as { iri?: unknown }).iri !== "string" || !validProjectionIri((hop as { iri: string }).iri) ||
+        ((hop as { direction?: string }).direction !== "forward" && (hop as { direction?: string }).direction !== "reverse"))))
+      throw new Error("Invalid FCT projection anchor path.");
+    return { id: item.id, property: item.property as string, direction: item.direction as "forward" | "reverse",
+      ...(path !== undefined ? { path: path as string[] } : {}),
+      ...(hops !== undefined ? { hops: hops as FctValueColumn["hops"] } : {}),
+      ...(rawBoundValues?.length ? { boundValues: rawBoundValues as SparqlBindingTerm[] } : {}) };
   });
 }
 
@@ -391,7 +436,7 @@ const APPROVAL_PROVENANCE = new Set([
 async function expandListValues(args: {
   endpoint: string;
   page: Record<string, SparqlBindingTerm>[];
-  columns: Array<{ property: string; direction: "forward" | "reverse"; path?: string[] }>;
+  columns: FctValueColumn[];
   graph: string;
   timeoutMs: number;
   request: Request;
@@ -422,11 +467,18 @@ async function expandListValues(args: {
     const sourceGraph = isStatus ? getPersonalStatusGraph(args.request) : isProvenance
       ? `${getUserGraph(args.request)}#policy-approvals` : args.graph;
     const key = personal ? "personal" : "source";
-    const triple = column.direction === "reverse"
-      ? `?value ${path.map(p => `<${p}>`).join("/")} ?resource .`
-      : `?resource ${path.map(p => `<${p}>`).join("/")} ?value .`;
+    const hops = column.hops?.length ? column.hops : path.map((iri, index) => ({
+      iri, id: "", direction: index === 0 ? column.direction : "forward" as const,
+    }));
+    // Each hop gets its own direction; reversing the entire property path
+    // would be incorrect for mixed <property>/<property-of> chains.
+    const triple = hops.map((hop, index) => {
+      const from = index === 0 ? "?resource" : `?hop_${columns.indexOf(column)}_${index}`;
+      const to = index === hops.length - 1 ? "?value" : `?hop_${columns.indexOf(column)}_${index + 1}`;
+      return hop.direction === "reverse" ? `${to} <${hop.iri}> ${from} .` : `${from} <${hop.iri}> ${to} .`;
+    }).join(" ");
     const source = sourceGraph ? `GRAPH <${sourceGraph}> { ${triple} }` : triple;
-    const branch = `{ VALUES ?resource { ${subjectValues} } VALUES ?column { ${index} } ${source} }`;
+    const branch = `{ VALUES ?resource { ${subjectValues} } VALUES ?column { ${JSON.stringify(column.id)} } ${source} }`;
     groups.set(key, [...(groups.get(key) ?? []), branch]);
   }
   const rows: Record<string, SparqlBindingTerm[]> = {};
@@ -451,14 +503,30 @@ async function expandListValues(args: {
     }
     for (const row of payload?.results?.bindings ?? []) {
       const resource = row.resource?.value;
-      const position = Number(row.column?.value);
+      const position = columns.findIndex(column => column.id === row.column?.value);
       const value = row.value;
-      if (!resource || !values.includes(resource) || !Number.isInteger(position) || position < 0 || position >= columns.length || !value) continue;
+      if (!resource || !values.includes(resource) || position < 0 || !value) continue;
       const key = `${resource}\u0000${position}`;
       const existing = rows[key] ?? (rows[key] = []);
       if (existing.length >= 3) continue;
       if (existing.some(term => term.value === value.value && term.type === value.type && term.datatype === value.datatype && term["xml:lang"] === value["xml:lang"])) continue;
       existing.push(value);
+    }
+  }
+  // A bound facet is both a normal FCT filter and a visible column. The
+  // original selected page was scoped by that binding, so carry its exact RDF
+  // lexical term into every cell even when the enrichment graph is incomplete.
+  for (const [index, column] of columns.entries()) {
+    for (const term of column.boundValues ?? []) {
+      for (const resource of values) {
+        const key = `${resource}\u0000${index}`;
+        const existing = rows[key] ?? (rows[key] = []);
+        if (!existing.some(item => item.type === term.type && item.value === term.value &&
+            item.datatype === term.datatype && item["xml:lang"] === term["xml:lang"])) {
+          if (existing.length >= 3) existing.pop();
+          existing.unshift(term);
+        }
+      }
     }
   }
   // One authorized, bookmarked list-values projection returns the *effective*
@@ -492,8 +560,9 @@ async function expandListValues(args: {
 
 function listValuesXml(args: {
   page: Record<string, SparqlBindingTerm>[];
-  columns: Array<{ property: string; direction: "forward" | "reverse"; path?: string[] }>;
+  columns: FctValueColumn[];
   expansion: Record<string, SparqlBindingTerm[]>;
+  view: "list-values" | "merge-values";
   labels: Map<string, string>;
   query: string;
   limit: number;
@@ -511,7 +580,7 @@ function listValuesXml(args: {
       const terms = args.expansion[`${resource}\u0000${i}`] ?? [];
       // Each property cell contains zero to three typed RDF values. Preserve
       // the projection's XML order even for empty fields.
-      return `<fct:column property="${xmlText(column.property)}" direction="${column.direction}" path="${xmlText((column.path ?? [column.property]).join(" "))}" var="value_${i + 1}">${terms.map((term) => {
+      return `<fct:column id="${xmlText(column.id)}" property="${xmlText(column.property)}" direction="${column.direction}" path="${xmlText((column.path ?? [column.property]).join(" "))}" var="${xmlText(column.id)}">${terms.map((term) => {
         const datatype = term.type === "uri" ? "uri" : isBlankNodeTerm(term.type) ? "bnode" : term.datatype;
         return `<fct:value${datatype ? ` datatype="${xmlText(datatype)}"` : ""}${term["xml:lang"] ? ` xml:lang="${xmlText(term["xml:lang"])}"` : ""}>${xmlText(term.value)}</fct:value>`;
       }).join("")}</fct:column>`;
@@ -523,7 +592,7 @@ function listValuesXml(args: {
     timeoutMs: args.timeoutMs, processed: args.page.length,
     offset: args.offset, limit: args.limit, ...args.upstream,
   });
-  return `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.LIST_VALUES}">${rows}</fct:result></fct:facets>`;
+  return `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${args.view}">${rows}</fct:result></fct:facets>`;
 }
 
 function parseDescribeRdfXml(source: string): Record<string, SparqlBindingTerm>[] {
@@ -572,27 +641,32 @@ function parseDescribeRdfXml(source: string): Record<string, SparqlBindingTerm>[
 
 export async function GET(request: Request) {
   logProxyCaller(request, "fct.GET");
-  let endpoints: Awaited<ReturnType<typeof getConfiguredFctEndpoints>>;
-  try { endpoints = await getConfiguredFctEndpoints(request); }
-  catch (error) {
-    return NextResponse.json({ error: `Could not load graphs from the personal SPARQL store: ${describeUpstreamError(error, "unknown error")}` }, { status: 503 });
-  }
   const url = new URL(request.url);
-  if (url.searchParams.get("health") !== "1") {
-    return NextResponse.json({ endpoints: endpoints.map(({ id, label, url, group, schemeInferred }) => ({ id, label, url, group, schemeInferred })) });
-  }
+  if (url.searchParams.get("health") !== "1")
+    return NextResponse.json({ error: "Use the courtesyGraphServers OpenAPI operation under /proxy/api/service." }, { status: 405 });
 
   const endpointId = url.searchParams.get("endpointId") ?? "";
-  const endpoint = endpoints.find((item) => item.id === endpointId);
-  if (!endpoint) return NextResponse.json({ error: "Unknown SPARQL endpoint health check." }, { status: 400 });
+  const preferredUrl = url.searchParams.get("graphServerUrl")?.trim() ?? "";
+  // An explicit URL needs no courtesy-registry lookup. Health is optional
+  // telemetry and must never block address selection or query execution.
+  let endpoint: Awaited<ReturnType<typeof getConfiguredFctEndpoints>>[number] | undefined;
+  if (preferredUrl) {
+    if (!permittedGraphServerTarget(preferredUrl))
+      return NextResponse.json({ error: "Invalid graph server health-check URL." }, { status: 400 });
+    endpoint = { id: endpointId || `shared:${encodeURIComponent(preferredUrl)}`,
+      url: preferredUrl, label: preferredUrl, group: "Shared" };
+  } else {
+    try { endpoint = (await getConfiguredFctEndpoints()).find(item => item.id === endpointId); }
+    catch (error) { return NextResponse.json({ error: `Courtesy list unavailable: ${describeUpstreamError(error)}` }, { status: 503 }); }
+  }
+  if (!endpoint) return NextResponse.json({ error: "Invalid graph server health-check address." }, { status: 400 });
 
   // The live FCT addr is authoritative. A host-only registered server may
   // explicitly be addressed over HTTP although the registry infers HTTPS.
   // Validate the preferred URL against that entry: this route is not an
   // arbitrary URL-fetching health proxy.
-  const preferredUrl = url.searchParams.get("graphServerUrl")?.trim() ?? "";
-  if (preferredUrl && !graphServerUrlMatches(endpoint.url, preferredUrl, endpoint.schemeInferred)) {
-    return NextResponse.json({ error: "The requested health-check URL does not match the registered graph server." }, { status: 400 });
+  if (preferredUrl && !permittedGraphServerTarget(preferredUrl)) {
+    return NextResponse.json({ error: "Invalid graph server health-check URL." }, { status: 400 });
   }
   const candidates = preferredUrl ? [preferredUrl] : [endpoint.url];
   if (!preferredUrl && endpoint.schemeInferred && endpoint.url.startsWith("https://")) {
@@ -612,6 +686,7 @@ export async function GET(request: Request) {
     const personal = getPersonalSession(request);
     const isPersonal = personal && candidate === personalSparqlUrl(request).toString();
     const headers = isPersonal ? personalSparqlHeaders(request) : undefined;
+    await checkGraphServerDestination(candidate);
     const check = await probeSparqlEndpoint(candidate, { headers });
     attempts.push(...check.attempts);
     if (check.state === "ok") return NextResponse.json({ check: { id: endpoint.id, ...check, attempts } });
@@ -650,12 +725,6 @@ async function handlePost(request: Request) {
     const body: Record<string, unknown> | null = contentType.includes("xml")
       ? { queryXml: requestBodyText }
       : (() => { try { return JSON.parse(requestBodyText) as Record<string, unknown>; } catch { return null; } })();
-    let endpoints: Awaited<ReturnType<typeof getConfiguredFctEndpoints>>;
-    try { endpoints = await getConfiguredFctEndpoints(request); }
-    catch (error) {
-      return fctError(`Could not load graphs from the personal SPARQL store: ${error instanceof Error ? error.message : "unknown error"}`, 503);
-    }
-
     let queryXml = typeof body?.queryXml === "string" ? body.queryXml.trim() : "";
     if (!queryXml && typeof body?.text === "string") {
       return fctError('A text query must be wrapped in an FCT <query> containing addr.', 400);
@@ -675,9 +744,10 @@ async function handlePost(request: Request) {
     // graph identity (e.g. http://dbpedia.org/resource/classes#) and must not
     // be removed. Removing '#' silently changes the queried graph.
     const serverAddress = normalizeGraphServerUri(address.slice(delimiter + 1).trim());
-    const configuredEndpoint = resolveConfiguredFctEndpoint(endpoints, serverAddress);
-    const endpoint = configuredEndpoint ? { ...configuredEndpoint, url: serverAddress } : undefined;
-    if (!endpoint) return fctError(`The graph server in query addr is not configured: ${serverAddress}`, 400);
+    // addr is the execution authority. The seed list is not an allowlist.
+    // Reject unsafe proxy targets, not previously unknown Shared addresses.
+    if (!permittedGraphServerTarget(serverAddress)) return fctError("Invalid or unsafe graph server in query addr.", 400);
+    const endpoint = { url: serverAddress };
 
     // Explicit <status addr> may only federate against configured graph servers.
     // Never allow untrusted FCT XML to become an unrestricted SERVICE target.
@@ -704,8 +774,8 @@ async function handlePost(request: Request) {
       const at = statusAddress.indexOf("@");
       if (at <= 0 || !statusAddress.slice(at + 1)) return fctError("Invalid status addr; expected graph@graphserver.", 400);
       const server = normalizeGraphServerUri(statusAddress.slice(at + 1).trim());
-      if (!resolveConfiguredFctEndpoint(endpoints, server))
-        return fctError(`The graph server in status addr is not configured: ${server}`, 400);
+      if (!permittedGraphServerTarget(server))
+        return fctError("Invalid or unsafe graph server in status addr.", 400);
     }
 
     // Discovery is deliberately separate from graph-server health. Green only
@@ -780,10 +850,10 @@ async function handlePost(request: Request) {
     let countOnly = body?.countOnly === true;
     let compiled = compileFctXmlToSparql(queryXml, view, graphOnly, countOnly);
     countOnly = compiled.countOnly;
-    if (body?.projections !== undefined && compiled.view !== FCT_VIEW_TYPES.LIST_VALUES)
-      return fctError("Projection columns are only supported by the list-values extension.", 400);
-    const valueColumns = compiled.view === FCT_VIEW_TYPES.LIST_VALUES
-      ? readListValueProjections(body?.projections) : [];
+    if (body?.projections !== undefined || body?.resources !== undefined)
+      return fctError("JSON list-values projection/resource payloads are retired; declare scoped properties and RDF terms in FCT XML.", 400);
+    const valueColumns = (compiled.view === FCT_VIEW_TYPES.LIST_VALUES || compiled.view === FCT_VIEW_TYPES.MERGE_VALUES)
+      ? readListValueProjections(compiled.listValueProjections) : [];
     const statusProjection = valueColumns.some(column => column.property === MUI_STATUS || APPROVAL_PROVENANCE.has(column.property));
     // A read of personal status/provenance requires an actual Bookmark, even
     // through the generic list-values FCT projection. A client flag is not enough.
@@ -917,85 +987,24 @@ async function handlePost(request: Request) {
         providerOtcGraph: graphForFile("otc-transcoders.rdf",request),
       });
     }
+    const session = getPersonalSession(request);
+    const privateExecution = Boolean(session?.authHeader && executionEndpoint === personalSparqlUrl(request).toString());
+    const scopedAuthorization = privateExecution ? session?.authHeader : undefined;
     const isDescribe = compiled.view === FCT_VIEW_TYPES.DESCRIBE;
     const responseCacheKey = queryCacheKey(
       // A Graphs response from an older query compiler must never survive
       // into the current grouped, rank-ordered Graphs pagination format.
-      compiled.graphOnly ? "fct-response-graphs-v2" : "fct-response",
+      compiled.graphOnly ? "fct-response-graphs-v2" : "fct-response-page-labels-v2",
       endpoint.url,
       JSON.stringify([queryXml, view ?? null, graphOnly, countOnly, valueColumns, labelAcceptLanguage ?? ""]),
     );
-    // A client that already has its paginated Results page may supply exactly
-    // those resources. This is the second stage of list-values, not a second
-    // pagination query. Projections are explicit transport metadata, not
-    // added XML relationships, and the proxy owns SPARQL construction.
-    const suppliedResources = Array.isArray(body?.resources) && compiled.view === FCT_VIEW_TYPES.LIST_VALUES
-      ? body.resources.map((raw: unknown): SparqlBindingTerm | null => {
-          const term = typeof raw === "string" ? { type: "uri", value: raw } : raw;
-          if (!term || typeof term !== "object") return null;
-          const value = term as { type?: unknown; value?: unknown; datatype?: unknown; lang?: unknown };
-          if (typeof value.value !== "string" || (value.type !== "uri" && value.type !== "literal")) return null;
-          if ((value.datatype !== undefined && typeof value.datatype !== "string") ||
-              (value.lang !== undefined && typeof value.lang !== "string")) return null;
-          const candidate: SparqlBindingTerm = { type: value.type, value: value.value,
-            ...(typeof value.datatype === "string" ? { datatype: value.datatype } : {}),
-            ...(typeof value.lang === "string" ? { "xml:lang": value.lang } : {}),
-          };
-          return serializeProjectionResource(candidate) ? candidate : null;
-        })
-      : null;
-    if (suppliedResources && suppliedResources.length > LIST_VALUES_MAX_RESOURCES)
-      return fctError(`list-values received ${suppliedResources.length} resources; maximum ${LIST_VALUES_MAX_RESOURCES} per request.`, 400);
-    if (suppliedResources && suppliedResources.some((term) => term === null))
-      return fctError(`list-values received ${suppliedResources.filter((term) => term === null).length} invalid RDF terms; verify URI schemes, literal datatypes, and term types.`, 400);
-    if (suppliedResources) {
-      if (statusProjection) {
-        // A saved query is necessary but not sufficient: never disclose personal
-        // approval data for a resource outside that query's actual FCT page.
-        const sourceXml = body?.bookmarkQueryXml as string;
-        let source = compileFctXmlToSparql(sourceXml);
-        if (source.statusBindings.length) {
-          const personalEndpoint = personalSparqlUrl(request).toString();
-          source = compileFctXmlToSparql(sourceXml, undefined, false, false, false, false, {
-            liveEndpoint: endpoint.url, executionEndpoint: personalEndpoint,
-            defaultStatusAddr: `${getPersonalStatusGraph(request)}@${personalEndpoint}`,
-          });
-        }
-        const membership = await executeSparql(source.statusBindings.length ? personalSparqlUrl(request).toString() : endpoint.url,
-          source.query, undefined, source.timeoutMs, request.signal, Boolean(source.statusBindings.length));
-        if (!membership.response.ok) return fctError("Cannot verify bookmarked FCT page membership.", 502);
-        const memberBindings = parseResults(membership.text)?.results?.bindings;
-        if (!memberBindings) return fctError("Bookmarked FCT page membership returned no valid results.", 502);
-        const members = new Set(memberBindings.map(row => row.c1?.value).filter(Boolean));
-        if (suppliedResources.some(term => term?.type !== "uri" || !members.has(term.value)))
-          return fctError("Requested approval resources are outside the bookmarked FCT result page.", 403);
-      }
-      const startedAt = Date.now();
-      const seen = new Set<string>();
-      const page = suppliedResources.filter((term): term is SparqlBindingTerm => {
-        if (!term) return false;
-        const key = serializeProjectionResource(term)!;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      }).map((term) => ({ c1: term }));
-      const address = queryXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
-      const graph = unscopedGraph(address.includes("@") ? address.slice(0, address.indexOf("@")) : "");
-      const expansion = await expandListValues({
-        endpoint: endpoint.url, page, columns: valueColumns, graph,
-        timeoutMs: compiled.timeoutMs, request,
-      });
-      const xml = listValuesXml({
-        page, columns: valueColumns, expansion: expansion.rows,
-        labels: new Map(), query: expansion.query, limit: page.length,
-        offset: 0, elapsed: Date.now() - startedAt, complete: expansion.complete,
-        timeoutMs: compiled.timeoutMs, upstream: expansion.upstream,
-      });
-      return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
-    }
+    // An already-selected resource page is expressed by root <value> terms
+    // in the XML query itself. No parallel JSON resource list or projection
+    // selector can override the FCT population.
     // Personal-status selections can change without changing the live FCT XML.
     // Never serve an old state-constrained response from the proxy cache.
-    const cachedResponse = (hasStatusConstraints || isValidate) ? null : getQueryCache<{ body: string; contentType: string; status: number }>(responseCacheKey);
+    const componentRetry = request.headers.get("x-maestro-component-retry") === "1";
+    const cachedResponse = (privateExecution || hasStatusConstraints || isValidate || componentRetry) ? null : getQueryCache<{ body: string; contentType: string; status: number }>(responseCacheKey);
     if (cachedResponse) {
       return new Response(cachedResponse.body, {
         status: cachedResponse.status,
@@ -1005,12 +1014,12 @@ async function handlePost(request: Request) {
     stage = "execute";
     const startedAt = Date.now();
     let activeQuery = compiled.query;
-    let queryResult = await executeSparql(executionEndpoint, activeQuery, isDescribe && !compiled.describeLiteral && !compiled.describeExpanded ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || isValidate);
+    let queryResult = await executeSparql(executionEndpoint, activeQuery, isDescribe && !compiled.describeLiteral && !compiled.describeExpanded ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || isValidate || componentRetry || privateExecution, scopedAuthorization);
     let countFreeFallback = false;
     let unorderedFallback = false;
     // A failed IRI_RANK sort should not make the primary Results pane unusable.
     // This retry removes only Maestro's optional ordering, never scope constraints.
-    if (!countOnly && !graphOnly && (compiled.view === FCT_VIEW_TYPES.TEXT || compiled.view === FCT_VIEW_TYPES.LIST || compiled.view === FCT_VIEW_TYPES.LIST_VALUES) &&
+    if (!countOnly && !graphOnly && (compiled.view === FCT_VIEW_TYPES.TEXT || compiled.view === FCT_VIEW_TYPES.LIST || compiled.view === FCT_VIEW_TYPES.LIST_VALUES || compiled.view === FCT_VIEW_TYPES.MERGE_VALUES) &&
         !queryResult.response.ok && !isVirtuosoAnytime(queryResult.response, queryResult.text) &&
         virtuosoRankFailure(queryResult.text + " " + (queryResult.response.headers.get("X-SQL-Message") ?? "")) &&
         /<LONG::IRI_RANK>/i.test(activeQuery)) {
@@ -1022,7 +1031,7 @@ async function handlePost(request: Request) {
           defaultStatusAddr:`${getPersonalStatusGraph(request)}@${executionEndpoint}`} : undefined).query;
       if (unorderedQuery !== activeQuery) {
         activeQuery = unorderedQuery;
-        queryResult = await executeSparql(executionEndpoint, activeQuery, undefined, compiled.timeoutMs, request.signal, hasStatusConstraints);
+        queryResult = await executeSparql(executionEndpoint, activeQuery, undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || componentRetry || privateExecution, scopedAuthorization);
         unorderedFallback = true;
       }
     }
@@ -1033,7 +1042,7 @@ async function handlePost(request: Request) {
         hasStatusConstraints ? {liveEndpoint:endpoint.url,executionEndpoint,
           defaultStatusAddr:`${getPersonalStatusGraph(request)}@${executionEndpoint}`} : undefined).query;
       activeQuery = fallbackQuery;
-      queryResult = await executeSparql(executionEndpoint, fallbackQuery, undefined, compiled.timeoutMs, request.signal, hasStatusConstraints);
+      queryResult = await executeSparql(executionEndpoint, fallbackQuery, undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || componentRetry || privateExecution, scopedAuthorization);
       countFreeFallback = true;
     }
     const { response, text, key } = queryResult;
@@ -1075,7 +1084,7 @@ async function handlePost(request: Request) {
       // No partial answer or cache entry is allowed to masquerade as source.
       if (compiled.describeExpanded && (partial || bindings.length > (compiled.describeMaxTriples ?? 0)))
         return fctError(`Expanded RDF subgraph is incomplete; increase the limit (maximum 5000 triples), reduce the FCT scope, or simplify the shape.`, 422);
-      if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
+      if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) if (!privateExecution) setQueryCache(key, text);
       // A literal Record can be returned promptly without a second network
       // query merely to decorate the subjects of its incoming Roles.
       const labels = compiled.describeLiteral || compiled.describeExpanded ? new Map<string, string>()
@@ -1090,7 +1099,7 @@ async function handlePost(request: Request) {
         ...fctUpstreamMetadata(response, text),
       });
       const xml = `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.DESCRIBE}">${describeRows}</fct:result></fct:facets>`;
-      if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+      if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) if (!privateExecution) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...incompleteHeaders } });
     }
 
@@ -1106,7 +1115,7 @@ async function handlePost(request: Request) {
         ...fctUpstreamMetadata(response, text),
       });
       const xml = `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.ASK}"><fct:boolean>${askBoolean ? "true" : "false"}</fct:boolean></fct:result></fct:facets>`;
-      if (!hasStatusConstraints && !isValidate && response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+      if (!hasStatusConstraints && !isValidate && response.status === 200) if (!privateExecution) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
     const parsed = parseResults(text);
@@ -1116,17 +1125,24 @@ async function handlePost(request: Request) {
     if (!parsed && anytime) proxyLog("warn", "fct.anytime-no-rows", { view: compiled.view, status: response.status });
     let bindings = parsed?.results?.bindings ?? [];
     let vars = parsed?.head?.vars ?? [];
-    if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
-    const labels = countOnly || compiled.view === FCT_VIEW_TYPES.VALIDATE || compiled.view === FCT_VIEW_TYPES.LIST_VALUES ||
+    if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) if (!privateExecution) setQueryCache(key, text);
+    const labels = countOnly || compiled.view === FCT_VIEW_TYPES.VALIDATE || (compiled.view === FCT_VIEW_TYPES.LIST_VALUES || compiled.view === FCT_VIEW_TYPES.MERGE_VALUES) ||
       (compiled.graphOnly && compiled.view === FCT_VIEW_TYPES.GRAPHS && /<view\b[^>]*\brecord=["']yes["']/i.test(queryXml))
       ? new Map<string, string>()
       : await resolveFctLabels(endpoint.url, bindings,
           labelAcceptLanguage, compiled.timeoutMs);
-    if (compiled.view === FCT_VIEW_TYPES.LIST_VALUES && !countOnly && !graphOnly) {
+    if ((compiled.view === FCT_VIEW_TYPES.LIST_VALUES || compiled.view === FCT_VIEW_TYPES.MERGE_VALUES) && !countOnly && !graphOnly) {
       const address = queryXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
       const graph = unscopedGraph(address.includes("@") ? address.slice(0, address.indexOf("@")) : "");
       // Labels only for the selected focus resources; the second query returns
       // all projected values without another label round-trip.
+      // VALUES selection has no intrinsic SPARQL order. Preserve the exact
+      // authoritative resource page even if the backend reorders bindings.
+      if (compiled.resourcePage?.length) {
+        const matching = (a: SparqlBindingTerm, b: SparqlBindingTerm) =>
+          a.value === b.value && a.type === b.type && a.datatype === b.datatype && a["xml:lang"] === b["xml:lang"];
+        bindings = compiled.resourcePage.map(term => bindings.find(row => row.c1 && matching(row.c1, term)) ?? { c1: term });
+      }
       const expansion = await expandListValues({
         endpoint: endpoint.url,
         page: bindings,
@@ -1135,7 +1151,7 @@ async function handlePost(request: Request) {
         timeoutMs: compiled.timeoutMs, request,
       });
       const xml = listValuesXml({
-        page: bindings,
+        page: bindings, view: compiled.view,
         columns: valueColumns,
         expansion: expansion.rows,
         labels,
@@ -1147,7 +1163,7 @@ async function handlePost(request: Request) {
         timeoutMs: compiled.timeoutMs, upstream: partial ? fctUpstreamMetadata(response, text) : expansion.upstream,
       });
       if (response.status === 200 && !partial && expansion.complete)
-        if (!hasStatusConstraints) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+        if (!hasStatusConstraints) if (!privateExecution) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
       return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
     }
     if ((compiled.view === FCT_VIEW_TYPES.LIST || compiled.view === FCT_VIEW_TYPES.LIST_SUBJECTS || compiled.view === FCT_VIEW_TYPES.LIST_OBJECTS) && !countOnly && !graphOnly) {
@@ -1168,11 +1184,24 @@ async function handlePost(request: Request) {
       // A separate unpaginated aggregate over the exact same FCT population.
       // A failed probe is not a negative SHACL match; surface the error.
       const evidenceQuery = compiled.datatypeEvidenceQuery;
-      const evidenceResult = await executeSparql(executionEndpoint, evidenceQuery, undefined, compiled.timeoutMs, request.signal);
-      if (!evidenceResult.response.ok || isVirtuosoAnytime(evidenceResult.response, evidenceResult.text) || evidenceResult.response.status === 206)
-        throw new Error("Facet datatype discovery did not complete.");
+      // The datatype population is independent of the value page offset.
+      // Reuse a complete evidence query across pages, but never reuse errors,
+      // partial results, protected status scopes, or an explicit component Retry.
+      const evidenceResult = await executeSparql(executionEndpoint, evidenceQuery, undefined,
+        compiled.timeoutMs, request.signal, hasStatusConstraints || isValidate || componentRetry || privateExecution, scopedAuthorization);
+      const evidenceAnytime = isVirtuosoAnytime(evidenceResult.response, evidenceResult.text) || evidenceResult.response.status === 206;
+      if (!evidenceResult.response.ok || evidenceAnytime) {
+        // Preserve the distinction between the successful main value-list request
+        // and this independent datatype aggregate; do not invent an upstream 502.
+        const status = evidenceResult.response.status;
+        const kind = evidenceAnytime ? "incomplete/ANYTIME" : `HTTP ${status}`;
+        return fctError(`Facet datatype evidence probe failed (${kind}). This was an auxiliary aggregate, not the main facet value list.\nProbe SPARQL (verbatim):\n${evidenceQuery}\nUpstream response (${evidenceResult.response.headers.get("content-type") ?? "unknown type"}):\n${evidenceResult.text.slice(0, 6000)}`,
+          evidenceAnytime ? 504 : status >= 400 && status < 600 ? status : 502);
+      }
       const evidence = parseResults(evidenceResult.text);
-      if (!evidence) throw new Error("Facet datatype evidence was not valid SPARQL JSON.");
+      if (!evidence) return fctError(`Facet datatype evidence probe returned invalid SPARQL Results JSON.\nProbe SPARQL:\n${evidenceQuery}\nRaw upstream body:\n${evidenceResult.text.slice(0, 6000)}`, 502);
+      if (!hasStatusConstraints && !isValidate && !componentRetry && evidenceResult.response.status === 200)
+        if (!privateExecution) setQueryCache(evidenceResult.key, evidenceResult.text);
       datatypeEvidence = (evidence.results?.bindings ?? []).flatMap(row => {
         const datatype = row.datatype?.value;
         const originalDatatype = row.originalDatatype?.value;
@@ -1195,7 +1224,7 @@ async function handlePost(request: Request) {
       execMilliseconds,
       execDbActivity,
     });
-    if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+    if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) if (!privateExecution) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...(unorderedFallback ? { "X-Maestro-Ordering-Fallback": "true" } : {}),
       ...(countFreeFallback ? { "X-Maestro-Count-Fallback": "unavailable" } : {}), ...incompleteHeaders } });
   } catch (error) {
@@ -1207,9 +1236,10 @@ async function handlePost(request: Request) {
 
 
 export async function POST(request: Request): Promise<Response> {
-  const result = request.headers.get(MAESTRO_EVENT_HEADER) === "1"
-    ? await streamProxyQuery(request, () => withProxyClient(request, () => handlePost(request)))
-    : await withProxyClient(request, () => handlePost(request));
+  // FCT's HTTP response always contains its native XML body. Queue, dispatch
+  // and timer events are pushed independently to OpenAPI subscribeQueryEvents under /proxy/api/service.
+  const result = await withProxyQueryTelemetry(request,
+    () => withProxyClient(request, () => handlePost(request)));
   // The retired preferences route previously issued this cookie. FCT now
   // provisions it itself, so independent browser clients never share quotas.
   if (!clientFromRequest(request)) {

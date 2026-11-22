@@ -8,7 +8,7 @@ import { D3SankeyDiagram } from "@/canvas/tab/analyze/d3-sankey";
 import { toLabel } from "@/lib/uri-labels";
 import { projectSankeyCoverage, type SankeyCoverageNode, type SankeyPredicate, type SankeyResource, type SankeyTerm,
   SANKEY_MAX_PREDICATES, SANKEY_MAX_RESOURCES, SANKEY_MAX_VALUES_PER_PREDICATE } from "@/lib/sankey-coverage";
-import { listValuesQueryClone, parseListValuesXml, type ScopeValue } from "@/canvas/utils/fct-response";
+import { mergeValuesQueryClone, parseListValuesXml, type ScopeValue } from "@/canvas/utils/fct-response";
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
 import { findQueryNode } from "@/canvas/utils/query-controller";
@@ -25,10 +25,11 @@ const colors:Record<SankeyCoverageNode["kind"],string> = {
  * for a later switch from Recharts to D3 without changing provider semantics. */
 export function AnalyzeSankey({workspace,renderer="recharts"}:{workspace:WorkspaceController;renderer?:"recharts"|"d3"}) {
   const axes=useMemo(():SankeyPredicate[]=>[...new Map(workspace.analyzeTableHeaderNodes.map(header=>{
-    const direction=header.name==="property-of"?"reverse" as const:"forward" as const;
-    const predicate={iri:header.uri,direction,
-      label:toLabel(header.uri,"Property")+(direction==="reverse"?" of":"")};
-    return [`${direction}|${header.uri}`,predicate] as const;
+    const direction=header.name==="a"?(header.hops?.[0]?.direction ?? "forward")
+      :header.name==="property-of"?"reverse" as const:"forward" as const;
+    const predicate={iri:header.uri,direction,label:header.label,
+      ...(header.name==="a"?{anchorId:header.id}:{})};
+    return [header.name==="a"?`alias:${header.id}`:`${direction}|${header.uri}`,predicate] as const;
   })).values()],[workspace.analyzeTableHeaderNodes]);
   const focusPath=useMemo(() => ["Everything", ...workspace.analyzeBreadcrumbTrail.slice(0, workspace.activeBreadcrumbIndex + 1)
     .map(crumb => `${toLabel(crumb.uri, "Property")}${crumb.name === "property-of" ? " of" : ""}`)].join(" › "),
@@ -47,8 +48,9 @@ export function AnalyzeSankey({workspace,renderer="recharts"}:{workspace:Workspa
   const projection=workspace.readyAnalysisValues as Map<string,ScopeValue[]>|null;
   const resources=useMemo(():SankeyResource[]=>chartResults.map(item=>({
     uri:item.uri,label:item.title||item.uri,
-    values:(projection?.get(item.uri)??[]).map(value=>({property:value.property,direction:value.direction,values:value.values})),
-  })),[chartResults,projection]);
+    values:(projection?.get(item.uri)??[]).map(value=>({property:value.property,direction:value.direction,values:value.values,
+      ...(workspace.analyzeTableHeaderNodes.some(header=>header.name==="a"&&header.id===value.id)?{anchorId:value.id}:{})})),
+  })),[chartResults,projection,workspace.analyzeTableHeaderNodes]);
   const focusId=workspace.activeBreadcrumbIndex>=0
     ? workspace.analyzeBreadcrumbTrail[workspace.activeBreadcrumbIndex]?.id ?? "" : "";
   const branches=useMemo(():SankeyQueryBranch[]=>{
@@ -76,7 +78,6 @@ export function AnalyzeSankey({workspace,renderer="recharts"}:{workspace:Workspa
       let truncated=false;
       let requests=0;
       try{
-        const projectionQueryXml=listValuesQueryClone(workspace.queryXml);
         const known=new Map(allSankeyBranches(branches).map(branch=>[branch.id,branch]));
         let frontier=[...initial].flatMap(([id,terms])=>{
           const branch=known.get(id);
@@ -99,11 +100,14 @@ export function AnalyzeSankey({workspace,renderer="recharts"}:{workspace:Workspa
                 if(requests>=SANKEY_MAX_DESCENDANT_REQUESTS){truncated=true;break;}
                 const batch=selected.slice(start,start+LIST_VALUES_MAX_RESOURCES);
                 requests++;
+                const projectionQueryXml=mergeValuesQueryClone(workspace.queryXml,
+                  columns.map(item=>({property:item.iri,direction:item.direction})),
+                  batch.map(term=>({value:term.value,type:term.type==="literal"?"literal" as const:"uri" as const,
+                    ...(term.datatype?{datatype:term.datatype}:{}),...(term.lang?{lang:term.lang}:{})})));
                 const response=await cachedFetchFct("/proxy/api/fct",{
                   method:"POST",cache:"no-store",signal:controller.signal,
-                  headers:{"Content-Type":"application/json"},
-                  body:JSON.stringify({queryXml:projectionQueryXml,resources:batch,
-                    projections:columns.map(item=>({property:item.iri,direction:item.direction}))}),
+                  headers:{"Content-Type":"text/xml; charset=utf-8"},
+                  body:projectionQueryXml,
                 });
                 const xml=await response.text();
                 if(!response.ok)throw new Error(`FCT descendant projection returned HTTP ${response.status}`);

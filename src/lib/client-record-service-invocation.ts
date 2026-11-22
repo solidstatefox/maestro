@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Browser-owned execution of graph-described Record service providers.
  * SPARQL reads service definitions; Saxon-JS handles request/response XSLT;
  * the generic HTTP bridge transports the authorized outbound GET unchanged.
@@ -29,7 +30,7 @@ function envelope(queryXml:string,fctXml:string,args:Record<string,string>,respo
 }
 async function describeOperation(service:string,operation:string,signal?:AbortSignal):Promise<Operation> {
   const ctx=await personalContext();
-  const graph=`${ctx.base}/shacl/policies`;
+  const graph=`${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`;
   const query=`PREFIX svc: <${SVC}> PREFIX rdf: <${RDF}>
 SELECT ?endpoint ?method ?inputXslt ?outputXslt ?requires ?queryParam ?paramName ?pointer ?bindingFormat WHERE {
   GRAPH <${graph}> {

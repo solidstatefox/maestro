@@ -88,7 +88,15 @@ export function snapshotFctQueryXml(xml: string, plane: FctClonePlane = "data", 
   // Parsing builds a fully detached representation; the live tree is never exposed.
   const nodes = parseFctQuerySnapshot(xml);
   const walk = (entries: FctXmlNode[]) => {
-    for (const node of entries) {
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const node = entries[index];
+      // <a> is a viewer-plane transported facet reference. Retaining it in
+      // a provider's data-plane snapshot would change the derived query or
+      // leak an alias column into consumers that did not request one.
+      if (plane === "data" && Object.keys(node).some(key => key === "a" || key.endsWith(":a"))) {
+        entries.splice(index, 1);
+        continue;
+      }
       const attributes = node[":@"] as Record<string, string> | undefined;
       if (attributes && Object.keys(node).some(key => key === "view" || key.endsWith(":view"))) delete attributes["@_indexLang"];
       if (plane === "data" && attributes) {

@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { readClientPolicyApprovals } from "@/lib/client-policy-approvals";
@@ -20,7 +21,7 @@ export type ClientPolicyTemplate = { templateXslt: string; enrichmentXslt: strin
 export async function loadClientPolicyTemplate(template: string, signal?: AbortSignal): Promise<ClientPolicyTemplate> {
   if (!validIri(template)) throw new Error("A valid XSLT template URI is required.");
   const ctx = await personalContext();
-  const graph = `${ctx.base}/shacl/policies`;
+  const graph = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`;
   const query = `PREFIX rdf: <${RDF}> PREFIX sh: <${SH}> PREFIX rdfs: <${RDFS}> PREFIX mui: <${MUI}>
     SELECT DISTINCT ?policy ?provider ?templateXslt ?enrichmentXslt WHERE {
       GRAPH <${graph}> {

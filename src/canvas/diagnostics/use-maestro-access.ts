@@ -1,6 +1,7 @@
 "use client";
 
-import { useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { toast } from "@/components/ui/toast";
 import type { PersonalAuthSession } from "@/lib/personal-auth";
 import { loadClientStatusMachines } from "@/lib/status-machine-client";
 import { machineForTarget } from "@/lib/status-machine-runtime";
@@ -11,6 +12,7 @@ import { createMaestroAccessController } from "@/lib/app-lifecycle/access";
 export function useMaestroAccess(session: PersonalAuthSession | null, restored: boolean, policiesReady = true, seedError = "") {
   const [controller] = useState(createMaestroAccessController);
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const lastNotifiedStageRef = useRef<{sessionKey:string;stage:string;error:string}>({sessionKey:"",stage:"",error:""});
   // An auth session with freshly rotated credentials is distinct even if its
   // public store URI/user name is unchanged. Do not store credentials in XState.
   const [sessionInstanceId] = useState(() => {
@@ -68,5 +70,23 @@ export function useMaestroAccess(session: PersonalAuthSession | null, restored: 
     })();
     return () => abort.abort();
   }, [controller, sessionKey, policiesReady, seedError]);
+  // No seed-completion success toast: only a verified XState transition
+  // is allowed to report final readiness. Distinct attempt/session scope
+  // avoids duplicated Strict Mode notifications and misleading stale toasts.
+  useEffect(() => {
+    const stage = snapshot.context.policyStage;
+    if (!sessionKey || snapshot.context.sessionKey !== sessionKey) return;
+    const previous = lastNotifiedStageRef.current;
+    const isTransition = previous.sessionKey !== sessionKey || previous.stage !== stage || previous.error !== snapshot.context.policyError;
+    lastNotifiedStageRef.current = {sessionKey,stage,error:snapshot.context.policyError};
+    if (stage === "ready" && isTransition) {
+      toast.add({ title: "Personal graphs ready", description: "Authenticated bootstrap, graph seeding, and State-machine verification completed.", type: "success" });
+    }
+    if (stage === "failed") {
+      if (isTransition) {
+        toast.add({title: "Personal initialization failed", description: snapshot.context.policyError || "State-machine verification failed.", type: "error"});
+      }
+    }
+  }, [sessionKey, snapshot.context.sessionKey, snapshot.context.policyStage, snapshot.context.policyError]);
   return { controller, snapshot, sessionKey };
 }

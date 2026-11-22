@@ -54,7 +54,7 @@ test('server retains identical FCT scope with cheaper unranked matching-graph fa
 test('XState graph health and query scope readiness remain separate', () => {
   const controller = read('src/canvas/utils/workspace-controller.tsx');
   const hook = read('src/canvas/diagnostics/use-maestro-operations.ts');
-  assert.match(controller, /graphReady: graphHealthReady,\s+querySourceReady: endpointReadyForQuery/);
+  assert.match(controller, /graphReady: endpointReadyForQuery,\s+querySourceReady: endpointReadyForQuery/);
   assert.match(hook, /QUERY_OBSERVED[^\n]*graphReady: facts\.querySourceReady/);
   assert.match(hook, /GRAPH_OBSERVED[^\n]*key: facts\.graphKey/);
 });
@@ -74,8 +74,8 @@ test('failed automatic graph discovery no longer replaces normal facets or resul
   const controller = read('src/canvas/utils/workspace-controller.tsx');
   assert.doesNotMatch(workspace, /Graph auto-fill could not resolve a matching named graph/);
   assert.doesNotMatch(workspace, /title=\{graphDiscoveryFailed/);
-  assert.match(controller, /graphAutoFillAllowsQuery\(/);
-  assert.match(selector, /Discovery errors are advisory/);
+  assert.doesNotMatch(controller, /graphAutoFillAllowsQuery\(/);
+  assert.match(selector, /Hydrated panes are \*always\* mounted/);
   assert.match(controller, /setGraphProbe\(\{ identity: graphProbeIdentity, state: "error"/);
 });
 

@@ -86,7 +86,16 @@ test('health client preserves HTTP response and thrown transport cause', () => {
   const client = read('src/canvas/utils/workspace-controller.tsx');
   assert.match(client, /diagnostic: sanitizeUpstreamDiagnostic\(\[`Proxy HTTP/);
   assert.match(client, /diagnostic: describeUpstreamError\(error, "Health proxy request failed"\)/);
-  assert.match(client, /JSON\.stringify\(previous\.attempts\) === JSON\.stringify\(status\.attempts\)/);
+  // The health ledger moved from the workspace controller into the XState
+  // actor. It must preserve all probe evidence (including attempts) and
+  // suppress only identical *complete* status snapshots.
+  const healthActor = read('src/lib/app-lifecycle/graph-server-health-actor.ts');
+  const healthState = read('src/canvas/controllers/graph-servers.ts');
+  assert.match(client, /reportGraphHealthProbe\(status, probeStartedAt\)/);
+  assert.match(healthState, /healthController\.reportProbe\(status, startedAt\)/);
+  assert.match(healthActor, /JSON\.stringify\(current\) === JSON\.stringify\(status\)/);
+  assert.match(healthActor, /statuses: \{ \.\.\.context\.statuses, \[status\.id\]: status \}/);
+
 });
 
 

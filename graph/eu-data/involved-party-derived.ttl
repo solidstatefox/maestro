@@ -1,0 +1,42 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix eurio: <http://data.europa.eu/s66#> .
+
+# CORDIS/EURIO hasInvolvedParty objects are role URIs; their rdfs:label values
+# contain the Org: ... / Role: ... / Project: ... text to parse.
+# Reuse the Email Components mui:Provider / regex-derived FCT contract.
+# No hard-coded EU extraction logic is needed in Maestro TypeScript.
+<gttp://ggg.maestro.ecosys/eu-data/provider/involved-party> a mui:Provider, mui:FacetProvider ;
+  rdfs:label "EURIO involved-party components"@en ;
+  mui:accepts <gttp://ggg.maestro.ecosys/eu-data/provider/involved-party-input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/eu-data/widget/involved-party> ;
+  mui:sourceValuePredicate rdfs:label ;
+  mui:sourcePattern "^\\s*Org:\\s*(.*?)\\s*/\\s*Role:\\s*(.*?)\\s*/\\s*Project:\\s*(.*?)\\s*$" ;
+  mui:derivedField <gttp://ggg.maestro.ecosys/eu-data/derived/involved-party-organization>,
+                   <gttp://ggg.maestro.ecosys/eu-data/derived/involved-party-role>,
+                   <gttp://ggg.maestro.ecosys/eu-data/derived/involved-party-id> .
+
+<gttp://ggg.maestro.ecosys/eu-data/provider/involved-party-input> a mui:InputShape, sh:NodeShape ;
+  sh:property [ sh:path eurio:hasInvolvedParty ] .
+
+<gttp://ggg.maestro.ecosys/eu-data/widget/involved-party> a mui:FacetWidget ;
+  rdfs:label "EURIO involved-party derived facets"@en .
+
+<gttp://ggg.maestro.ecosys/eu-data/derived/involved-party-organization> a mui:DerivedFacet ;
+  rdfs:label "hasInvolvedParty: Organization"@en ;
+  mui:icon "pickaxe" ;
+  mui:resultPredicate <gttp://ggg.maestro.ecosys/eu-data/derived/involved-party#organization> ;
+  mui:capture "1" .
+<gttp://ggg.maestro.ecosys/eu-data/derived/involved-party-role> a mui:DerivedFacet ;
+  rdfs:label "hasInvolvedParty: Role"@en ;
+  mui:icon "pickaxe" ;
+  mui:resultPredicate <gttp://ggg.maestro.ecosys/eu-data/derived/involved-party#role> ;
+  mui:capture "2" .
+
+<gttp://ggg.maestro.ecosys/eu-data/derived/involved-party-id> a mui:DerivedFacet ;
+  rdfs:label "hasInvolvedParty: Id"@en ;
+  mui:icon "pickaxe" ;
+  mui:resultPredicate <gttp://ggg.maestro.ecosys/eu-data/derived/involved-party#id> ;
+  mui:capture "3" .

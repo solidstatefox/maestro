@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Provider-discovery provenance and the bookmark precondition are browser
  * workflows over the user's personal RDF graphs.  The hosting proxy does not
  * interpret a policy, decide approval, or persist discovery metadata. */
@@ -20,7 +21,7 @@ export async function isClientQueryBookmarked(queryXml: string, signal?: AbortSi
   const canonical = canonicalQueryIdentityXml(queryXml);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
   const hash = `sha256:${[...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2,"0")).join("")}`;
-  return personalExists(`GRAPH ${iri(`${ctx.base}#bookmarks`)} { ?bookmark <${SCHEMA}> ${quote(hash)} }`, ctx, signal);
+  return personalExists(`GRAPH ${iri(`${resolveGraph(GRAPH.BOOKMARKS, ctx.base)}`)} { ?bookmark <${SCHEMA}> ${quote(hash)} }`, ctx, signal);
 }
 
 export type ClientPolicyDiscoveryContext = { component: string; queryXml: string; history?: string; record?: string };
@@ -37,9 +38,9 @@ export async function writeClientProviderDiscovery(uris: string[], context: Clie
   // currently active canvas even if provenance persistence is unavailable.
   pendingApprovalController.match(context.queryXml,policies,context.record);
   const ctx = await personalContext();
-  const graph = iri(`${ctx.base}#policy-approvals`);
+  const graph = iri(`${resolveGraph(GRAPH.POLICY_APPROVALS, ctx.base)}`);
   const historyValid = Boolean(context.history && context.queryXml.length <= 200_000 &&
-    await personalExists(`GRAPH ${iri(`${ctx.base}#history`)} {
+    await personalExists(`GRAPH ${iri(`${resolveGraph(GRAPH.HISTORY, ctx.base)}`)} {
       ${iri(context.history!)} a <${HISTORY_VISIT}> ; <${HISTORY_QUERY}> ${quote(context.queryXml)} .
     }`, ctx, signal));
   const match = iri(context.record ?? context.component);

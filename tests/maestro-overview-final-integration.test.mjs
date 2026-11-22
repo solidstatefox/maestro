@@ -76,7 +76,7 @@ test('Mindmap two-URI FCT and virtual Record use FCT population, no synthetic re
 });
 test('API transport remains consolidated and connection requests are XState-cancellable',()=>{
   const routes=readdirSync(new URL('../src/app/proxy/api/',import.meta.url),{withFileTypes:true}).filter(entry=>entry.isDirectory()).map(e=>e.name).sort();
-  assert.deepEqual(routes,['fct','observations','service','sparql']);
+  assert.deepEqual(routes,['fct','service','sparql']);
   const service=read('src/app/proxy/api/service/route.ts');
   assert.match(service,/resolveOpenApiOperation/);
   assert.doesNotMatch(service,/dispatchMaestroService/);

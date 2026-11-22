@@ -1,21 +1,22 @@
+/** Same-origin URI-observation transport: local OpenAPI service handler.
+ * The execution address is supplied by the active FCT query, not a registry. */
 import { proxyLog } from "@/lib/maestro-logger";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
 import { isIP } from "node:net";
 import { recordUriObservations } from "@/lib/uri-registry";
-import { getConfiguredFctEndpoints, resolveFctEndpointFromAddr } from "@/lib/personal-sparql";
+import { resolveFctEndpointFromAddr } from "@/lib/personal-sparql";
 
-
-export async function POST(request: Request) {
+export async function processUriObservationBatch(request: Request, payload: unknown): Promise<Response> {
   try {
-    const body = await request.json().catch(() => null) as {
+    const body = payload as {
       observations?: unknown;
       addr?: unknown;
       _debug?: { source?: unknown; component?: unknown; requestId?: unknown };
     } | null;
     logProxyCaller(request, "observations.POST", body?._debug);
-    const endpoint = resolveFctEndpointFromAddr(await getConfiguredFctEndpoints(request), body?.addr);
-    if (!endpoint) return NextResponse.json({ error: "Observations require a registered graph server in query addr." }, { status: 400 });
+    const endpoint = resolveFctEndpointFromAddr([], body?.addr);
+    if (!endpoint) return NextResponse.json({ error: "Observations require a valid graph server in query addr." }, { status: 400 });
     if (!Array.isArray(body?.observations)) {
       return NextResponse.json({ error: "Expected an observations array." }, { status: 400 });
     }

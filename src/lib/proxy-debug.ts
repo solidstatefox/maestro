@@ -23,7 +23,7 @@ export function proxyDebugFingerprint(value: string): string {
 export function proxyDebugHeaders(source: string, componentId: string): Record<string, string> {
   proxyDebugSequence += 1;
   return {
-    "X-Maestro-Debug-Source": source,
+    "X-Maestro-Debug-Source": source.startsWith("urn:") ? source : `urn:maestro:component:${source}`,
     "X-Maestro-Debug-Component": compactComponentId(componentId),
     "X-Maestro-Debug-Request": `${Date.now().toString(36)}-${proxyDebugSequence.toString(36)}`,
   };

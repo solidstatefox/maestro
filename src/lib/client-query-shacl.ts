@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Query-context SHACL Core, evaluated IN THE BROWSER against the RDF tree
  * linked from the exact current History visit. /sparql is transport only.
  * The Record validator uses the same rdf-validate-shacl processor and report
@@ -32,7 +33,7 @@ const toTerm = (value: Cell, bnode: (name: string) => string) => {
 async function shapeRows(ctx: PersonalContext, shape: string, signal: AbortSignal): Promise<Row[]> {
   const limit = 4001;
   const rows = await selectPersonal(`PREFIX sh: <${SH}> PREFIX rdf: <${RDF}>
-SELECT DISTINCT ?s ?p ?o WHERE { GRAPH <${ctx.base}/shacl/policies> {
+SELECT DISTINCT ?s ?p ?o WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
  ${safe(shape)} (sh:property|sh:in|sh:or|sh:and|sh:xone|sh:not|sh:node|sh:qualifiedValueShape|sh:path|sh:alternativePath|sh:inversePath|sh:zeroOrMorePath|sh:oneOrMorePath|sh:zeroOrOnePath|rdf:first|rdf:rest)* ?s .
  ?s ?p ?o .
 } } LIMIT ${limit}`, ctx, signal);
@@ -89,7 +90,7 @@ function mergeReports(reports: ShaclValidationReport[]): ShaclValidationReport {
 export async function validateCurrentHistoryQuery(historyId: string, queryXml: string, signal: AbortSignal): Promise<ValidatedHistoryQuery> {
   safe(historyId);
   const ctx=await personalContext();
-  const historyGraph=safe(`${ctx.base}#history`);
+  const historyGraph=safe(`${resolveGraph(GRAPH.HISTORY, ctx.base)}`);
   // No legacy History conversion or fallback. Every new visit has an explicit
   // bookmark:recalls link and a structured query tree from the initial INSERT DATA.
   const visits=await selectPersonal(`PREFIX vfct: <${VFCT}> PREFIX bookmark: <${BOOKMARK}>
@@ -111,7 +112,7 @@ SELECT ?root ?xml WHERE { GRAPH ${historyGraph} {
   // Find standard SHACL Core targets for the QUERY root (not just result URIs).
   // This is separate from provider input shapes, which are evaluated *after*.
   const targetQuery=`PREFIX sh: <${SH}> PREFIX mui: <${MUI}> PREFIX vfct: <${VFCT}>
-SELECT DISTINCT ?shape WHERE { GRAPH <${ctx.base}/shacl/policies> {
+SELECT DISTINCT ?shape WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
  ?shape a sh:NodeShape .
  FILTER NOT EXISTS { ?provider mui:accepts ?shape }
  { ?shape sh:targetNode ${safe(root)} }
@@ -132,7 +133,7 @@ SELECT DISTINCT ?shape WHERE { GRAPH <${ctx.base}/shacl/policies> {
   // population's sh:class/targetClass matching runs separately and is UNIONED
   // with this validated candidate set by discoverViews/discoverAnalyses.
   const providerRows=await selectPersonal(`PREFIX sh: <${SH}> PREFIX mui: <${MUI}> PREFIX vfct: <${VFCT}>
-SELECT DISTINCT ?provider ?shape WHERE { GRAPH <${ctx.base}/shacl/policies> {
+SELECT DISTINCT ?provider ?shape WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
  ?provider a mui:Provider ; mui:accepts ?shape .
  { ?shape sh:targetClass vfct:query }
  UNION { ?shape sh:class vfct:query }

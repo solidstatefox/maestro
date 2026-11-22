@@ -10,7 +10,7 @@ const d3=text('src/canvas/tab/analyze/d3-sankey.tsx');
 
 test('D3 Sankey is separate approved Analysis provider with the same scoped forward FCT projection',()=>{
   const provider=text('graph/sankey-d3/provider.ttl');
-  assert.equal(manifest['sankey-d3/provider.ttl'],'/shacl/policies');
+  assert.equal(manifest['sankey-d3/provider.ttl'],'shacl-policies');
   assert.match(curator,/analyze\/sankey-d3/);
   assert.match(provider,/a mui:Provider, ma:Analysis, sh:NodeShape/);
   assert.match(provider,/renderer="d3-sankey"/);
@@ -24,18 +24,21 @@ test('D3 Sankey is separate approved Analysis provider with the same scoped forw
 });
 
 test('D3 renderer supports Observable-style node alignment and link color as well as local zoom/pan',()=>{
-  for (const token of ['Node alignment','Link color','Node order','Node width','Node padding','Iterations','Ribbons:','Nodes:','Label padding','Node border','Colors by node stage','Ribbon blend mode','Chart width','Chart height','Zoom in','Zoom out','Reset zoom','setPointerCapture','onPointerMove'])
+  for (const token of ['Node alignment','Link color','Node order','Node width','Node padding','Iterations','Ribbons','Nodes','Label padding','Node border','Colors by node stage','Ribbon blend mode','Chart width','Chart height','Zoom in','Zoom out','Reset zoom','setPointerCapture','onPointerMove'])
     assert.ok(d3.includes(token),token);
   assert.match(d3,/setSelectedUri|onOpenResource\(node.uri\)/);
   assert.doesNotMatch(d3,/SPARQL UPDATE|updatePersonal\(/);
 });
 
-test('Sunburst XSLT owns wedge labels and percentages and provider content fills the available pane',()=>{
+test('Sunburst XSLT owns wedge labels and percentages and host caps chart width without an ambient filler',()=>{
   const sun=text('graph/sunburst/provider.ttl');
   assert.match(sun,/format-number\(100 \* \$span div/);
   assert.match(sun,/text-anchor="middle"/);
   assert.doesNotMatch(sun,/max-w-\[360px\]/);
-  assert.match(text('src/canvas/left/facet-presentation.tsx'),/w-full min-w-0 flex-1/);
+  const host=text('src/canvas/left/facet-presentation.tsx');
+  assert.match(host,/max-w-\[420px\]/);
+  assert.match(host,/flex-none flex-col gap-1/);
+  assert.doesNotMatch(host,/max-w-\[800px\]/);
   assert.doesNotMatch(text('src/canvas/tab/analyze/spider.tsx'),/max-w-6xl space-y-4/);
   assert.doesNotMatch(sankey,/max-w-7xl space-y-4/);
 });

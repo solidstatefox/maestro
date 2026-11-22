@@ -4,6 +4,7 @@ import { executeProviderDerivedQuery, type ProviderQueryRequest } from "@/lib/ma
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 import { compileProviderXsltQuery } from "@/lib/provider-xslt-query";
 import { cachedFetchFct } from "@/lib/client-query-cache";
+import { mergeValuesQueryClone } from "@/canvas/utils/fct-response";
 import { publishXsltFacetDecorations, resetFacetDecorations, type DecorationFacet } from "@/lib/facet-decoration-contract";
 
 /** The generic provider host resolves URI-addressed furniture; XSLT owns its UI. */
@@ -62,7 +63,7 @@ export type MaestroProviderBrowserApi = {
   executeQuery: (query: ProviderQueryRequest, signal?: AbortSignal) => Promise<string>;
   compileQuery: typeof compileProviderXsltQuery;
   transformXml: (stylesheet: string, xml: string, signal?: AbortSignal) => Promise<string>;
-  projectValues: (queryXml: string, resources: { type: string; value: string }[], projections: { property: string; direction: string }[], signal?: AbortSignal) => Promise<string>;
+  projectValues: (queryXml: string, resources: { type: string; value: string }[], projections: { property: string; direction: string; hops?: Array<{ iri: string; direction: "forward" | "reverse" }> }[], signal?: AbortSignal) => Promise<string>;
   decorateFacets: (providerUri: string, stylesheet: string, facets: DecorationFacet[], selected: string, action: (name: string, facetKey: string) => void) => Promise<void>;
   clearFacetDecorations: (providerUri: string) => void;
   loadLibrary: typeof loadMaestroUiLibrary;
@@ -77,10 +78,13 @@ export function installMaestroProviderBridge(): MaestroProviderBrowserApi {
     compileQuery: compileProviderXsltQuery,
     transformXml: (stylesheet, xml, signal) => transformWithMaestroSaxon(stylesheet, xml, { signal }),
     projectValues: async (queryXml, resources, projections, signal) => {
+      const xml = mergeValuesQueryClone(queryXml,
+        projections.map(({property,direction,hops}) => ({property, direction: direction === "reverse" ? "reverse" as const : "forward" as const, ...(hops?.length ? { hops } : {})})),
+        resources.map(({type,value}) => ({type: type === "literal" ? "literal" as const : "uri" as const, value})));
       const response = await cachedFetchFct("/proxy/api/fct", {
         method: "POST", cache: "no-store", signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ queryXml, resources, projections }),
+        headers: { "Content-Type": "text/xml; charset=utf-8" },
+        body: xml,
       });
       const result = await response.text();
       if (!response.ok) throw new Error(`Provider FCT projection failed (HTTP ${response.status}): ${result.slice(0, 250)}`);

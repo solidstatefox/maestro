@@ -1,0 +1,51 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix eurio: <http://data.europa.eu/s66#> .
+@prefix schema: <https://schema.org/> .
+
+# Supplemental EURIO semantic checks; these make no unsupported mandatory assertions.
+
+<gttp://ggg.maestro.ecosys/eu-data/validation#Project> a sh:NodeShape ;
+  rdfs:label "EURIO Project supplemental validation"@en ;
+  rdfs:comment "Additional optional checks for source records. CORDIS has not published these as an authoritative EURIO conformance profile."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Project> ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:property [ sh:path <http://data.europa.eu/s66#title> ; sh:nodeKind sh:Literal ; sh:severity sh:Warning ] ;
+  sh:property [ sh:path <http://data.europa.eu/s66#acronym> ; sh:nodeKind sh:Literal ; sh:severity sh:Warning ] .
+
+<gttp://ggg.maestro.ecosys/eu-data/validation#Organisation> a sh:NodeShape ;
+  rdfs:label "EURIO Organisation supplemental validation"@en ;
+  rdfs:comment "Additional optional checks for source records. CORDIS has not published these as an authoritative EURIO conformance profile."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Organisation> ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:property [ sh:path <http://data.europa.eu/s66#legalName> ; sh:nodeKind sh:Literal ; sh:severity sh:Warning ] .
+
+<gttp://ggg.maestro.ecosys/eu-data/validation#Person> a sh:NodeShape ;
+  rdfs:label "EURIO Person supplemental validation"@en ;
+  rdfs:comment "Additional optional checks for source records. CORDIS has not published these as an authoritative EURIO conformance profile."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Person> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/validation#Grant> a sh:NodeShape ;
+  rdfs:label "EURIO Grant supplemental validation"@en ;
+  rdfs:comment "Additional optional checks for source records. CORDIS has not published these as an authoritative EURIO conformance profile."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Grant> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/validation#Result> a sh:NodeShape ;
+  rdfs:label "EURIO Result supplemental validation"@en ;
+  rdfs:comment "Additional optional checks for source records. CORDIS has not published these as an authoritative EURIO conformance profile."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Result> ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:property [ sh:path <http://data.europa.eu/s66#title> ; sh:nodeKind sh:Literal ; sh:severity sh:Warning ] .
+
+<gttp://ggg.maestro.ecosys/eu-data/validation#Role> a sh:NodeShape ;
+  rdfs:label "EURIO Role supplemental validation"@en ;
+  rdfs:comment "Additional optional checks for source records. CORDIS has not published these as an authoritative EURIO conformance profile."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Role> ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:property [ sh:path <http://data.europa.eu/s66#roleLabel> ; sh:nodeKind sh:Literal ; sh:severity sh:Warning ] .

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 const source = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 test('Record XSLT policy supplies IDs for DBpedia Person literal and URI values', () => {
-  const rdf = source('graph/maestro-dbpedia-policies.ttl');
+  const rdf = source('graph/dbpedia/maestro-dbpedia-policies.ttl');
   const renderer = source('src/canvas/utils/workspace-controller.tsx');
   assert.match(rdf, /DbpediaPersonRecordTemplate/);
   for (const field of ['label', 'birthDate', 'deathDate', 'birthName', 'nationality']) {

@@ -1,6 +1,4 @@
 "use client";
-import { ErrorDetails } from "@/components/ui/error-details";
-import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { ConfigureWorkspaceContent } from "@/canvas/left/configure-pane";
 import { FilterWorkspaceContent } from "@/canvas/left/filter-pane";
 
@@ -8,16 +6,11 @@ import { CONFIGURE_LIST_BACKGROUND_COLOR } from "@/canvas/left/configure";
 
 import maestroLanguages from "@/data/maestro-languages.json";
 
-import { ButtonGroup } from "@/components/ui/button-group";
-import { Button } from "@/components/ui/button";
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { MousePointerClick, LoaderCircle } from "lucide-react";
-import { ReturnToFiltersButton } from "@/canvas/left/return-to-filters";
-import { shortenCount } from "@/lib/utils";
 
 import { LeftPaneFrame, LeftPaneBody } from "@/canvas/workspace-pane-shells";
+import { LeftPaneNavigation } from "@/canvas/left/pane-navigation";
 
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
 
@@ -197,94 +190,7 @@ export function LeftCanvasPanel({ workspace }: { workspace: LeftPaneWorkspace })
 <LeftPaneFrame>
             {/* Left pane navigation uses count links while retaining the existing panes. */}
             <LeftPaneBody>
-              <div className="flex shrink-0 items-center gap-1 border-b px-3 py-2 text-sm whitespace-nowrap">
-                {defaultLeftTab === "facets" ? (
-                  <>
-                    <ButtonGroup aria-label="Return to facets">
-                      <ReturnToFiltersButton onClick={commitConfigureFacetChanges} />
-
-                      <Tooltip><TooltipTrigger render={<Button
-                        type="button"
-                        onClick={commitConfigureFacetChanges}
-                        variant="outline" size="sm" className="cursor-pointer"
-                        aria-label={`Show Filters, ${personalWidgets.length + activeRoleFilters.length + (classFacets.length > 0 && !isLoadingClasses ? 1 : 0) + (graphFacets.length > 0 ? 1 : 0)} facets`}
-                      >
-                        {personalWidgets.length + activeRoleFilters.length + (classFacets.length > 0 && !isLoadingClasses ? 1 : 0) + (graphFacets.length > 0 ? 1 : 0)}
-                      </Button>} /><TooltipContent>{"Show Filters"}</TooltipContent></Tooltip>
-                    </ButtonGroup>
-                  </>
-                ) : (
-                  <>
-                    {(isLoadingProperties && propertyFacets.length === 0) ||
-                    (isLoadingRoles && roleFacets.length === 0) ? (
-                      <span role="status" aria-live="polite" className="px-2 text-xs text-muted-foreground">
-                        <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-                          {isLoadingProperties && propertyFacets.length === 0 ? <ElapsedStatus label="Fetching properties" category="properties" clockScope="properties" /> : null}
-                          {isLoadingRoles && roleFacets.length === 0 ? <ElapsedStatus label="Fetching roles" category="roles" clockScope="roles" /> : null}
-                        </span>
-                      </span>
-                    ) : null}
-                    {(!isLoadingProperties && propertyFacets.length === 0 && propertyFacetError) || (!isLoadingRoles && roleFacets.length === 0 && roleFacetError) ? (
-                      <div role="alert" className="flex min-w-0 max-w-full flex-col gap-0.5 px-2 text-xs text-destructive">
-                        {!isLoadingProperties && propertyFacets.length === 0 && propertyFacetError ? (
-                          <ErrorDetails prefix="Properties" error={propertyFacetError} />
-                        ) : null}
-                        {!isLoadingRoles && roleFacets.length === 0 && roleFacetError ? (
-                          <ErrorDetails prefix="Roles" error={roleFacetError} />
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {showConfigureProperties && (
-                      <ButtonGroup aria-label="Configure properties">
-                        <Button variant="outline" size="sm" type="button" onClick={() => { setFocusListOrder("Properties"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="cursor-pointer gap-1" title="Configure Properties" aria-label="Configure Properties"><MousePointerClick className="size-3.5" aria-hidden="true" /> Properties</Button>
-
-                        <Tooltip><TooltipTrigger render={<Button variant="outline" size="sm"
-                          type="button"
-                          onClick={() => {
-                            setFocusListOrder("Properties");
-                            setResultsPage(resultsBatchSize, 0);
-                            setDefaultLeftTab("facets");
-                          }}
-                          className="cursor-pointer gap-1"
-                          aria-label={`Show Focus properties, ${propertyFacets.length} properties`}
-                        >{showPropertiesSpinner ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading properties" role="status" /> : shortenCount(propertyFacets.length)}</Button>} /><TooltipContent>{"Show Focus properties first"}</TooltipContent></Tooltip>
-                      </ButtonGroup>
-                    )}
-                    {showConfigureRoles && (
-                      <ButtonGroup aria-label="Configure roles">
-                        <Button variant="outline" size="sm" type="button" onClick={() => { setFocusListOrder("Roles"); setResultsPage(resultsBatchSize, 0); setDefaultLeftTab("facets"); }} className="cursor-pointer gap-1" title="Configure Roles" aria-label="Configure Roles"><MousePointerClick className="size-3.5" aria-hidden="true" /> Roles</Button>
-
-                        <Tooltip><TooltipTrigger render={<Button variant="outline" size="sm"
-                          type="button"
-                          onClick={() => {
-                            setFocusListOrder("Roles");
-                            setResultsPage(resultsBatchSize, 0);
-                            setDefaultLeftTab("facets");
-                          }}
-                          className="cursor-pointer gap-1"
-                          aria-label={`Show Focus roles, ${roleFacets.length} roles`}
-                        >{showRolesSpinner ? <LoaderCircle className="size-4 animate-spin" aria-label="Loading roles" role="status" /> : shortenCount(roleFacets.length)}</Button>} /><TooltipContent>{"Show Focus roles first"}</TooltipContent></Tooltip>
-                      </ButtonGroup>
-                    )}
-                    {autoConfigureFacetCount > 0 && (
-                      <ButtonGroup aria-label="Auto-configure facets">
-                        <Tooltip><TooltipTrigger render={<Button variant="outline" size="sm"
-                          type="button"
-                          onClick={runAutoConfigure}
-                          className="cursor-pointer gap-1"
-                        >Auto-configure</Button>} /><TooltipContent>{"Add high-frequency Properties and Roles that apply to the current query scope"}</TooltipContent></Tooltip>
-
-                        <Tooltip><TooltipTrigger render={<Button variant="outline" size="sm"
-                          type="button"
-                          onClick={runAutoConfigure}
-                          className="cursor-pointer gap-1"
-                          aria-label={`Auto-configure ${autoConfigureFacetCount} facets`}
-                        >{shortenCount(autoConfigureFacetCount)}</Button>} /><TooltipContent>{`${autoConfigureFacetCount} facets will be added`}</TooltipContent></Tooltip>
-                      </ButtonGroup>
-                    )}
-                  </>
-                )}
-              </div>
+              <LeftPaneNavigation workspace={workspace} />
               <div
                 className={`min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] p-3 ${defaultLeftTab === "facets" ? "" : "bg-background"}`}
                 style={defaultLeftTab === "facets" ? { backgroundColor: CONFIGURE_LIST_BACKGROUND_COLOR } : undefined}

@@ -11,10 +11,11 @@ function harness(){
   }).outputText;
   const holds=[];
   const mock={
+    '@/lib/client-personal-request': { withPersonalProxyCredentials: async (_url,init)=>({init,authenticated:false}) },
     './maestro-language': {maestroLanguageHeader: ()=>'en'},
     './maestro-concurrency': {readMaestroConcurrency: () =>({proxyConnections:1})},
     './maestro-query-execution-clock': {maestroQueryClockScope:()=>null},
-    './client-query-events': {unwrapMaestroQueryEvents: async res=>res},
+    './client-query-events': {subscribeMaestroQueryEvents: async () => ({close(){}})},
     './maestro-incomplete-results': {setMaestroIncompleteResults:()=>{}},
     './maestro-query-timeouts': {applyFctQueryTimeout:(source,xml)=>xml,configuredTimeoutMs:()=>0},
   };
@@ -25,7 +26,7 @@ function harness(){
     fetch: async (...args) => new Promise((resolve,reject)=>{
       holds.push({resolve,reject,args});
     }),
-    Request, Response, Headers, AbortController, AbortSignal, DOMException, URL,
+    Request, Response, Headers, AbortController, AbortSignal, DOMException, URL, crypto: require("node:crypto").webcrypto,
     Map, Set, WeakMap, Promise, JSON, TextDecoder, TextEncoder
   },{filename:'client-query-cache.js'});
   return {cache:mod.exports,holds};
@@ -40,7 +41,7 @@ test('browser queue indexes remain unique in priority order and reindex immediat
   const a=req('interactive-a');
   const b=req('count-b');
   const c=req('interactive-c');
-  await Promise.resolve();
+  for(let i=0;i<18;i++) await Promise.resolve();
   assert.equal(holds.length,1,'only first request is dispatched');
   const waiting=pending.filter(x=>x.queueIndex>0);
   assert.equal(waiting.length,2);
@@ -54,7 +55,7 @@ test('browser queue indexes remain unique in priority order and reindex immediat
   assert.equal(pending.find(x=>x.label==='count-b')?.queueIndex,1);
   holds[0].resolve(new Response('done',{status:200}));
   await a;
-  await Promise.resolve();
+  for(let i=0;i<18;i++) await Promise.resolve();
   assert.equal(holds.length,2,'next queued request is dispatched');
   holds[1].resolve(new Response('done',{status:200}));
   await b;

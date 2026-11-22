@@ -14,6 +14,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { DateTimePicker } from "@/components/ui/date-time-picker";
 import { temporalDayDomain, temporalPageOverlapsDomain } from "@/lib/temporal-domain-bounds";
+import { restoredCalendarDate, restoredCalendarWeekStart } from "@/lib/temporal-calendar-restoration";
 import {
   createMaestroProviderDiscoveryController, selectProviderMatches, facetProviderApplicabilityKey,
   type DateProviderMatch, type NumericProviderMatch, type TagProviderMatch,
@@ -127,13 +128,13 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
     setSelectedCalendarCell(savedCell);
     setResolution(["years", "months", "weeks", "days"].includes(savedResolution)
       ? savedResolution as Resolution : "years");
-    const focus = savedStart && Number.isFinite(Date.parse(savedStart)) ? new Date(savedStart) : null;
-    if (focus) {
-      setYear(focus.getUTCFullYear());
-      setMonth(focus.getUTCMonth());
-      setWeekStart(new Date(focus.getTime() - ((focus.getUTCDay() + 6) % 7) * DAY_MS));
-    }
-  }, [savedStart, savedEnd, savedResolution, savedCell]);
+    // Restored FCT range, never the current date picker tab: From wins;
+    // one-sided To is equally valid. A new facet without a bound starts today.
+    const focus = restoredCalendarDate(savedStart, savedEnd);
+    setYear(focus.getUTCFullYear());
+    setMonth(focus.getUTCMonth());
+    setWeekStart(restoredCalendarWeekStart(focus));
+  }, [provider.property, savedStart, savedEnd, savedResolution, savedCell]);
   const domainRequest = useMemo(() => temporalDomainQuery(queryXml, provider.property), [queryXml, provider.property]);
   useEffect(() => {
     const controller = new AbortController();
@@ -152,29 +153,34 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
         const min = temporalDayDomain(data.min, "min"), max = temporalDayDomain(data.max, "max");
         if (!min || !max || min > max)
           throw new Error("No valid date domain returned for this property.");
-        if (!controller.signal.aborted) { setDomain({ min, max });
-          const first = new Date(`${min}T00:00:00Z`);
-          // Keep the visible page if it is in range; otherwise start at the
-          // earliest available month, so navigation is never stranded.
-          // Year/month form one logical calendar page. Updating them through
-          // independent state setters previously mixed a *new* year with the
-          // *old* month in the month updater, leaving the page out of range.
-          const visibleMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
-          if (visibleMonth < min.slice(0, 7) || visibleMonth > max.slice(0, 7)) {
-            setYear(first.getUTCFullYear());
-            setMonth(first.getUTCMonth());
-          }
-          setWeekStart(current => {
-            const weekEnd = iso(new Date(current.getTime() + 6 * DAY_MS));
-            if (iso(current) <= max && weekEnd >= min) return current;
-            return new Date(first.getTime() - ((first.getUTCDay() + 6) % 7) * DAY_MS);
-          }); }
+        if (!controller.signal.aborted) setDomain({ min, max });
       } catch (cause) {
         if (!controller.signal.aborted) { setDomainError(cause instanceof Error ? cause.message : "Date domain unavailable"); setDomain(null); }
       } finally { if (!controller.signal.aborted) setDomainLoading(false); }
     })();
     return () => controller.abort();
   }, [domainRequest, provider.property]);
+  // Async domain arrival must not overwrite the bound From/To with the
+  // dataset minimum. A manually navigated in-domain month stays put.
+  useEffect(() => {
+    if (!domain) return;
+    const visibleMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
+    const bound = Boolean(savedStart || savedEnd);
+    if (bound || visibleMonth < domain.min.slice(0, 7) || visibleMonth > domain.max.slice(0, 7)) {
+      const focus = restoredCalendarDate(savedStart, savedEnd, domain);
+      setYear(focus.getUTCFullYear());
+      setMonth(focus.getUTCMonth());
+      setWeekStart(restoredCalendarWeekStart(focus));
+    } else {
+      // A selected week may have gone out of scope after a domain change.
+      const end = iso(new Date(weekStart.getTime() + 6 * DAY_MS));
+      if (iso(weekStart) > domain.max || end < domain.min)
+        setWeekStart(restoredCalendarWeekStart(dateAt(year, month)));
+    }
+  // Deliberately do not depend on visible year/month/week: user navigation
+  // must not snap back to the saved range. Only domain/bindings restore it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [domain?.min, domain?.max, savedStart, savedEnd, provider.property]);
   // Year zoom shows month counts; month zoom shows week counts; week and day
   // zoom show individual day counts. These are bucket views on one property.
   const bucketView: Resolution = "days";
@@ -241,9 +247,15 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
   };
   const monthLabel = new Intl.DateTimeFormat(undefined,{month:"long",timeZone:"UTC"}).format(dateAt(year,month));
   const countFor = (date: Date) => counts.get(normalizedBucket(iso(date), bucketView)) ?? 0;
+  const selectionFrom = (savedStart || from).slice(0, 10);
+  const selectionTo = (savedEnd || to).slice(0, 10);
   const selectedCalendarStyle = (key: string) => selectedCalendarCell === key
     ? "border-border bg-muted/70 text-foreground ring-1 ring-border/60 dark:border-border dark:bg-muted/50 dark:text-foreground"
     : "";
+  const isSelectedInterval = (start: string, end: string) => Boolean(selectionFrom && selectionTo &&
+    start <= selectionTo && end >= selectionFrom);
+  const intervalStyle = (start: string, end: string) => isSelectedInterval(start, end)
+    ? "border-primary/60 bg-primary/10 text-foreground" : "";
   const mutedIfZero = (count: number) => countsLoaded && !fetching && !error && count === 0
     ? "bg-muted/30 text-muted-foreground/50 opacity-50"
     : "hover:bg-accent";
@@ -307,15 +319,15 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
           {resolution === "years" && Array.from({length:12},(_,i)=>i).map(m=>{
             const monthKey = `${year}-${String(m+1).padStart(2,"0")}`;
             const count = Array.from(counts, ([key, value]) => key.startsWith(`${monthKey}-`) ? value : 0).reduce((a,b) => a+b,0);
-            return <button key={m} type="button" disabled={!intersects(dateAt(year,m),dateAt(year,m+1))} onClick={()=>{choose(dateAt(year,m),dateAt(year,m+1), `month:${year}-${m}`);setMonth(m);}} className={`flex flex-col items-center rounded border px-1 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-25 ${selectedCalendarCell === `month:${year}-${m}` ? selectedCalendarStyle(`month:${year}-${m}`) : mutedIfZero(count)}`}><span>{new Intl.DateTimeFormat(undefined,{month:"short",timeZone:"UTC"}).format(dateAt(year,m))}</span><span className="text-muted-foreground">{count}</span></button>;
+            return <button key={m} type="button" disabled={!intersects(dateAt(year,m),dateAt(year,m+1))} onClick={()=>{choose(dateAt(year,m),dateAt(year,m+1), `month:${year}-${m}`);setMonth(m);}} className={`flex flex-col items-center rounded border px-1 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-25 ${selectedCalendarCell === `month:${year}-${m}` ? selectedCalendarStyle(`month:${year}-${m}`) : intervalStyle(iso(dateAt(year,m)), iso(new Date(dateAt(year,m+1).getTime() - DAY_MS))) || mutedIfZero(count)}`}><span>{new Intl.DateTimeFormat(undefined,{month:"short",timeZone:"UTC"}).format(dateAt(year,m))}</span><span className="text-muted-foreground">{count}</span></button>;
           })}
           {resolution === "months" && weeks.map(start=>{
             const count = weekCount(start);
-            return <button key={iso(start)} type="button" disabled={!intersects(start,new Date(start.getTime()+7*DAY_MS))} onClick={()=>{choose(start,new Date(start.getTime()+7*DAY_MS), `week:${iso(start)}`);setWeekStart(start);}} className={`flex flex-col items-center rounded border px-1 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-25 ${selectedCalendarCell === `week:${iso(start)}` ? selectedCalendarStyle(`week:${iso(start)}`) : mutedIfZero(count)}`}><span>{iso(start).slice(5)}</span><span className="text-muted-foreground">{count}</span></button>;
+            return <button key={iso(start)} type="button" disabled={!intersects(start,new Date(start.getTime()+7*DAY_MS))} onClick={()=>{choose(start,new Date(start.getTime()+7*DAY_MS), `week:${iso(start)}`);setWeekStart(start);}} className={`flex flex-col items-center rounded border px-1 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-25 ${selectedCalendarCell === `week:${iso(start)}` ? selectedCalendarStyle(`week:${iso(start)}`) : intervalStyle(iso(start), iso(new Date(start.getTime()+6*DAY_MS))) || mutedIfZero(count)}`}><span>{iso(start).slice(5)}</span><span className="text-muted-foreground">{count}</span></button>;
           })}
           {(resolution === "days" || resolution === "weeks") && days.map(day=>{
             const count = countFor(day);
-            return <button key={iso(day)} type="button" disabled={outside(iso(day))} onClick={()=>choose(day,new Date(day.getTime()+DAY_MS), `day:${iso(day)}`)} className={`flex flex-col items-center rounded border px-1 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-25 ${selectedCalendarCell === `day:${iso(day)}` ? selectedCalendarStyle(`day:${iso(day)}`) : mutedIfZero(count)}`}><span>{resolution === "weeks" ? weekdayName(day) : day.getUTCDate()}</span><span className="text-muted-foreground">{count}</span></button>;
+            return <button key={iso(day)} type="button" disabled={outside(iso(day))} onClick={()=>choose(day,new Date(day.getTime()+DAY_MS), `day:${iso(day)}`)} className={`flex flex-col items-center rounded border px-1 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-25 ${selectedCalendarCell === `day:${iso(day)}` ? selectedCalendarStyle(`day:${iso(day)}`) : intervalStyle(iso(day), iso(day)) || mutedIfZero(count)}`}><span>{resolution === "weeks" ? weekdayName(day) : day.getUTCDate()}</span><span className="text-muted-foreground">{count}</span></button>;
           })}
         </div>
         {fetching && <span className="text-xs text-muted-foreground">Fetching calendar counts…</span>}

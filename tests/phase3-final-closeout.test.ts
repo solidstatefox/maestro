@@ -60,7 +60,7 @@ test("Record Graphs pagination retains completeness boundary and same FCT popula
 test("Kanban is a seeded, curated Perspective provider using shared FCT grouping", () => {
   const ttl = source("graph/kanban/provider.ttl");
   const manifest = JSON.parse(source("graph/manifest.json")) as Record<string, string>;
-  assert.equal(manifest["kanban/provider.ttl"], "/shacl/policies");
+  assert.equal(manifest["kanban/provider.ttl"], "shacl-policies");
   assert.match(ttl, /a mui:Provider/);
   assert.match(ttl, /a mui:PerspectiveWidget/);
   assert.match(ttl, /sh:targetClass vfct:query/);

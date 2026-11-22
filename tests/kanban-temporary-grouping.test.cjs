@@ -11,7 +11,7 @@ test('Kanban grouping is local-only; bookmarked default Status and special fixtu
   assert.match(controller, /option\.uri === RDF_TYPE_URI \? "Categories"/);
   assert.match(controller, /setKanbanGroupChoice\("auto"\)/);
   assert.match(controller, /setKanbanMoves\(\{\}\)/);
-  assert.match(controller, /listValuesQueryClone\(queryXml\)/);
+  assert.match(controller, /mergeValuesQueryClone\(queryXml,/);
   assert.doesNotMatch(controller.slice(controller.indexOf('const [kanbanGroupChoice'), controller.indexOf('const viewRenderInputKey')), /updatePersonal|localStorage|setQueryTree|setNodeAttribute/);
 });
 test('Kanban drag and drop remains a presentation action with existing Record navigation', () => {

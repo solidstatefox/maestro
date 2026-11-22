@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 import { cachedFetchFct } from "@/lib/client-query-cache";
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
@@ -7,7 +8,7 @@ import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { isClientQueryBookmarked } from "@/lib/client-provider-provenance";
 import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
 import { withFctQueryExecutionAddress } from "@/lib/fct-query-clone";
-import { parseFctResponse, parseListValuesXml, listValuesQueryClone, type EnrichedTerm } from "@/canvas/utils/fct-response";
+import { parseFctResponse, parseListValuesXml, mergeValuesQueryClone, type EnrichedTerm } from "@/canvas/utils/fct-response";
 
 export type Projection = { property: string; direction: "forward" | "reverse"; path?: string[] };
 export type ProjectedRecord = { uri: string; label: string; properties: Map<string, EnrichedTerm[]> };
@@ -22,25 +23,43 @@ export async function fctRead(xml: string, signal?: AbortSignal) {
   return result;
 }
 
-/** Existing FCT list-values: one bounded projection query for all page resources. */
-export async function fctProjectPage(liveXml: string, resources: string[], columns: Projection[], signal?: AbortSignal, isBookmarked = false): Promise<ProjectedRecord[]> {
+/** Read the selected page with a self-contained FCT XML merge-values query. */
+export async function fctProjectPage(liveXml: string, resources: string[], columns: Projection[], signal?: AbortSignal, _isBookmarked = false): Promise<ProjectedRecord[]> {
   const unique = [...new Set(resources.filter(validIri))].slice(0, 500);
   if (!unique.length) return [];
-  const queryXml = listValuesQueryClone(liveXml);
-  const response = await cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal,
-    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ queryXml, ...(isBookmarked ? { bookmarkQueryXml: liveXml } : {}),
-      resources: unique.map(uri => ({ type: "uri", value: uri })), projections: columns }) });
-  const xml = await response.text();
-  if (!response.ok) {
+  const records = new Map<string, ProjectedRecord>();
+  for (let index = 0; index < unique.length; index += 100) {
+    const batch = unique.slice(index, index + 100);
+    const queryXml = mergeValuesQueryClone(liveXml, columns, batch.map(value => ({ type: "uri", value })));
+    const response = await cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal,
+      headers: { "Content-Type": "text/xml; charset=utf-8" }, body: queryXml });
+    const xml = await response.text();
+    if (!response.ok) {
+      const parsed = parseFctResponse(xml);
+      throw new Error(parsed.error || `FCT merge-values returned HTTP ${response.status}`);
+    }
+    const scopes = parseListValuesXml(xml);
     const parsed = parseFctResponse(xml);
-    throw new Error(parsed.error || `FCT list-values returned HTTP ${response.status}`);
+    if (parsed.error || parsed.incomplete) throw new Error(parsed.error || "FCT merge-values enrichment was incomplete.");
+    const byUri = new Map(parsed.results.map(item => [item.uri, item]));
+    for (const uri of batch) {
+      // The response addresses columns by FCT node/anchor ID. Translate them
+      // back to caller-requested column identities for the legacy Map-based
+      // ProjectedRecord consumer contract; do not use the terminal predicate
+      // as a positional or path identity (mui:accepts/sh:class is distinct).
+      const cells = scopes.get(uri) ?? [];
+      const properties = new Map<string, EnrichedTerm[]>();
+      columns.forEach((column, position) => {
+        const cell = cells[position];
+        const values = cell?.values.filter(value => value.value !== "-") ?? [];
+        properties.set(`${column.direction}|${(column.path ?? [column.property]).join("/")}`, values);
+        if (!properties.has(column.property)) properties.set(column.property, values);
+        if (cell?.id) properties.set(cell.id, values);
+      });
+      records.set(uri, { uri, label: byUri.get(uri)?.title ?? uri, properties });
+    }
   }
-  const scopes = parseListValuesXml(xml);
-  const parsed = parseFctResponse(xml);
-  if (parsed.error) throw new Error(parsed.error);
-  const byUri = new Map(parsed.results.map(item => [item.uri, item]));
-  return unique.map(uri => ({ uri, label: byUri.get(uri)?.title ?? uri,
-    properties: new Map((scopes.get(uri) ?? []).map(scope => [scope.property, scope.values.filter(value => value.value !== "-")])) }));
+  return unique.map(uri => records.get(uri)!);
 }
 
 /** Shared Status clone: no DOMParser or XMLSerializer round trip. The server
@@ -63,7 +82,7 @@ export async function fctStatusFacet(liveXml: string, signal?: AbortSignal) {
   const endpoint = splitAt >= 0 ? sourceAddr.slice(splitAt + 1) : "";
   if (!/^https?:\/\//i.test(endpoint) || !sourceAddr || sourceAddr.length > 8192)
     throw new Error("The bookmarked FCT query has no valid graph-server address for Status.");
-  const graph = `<${ctx.base}/status>`;
+  const graph = `<${resolveGraph(GRAPH.STATUS, ctx.base)}>`;
   const predicate = `<gttp://ggg.maestro.ecosys/ns/ui#status>`;
   const where = `GRAPH ${graph} { ?s ${predicate} ?status } FILTER(isIRI(?s) && isIRI(?status))`;
   const countQuery = `SELECT (COUNT(*) AS ?ct) WHERE { ${where} }`;

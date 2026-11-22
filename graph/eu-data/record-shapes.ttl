@@ -1,0 +1,76 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix eurio: <http://data.europa.eu/s66#> .
+@prefix schema: <https://schema.org/> .
+
+# Projection-safe Record selection shapes. Full DCAT-AP shapes are separate.
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#ProjectRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Research project Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Project> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#OrganisationRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Research organisation Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Organisation> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#PersonRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Researcher Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Person> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#GrantRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Grant Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Grant> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#ResultRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Research result Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Result> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#RoleRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Participation role Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://data.europa.eu/s66#Role> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#DatasetRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Dataset Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://www.w3.org/ns/dcat#Dataset> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#DistributionRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Dataset distribution Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://www.w3.org/ns/dcat#Distribution> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#DataServiceRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Data service Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://www.w3.org/ns/dcat#DataService> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#CatalogRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Data catalogue Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://www.w3.org/ns/dcat#Catalog> ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#CatalogRecordRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · Catalogue record Record projection"@en ;
+  rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;
+  sh:targetClass <http://www.w3.org/ns/dcat#CatalogRecord> ;
+  sh:nodeKind sh:BlankNodeOrIRI .

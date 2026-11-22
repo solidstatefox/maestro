@@ -28,7 +28,7 @@
 <xsl:if test="position() = 1 or substring(@created,1,10) != substring(preceding-sibling::result[1]/@created,1,10)">
 <h3 class="mb-1 mt-2 border-b pb-1 text-xs font-semibold text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 10"><xsl:value-of select="substring(@created,1,10)"/></xsl:when><xsl:otherwise>Undated</xsl:otherwise></xsl:choose></h3>
 </xsl:if>
-<article class="group flex items-center gap-2 rounded-sm border-b px-2 py-1.5 hover:bg-accent/40">
+<article class="group flex items-start gap-2 rounded-sm border-b px-2 py-1.5 hover:bg-accent/40">
 <span class="inline-flex shrink-0 self-start" data-perspective-action-slot="select"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute></span>
 <div class="flex min-w-0 flex-1 flex-col gap-0.5">
 <div class="flex min-w-0 items-center gap-1.5">
@@ -49,10 +49,8 @@ Depth <xsl:value-of select="@depth"/> · Siblings/node <xsl:value-of select="@av
 </small>
 <small class="truncate text-xs text-muted-foreground"><xsl:choose><xsl:when test="string-length(@created) &gt;= 19"><xsl:value-of select="substring(@created,12,8)"/></xsl:when><xsl:otherwise><xsl:value-of select="@created"/></xsl:otherwise></xsl:choose></small>
 </div>
-<xsl:if test="@appbarAvailable = 'true'">
-<span class="inline-flex shrink-0" data-perspective-pin-slot="true"><xsl:attribute name="data-perspective-pin-id"><xsl:value-of select="@uri"/></xsl:attribute></span>
-</xsl:if>
-<span class="inline-flex shrink-0 self-start" data-perspective-action-slot="delete"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute></span>
+<!-- React mounts one real shadcn ButtonGroup into this inert trusted slot. -->
+<span class="inline-flex shrink-0 self-start" data-perspective-bookmark-actions-slot="true"><xsl:attribute name="data-perspective-id"><xsl:value-of select="@uri"/></xsl:attribute></span>
 </article>
 </xsl:template>
 </xsl:stylesheet>""" .

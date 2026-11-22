@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 
@@ -18,7 +19,7 @@ function namespaceFallback(uri:string):string {
 export async function readOntologyMetadata(uris: string[], signal?:AbortSignal):Promise<OntologyClassMetadata[]> {
   const requested=[...new Set(uris.filter(safe))].slice(0,100);
   if(!requested.length)return [];
-  const ctx=await personalContext(),graph=`${ctx.base}/ontology`,seed=`${ctx.base}/ontology-cache`;
+  const ctx=await personalContext(),graph=`${resolveGraph(GRAPH.ONTOLOGY, ctx.base)}`,seed=`${resolveGraph(GRAPH.ONTOLOGY_CACHE, ctx.base)}`;
   const values=requested.map(uri=>`<${uri}>`).join(" ");
   const items=await selectPersonal(`PREFIX rdfs: <${RDFS}> PREFIX owl: <${OWL}>
     SELECT DISTINCT ?class ?parent ?ontology ?ontologyLabel WHERE {

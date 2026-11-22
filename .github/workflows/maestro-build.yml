@@ -1,0 +1,23 @@
+name: Maestro build and regression tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install exact lockfile dependencies
+        run: npm ci
+      - name: Run all tests
+        run: npm run test
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+      - name: Full production build, including prebuild graph generation
+        run: npm run build

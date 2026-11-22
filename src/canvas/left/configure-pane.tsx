@@ -475,17 +475,17 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                           className="mb-5"
                         >
                           <div
-                            className={`group/header flex w-full items-center gap-1 rounded-t-md border-b overflow-hidden ${group === "Properties" || group === "Roles" ? "mb-2" : ""}`}
+                            className={`group/header flex w-full items-center gap-1 rounded-t-md border-b px-2 py-2 ${group === "Properties" || group === "Roles" ? "mb-2" : ""}`}
                             style={{ backgroundColor: CONFIGURE_HEADER_BACKGROUND_COLOR, borderColor: CONFIGURE_HEADER_BORDER_COLOR }}
                           >
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex items-center gap-1">
+                              <IncompleteWidgetIndicator source={group === "Properties" ? "properties" : group === "Roles" ? "roles" : "graphs"} />
                               <button
                                 type="button"
-                                className="flex min-w-0 items-center gap-1 px-3 py-2 text-left text-white hover:brightness-90"
+                                className="flex min-w-0 items-center gap-1 text-left text-white hover:brightness-90"
                                 style={{ backgroundColor: CONFIGURE_HEADER_BACKGROUND_COLOR }}
                                 onClick={() => setSelectedFacet(group)}
                               >
-                                <IncompleteWidgetIndicator source={group === "Properties" ? "properties" : group === "Roles" ? "roles" : "graphs"} />
                                 <h2 className="truncate text-sm font-semibold">{group}</h2>
                               </button>
                             </div>

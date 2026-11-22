@@ -3,6 +3,7 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { parseFctIdCounter, serializeFctIdCounter, ensureFctQueryIds } from "./fct-node-identity";
 import { cloneFctQueryTree } from "./fct-query-clone";
+import { dependentFctValueReferences } from "./fct-value-references";
 export { serializeFctQuery } from "./fct-query-serialize";
 
 export type FctNodeName = string;
@@ -211,6 +212,13 @@ function isValidQueryTree(tree: unknown): tree is FctQueryTree {
     Array.isArray(candidate.children);
 }
 
+function assertFctNodeCanBeDeleted(tree: FctQueryTree, nodeId: string): void {
+  const dependents = dependentFctValueReferences(tree, nodeId);
+  if (!dependents.length) return;
+  throw new Error(`Cannot delete node ${nodeId}: its path is in use by ${dependents.map(ref =>
+    `<value id="${ref.valueId}" ${ref.kind}="${ref.targetId}">`).join(", ")}. Remove those references first.`);
+}
+
 function createQueryStore(initialTree?: FctQueryTree) {
   let state: FctQueryState = initialTree
     ? { tree: ensureFctQueryIds(cloneQueryTree(initialTree)), revision: 0 }
@@ -367,7 +375,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
     const uniqueValues = new Map<string, FctValueInput>();
     for (const value of inputValues) {
       const normalized = normalizeFctValue(value);
-      if (!normalized.text.trim() && !(normalized.attributes?.rangeStart || normalized.attributes?.rangeEnd)) continue;
+      if (!normalized.text.trim() && !(normalized.attributes?.rangeStart || normalized.attributes?.rangeEnd || normalized.attributes?.from || normalized.attributes?.fromView)) continue;
       uniqueValues.set(fctValueKey(value), value);
     }
 
@@ -420,6 +428,29 @@ function createQueryStore(initialTree?: FctQueryTree) {
     });
   }
 
+  /** Edit exactly one <value> while preserving its ID and sibling bindings.
+   * A null valueId inserts a new reference in the selected relationship.
+   * FCT IDs remain allocated by the existing ensureFctQueryIds machinery. */
+  function upsertValueBinding(parentId: string, valueId: string | null, value: FctValueInput) {
+    updateTree((tree) => {
+      const parent = findNodeInTree(tree, parentId);
+      if (!parent || !["property", "property-of"].includes(parent.name)) return tree;
+      const normalized = normalizeFctValue(value);
+      const attributes = fctValueAttributes(value);
+      if (!normalized.text.trim() && !attributes.from && !attributes.fromView &&
+          attributes.rangeStart === undefined && attributes.rangeEnd === undefined) return tree;
+      const replacement: FctQueryNode = {id: valueId ?? "", name:"value",
+        attributes, text:normalized.text, children:[]};
+      if (valueId && !parent.children.some(child => child.name === "value" && child.id === valueId)) return tree;
+      return {...tree, children:updateNodeRecursively(tree.children,parentId,node => ({
+        ...node,
+        children:valueId
+          ? node.children.map(child => child.id === valueId ? {...replacement,id:child.id,uiKey:child.uiKey} : child)
+          : [...node.children,replacement],
+      }))};
+    });
+  }
+
   function replaceQueryNode(nodeId: string, replacement: FctQueryNode) {
     updateTree((tree) => {
       const target = findNodeInTree(tree, nodeId);
@@ -445,6 +476,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
   function removeQueryNode(nodeId: string) {
     updateTree((tree) => {
       const target = findNodeInTree(tree, nodeId);
+      if (target) assertFctNodeCanBeDeleted(tree, nodeId);
       if (!target || target.uiKey === "query-view" || target.uiKey === "query-text" ||
           nodeId === "query-view" || nodeId === "query-text") return tree;
       // Never let a generic structural edit orphan the active view. If the
@@ -1175,6 +1207,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     updateTree((tree) => {
       const target = findNodeInTree(tree, nodeId);
       if (!target || nodeId === "query-view" || nodeId === "query-text") return tree;
+      assertFctNodeCanBeDeleted(tree, nodeId);
 
       // Delete exactly the selected node. Removing a <value> clears only that
       // binding; its parent <property> filter remains in the authoritative tree.
@@ -1242,6 +1275,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     showClassResults,
     refresh,
     deleteNode,
+    upsertValueBinding,
   };
 }
 
@@ -1346,6 +1380,9 @@ export const fctQueryTreeApi = {
   },
   deleteNode(tree: FctQueryTree | undefined, nodeId: string): FctQueryTree {
     return applyTreeOperation(tree, (store) => store.deleteNode(nodeId));
+  },
+  upsertValueBinding(tree: FctQueryTree | undefined, parentId: string, valueId: string | null, value: FctValueInput): FctQueryTree {
+    return applyTreeOperation(tree, store => store.upsertValueBinding(parentId, valueId, value));
   },
 };
 

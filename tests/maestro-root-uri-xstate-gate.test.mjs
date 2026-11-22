@@ -58,11 +58,14 @@ test('Clipboard obeys both 10s freshness and URL length without truncating',()=>
   assert.match(workspace,/selectedSignalModeRef\.current === modeAtClick/);
 });
 
-test('no changes to four proxy contracts; breadcrumb preview update guard included',()=>{
+test('the three proxy transports remain explicit; breadcrumb preview update guard included',()=>{
   const wc=read('src/canvas/utils/workspace-controller.tsx');
   assert.match(wc,/reconcileBreadcrumbSummaries/);
   assert.match(wc,/reconcileBreadcrumbPendingIds/);
-  // Ensure the four generic transports remain explicit and present.
-  for(const route of ['service','observations','fct','sparql'])
+  // Query traffic is still on FCT/SPARQL; observations and events moved to OpenAPI /service.
+  for(const route of ['service','fct','sparql'])
     assert.match(read(`src/app/proxy/api/${route}/route.ts`),/export/);
+  const service=read('src/app/proxy/api/service/route.ts');
+  assert.match(service,/recordUriObservations/);
+  assert.match(service,/subscribeQueryEvents/);
 });

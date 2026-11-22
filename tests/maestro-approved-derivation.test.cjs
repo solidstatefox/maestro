@@ -9,7 +9,7 @@ const spawn=loadTs('src/lib/fct-derived-facets.ts',{'./fct-node-identity':identi
 const spawned=spawn(original,'b',[{iri:derived.attributes.iri,label:'email: username',pattern:derived.attributes.pattern,capture:'1'}]);
 assert.equal(spawned.children.length,3);assert.equal(spawned.children[2].attributes.pid,spawned.children[1].attributes.rid);assert(identity.isValidFctNodeId(spawned.children[2].attributes.rid));
 assert.equal(spawn(spawned,'b',[{iri:derived.attributes.iri,label:'email: username',pattern:derived.attributes.pattern,capture:'1'}]).children.length,3);
-const kinds={'./maestro-language':{effectiveMaestroLanguage:()=> 'en',validMaestroLanguage:(value)=>value},'./maestro-kinds':{MAESTRO_KIND_IDS:[],normalizeMaestroKind:()=>null,maestroKindSparql:()=>''},'./graph-address-mode':{ALL_GRAPHS:'$ALL$'},'./fct-value-policy':{normalizeFctValue:s=>s??''},'./virtuoso-full-text':{buildVirtuosoFullTextExpression:()=>null},'./virtuoso-numeric-coercion':{guardedNumericRangeFilter:()=>'',numericFacetBinding:()=>'',NUMERIC_FACET_PROJECTION:''}};
+const kinds={'./maestro-language':{effectiveMaestroLanguage:()=> 'en',validMaestroLanguage:(value)=>value},'./maestro-kinds':{MAESTRO_KIND_IDS:[],normalizeMaestroKind:()=>null,maestroKindSparql:()=>''},'./fct-value-references':loadTs('src/lib/fct-value-references.ts'),'./graph-address-mode':{ALL_GRAPHS:'$ALL$'},'./fct-value-policy':{normalizeFctValue:s=>s??''},'./virtuoso-full-text':{buildVirtuosoFullTextExpression:()=>null},'./virtuoso-numeric-coercion':{guardedNumericRangeFilter:()=>'',numericFacetBinding:()=>'',NUMERIC_FACET_PROJECTION:''}};
 const buildCount=loadTs('src/lib/fct-count-sparql.ts',kinds).buildFctCountSparql;
 const count=buildCount({...original,children:[original.children[0],source,derived]});
 assert(count&&count.includes('BIND(REPLACE('),count);assert(count.includes('$1'),count);assert(count.includes('REGEX(STR('),count);
@@ -20,12 +20,13 @@ const expressionMock={
  './fct-view-types':{FCT_VIEW_TYPES:{TEXT:'text',LIST:'list',LIST_COUNT:'list-count',DESCRIBE:'describe',PROPERTIES:'properties',PROPERTIES_IN:'properties-in',CLASSES:'classes',GRAPHS:'graphs'},isFctViewType:()=>true},
  './bnode':{isBlankNodeTerm:()=>false,bnodeDescribeBounds:()=>({}),RDF_REST_IRI:'http://www.w3.org/1999/02/22-rdf-syntax-ns#rest'},
  'fast-xml-parser':{XMLParser:class{parse(){return {query:{'@_addr':original.attributes.addr,value:{'@_datatype':'uri','#text':'http://example.org/person'},property:[{'@_iri':source.attributes.iri,'@_rid':'a'},{'@_iri':derived.attributes.iri,'@_rid':'b','@_pid':'a','@_derive':'regex','@_pattern':derived.attributes.pattern,'@_capture':'1',view:{'@_type':'list','@_limit':'30','@_offset':'0'}}]}}}},XMLValidator:{validate:()=>true}},
+ './fct-value-references':loadTs('src/lib/fct-value-references.ts'),
  './fct-value-policy':kinds['./fct-value-policy'],
  './virtuoso-numeric-coercion':{NUMERIC_LEXICAL_PATTERN:'^[-+]?\\d+$'},
  './virtuoso-full-text':kinds['./virtuoso-full-text'],
  './graph-address-mode':kinds['./graph-address-mode'],
 };
-const compile=loadTs('src/lib/fct-sparql-translator.ts',expressionMock).compileFctXmlToSparql;
+const compile=loadTs('src/lib/fct-sparql-translator.ts',{...expressionMock,'./fct-get-path':loadTs('src/lib/fct-get-path.ts')}).compileFctXmlToSparql;
 const compiled=compile('<query/>');
 assert(compiled.query.includes('BIND(REPLACE('),compiled.query);assert(compiled.query.includes('REGEX(STR('),compiled.query);assert(compiled.query.includes('$1'),compiled.query);
 console.log('PASS derived regex source binding, pid/rid provenance, idempotence, count and FCT projection');

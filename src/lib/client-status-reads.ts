@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Read-only Record statuses and query-hash facet counts now run against the
  * existing authenticated /sparql gateway. The browser evaluates virtual
  * initial states using the same RDF -> XState adapter as the trusted writer.
@@ -19,7 +20,7 @@ export async function readClientRecordPage(uris: readonly string[], signal?: Abo
   if (unique.length > 150 || unique.some(uri => !validIri(uri))) throw new Error("Invalid Record status page.");
   if (!unique.length) return { statuses: {}, hidden: [] };
   const ctx = await personalContext();
-  const g = iri(`${ctx.base}/status`);
+  const g = iri(`${resolveGraph(GRAPH.STATUS, ctx.base)}`);
   const rows = await selectPersonal(`SELECT ?s ?status WHERE {
     VALUES ?s { ${unique.map(iri).join(" ")} }
     OPTIONAL { GRAPH ${g} { ?s ${iri(MUI_STATUS)} ?status } }
@@ -64,8 +65,8 @@ export type StatusFacetProjection = { hasStatuses: boolean; counts: Record<Statu
 export async function readClientStatusFacetCounts(queryHash: string, signal?: AbortSignal): Promise<StatusFacetProjection> {
   if (!/^sha256:[0-9a-f]{64}$/.test(queryHash)) throw new Error("A valid bookmarked-query hash is required.");
   const ctx = await personalContext();
-  const status = iri(`${ctx.base}/status`);
-  const observation = iri(`${ctx.base}/status/${queryHash}`);
+  const status = iri(`${resolveGraph(GRAPH.STATUS, ctx.base)}`);
+  const observation = iri(`${resolveGraph(GRAPH.STATUS, ctx.base)}/${queryHash}`);
   const located = `GRAPH ${observation} { ?c1 ${iri(MUI_LAST_LOCATED_AT)} ?located }`;
   const definitions: Record<"New" | "Seen" | "Starred" | "Hidden", string> = {
     New: `${located} GRAPH ${status} { ?c1 ${iri(MUI_STATUS)} ${iri(RECORD_STATUSES.Unseen)} }`,

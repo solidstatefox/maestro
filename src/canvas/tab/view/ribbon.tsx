@@ -6,12 +6,9 @@ import { createMaestroPerspectiveSelectionController } from "@/lib/app-lifecycle
 import { pendingApprovalController, selectPendingApprovalBadge } from "@/lib/app-lifecycle/pending-approvals";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
 import { Server, Database, Globe, LayoutGrid, Kanban, Filter, Network, ShieldCheck, FileCode2, ArrowLeftRight, Landmark, Blocks, Bookmark, History, Route, Regex, Telescope, ChartNoAxesCombined } from "lucide-react";
-import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
-import { useMapProviderDiscovery } from "@/lib/map-provider-discovery";
 import type { ProviderKind } from "@/lib/provider-catalog-xslt";
 import { discoverMatchedClientPerspectives } from "@/lib/client-personal-perspectives";
-import { PERSONAL_PERSPECTIVE_URI, personalPerspectiveFromUri, type PersonalPerspectiveKind } from "@/lib/personal-perspective-ids";
-const availableProviderIcons = new Set<string>(iconNames);
+import { personalPerspectiveFromUri, type PersonalPerspectiveKind } from "@/lib/personal-perspective-ids";
 type ViewDefinition = { uri: string; label: string; icon?: string; stylesheet: string };
 export interface ViewRibbonProps {
   viewPanel: "trail" | "perspectives" | "providers";
@@ -32,8 +29,6 @@ export interface ViewRibbonProps {
   historyUri?: string;
 }
 export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredViews, viewProvider, setViewProvider, onSelectProvider, onFeaturesEntered, selectedViewUri, onSelectView, viewDiscoveryLoading, queryClassUris, queryMatchedProviders = [], queryXml, triggerUri, historyUri }: ViewRibbonProps) {
-  const mapDiscovery = useMapProviderDiscovery(viewPanel === "perspectives", queryXml);
-  const mapProvider = mapDiscovery.provider;
   const approvalSnapshot = useSyncExternalStore(pendingApprovalController.subscribe,
     pendingApprovalController.getSnapshot,pendingApprovalController.getSnapshot);
   const pendingByProvider = selectPendingApprovalBadge(approvalSnapshot).providersByKind;
@@ -84,7 +79,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
     personalToRender.push({ uri: selectedViewUri, kind: retainedPersonalKind,
       label: retainedPersonalKind === "bookmarks" ? "Bookmarks" : "History" });
   }
-  const firstAvailableUri = discoveredViews[0]?.uri ?? mapProvider?.uri ?? personalProviders[0]?.uri ?? "";
+  const firstAvailableUri = discoveredViews[0]?.uri ?? personalProviders[0]?.uri ?? "";
   const [selectionController] = useState(createMaestroPerspectiveSelectionController);
   const selectionSnapshot = useSyncExternalStore(selectionController.subscribe,
     selectionController.getSnapshot, selectionController.getSnapshot);
@@ -123,8 +118,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
   // A URL-restored selection is authoritative. Provider discovery may be
   // briefly empty while the class tree and login finish loading; do not
   // overwrite the saved perspective or ribbon selection during that window.
-  // A saved Map selection must survive initial Configure discovery. An empty
-  // geospatial property list during startup is not a deliberate user pivot.
+  // A saved provider selection must survive incomplete discovery on startup.
   return <MaestroHoverExpand active={viewPanel} onChange={(panel) => {
     if (panel === "trail" || panel === "perspectives" || panel === "providers") onRibbonPanelChange(panel);
   }} panels={[
@@ -146,13 +140,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
                 <Icon className="size-7" strokeWidth={1} aria-hidden="true" />{title}
               </button>;
             })}
-            {mapDiscovery.error && <ErrorDetails prefix="Maps discovery" error={mapDiscovery.error} />}
-            {mapProvider && <button type="button" aria-pressed={!viewProvider && selectedViewUri === mapProvider.uri}
-              onClick={() => onSelectView(mapProvider.uri)}
-              className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${!viewProvider && selectedViewUri === mapProvider.uri ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
-              <DynamicIcon name={(availableProviderIcons.has(mapProvider.icon) ? mapProvider.icon : "layout-grid") as IconName} className="size-7" strokeWidth={1} aria-hidden="true" />{mapProvider.label}
-            </button>}
-            {personalToRender.filter(provider => !discoveredViews.some(view => view.uri === provider.uri) && provider.uri !== mapProvider?.uri).map(provider => {
+            {personalToRender.filter(provider => !discoveredViews.some(view => view.uri === provider.uri)).map(provider => {
               const uri = provider.uri;
               const active = !viewProvider && selectedViewUri === uri;
               const Icon = provider.kind === "bookmarks" ? Bookmark : History;
@@ -163,8 +151,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
               </button>;
             })}
             {personalDiscoveryError && <ErrorDetails prefix="Personal perspective discovery" error={personalDiscoveryError} />}
-            {personalDiscoveryPending && <span className="px-3 text-xs text-muted-foreground"><ElapsedStatus label="Locating personal perspectives" category="policies" clockScope="views" /></span>}
-            {viewDiscoveryLoading && <span className="px-3 text-xs text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></span>}
+            {(personalDiscoveryPending || viewDiscoveryLoading) && <span className="px-3 text-xs text-muted-foreground"><ElapsedStatus label="Locating perspectives" category="policies" clockScope="views" /></span>}
           </div> },
           { id: "providers", label: "Providers", content: <div className="flex h-full flex-wrap items-center gap-1" role="toolbar" aria-label="View providers">
             {([

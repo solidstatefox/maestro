@@ -50,7 +50,9 @@ function loadWandQuery() {
 
 test('Pointer Record clicks pivot on value without requiring Shift; property clicks stay local', () => {
   const pane = read('src/canvas/right/pane.tsx');
-  const fullscreen = pane.split('if (fullscreenPane) {')[1]?.split('// Browse keeps its existing behavior')[0] ?? '';
+  // Stop at the actual fullscreen/Browse boundary; otherwise the Browse-only
+  // Shift-click handler contaminates the fullscreen assertion.
+  const fullscreen = pane.split('if (fullscreenPane) {')[1]?.split("// Browse's URI values now behave like the Record title:")[0] ?? '';
   assert.match(fullscreen, /resolveFullscreenRecordTarget\(target, rows\)/);
   assert.match(fullscreen, /picked\.kind === "value" && picked\.statement\.value/);
   assert.match(fullscreen, /intent: "pivot", kind: "value"/);

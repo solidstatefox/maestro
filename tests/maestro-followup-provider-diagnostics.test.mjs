@@ -40,7 +40,7 @@ test('Calendar eligibility comes from actual SHACL validation and remains approv
 
 test('diagnostic catalog includes curators and OTC providers with scoped SHACL evidence', () => {
   const source = read('src/lib/client-provider-diagnostics.ts');
-  assert.match(source, /otcGraph = `\$\{ctx\.base\}\/otc\/transcoders`/);
+  assert.match(source, /otcGraph = `\$\{resolveGraph\(GRAPH\.OTC_TRANSCODERS, ctx\.base\)\}`/);
   assert.match(source, /\?uri a mui:CurationProvider/);
   assert.match(source, /\?report sh:result\/sh:focusNode \?uri/);
   assert.match(source, /\?report a sh:ValidationReport/);

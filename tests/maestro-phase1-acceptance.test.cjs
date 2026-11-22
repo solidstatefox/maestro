@@ -123,9 +123,9 @@ test('temporal selection and Overview sweep retain FCT semantics', () => {
 });
 
 test('provider eligibility is separate from generic History validation', () => {
-  const map = read('src/lib/map-provider-discovery.ts');
-  const probe = read('src/lib/client-map-eligibility.ts');
-  assert.match(map,/hasMapProviderInput/);
-  assert.match(probe,/compileProviderXsltQuery/);
-  assert.match(probe,/LIMIT 1/);
+  const generic = read('src/lib/personal-sparql-reads.ts');
+  assert.match(generic,/sh:or \?conditions/);
+  assert.match(generic,/readClientPolicyApprovals/);
+  const page = read('src/canvas/tab/view/page.tsx');
+  assert.doesNotMatch(page,/useMapProviderDefinition|useMapProviderDiscovery/);
 });

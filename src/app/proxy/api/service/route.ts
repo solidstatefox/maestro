@@ -2,6 +2,9 @@ import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstrea
 import { NextResponse } from "next/server";
 import { resolveOpenApiOperation } from "@/lib/openapi-registry";
 import { validateOpenAiChatPayload } from "@/lib/openai-chat-completions";
+import { getCourtesyGraphServerDigest, getCourtesyGraphServerSnapshot } from "@/lib/personal-sparql";
+import { openProxyQueryTelemetry } from "@/lib/proxy-query-telemetry";
+import { processUriObservationBatch } from "@/lib/uri-observation-service";
 
 // OTC survey streams use the same approved service transport.
 export const maxDuration = 300;
@@ -29,6 +32,34 @@ export async function POST(request: Request): Promise<Response> {
     const entries = Object.entries(params);
     if (entries.length > 16 || entries.some(([name, value]) => !operation.parameters.includes(name) || typeof value !== "string" || value.length > 250 || /[\x00-\x1f]/.test(value)))
       return NextResponse.json({ error: "Parameters do not match the OpenAPI operation" }, { status: 400 });
+    // A registered local OpenAPI service is handled here; no user-specified
+    // destination or credentials are forwarded to a third-party host.
+    if (operation.serviceKey === "maestroTransport") {
+      if (operation.operationId === "subscribeQueryEvents") {
+        const id = (params as Record<string,string>).id ?? "";
+        return openProxyQueryTelemetry(request, id);
+      }
+      if (operation.operationId === "courtesyGraphServers") {
+        const value = body.payload;
+        if (!value || typeof value !== "object" || Array.isArray(value))
+          return NextResponse.json({error:"Invalid courtesy action"},{status:400});
+        const {action,digest} = value as {action?:unknown;digest?:unknown};
+        if (action === "check") {
+          if (typeof digest !== "string" || (digest !== "" && !/^sha256:[0-9a-f]{64}$/.test(digest)))
+            return NextResponse.json({error:"Invalid courtesy digest"},{status:400});
+          const current = await getCourtesyGraphServerDigest();
+          return NextResponse.json({digest:current,changed:digest!==current},{headers:{"Cache-Control":"no-store"}});
+        }
+        if (action === "list") {
+          const {digest,endpoints} = await getCourtesyGraphServerSnapshot();
+          return NextResponse.json({digest,endpoints},{headers:{"Cache-Control":"no-store"}});
+        }
+        return NextResponse.json({error:"Unknown courtesy action"},{status:400});
+      }
+      if (operation.operationId === "recordUriObservations")
+        return processUriObservationBatch(request, body.payload);
+      return NextResponse.json({error:"Unknown local OpenAPI operation"},{status:404});
+    }
     // OpenAPI paths contain URI-template variables. Validate each requested
     // path parameter before substitution; query parameters remain allowlisted.
     let path=operation.path;

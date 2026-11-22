@@ -2,7 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 type Sink = (event: "dispatched" | "completed" | "queue-position", data: {
-  queryId: number; elapsedMs?: number; queueIndex?: number; server?: string; lane?: "light" | "heavy"; laneIndex?: number;
+  queryId: number; elapsedMs?: number; queueIndex?: number; server?: string; lane?: "light" | "heavy"; laneIndex?: number; laneNumber?: number; lanePosition?: number;
 }) => void;
 const storage = new AsyncLocalStorage<{ sink: Sink; sequence: number }>();
 
@@ -24,8 +24,8 @@ export async function traceVirtuosoDispatch<T>(work: () => Promise<T>): Promise<
 /** Capture the existing SSE request sink at scheduler enqueue time. A queued
  * task may move between lanes as quotas change; send its current server-side
  * position on each real scheduler reorder. No new endpoint or polling. */
-export function proxyQueuePositionNotifier(): ((index: number, server: string, lane: "light" | "heavy", laneIndex: number) => void) | undefined {
+export function proxyQueuePositionNotifier(): ((index: number, server: string, lane: "light" | "heavy", laneIndex: number, laneNumber: number, lanePosition: number) => void) | undefined {
   const context = storage.getStore();
   if (!context) return undefined;
-  return (index, server, lane, laneIndex) => context.sink("queue-position", { queryId: 0, queueIndex: index, server, lane, laneIndex });
+  return (index, server, lane, laneIndex, laneNumber, lanePosition) => context.sink("queue-position", { queryId: 0, queueIndex: index, server, lane, laneIndex, laneNumber, lanePosition });
 }

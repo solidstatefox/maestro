@@ -314,6 +314,10 @@ mui:lastNewCount a owl:DatatypeProperty ; rdfs:range xsd:nonNegativeInteger ; rd
 mui:FacetProvider a owl:Class ; rdfs:subClassOf mui:Provider ;
   rdfs:label "Facet provider"@en ;
   rdfs:comment "An approvable provider which supplies one or more facet presentations. mui:widget describes its implementation, not its catalog membership."@en .
+# Declarative host capability. Providers request hierarchy, but Maestro's
+# XState/FCT controller owns classTree and respects a user's manual override.
+mui:requestsClassTree a owl:DatatypeProperty ; rdfs:domain mui:FacetProvider ;
+  rdfs:range xsd:boolean ; rdfs:label "Request Categories tree mode"@en .
 mui:FacetWidget a owl:Class ; rdfs:label "Facet widget"@en .
 mui:PersonalFacetWidget a owl:Class ; rdfs:subClassOf mui:FacetWidget ; rdfs:label "Personal facet widget"@en .
 mui:DateRangeFacetWidget a owl:Class ; rdfs:subClassOf mui:PersonalFacetWidget ; rdfs:label "Date/time range facet"@en .
@@ -422,3 +426,21 @@ mui:Unseen a rdfs:Resource ; rdfs:label "Unseen" .
 mui:Hidden a rdfs:Resource ; rdfs:label "Hidden" .
 mui:RecordStatusShape a sh:NodeShape ; sh:targetSubjectsOf mui:status ; sh:property mui:RecordStatusPropertyShape .
 mui:RecordStatusPropertyShape sh:path mui:status ; sh:nodeKind sh:IRI .
+
+# Optional provider-declared RDF lexical source for regex-derived facets.
+# When absent, derive=regex applies to STR(?source) (Email Components).
+# For URI-valued source relationships, the provider can instead request a
+# specific RDF label or descriptor property, with no provider-specific code.
+mui:sourceValuePredicate a owl:ObjectProperty ;
+  rdfs:label "derived facet source value predicate"@en ;
+  rdfs:comment "Predicate whose literal value supplies the lexical input to a regex-derived facet, when the source relationship points to an RDF resource."@en ;
+  rdfs:domain mui:Provider ;
+  rdfs:range rdf:Property .
+
+# Authenticated graph servers are still ordinary schema:EntryPoint resources.
+# This additional RDF type identifies the user-selected Personal Servers group,
+# without putting credentials or session state in public RDF metadata.
+mui:PersonalGraphServer a owl:Class ;
+    rdfs:subClassOf <https://schema.org/EntryPoint> ;
+    rdfs:label "Personal graph server"@en ;
+    rdfs:comment "A graph-server registration managed in the authenticated user's personal RDF directory. It does not itself grant access."@en .

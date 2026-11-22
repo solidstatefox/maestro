@@ -33,6 +33,7 @@ import { useEffect, useState } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { selectMaestroCapabilities } from "@/lib/app-lifecycle/access";
 
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
 
@@ -104,6 +105,7 @@ import type { SettingsPaneWorkspace } from "@/canvas/controllers/workspace-inter
 export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }) {
   const {
     authSession,
+    accessCapabilities, accessController,
     queryConcurrency,
     changeQueryConcurrency,
     bookmarkImportFileRef,
@@ -172,6 +174,11 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     tutorialMode,
     widgetTimeouts,
   } = workspace;
+  const canClearNow = () => selectMaestroCapabilities(accessController.getSnapshot()).canClearCaches;
+  const guardedClear = (action: () => void) => {
+    if (!canClearNow()) { toast.add({ title: "Cache clearing unavailable", description: "Finish login and personal graph seeding first.", type: "warning" }); return; }
+    action();
+  };
   const [iteraComputeKey, setIteraComputeKey] = useState("");
   const [iteraComputeKeyLoaded, setIteraComputeKeyLoaded] = useState(false);
   const [showIteraComputeKey, setShowIteraComputeKey] = useState(false);
@@ -391,7 +398,9 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                     type="button"
                     variant="destructive"
                     className="shrink-0"
-                    onClick={() => setClearCacheDialogOpen(true)}
+                    disabled={!accessCapabilities.canClearCaches}
+                    title={!accessCapabilities.canClearCaches ? "Cache clearing is disabled during login or graph seeding" : "Clear Maestro cache"}
+                    onClick={() => guardedClear(() => setClearCacheDialogOpen(true))}
                   >Clear Cache</Button>
                 </div>
               </div>
@@ -400,11 +409,11 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                   <Label>Clear format cache</Label>
                   <p className="mt-1 text-xs text-muted-foreground">Empty the separate in-memory cache of XSLT-formatted Record HTML. RDF data and other caches are unchanged.</p>
                 </div>
-                <Button type="button" variant="outline" size="sm" onClick={() => {
+                <Button type="button" variant="outline" size="sm" disabled={!accessCapabilities.canClearCaches} title={!accessCapabilities.canClearCaches ? "Login or graph seeding is active" : "Clear format cache"} onClick={() => guardedClear(() => {
                   const { entries } = maestroRecordFormatCacheStats();
                   clearMaestroRecordFormatCache();
                   toast.add({ title: "Record format cache cleared", description: `${entries} formatted Records discarded.` });
-                }}>Clear format cache</Button>
+                })}>Clear format cache</Button>
               </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
@@ -413,7 +422,8 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                 </div>
                 <Tooltip><TooltipTrigger render={<button
                   type="button"
-                  onClick={() => {
+                  disabled={!accessCapabilities.canClearCaches}
+                  onClick={() => guardedClear(() => {
                     try {
                       window.localStorage.removeItem(FACET_ADD_COUNTS_STORAGE_KEY);
                       window.localStorage.removeItem(FACET_AUTOFILL_STORAGE_KEY);
@@ -426,7 +436,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                     } catch (error) {
                       toast.add({ title: "Auto-configure could not be reset", description: error instanceof Error ? error.message : String(error), type: "error" });
                     }
-                  }}
+                  })}
                   className="shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
                 >Reset Auto</button>} /><TooltipContent>{"Reset Auto-configure learning history and saved candidates"}</TooltipContent></Tooltip>
               </div>
@@ -463,7 +473,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                       <Switch id="set-all-timeouts" aria-label="Enable master timeout" checked={masterTimeoutEnabled}
                         onCheckedChange={(on) => { setMasterTimeoutEnabled(on); if (on) applyMasterTimeout(masterTimeout); }} />
                     </InputGroupAddon>
-                    {masterTimeoutEnabled && <div className="w-full min-w-0 space-y-2 py-3">
+                    {masterTimeoutEnabled && <div className="w-full min-w-0 space-y-2 px-4 py-3">
                       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span>Master timeout</span><output>{masterTimeout ? `${masterTimeout}s` : "Default"}</output></div>
                       <Slider aria-label="Set all query timeouts in seconds" min={0} max={120} step={5}
                         value={[masterTimeout]} onValueChange={(values) => applyMasterTimeout(values[0] ?? 0)} />

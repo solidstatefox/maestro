@@ -14,8 +14,8 @@ test('Categories metadata uses existing RDF graphs; browsing never causes unsoli
   const code=read('src/lib/client-ontology-metadata.ts');
   assert.doesNotMatch(code,/ingestClientOntologies|forwardHttp|fetch\(/);
   assert.match(code,/selectPersonal\(/);
-  assert.match(code,/\$\{ctx\.base\}\/ontology/);
-  assert.match(code,/\$\{ctx\.base\}\/ontology-cache/);
+  assert.match(code,/resolveGraph\(GRAPH\.ONTOLOGY, ctx\.base\)/);
+  assert.match(code,/resolveGraph\(GRAPH\.ONTOLOGY_CACHE, ctx\.base\)/);
   const controller=read('src/canvas/utils/workspace-controller.tsx');
   assert.match(controller,/classTreeEdges/);
   assert.match(controller,/readOntologyMetadata\(batch, controller\.signal\)/);
@@ -31,8 +31,16 @@ test('the same generic SPARQL proxy has an authenticated personal READ mode scop
   assert.match(proxy,/isBoundedReadOnlySparql\(body\.query, 100000\)/);
   assert.match(proxy,/queryPersonalSparql\(body\.query\.trim\(\), queryTimeoutMs \?\? 20000, request\)/);
   const authStart=proxy.indexOf('if (body?.personalRead === true)');
-  assert.ok(authStart>0 && authStart<proxy.indexOf('const endpointList = await getConfiguredFctEndpoints(request)'));
-  assert.doesNotMatch(proxy.slice(authStart,proxy.indexOf('const endpointList = await getConfiguredFctEndpoints(request)')),/setQueryCache|\/sparql-auth|Authorization:/);
+  const genericReadStart=proxy.indexOf('const selectedEndpoint = resolveFctEndpointFromAddr([], explicitAddr)');
+  assert.ok(authStart>0 && genericReadStart>authStart,
+    'authenticated personalRead must be handled before direct addr reads');
+  const personalReadBranch=proxy.slice(authStart,genericReadStart);
+  assert.match(personalReadBranch,/requirePersonalLogin\(request\)/);
+  assert.match(personalReadBranch,/selectedUrl !== personalUrl/);
+  assert.match(personalReadBranch,/queryPersonalSparql\(/);
+  assert.doesNotMatch(personalReadBranch,/setQueryCache|\/sparql-auth|Authorization:/);
+  // Ordinary read-only SPARQL must not consult an endpoint membership allowlist.
+  assert.doesNotMatch(proxy.slice(genericReadStart),/getAuthorizedFctEndpoints/);
   assert.match(browser,/await perform\(\{update,/);
 });
 
@@ -65,6 +73,7 @@ test('personal RDF metadata lookup returns previously imported class relationshi
   const module={exports:{}};
   const ctx={base:'urn:me/query'};
   const mocks={
+    '@/lib/constants/graphs':{ GRAPH:{ONTOLOGY:'ontology',ONTOLOGY_CACHE:'ontology-cache'}, resolveGraph:(key,base)=>base+'/'+key },
     '@/lib/client-personal-sparql':{
       personalContext:async()=>ctx,
       selectPersonal:async(query, received)=>{

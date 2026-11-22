@@ -40,7 +40,7 @@ test('Value Wand decorates both predicate and exact value while keeping one sele
 });
 
 test('Place formatter selects only current Record subject, supplies native SVG heading and full-width hero', () => {
-  const ttl = source('graph/maestro-dbpedia-policies.ttl');
+  const ttl = source('graph/dbpedia/maestro-dbpedia-policies.ttl');
   const place = ttl.slice(ttl.indexOf('DbpediaPlaceRecordTemplate'), ttl.indexOf('DbpediaSpeciesRecordTemplate'));
   assert.match(place, /normalize-space\(string\(fct:column\[1\]\)\) = \$recordUri/);
   assert.match(place, /id="dbpedia-place-record-heading-icon"/);
@@ -77,22 +77,28 @@ test('Status header has text and reads both ODS and remote proxy dispatch clocks
   const client = source('src/lib/fct-client.ts');
   const clocks = source('src/lib/maestro-query-execution-clock.ts');
   assert.match(header, /<ElapsedStatus label="Status" category="status" clockScope="statuses"/);
-  assert.match(personal, /requestSource \? maestroQueryFetch : fetch/);
+  assert.match(personal, /await maestroQueryFetch\("\/proxy\/api\/sparql"/);
   assert.match(client, /selectPersonal\(countQuery, ctx, signal, "status-facet-count"\)/);
   assert.match(client, /"x-maestro-debug-source": "status-facet-remote"/);
   assert.match(clocks, /label\.includes\("status-facet"\).*return "statuses"/);
 });
 
-test('proxy sends lane and physical lane index; hover shows lane.index', () => {
+test('proxy preserves class queue ordinals and displays numbered projected waiting lanes', () => {
   const proxy = source('src/lib/proxy-query-events.ts');
   const server = source('src/lib/graph-server-query-scheduler.ts');
   const adapter = source('src/lib/client-query-events.ts');
   const cache = source('src/lib/client-query-cache.ts');
   const appbar = source('src/canvas/top/appbar-pane.tsx');
-  assert.match(proxy, /lane\?: "light" \| "heavy"; laneIndex\?: number/);
+  // The prior class-wide ordinal is still emitted; a numbered projected lane
+  // is additional metadata, not a permanent physical worker identifier.
+  assert.match(proxy, /lane\?: "light" \| "heavy"; laneIndex\?: number; laneNumber\?: number; lanePosition\?: number/);
   assert.match(server, /const laneIndex = orderedLane\.indexOf\(task\) \+ 1/);
+  assert.match(server, /const laneNumber = \(clientLaneIndex - 1\) % laneCount \+ 1/);
+  assert.match(server, /const lanePosition = Math\.floor\(\(clientLaneIndex - 1\) \/ laneCount\) \+ 1/);
   assert.match(adapter, /onQueuePosition\?\.\(data\.queueIndex!/);
   assert.match(cache, /serverQueueLaneIndex/);
-  assert.match(appbar, /\$\{query\.serverQueueLane\}\.\$\{query\.serverQueueLaneIndex\}/);
-  assert.match(appbar, /`browser\.\$\{query\.queueIndex\}`/);
+  assert.match(cache, /serverQueueLaneNumber: laneNumber, serverQueueLanePosition: lanePosition/);
+  assert.match(appbar, /`\$\{lane\}\$\{query\.serverQueueLaneNumber\}:\$\{query\.serverQueueLanePosition\} · \$\{query\.serverQueueLane\}`/);
+  assert.match(appbar, /`B:\$\{query\.queueIndex\} · browser`/);
+  assert.match(appbar, /projected \$\{query.serverQueueLane\} lane/);
 });

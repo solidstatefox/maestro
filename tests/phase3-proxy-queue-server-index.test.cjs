@@ -61,28 +61,16 @@ test('multi-server pending positions are unique, regardless of lane', async () =
   await Promise.all([a,b,first,second]);
 });
 
-test('existing proxy SSE stream forwards scheduler position changes to the browser without polling', async () => {
-  const ts = require('typescript');
-  const source = fs.readFileSync(path.join(__dirname, '../src/lib/client-query-events.ts'), 'utf8');
-  const js = ts.transpileModule(source, {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText;
-  const mod = {exports: {}};
-  vm.runInNewContext(js, {
-    exports: mod.exports, module: mod, require: name => {
-      if (name.includes('maestro-query-execution-clock')) return {beginMaestroQueryExecution: () => () => {}};
-      throw Error(name);
-    }, TextDecoder, TextEncoder, Response, ReadableStream, Headers, DOMException, JSON, Set, Map,
-  });
-  const frames = [
-    ['queued', {}], ['queue-position', {queryId: 0, queueIndex: 4, server: 'https://dbpedia.org/sparql'}],
-    ['queue-position', {queryId: 0, queueIndex: 2, server: 'https://dbpedia.org/sparql'}],
-    ['queue-position', {queryId: 0, queueIndex: 0, server: 'https://dbpedia.org/sparql'}],
-    ['result', {status: 200, statusText: 'OK', headers: [['Content-Type', 'application/json']], body: '{"ok":true}'}],
-  ].map(([event,data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('');
-  const positions = [];
-  const response = new Response(frames, {headers: {'Content-Type': 'text/event-stream; charset=utf-8'}});
-  const result = await mod.exports.unwrapMaestroQueryEvents(response, null, undefined,
-    (position, server) => positions.push([position,server]));
-  assert.deepEqual(positions.map(([position]) => position), [4,2,0]);
-  assert.equal(result.status, 200);
-  assert.deepEqual(await result.json(), {ok: true});
+test('OpenAPI /service event subscription preserves proxy queue positions without wrapping results', () => {
+  const code = fs.readFileSync(path.join(__dirname, '../src/lib/client-query-events.ts'), 'utf8');
+  assert.match(code, /fetch\("\/proxy\/api\/service"/);
+  assert.match(code, /operationId: "subscribeQueryEvents"/);
+  assert.match(code, /Accept: "text\/event-stream"/);
+  assert.match(code, /event === "ready"/);
+  assert.match(code, /event === "queue-position"/);
+  assert.match(code, /onQueuePosition\?\.\(data\.queueIndex!/);
+  assert.match(code, /event === "dispatched"/);
+  assert.match(code, /event === "completed"/);
+  assert.match(code, /event === "finished"/);
+  assert.doesNotMatch(code, /event === "result"/);
 });

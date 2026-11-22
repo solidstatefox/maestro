@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { buildOverviewReport, percentage, type OverviewPercent } from "@/lib/overview-metrics";
 import { fetchPublishedVoID, publishedGraphAddress, publishedGraphRatios, type PublishedGraphStats } from "@/lib/overview-void-metrics";
 import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
+import { TransportedDimensionSummary } from "@/canvas/tab/view/transported-dimension-summary";
 import { readOverviewLabelCoverage, readOverviewTextMatchCoverage, type OverviewLabelCoverageResult } from "@/lib/overview-population";
 
 /** The light, blue-first card/chart vocabulary of shadcn's Recharts gallery.
@@ -180,7 +181,7 @@ export function OverviewPerspective({workspace}: {workspace: WorkspaceController
     return ()=>controller.abort();
   },[publishedKey, updating]);
   const graphStats = !updating && published?.key===publishedKey ? published.stats : null;
-  const hasReport = data.topClasses.length || data.topProperties.length || data.topRoles.length || data.topGraphs.length ||
+  const hasReport = workspace.personalWidgets.some(widget => widget.anchor) || data.topClasses.length || data.topProperties.length || data.topRoles.length || data.topGraphs.length ||
     data.sampleSize || labelCoverage.length>0 || textMatchCoverage.length>0 || (data.numericProperties.length > 0) || (data.topNamespaces.length > 0) || !!graphStats;
   const navigate=(uri:string,direction:"forward"|"reverse")=>{workspace.navigateIntoRelationship(uri,direction);workspace.setWorkspaceTab("browse");};
   const classRatios = data.classCoverage.length ? data.classCoverage : data.classShares;
@@ -202,6 +203,7 @@ export function OverviewPerspective({workspace}: {workspace: WorkspaceController
       </header>
       {updating ? <p className="py-8 text-sm text-muted-foreground" role="status">Waiting for the current graph-server result and facet projections.</p> :
       !hasReport ? <MaestroEmptyResults title="No summary available" description="No summary data is available for this query. Try the default Browse perspective or select another graph server." onBrowse={() => workspace.setWorkspaceTab("browse")}/> : <>
+        <TransportedDimensionSummary widgets={workspace.personalWidgets}/>
         <div className="space-y-1"><h3 className="text-xs font-semibold uppercase tracking-wider text-blue-700 dark:text-sky-400">At a glance</h3>
           <p className="max-w-4xl text-sm leading-relaxed text-foreground/85">{data.summary}</p></div>
 

@@ -2,10 +2,10 @@
  * approved Numeric Range Personal facet. No RDFS/OWL datatype inference. */
 import { isCoercibleNumericLexical } from "./virtuoso-numeric-coercion";
 export const SPIDER_ANALYSIS_URI = "gttp://ggg.maestro.ecosys/analyze/spider";
-export type SpiderAxis = { uri: string; direction: "forward" | "reverse"; label: string };
+export type SpiderAxis = { uri: string; direction: "forward" | "reverse"; label: string; anchorId?: string };
 export type SpiderCell = { value: string; type?: string; datatype?: string };
 export type SpiderRow = { uri: string; label: string; values: Record<string,SpiderCell[]> };
-export function spiderAxisKey(axis: Pick<SpiderAxis,"uri"|"direction">): string { return `${axis.direction}|${axis.uri}`; }
+export function spiderAxisKey(axis: Pick<SpiderAxis,"uri"|"direction"> & { anchorId?: string }): string { return "anchorId" in axis && axis.anchorId ? `alias:${axis.anchorId}` : `${axis.direction}|${axis.uri}`; }
 export function validateSpiderQuery(axes: readonly SpiderAxis[], rows: readonly SpiderRow[]):
   {ok: true; chart: Array<{axis:string;[member:string]:number|string}>; members:Array<{key:string;label:string}>} | {ok:false;reason:string} {
   if (axes.length < 3) return {ok:false,reason:"Spider needs at least three Properties or Roles in the current FCT view."};

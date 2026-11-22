@@ -12,8 +12,9 @@ import { canRefreshApprovedProvider } from "@/lib/app-lifecycle/context-guards";
 import { changeApprovals } from "@/lib/approval-update";
 import { facetValueKey, fctTermKey } from "@/canvas/utils/fct-response";
 import { PerspectiveProviderRuntime } from "@/canvas/tab/view/perspective-provider-runtime";
-import { useMapProviderDefinition } from "@/lib/map-provider-discovery";
 import { PersonalPerspectives } from "@/canvas/tab/view/personal-perspectives";
+import { GraphServerManager } from "@/canvas/tab/view/graph-server-manager";
+import { GraphServerStatusHistory } from "@/canvas/tab/view/graph-server-status-history";
 import { personalPerspectiveFromUri, personalPerspectiveMatchesQuery } from "@/lib/personal-perspective-ids";
 
 import { Separator } from "@/components/ui/separator";
@@ -29,6 +30,24 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 
 export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController }) {
  const { alphabetCounts, alphabetError, alphabetIndex, alphabetLabelUris, alphabetPreflight, changeResultsPage, checkSelectedGraphServer, checkingEndpointIds, chooseFctEndpoint, discoveredViews, effectivePageSize, effectiveResultsTotalCount, fctEndpoints, isLoadingAlphabet, isSearching, preferredAlphabetLanguage, results, resultsBatchRequestPending, resultsBatchSize, resultsPageComplete, resultsPageSize, resultsPageSizeOptions, resultsUiPage, selectedEndpointId, selectedView, selectedViewUri, setNodeAttribute, setResults, setResultsPage, setResultsPageSize, setResultsUiPage, setSelectedViewUri, viewDiscoveryError, viewDiscoveryLoading, viewProvider, viewProviderCount, viewProviderError, viewProviderHtml, viewProviderLoading, viewHtml, viewRenderError, visibleResultsPage, workspaceTab } = workspace;
+ const [selectedGraphCardUri, setSelectedGraphCardUri] = useState("");
+ useEffect(() => { setSelectedGraphCardUri(""); }, [workspace.queryXml]);
+ const isGraphServerPerspective = workspace.viewPanel === "perspectives" &&
+   selectedViewUri === "gttp://ggg.maestro.ecosys/shacl/view#EntryPointView";
+ const graphServerCardRows = useMemo(() => visibleResultsPage.map(row => {
+   const endpoint = fctEndpoints.find(option => option.url === row.uri || option.id === row.uri ||
+     option.label === row.title);
+   const status = endpoint ? workspace.endpointStatuses[endpoint.id] : undefined;
+   return { uri: row.uri, label: row.title, endpoint: endpoint?.url ?? row.uri,
+     endpointId: endpoint?.id ?? "", selected: Boolean(endpoint && endpoint.id === selectedEndpointId),
+     health: status?.status === 200 && status.state === "ok" ? "Healthy" : status?.state ?? "Unknown",
+     healthState: status?.status === 200 && status.state === "ok" ? "green" : status?.state === "degraded" || status?.state === "probe-error" ? "amber" : "red" };
+ }), [visibleResultsPage, fctEndpoints, workspace.endpointStatuses, selectedEndpointId]);
+ const selectedGraphCard = graphServerCardRows.find(row => row.uri === selectedGraphCardUri) ??
+   fctEndpoints.filter(endpoint => endpoint.url === selectedGraphCardUri).map(endpoint => ({
+     uri: endpoint.url, label: endpoint.label, endpoint: endpoint.url, endpointId: endpoint.id,
+     selected: endpoint.id === selectedEndpointId, health: "Unknown", healthState: "unknown" })).at(0);
+ const toggleGraphCard = (uri: string) => setSelectedGraphCardUri(previous => previous === uri ? "" : uri);
  const [providerLetter, setProviderLetter] = useState("");
  const [selectAllPendingKey, setSelectAllPendingKey] = useState("");
  const selectAllContextKey = `${workspace.queryXml}\u0000${workspace.viewProvider ?? ""}`;
@@ -50,14 +69,14 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
    return () => { window.dispatchEvent(new CustomEvent("maestro:policy-bookmark-attention", { detail: { active: false } })); };
  }, [policyBookmarkNeeded]);
  const personalKind = personalPerspectiveMatchesQuery(selectedViewUri, workspace.queryTree) ? personalPerspectiveFromUri(selectedViewUri) : null;
- const mapProvider = useMapProviderDefinition(workspace.viewPanel === "perspectives", workspace.queryXml);
- const providerSelected = Boolean(mapProvider && selectedViewUri === mapProvider.uri && workspace.viewPanel === "perspectives");
+ const selectedRdfProvider = discoveredViews.find(provider => provider.uri === selectedViewUri);
+ const providerSelected = Boolean(selectedRdfProvider?.queryStylesheet && selectedRdfProvider?.resultStylesheet && workspace.viewPanel === "perspectives");
  // Include the actual Personal facet values, not just geocoded marker values.
  // Some values in a facet have no corresponding mapped resource and must still
  // receive an item decoration when that facet is selected for Color By.
  const visibleFacetTerms = useMemo(() => ({
    ...Object.fromEntries(workspace.personalWidgets.map(widget => [
-     `forward|${widget.uri}`, widget.values.map(facetValueKey),
+     widget.anchor ? `alias:${widget.anchor.id}` : `forward|${widget.uri}`, widget.values.map(facetValueKey),
    ])),
    "class|http://www.w3.org/1999/02/22-rdf-syntax-ns#type": workspace.classFacets.map(facet => fctTermKey(facet.uri, "uri")),
  }), [workspace.personalWidgets, workspace.classFacets]);
@@ -120,7 +139,7 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                 </div>;
  return <>
 {workspaceTab === "view" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Views">
-                {providerSelected && mapProvider ? <PerspectiveProviderRuntime provider={mapProvider} queryXml={workspace.queryXml} queryTree={workspace.queryTree} addr={workspace.queryTree.attributes.addr ?? ""} visibleFacetTerms={visibleFacetTerms} /> : personalKind && workspace.viewPanel === "perspectives" ? <PersonalPerspectives active={workspace.accessCapabilities.canUsePersonalStore} kind={personalKind} providerUri={selectedViewUri} queryXml={workspace.queryXml} onBrowse={() => workspace.setWorkspaceTab("browse")}/> : <>
+                {providerSelected && selectedRdfProvider ? <PerspectiveProviderRuntime provider={selectedRdfProvider} queryXml={workspace.queryXml} queryTree={workspace.queryTree} addr={workspace.queryTree.attributes.addr ?? ""} visibleFacetTerms={visibleFacetTerms} /> : personalKind && workspace.viewPanel === "perspectives" ? <PersonalPerspectives active={workspace.accessCapabilities.canUsePersonalStore} kind={personalKind} providerUri={selectedViewUri} queryXml={workspace.queryXml} onBrowse={() => workspace.setWorkspaceTab("browse")} onOpenShareUrl={workspace.openPinnedShareUrl}/> : <>
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-4 py-3">
                   {viewProvider ? <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label={`Alphabet for ${viewProvider}`}>
                     <ToggleGroup type="multiple" value={parseAlphabetSelections(providerLetter).map(value => value.replace(/^!/, ""))} onValueChange={() => {}} className="flex flex-wrap items-center gap-1">{providerLetters.map(([letter, count]) => <ToggleGroupItem unstyled key={letter} value={letter} type="button" aria-label={`${letter}: ${count} ${viewProvider}; Shift-click excludes the letter`}
@@ -165,7 +184,21 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                   <div className="ml-auto">{viewPagination}</div>
 
                 </div>}
-                <ViewPage onBrowse={() => workspace.setWorkspaceTab("browse")} queryXml={workspace.queryXml} requiresBookmark={policyBookmarkNeeded} viewProvider={viewProvider} viewProviderLoading={viewProviderLoading} viewProviderError={viewProviderError} viewProviderCount={visibleProviderCount} viewProviderHtml={visibleProviderHtml} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} selectedView={selectedView} selectedViewUri={selectedViewUri} viewSelectionPending={viewDiscoveryLoading || workspace.queryContextLoading} viewRenderError={viewRenderError} viewHtml={viewHtml} viewResultCount={visibleResultsPage.length} kanbanGroupingOptions={workspace.kanbanGroupingOptions} kanbanGroupKey={workspace.kanbanGroupKey} onKanbanGroupChange={workspace.setKanbanGroupChoice} onKanbanMoveCard={workspace.kanbanMoveCard} onSelectEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id); }} onRefreshEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (!endpoint || checkingEndpointIds[id]) return; void checkSelectedGraphServer(endpoint).catch((error) => { toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" }); }); }} onOpenResource={(uri) => {
+                {isGraphServerPerspective && <>
+                  <GraphServerManager canMutate={workspace.accessCapabilities.canMutatePersonalStore}
+                    selectedCardUri={selectedGraphCardUri} onSelectCard={toggleGraphCard}
+                    selectedEndpointId={selectedEndpointId} configuredEndpoints={fctEndpoints}
+                    statuses={workspace.endpointStatuses}
+                    queryXml={workspace.queryXml} canReadHistory={workspace.accessCapabilities.canUsePersonalStore}
+                    onRegistryChange={() => workspace.setEndpointReloadRevision(revision => revision + 1)} />
+                  {selectedGraphCard && !fctEndpoints.some(e => e.url === selectedGraphCard.endpoint) &&
+                    <GraphServerStatusHistory endpoint={selectedGraphCard.endpoint}
+                      label={selectedGraphCard.label} queryXml={workspace.queryXml}
+                      canRead={workspace.accessCapabilities.canUsePersonalStore} />}
+                </>}
+                <ViewPage graphServerCards={isGraphServerPerspective ? graphServerCardRows : []}
+                  selectedGraphCardUri={selectedGraphCardUri} onSelectGraphCard={toggleGraphCard}
+                  onBrowse={() => workspace.setWorkspaceTab("browse")} queryXml={workspace.queryXml} requiresBookmark={policyBookmarkNeeded} viewProvider={viewProvider} viewProviderLoading={viewProviderLoading} viewProviderError={viewProviderError} viewProviderCount={visibleProviderCount} viewProviderHtml={visibleProviderHtml} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} selectedView={selectedView} selectedViewUri={selectedViewUri} viewSelectionPending={viewDiscoveryLoading || workspace.queryContextLoading} viewRenderError={viewRenderError} viewHtml={viewHtml} viewResultCount={visibleResultsPage.length} kanbanGroupingOptions={workspace.kanbanGroupingOptions} kanbanGroupKey={workspace.kanbanGroupKey} onKanbanGroupChange={workspace.setKanbanGroupChoice} onKanbanMoveCard={workspace.kanbanMoveCard} onSelectEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id); }} onRefreshEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (!endpoint || checkingEndpointIds[id]) return; void checkSelectedGraphServer(endpoint).catch((error) => { toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" }); }); }} onOpenResource={(uri) => {
                     // Provider cards are FCT result items. Selecting their Record
                     // must preserve the bookmarked live Providers query, rather
                     // than replacing it with an unbookmarked URI-root query.

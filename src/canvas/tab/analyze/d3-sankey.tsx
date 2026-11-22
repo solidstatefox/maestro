@@ -6,6 +6,11 @@ import { Minus, Plus, RotateCcw } from "lucide-react";
 import type { SankeyCoverageGraph, SankeyCoverageNode } from "@/lib/sankey-coverage";
 import { traceSankeyStreams } from "@/lib/sankey-stream-focus";
 import { ErrorDetails } from "@/components/ui/error-details";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 
 /** Only rendering and experimentation live here: RDF/FCT projection, coverage
  * denominators, paging, navigation and provider approval are shared with the
@@ -25,6 +30,49 @@ type Link = { source: Node; target: Node; value: number; width: number; y0: numb
 const aligners = {left:sankeyLeft,right:sankeyRight,center:sankeyCenter,justify:sankeyJustify};
 const clamp = (n:number,min:number,max:number) => Math.min(max,Math.max(min,n));
 const format = (n:number) => `${n.toLocaleString(undefined,{maximumFractionDigits:2})} percentage points`;
+
+type SankeyOption = { value: string; label: string };
+
+/** Cosmetic-only shadcn replacements for the original native form controls. */
+function SankeySelect({ label, value, options, onChange }: {
+  label: string; value: string; options: readonly SankeyOption[]; onChange: (value: string) => void;
+}) {
+  const id = useId();
+  return <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+    <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger id={id} className="h-7 w-auto min-w-0 rounded-md px-2 py-1 text-xs" aria-label={label}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>{options.map(option =>
+        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+      )}</SelectContent>
+    </Select>
+  </div>;
+}
+
+function SankeySlider({ label, min, max, step, value, onChange }: {
+  label: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void;
+}) {
+  const id = useId();
+  return <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+    <Label id={id} className="text-xs text-muted-foreground">{label}</Label>
+    <Slider className="w-32" min={min} max={max} step={step} value={[value]}
+      aria-labelledby={id} onValueChange={values => {
+        if (typeof values[0] === "number") onChange(values[0]);
+      }} />
+  </div>;
+}
+
+function SankeyCheckbox({ label, checked, onChange, compact = false }: {
+  label: string; checked: boolean; onChange: (checked: boolean) => void; compact?: boolean;
+}) {
+  const id = useId();
+  return <div className={`flex items-center ${compact ? "gap-1 text-xs" : "gap-2 text-xs text-muted-foreground"}`}>
+    <Checkbox id={id} checked={checked} onCheckedChange={value => onChange(value === true)} />
+    <Label htmlFor={id} className="cursor-pointer text-xs font-normal">{label}</Label>
+  </div>;
+}
 
 export function D3SankeyDiagram({data,minWidth,onOpenResource}:{data:SankeyCoverageGraph;minWidth:number;onOpenResource:(uri:string)=>void}) {
   const gradientPrefix = useId().replace(/[^a-zA-Z0-9_-]/g,"-");
@@ -101,7 +149,6 @@ export function D3SankeyDiagram({data,minWidth,onOpenResource}:{data:SankeyCover
     :linkColor==="source"?nodeColor(l.source)
     :linkColor==="target" || linkColor==="stage"?nodeColor(l.target)
     :"var(--muted-foreground)";
-  const inputClass="rounded-md border bg-background px-2 py-1 text-xs text-foreground";
   const reset=()=>{setZoom(1);setOffset({x:0,y:0});};
   const pointerDown=(event:PointerEvent<SVGSVGElement>)=>{
     if(event.button!==0 || (event.target as Element).closest('[data-d3-sankey-node]')) return;
@@ -115,72 +162,35 @@ export function D3SankeyDiagram({data,minWidth,onOpenResource}:{data:SankeyCover
   };
   return <div className="flex w-full min-w-0 flex-col gap-3" data-d3-sankey-renderer="true">
     <div role="group" aria-label="D3 Sankey layout controls" className="flex w-full flex-wrap items-end gap-3 rounded-md border bg-muted/20 px-3 py-2">
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Node alignment
-        <select className={inputClass} value={align} onChange={e=>setAlign(e.target.value as Align)}>
-          <option value="justify">Justify</option><option value="left">Left</option><option value="right">Right</option><option value="center">Center</option>
-        </select>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Link color
-        <select className={inputClass} value={linkColor} onChange={e=>setLinkColor(e.target.value as LinkColor)}>
-          <option value="source-target">Source → target gradient</option><option value="source">Source</option><option value="target">Target</option><option value="stage">Stage</option><option value="neutral">Neutral</option>
-        </select>
-      </label>
-      <label className="flex items-center gap-2 text-xs text-muted-foreground">
-        <input type="checkbox" checked={multicolorColumns} onChange={event=>setMulticolorColumns(event.target.checked)}/>
-        Multicolor columns
-      </label>
-      {multicolorColumns && selectedNode!==null && <button type="button" className={inputClass}
-        onClick={()=>setSelectedNode(null)}>Show all streams</button>}
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Colors by node stage
-        <select className={inputClass} value={paletteName} onChange={e=>setPaletteName(e.target.value)}>
-          {Object.keys(palettes).map(name=><option key={name} value={name}>{name}</option>)}
-        </select>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Node order
-        <select className={inputClass} value={nodeSort} onChange={e=>setNodeSort(e.target.value as NodeSort)}>
-          <option value="auto">Automatic</option><option value="label">Alphabetical</option><option value="value">Value</option>
-        </select>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Node width: {nodeWidth}px
-        <input type="range" min="4" max="40" step="2" value={nodeWidth} onChange={e=>setNodeWidth(Number(e.target.value))}/>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Node padding: {nodePadding}px
-        <input type="range" min="0" max="40" step="2" value={nodePadding} onChange={e=>setNodePadding(Number(e.target.value))}/>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Label padding: {labelPadding}px
-        <input type="range" min="0" max="24" step="2" value={labelPadding} onChange={e=>setLabelPadding(Number(e.target.value))}/>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Node border: {nodeStrokeWidth}px
-        <input type="range" min="0" max="3" step="0.5" value={nodeStrokeWidth} onChange={e=>setNodeStrokeWidth(Number(e.target.value))}/>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Iterations: {iterations}
-        <input type="range" min="0" max="64" step="4" value={iterations} onChange={e=>setIterations(Number(e.target.value))}/>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Ribbons: {Math.round(linkOpacity*100)}%
-        <input type="range" min="0.1" max="1" step="0.05" value={linkOpacity} onChange={e=>setLinkOpacity(Number(e.target.value))}/>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Nodes: {Math.round(nodeOpacity*100)}%
-        <input type="range" min="0.2" max="1" step="0.05" value={nodeOpacity} onChange={e=>setNodeOpacity(Number(e.target.value))}/>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Ribbon blend mode
-        <select className={inputClass} value={blendMode} onChange={e=>setBlendMode(e.target.value as typeof blendMode)}>
-          <option value="normal">Normal</option><option value="multiply">Multiply</option><option value="screen">Screen</option>
-        </select>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Chart width: {widthMultiplier}%
-        <input type="range" min="100" max="200" step="10" value={widthMultiplier} onChange={e=>setWidthMultiplier(Number(e.target.value))}/>
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">Chart height
-        <select className={inputClass} value={canvasHeight} onChange={e=>setCanvasHeight(Number(e.target.value))}>
-          <option value={0}>Automatic</option><option value={560}>560px</option><option value={760}>760px</option><option value={960}>960px</option><option value={1200}>1200px</option>
-        </select>
-      </label>
-      <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={showLabels} onChange={e=>setShowLabels(e.target.checked)}/>Labels</label>
+      <SankeySelect label="Node alignment" value={align} onChange={value=>setAlign(value as Align)}
+        options={[{value:"justify",label:"Justify"},{value:"left",label:"Left"},{value:"right",label:"Right"},{value:"center",label:"Center"}]}/>
+      <SankeySelect label="Link color" value={linkColor} onChange={value=>setLinkColor(value as LinkColor)}
+        options={[{value:"source-target",label:"Source → target gradient"},{value:"source",label:"Source"},{value:"target",label:"Target"},{value:"stage",label:"Stage"},{value:"neutral",label:"Neutral"}]}/>
+      <SankeyCheckbox label="Multicolor columns" checked={multicolorColumns} onChange={setMulticolorColumns}/>
+      {multicolorColumns && selectedNode!==null && <Button type="button" variant="outline" size="xs"
+        onClick={()=>setSelectedNode(null)}>Show all streams</Button>}
+      <SankeySelect label="Colors by node stage" value={paletteName} onChange={setPaletteName}
+        options={Object.keys(palettes).map(name=>({value:name,label:name}))}/>
+      <SankeySelect label="Node order" value={nodeSort} onChange={value=>setNodeSort(value as NodeSort)}
+        options={[{value:"auto",label:"Automatic"},{value:"label",label:"Alphabetical"},{value:"value",label:"Value"}]}/>
+      <SankeySlider label={`Node width: ${nodeWidth}px`} min={4} max={40} step={2} value={nodeWidth} onChange={setNodeWidth}/>
+      <SankeySlider label={`Node padding: ${nodePadding}px`} min={0} max={40} step={2} value={nodePadding} onChange={setNodePadding}/>
+      <SankeySlider label={`Label padding: ${labelPadding}px`} min={0} max={24} step={2} value={labelPadding} onChange={setLabelPadding}/>
+      <SankeySlider label={`Node border: ${nodeStrokeWidth}px`} min={0} max={3} step={0.5} value={nodeStrokeWidth} onChange={setNodeStrokeWidth}/>
+      <SankeySlider label={`Iterations: ${iterations}`} min={0} max={64} step={4} value={iterations} onChange={setIterations}/>
+      <SankeySlider label={`Ribbons: ${Math.round(linkOpacity*100)}%`} min={0.1} max={1} step={0.05} value={linkOpacity} onChange={setLinkOpacity}/>
+      <SankeySlider label={`Nodes: ${Math.round(nodeOpacity*100)}%`} min={0.2} max={1} step={0.05} value={nodeOpacity} onChange={setNodeOpacity}/>
+      <SankeySelect label="Ribbon blend mode" value={blendMode} onChange={value=>setBlendMode(value as typeof blendMode)}
+        options={[{value:"normal",label:"Normal"},{value:"multiply",label:"Multiply"},{value:"screen",label:"Screen"}]}/>
+      <SankeySlider label={`Chart width: ${widthMultiplier}%`} min={100} max={200} step={10} value={widthMultiplier} onChange={setWidthMultiplier}/>
+      <SankeySelect label="Chart height" value={String(canvasHeight)} onChange={value=>setCanvasHeight(Number(value))}
+        options={[{value:"0",label:"Automatic"},{value:"560",label:"560px"},{value:"760",label:"760px"},{value:"960",label:"960px"},{value:"1200",label:"1200px"}]}/>
+      <SankeyCheckbox label="Labels" checked={showLabels} onChange={setShowLabels} compact/>
       <div className="flex items-center gap-1" role="group" aria-label="D3 Sankey zoom controls">
-        <button type="button" className={inputClass} aria-label="Zoom out" onClick={()=>setZoom(v=>clamp(v/1.25,0.3,4))}><Minus className="size-4"/></button>
+        <Button type="button" variant="outline" size="icon-xs" aria-label="Zoom out" onClick={()=>setZoom(v=>clamp(v/1.25,0.3,4))}><Minus className="size-4"/></Button>
         <span className="min-w-12 text-center text-xs tabular-nums">{Math.round(zoom*100)}%</span>
-        <button type="button" className={inputClass} aria-label="Zoom in" onClick={()=>setZoom(v=>clamp(v*1.25,0.3,4))}><Plus className="size-4"/></button>
-        <button type="button" className={inputClass} aria-label="Reset zoom and pan" onClick={reset}><RotateCcw className="size-4"/></button>
+        <Button type="button" variant="outline" size="icon-xs" aria-label="Zoom in" onClick={()=>setZoom(v=>clamp(v*1.25,0.3,4))}><Plus className="size-4"/></Button>
+        <Button type="button" variant="outline" size="icon-xs" aria-label="Reset zoom and pan" onClick={reset}><RotateCcw className="size-4"/></Button>
       </div>
     </div>
     {graph.error ? <ErrorDetails prefix="D3 Sankey layout" error={`${graph.error}. You can use the original Sankey Analysis provider.`} />

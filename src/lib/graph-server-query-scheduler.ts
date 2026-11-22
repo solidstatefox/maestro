@@ -8,8 +8,8 @@ export type QueryPriority = "autocomplete" | "interactive" | "facet" | "count";
 export type QueryWeight = "light" | "heavy";
 type Task = { priority: QueryPriority; weight: QueryWeight; client: string; order: number;
   start: () => void; cancel: () => void;
-  queuePosition?: (index: number, server: string, lane: QueryWeight, laneIndex: number) => void;
-  lastQueuePosition: number; lastLaneIndex: number;
+  queuePosition?: (index: number, server: string, lane: QueryWeight, laneIndex: number, laneNumber: number, lanePosition: number) => void;
+  lastQueuePosition: number; lastLaneIndex: number; lastLaneNumber: number; lastLanePosition: number;
 };
 type ClientUsage = { total: number; heavy: number };
 type ServerQueue = {
@@ -69,12 +69,22 @@ function reportQueuePositions(): void {
     const orderedLane = [...(lane === "light" ? queue.pendingLight : queue.pendingHeavy)]
       .sort((a,b) => ranks[a.priority] - ranks[b.priority] || a.order - b.order);
     const laneIndex = orderedLane.indexOf(task) + 1;
-    // A different job can enter this physical lane without changing the
-    // proxy-wide ordinal; emit its new lane index as well.
-    if (index !== task.lastQueuePosition || task.lastLaneIndex !== laneIndex) {
+    // Sheet controls concurrent request quotas, not fixed worker identities.
+    // Assign a deterministic *projected* numbered lane for each client's
+    // waiting work, distributed round-robin across its configured quota.
+    // This is a waiting-queue address, not a claim about a running socket.
+    const clientLaneIndex = orderedLane.filter(item => item.client === task.client).indexOf(task) + 1;
+    const preference = getProxyClientPreferences(task.client);
+    const laneCount = Math.max(1, lane === "heavy" ? preference.heavyPerServer : preference.lightPerServer);
+    const laneNumber = (clientLaneIndex - 1) % laneCount + 1;
+    const lanePosition = Math.floor((clientLaneIndex - 1) / laneCount) + 1;
+    if (index !== task.lastQueuePosition || task.lastLaneIndex !== laneIndex ||
+        task.lastLaneNumber !== laneNumber || task.lastLanePosition !== lanePosition) {
       task.lastQueuePosition = index;
       task.lastLaneIndex = laneIndex;
-      task.queuePosition?.(index, server, lane, laneIndex);
+      task.lastLaneNumber = laneNumber;
+      task.lastLanePosition = lanePosition;
+      task.queuePosition?.(index, server, lane, laneIndex, laneNumber, lanePosition);
     }
   });
 }
@@ -113,7 +123,7 @@ function drain(server: string, queue: ServerQueue): void {
     const [task] = list.splice(index, 1);
     if (task.lastQueuePosition !== 0) {
       task.lastQueuePosition = 0;
-      task.queuePosition?.(0, server, task.weight, 0);
+      task.queuePosition?.(0, server, task.weight, 0, 0, 0);
     }
     reportQueuePositions();
     const usage = queue.clients.get(task.client) ?? { total: 0, heavy: 0 };
@@ -184,7 +194,7 @@ export async function scheduleMaestroQuery<T>(server: string, priority: QueryPri
       drain(server, queue);
     };
     const task: Task = { priority, weight, client, order: sequence++, cancel: onAbort,
-      queuePosition: proxyQueuePositionNotifier(), lastQueuePosition: -1, lastLaneIndex: -1, start: () => {
+      queuePosition: proxyQueuePositionNotifier(), lastQueuePosition: -1, lastLaneIndex: -1, lastLaneNumber: -1, lastLanePosition: -1, start: () => {
       running = true;
       if (signal?.aborted) { finish(); reject(new DOMException("Maestro request canceled", "AbortError")); return; }
       void work().then(resolve, reject).finally(finish);

@@ -46,9 +46,14 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --secondary: oklch(96.7% 0.001 286.4);
+  --chart-1: oklch(64.6% 0.222 41.1);
+  --muted-foreground: oklch(55.2% 0.014 285.9);
 }
 
 :root {
+  /* Central default for uncustomized Lucide icons (2 is Lucide's own default). */
+  --maestro-icon-stroke-width: 1.5;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -179,3 +184,18 @@ html, body { height: 100%; overflow: hidden; }
 .maestro-record-explorer *::-webkit-scrollbar-thumb,
 [data-panel] *::-webkit-scrollbar-thumb,
 [data-slot="scroll-area-viewport"]::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+
+/* Only Lucide's default 2px icons: stronger per-icon strokes stay intact. */
+svg.lucide[stroke-width="2"] { stroke-width: var(--maestro-icon-stroke-width); }
+
+/* Browse Record literals/blank nodes are navigable only with Shift.
+   Never turn a DESCRIBE literal into a root URI query. */
+[data-maestro-record-shift] [data-maestro-shift-only="true"] {
+  cursor: default !important;
+  text-decoration: none !important;
+}
+[data-maestro-record-shift="true"] [data-maestro-shift-only="true"]:hover {
+  cursor: pointer !important;
+  text-decoration: underline !important;
+  text-underline-offset: 2px;
+}

@@ -14,6 +14,7 @@ function loadClientStatusReads(select) {
   }}).outputText;
   const target = { exports: {} };
   const modules = {
+    '@/lib/constants/graphs': { GRAPH:{ STATUS:'status' }, resolveGraph:(_key,base)=>base+'/status' },
     '@/lib/client-personal-sparql': {
       personalContext: async () => ({base:'https://test.example/query',addr:'https://test.example/query@https://test.example/sparql'}),
       selectPersonal: select,

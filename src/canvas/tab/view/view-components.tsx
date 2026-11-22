@@ -3,12 +3,14 @@ import { ErrorDetails } from "@/components/ui/error-details";
 import { describeFctSource } from "@/lib/rdf-source";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { ProviderCatalogLoadingSkeleton } from "@/canvas/workspace-skeleton";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CodeBlock } from "@/components/ui/code-block";
 import { ArrowLeft } from "lucide-react";
 import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import type { ProviderKind } from "@/lib/provider-catalog-xslt";
 type ViewChoice = { uri: string };
+type GraphServerCard = { uri: string; label: string; endpoint: string; endpointId: string;
+  selected: boolean; health: string; healthState: string };
 const BOOKMARK_APPROVAL_MESSAGE = "Bookmark this query to manage {kind} approvals. Use the highlighted Bookmark button in the appbar.";
 const PROVIDER_APPROVAL_LABEL: Record<ProviderKind, string> = {
   policies: "policy", formats: "format", "facet-widgets": "facet", transcoders: "transcoder", curators: "curator", "fsm-providers": "FSM provider", kinds: "Kinds provider", perspectives: "perspective provider", "analysis-providers": "Analysis provider",
@@ -39,9 +41,54 @@ export interface ViewPageProps {
   onOpenResource?: (uri: string) => void;
   onSelectProvider?: (uri: string, selected: boolean) => void;
   onBrowse: () => void;
+  graphServerCards?: GraphServerCard[];
+  selectedGraphCardUri?: string;
+  onSelectGraphCard?: (uri: string) => void;
 }
-export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider, viewProviderLoading, viewProviderError, viewProviderCount, viewProviderHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, selectedViewUri = "", viewSelectionPending = false, viewRenderError, viewHtml, viewResultCount, onSelectEndpoint, onRefreshEndpoint, onPolicyAction, onOpenResource, onSelectProvider, onBrowse, kanbanGroupingOptions = [], kanbanGroupKey = "none", onKanbanGroupChange, onKanbanMoveCard }: ViewPageProps) {
+export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider, viewProviderLoading, viewProviderError, viewProviderCount, viewProviderHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, selectedViewUri = "", viewSelectionPending = false, viewRenderError, viewHtml, viewResultCount, onSelectEndpoint, onRefreshEndpoint, onPolicyAction, onOpenResource, onSelectProvider, onBrowse, kanbanGroupingOptions = [], kanbanGroupKey = "none", onKanbanGroupChange, onKanbanMoveCard, graphServerCards = [], selectedGraphCardUri = "", onSelectGraphCard }: ViewPageProps) {
   const kanbanActive = selectedView?.uri === "gttp://ggg.maestro.ui/provider/kanban" && !viewProvider;
+  // The XSLT still owns cards. Decorate its *sanitized* HTML with trusted,
+  // page-bounded selection metadata so native React can implement a toggle
+  // without mutating FCT or selecting a different execution server.
+  const graphServerHtml = useMemo(() => {
+    if (!graphServerCards.length || !viewHtml || typeof DOMParser === "undefined") return viewHtml;
+    const doc = new DOMParser().parseFromString(viewHtml, "text/html");
+    const used = new Set<string>();
+    for (const article of Array.from(doc.body.querySelectorAll("article"))) {
+      const button = article.querySelector<HTMLButtonElement>("button[data-endpoint-select]");
+      const id = button?.getAttribute("data-endpoint-select") ?? "";
+      const hrefs = Array.from(article.querySelectorAll<HTMLAnchorElement>("a[href]"))
+        .map(anchor => anchor.getAttribute("href") ?? "");
+      const matches = graphServerCards.filter(row => !used.has(row.uri) && (
+        (id && row.endpointId === id) || hrefs.includes(row.endpoint) || hrefs.includes(row.uri) ||
+        (row.label && article.textContent?.includes(row.label))));
+      // Ambiguous cards must not be given the identity of the wrong server.
+      if (matches.length !== 1) continue;
+      const row = matches[0]; used.add(row.uri);
+      article.setAttribute("data-maestro-graph-card", row.uri);
+      article.setAttribute("tabindex", "0");
+      article.setAttribute("aria-label", `${row.label} · select card for status history`);
+      article.classList.add("cursor-pointer", "focus-visible:ring-2", "focus-visible:ring-ring", "hover:border-primary/60");
+      if (selectedGraphCardUri === row.uri || selectedGraphCardUri === row.endpoint)
+        article.classList.add("ring-2", "ring-primary", "border-primary");
+      if (row.selected) {
+        const header = article.querySelector("header");
+        if (header) {
+          header.classList.add("flex", "items-center", "justify-between", "gap-2");
+          const state = row.healthState === "green" ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100"
+            : row.healthState === "amber" ? "bg-amber-100 text-amber-950 dark:bg-amber-950 dark:text-amber-100"
+            : row.healthState === "red" ? "bg-red-100 text-red-950 dark:bg-red-950 dark:text-red-100"
+            : "bg-muted text-muted-foreground";
+          header.classList.add(...state.split(" "));
+          const indicator = doc.createElement("span");
+          indicator.className = "ml-auto shrink-0 text-xs font-semibold";
+          indicator.textContent = `Selected: ${row.health}`;
+          header.appendChild(indicator);
+        }
+      }
+    }
+    return doc.body.innerHTML;
+  }, [viewHtml, graphServerCards, selectedGraphCardUri]);
   // A ref survives the native drag lifecycle synchronously; React state updates
   // may not have committed by the first dragover event.
   const kanbanDragged = useRef<{uri: string; from: string} | null>(null);
@@ -92,8 +139,8 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
                         const action = actionNode.getAttribute("data-policy-action");
                         if (action === "toggle" || action === "forget" || action === "bookmark") onPolicyAction(uri, action, actionNode instanceof HTMLInputElement ? actionNode.checked : false);
                       }} dangerouslySetInnerHTML={{ __html: viewProviderHtml }}/>)
-                    : viewDiscoveryLoading ? <p className="text-sm text-muted-foreground"><ElapsedStatus label="Locating views" category="policies" clockScope="views" /></p>
-                    : viewDiscoveryError ? <ErrorDetails prefix="View discovery" error={viewDiscoveryError} />
+                    : viewDiscoveryLoading && !selectedView ? null
+                    : viewDiscoveryError && !selectedView ? <ErrorDetails prefix="View discovery" error={viewDiscoveryError} />
                     : !selectedView ? <MaestroEmptyResults onBrowse={onBrowse} title={selectedViewUri ? viewSelectionPending ? "Checking selected Perspective…" : "Selected Perspective unavailable" : "No perspectives available"} description={selectedViewUri ? viewSelectionPending ? "The saved selection is retained while discovery and SHACL validation complete. You can use the default Browse perspective meanwhile." : "The selected provider did not match this query context. Try the default Browse perspective." : "No Perspectives match the current query. Try the default Browse perspective."}/>
                     : viewRenderError ? <ErrorDetails prefix="View rendering" error={viewRenderError} />
                     : !viewHtml.trim() && viewResultCount > 0 ? <p role="status" className="text-sm text-muted-foreground"><ElapsedStatus label="Rendering perspective" category="other" clockScope="views"/></p>
@@ -140,8 +187,22 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
                           return;
                         }
                         const button = target.closest<HTMLButtonElement>("button[data-endpoint-refresh]");
-                        if (!button) return;
-                        if (button.dataset.endpointRefresh) onRefreshEndpoint(button.dataset.endpointRefresh);
+                        if (button) {
+                          if (button.dataset.endpointRefresh) onRefreshEndpoint(button.dataset.endpointRefresh);
+                          return;
+                        }
+                        if (target.closest("a,button,input,select,textarea")) return;
+                        const card = target.closest<HTMLElement>("article[data-maestro-graph-card]");
+                        const uri = card?.getAttribute("data-maestro-graph-card") ?? "";
+                        if (uri && graphServerCards.some(row => row.uri === uri)) onSelectGraphCard?.(uri);
+                      }} onKeyDown={event => {
+                        const target = event.target as HTMLElement;
+                        if (target.localName !== "article" || !target.hasAttribute("data-maestro-graph-card") ||
+                            (event.key !== "Enter" && event.key !== " ")) return;
+                        const uri = target.getAttribute("data-maestro-graph-card") ?? "";
+                        if (uri && graphServerCards.some(row => row.uri === uri)) {
+                          event.preventDefault(); onSelectGraphCard?.(uri);
+                        }
                       }} ref={(element) => {
                         if (!element) return;
                         // Native favicon fetching is optional; expose the XSLT's Lucide fallback when missing.
@@ -154,7 +215,7 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
                             } else image.hidden = true;
                           };
                         });
-                      }} dangerouslySetInnerHTML={{ __html: viewHtml }}/>} 
+                      }} dangerouslySetInnerHTML={{ __html: graphServerHtml }}/>} 
                 </div>;
 }
 

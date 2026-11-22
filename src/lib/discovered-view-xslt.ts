@@ -117,6 +117,8 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
             // React validates this URI before requesting code from the authenticated personal store.
           } else if (name === "data-perspective-appbar-icon" && element.localName.toLowerCase() === "span" && /^[a-z][a-z0-9-]{0,63}$/.test(attribute.value)) {
             // A non-executable placeholder for the trusted React DynamicIcon component.
+          } else if (name === "data-perspective-bookmark-actions-slot" && element.localName.toLowerCase() === "span" && attribute.value === "true") {
+            // Inert mount for the trusted combined shadcn Bookmark actions.
           } else if (name === "data-perspective-pin-slot" && element.localName.toLowerCase() === "span" && attribute.value === "true") {
             // Inert portal mount for the trusted React Pin/PinOff control.
           } else if (name === "data-perspective-pin-id" && element.localName.toLowerCase() === "span") {
@@ -124,7 +126,7 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
           } else if (name === "data-perspective-action-slot" && element.localName.toLowerCase() === "span" && ["select", "delete"].includes(attribute.value)) {
             // Inert XSLT slot: trusted React mounts a Lucide Button with Base UI Tooltip.
           } else if (name === "data-perspective-id" && (element.localName.toLowerCase() === "button" ||
-              (element.localName.toLowerCase() === "span" && ["select", "delete"].includes(element.getAttribute("data-perspective-action-slot") ?? "")))) {
+              (element.localName.toLowerCase() === "span" && (["select", "delete"].includes(element.getAttribute("data-perspective-action-slot") ?? "") || element.getAttribute("data-perspective-bookmark-actions-slot") === "true")))) {
             // The perspective controller validates this identifier against its returned dataset.
           } else if (["data-perspective-open", "data-perspective-select", "data-perspective-delete", "data-perspective-appbar"].includes(name)
               && element.localName.toLowerCase() === "button" && attribute.value === "true") {

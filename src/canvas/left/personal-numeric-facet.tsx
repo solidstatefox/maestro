@@ -4,6 +4,9 @@ import { useProviderWidgetLifecycle } from "@/canvas/diagnostics/use-provider-wi
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Slider } from "@/components/ui/slider";
 import { maestroQueryFetch } from "@/lib/client-query-cache";
+import { proxyDebugHeaders } from "@/lib/proxy-debug";
+import { resetMaestroQueryExecutionScope } from "@/lib/maestro-query-execution-clock";
+import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import type { FctQueryNode, FctQueryTree } from "@/lib/fct-query-api";
 import type { NumericFacetProvider } from "@/canvas/left/personal-date-facet";
@@ -69,17 +72,22 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
     // Keep the last valid same-endpoint domain mounted while the next FCT
     // scope is being measured. The slider is disabled until the new scope is
     // confirmed; no stale bound can be committed to the live query.
+    resetMaestroQueryExecutionScope(`component:numeric:${property}`);
     setLoading(true); setDraft(null); setEditingBound(null); setError("");
     if (!query) { setError("Numeric domain is unavailable for this FCT query scope."); setLoading(false); return () => controller.abort(); }
     void (async () => {
       try {
         const response = await maestroQueryFetch("/proxy/api/sparql", {
           method: "POST", signal: controller.signal, cache: "no-store",
-          headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": "NumericFacet:count-projection" },
+          headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": "NumericFacet:count-projection",
+            ...proxyDebugHeaders("facet:count:numeric-domain", `NumericFacet:${provider.uri}:${property}`),
+            "X-Maestro-Clock-Component": `component:numeric:${property}` },
           body: JSON.stringify({ facetValueCount: { addr: tree.attributes.addr, sparql: query, numericDomain: true } }),
         });
-        const data = await response.json() as { error?: string; incomplete?: boolean; min?: string | null; max?: string | null };
-        if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+        const responseBody = await response.text();
+        let data: { error?: string; incomplete?: boolean; min?: string | null; max?: string | null } = {};
+        try { data = JSON.parse(responseBody) as typeof data; } catch { /* retain the raw upstream failure */ }
+        if (!response.ok) throw new Error(`Numeric domain HTTP ${response.status} ${response.statusText}; ${data.error ?? responseBody.slice(0, 4000)}; endpoint ${tree.attributes.addr}; count projection SPARQL:\n${query}`);
         if (data.incomplete) throw new Error("Numeric domain query timed out before completing.");
         const min = numeric(data.min ?? undefined);const max = numeric(data.max ?? undefined);
         if (controller.signal.aborted) return;
@@ -99,7 +107,11 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
   const canRetainDomain = Boolean(domain && domainKey.startsWith(`${tree.attributes.addr}\u0000`));
   const refreshing = !domainIsCurrent || loading;
   // Never display one graph server's numeric domain as another server's domain.
-  if (!domain || !canRetainDomain) return error ? <ErrorDetails prefix="Numeric facet" error={error} /> : <div data-provider-phase={widgetPhase} className="h-56 w-[104px] shrink-0 animate-pulse border-r pr-2" aria-label="Loading numeric facet domain"><div className="mx-auto h-full w-1.5 rounded bg-muted" /></div>;
+  if (!domain || !canRetainDomain) return error ? <ErrorDetails prefix="Numeric facet" error={error} /> :
+    <div data-provider-phase={widgetPhase} className="flex h-56 w-[104px] shrink-0 flex-col items-center gap-3 border-r pr-2" aria-label="Loading numeric facet domain">
+      <ElapsedStatus label="Updating range…" category="counts" clockScope={`component:numeric:${property}`} />
+      <div className="mx-auto h-full w-1.5 animate-pulse rounded bg-muted" />
+    </div>;
   const [min,max] = domain;
   if (min === max) return <div className="flex h-56 w-[104px] shrink-0 items-center justify-center border-r pr-2 text-xs text-muted-foreground" aria-label="Constant numeric domain">{display(min)}</div>;
   const lower = Math.max(min, Math.min(max, numeric(start) ?? min));
@@ -126,7 +138,7 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
   // The first value is the lower bound (bottom thumb), the second is the
   // upper bound (top thumb). Keep those labels in the same visual order.
   return <div data-provider-phase={widgetPhase} aria-busy={refreshing} className={`flex h-56 w-[104px] shrink-0 flex-col items-center gap-1 border-r pr-2 text-[10px] tabular-nums ${refreshing ? "opacity-50" : ""}`} data-numeric-facet-provider={provider.uri}>
-    {(refreshing || error) && <span role="status" className="w-full text-center text-muted-foreground">{error ? "Domain unavailable" : "Updating range…"}</span>}
+    {(refreshing || error) && <span role="status" className="w-full text-center text-muted-foreground">{error ? "Domain unavailable" : <ElapsedStatus label="Updating range…" category="counts" clockScope={`component:numeric:${property}`} />}</span>}
     <div className="w-full text-center leading-tight" aria-label={`Domain maximum ${format(max)}; selected upper bound ${format(current[1])}`}>
       <div className="text-muted-foreground">Max {display(max)}</div>
       {editingBound === "upper" ? <input ref={editingRef} aria-label="Edit selected upper bound" inputMode="decimal" type="text"

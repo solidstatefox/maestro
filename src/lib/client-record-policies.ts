@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Record ClassPolicy discovery is a browser SPARQL + SHACL workflow. */
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { readClientPolicyApprovals } from "@/lib/client-policy-approvals";
@@ -21,7 +22,7 @@ export async function requestClientRecordPolicy(input:ClientRecordPolicyInput,si
   if(input.action==="template"){
     return loadClientPolicyTemplate(str(input.template),signal);
   }
-  const ctx=await personalContext(),shapes=`<${ctx.base}/shacl/policies>`;
+  const ctx=await personalContext(),shapes=`<${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}>`;
   if(input.action==="validate"){
     if(!safe(input.recordShape)||!safe(input.recordUri)||!Array.isArray(input.triples)||input.triples.length>10000)
       throw new Error("Record URI, SHACL shape, and bounded DESCRIBE triples are required.");

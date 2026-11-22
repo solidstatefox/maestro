@@ -14,6 +14,18 @@
           <xsl:choose><xsl:when test="local-name()='class'">Categories</xsl:when><xsl:otherwise><xsl:call-template name="local-label"><xsl:with-param name="uri" select="@iri"/></xsl:call-template><xsl:if test="$direction='reverse'"> of</xsl:if></xsl:otherwise></xsl:choose>
         </option>
       </xsl:for-each>
+      <!-- The host supplies identity-qualified multi-hop aliases from the
+           same getPath reference as Personal facets and Analyze Table. -->
+      <xsl:for-each select="mctx:transported-facets/mctx:facet">
+        <option value="{@key}" data-iri="{@iri}" data-direction="{@direction}"
+          data-alias-id="{@id}" data-target-id="{@target-id}">
+          <xsl:for-each select="mctx:hop">
+            <xsl:if test="position() &gt; 1"> › </xsl:if>
+            <xsl:call-template name="local-label"><xsl:with-param name="uri" select="@iri"/></xsl:call-template>
+            <xsl:if test="@direction='reverse'"> of</xsl:if>
+          </xsl:for-each>
+        </option>
+      </xsl:for-each>
     </select>
     <span data-map-status="true" role="status" class="text-xs text-muted-foreground">Locating map resources…</span>
     <span data-map-error="true" role="alert" hidden="hidden" class="text-xs text-destructive"/>
@@ -25,6 +37,13 @@
     <textarea data-provider-field="queryXml"><xsl:value-of select="mctx:query-text"/></textarea>
     <xsl:for-each select="mctx:metadata/mctx:entry">
       <textarea data-provider-field="{@name}"><xsl:value-of select="."/></textarea>
+    </xsl:for-each>
+    <xsl:for-each select="mctx:transported-facets/mctx:facet">
+      <span data-map-alias="{@id}">
+        <xsl:for-each select="mctx:hop">
+          <span data-alias-hop="true" data-iri="{@iri}" data-direction="{@direction}"/>
+        </xsl:for-each>
+      </span>
     </xsl:for-each>
     <xsl:for-each select="mctx:facet-values/mctx:facet/mctx:term">
       <span data-facet-term="true" data-facet-key="{../@key}"><xsl:value-of select="."/></span>
@@ -57,6 +76,11 @@
   const facetOptions = Array.from(select.options).filter(option => option.value);
   const facetDefinitions = [...new Map(facetOptions.map(option => [option.value, {
     key: option.value, iri: option.dataset.iri, direction: option.dataset.direction,
+    anchorId: option.dataset.aliasId || '', targetId: option.dataset.targetId || '',
+    hops: option.dataset.aliasId ? Array.from(root.querySelectorAll('[data-map-alias]'))
+      .filter(node => node.getAttribute('data-map-alias') === option.dataset.aliasId)
+      .flatMap(node => Array.from(node.querySelectorAll('[data-alias-hop]'))
+        .map(hop => ({ iri: hop.dataset.iri, direction: hop.dataset.direction }))) : [],
     label: option.textContent.trim()
   }])).values()];
   for (const option of facetOptions) {
@@ -89,10 +113,13 @@
   const selectedTerms = selected => {
     const result = new Set();
     if (!scope || !selected) return result;
-    for (const node of Array.from(scope.children)) {
+    const nodes = selected.anchorId
+      ? Array.from(currentQuery.getElementsByTagName('*')).filter(node => node.getAttribute('id') === selected.targetId)
+      : Array.from(scope.children);
+    for (const node of nodes) {
       const direction = node.localName === 'class' ? 'class' : node.localName === 'property-of' ? 'reverse' : 'forward';
       const iri = node.localName === 'class' ? 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type' : node.getAttribute('iri');
-      if (direction + '|' + iri !== selected.key) continue;
+      if (selected.anchorId ? node.getAttribute('id') !== selected.targetId : direction + '|' + iri !== selected.key) continue;
       if (node.localName === 'class' && node.getAttribute('iri')) result.add(termKey(node.getAttribute('iri'), 'uri'));
       for (const val of Array.from(node.children).filter(n => n.localName === 'value')) {
         result.add(termKey(val.textContent || '', val.getAttribute('datatype') || (val.getAttribute('xml:lang') ? '' : 'string'), val.getAttribute('xml:lang') || ''));
@@ -138,7 +165,9 @@
     window.history.replaceState(window.history.state, '', window.location.pathname + '?' + params.toString() + window.location.hash);
     if (key) {
       const separator = key.indexOf('|');
-      window.dispatchEvent(new CustomEvent('maestro:colorby-selection', { detail: { direction: key.slice(0, separator), iri: key.slice(separator + 1) } }));
+      window.dispatchEvent(new CustomEvent('maestro:colorby-selection', { detail: key.startsWith('alias:')
+        ? { direction:'alias', iri:key.slice(6) }
+        : { direction: key.slice(0, separator), iri: key.slice(separator + 1) } }));
     }
   };
   const drawMarkers = () => {
@@ -165,8 +194,12 @@
   const publishDecorations = async () => {
     if (signal.aborted) return;
     const active = select.value;
+    // The native decoration contract addresses ordinary facets by predicate
+    // and direction. An anchor is a distinct query-node ID: do not let its
+    // colors leak onto an unrelated same-IRI Personal facet.
     const specs = facetDefinitions.map(facet => ({
       iri: facet.iri, direction: facet.direction,
+      ...(facet.anchorId ? { anchorId: facet.anchorId } : {}),
       items: facet.key === active ? [...new Set([...points.map(point => point.colorTermKey), ...(facetTerms.get(active) || [])].filter(Boolean))]
         .map(value => ({ value, color: palette.get(value) || '' })) : []
     }));
@@ -186,7 +219,8 @@
       if (!uri) continue;
       const existing = projected.get(uri) || new Map();
       for (const column of columns.slice(2)) {
-        if (column.getAttribute('property') !== selected.iri || (column.getAttribute('direction') || 'forward') !== (selected.direction === 'class' ? 'forward' : selected.direction)) continue;
+        // This bounded merge-values call projects just this dimension; consume
+        // its complete returned columns, including mixed-direction aliases.
         for (const term of Array.from(column.children).filter(node => node.localName === 'value')) {
           const value = term.textContent || '';
           if (!value || value === '-') continue;
@@ -210,7 +244,8 @@
       if (requestSignal.aborted) return;
       const batch = points.slice(i, i + 100);
       const xml = await api.projectValues(projectionXml, batch.map(point => ({ type: 'uri', value: point.uri })),
-        [{ property: selected.iri, direction: selected.direction === 'class' ? 'forward' : selected.direction }], requestSignal);
+        [{ property: selected.iri, direction: selected.direction === 'class' ? 'forward' : selected.direction,
+          ...(selected.hops.length ? { hops: selected.hops } : {}) }], requestSignal);
       projectionRows(xml, projected, selected);
     }
     if (requestSignal.aborted) return;
@@ -321,13 +356,14 @@
     <xsl:apply-templates select="facets/facet" mode="decorate">
       <xsl:with-param name="colorDirection" select="@colorDirection"/>
       <xsl:with-param name="colorIri" select="@colorIri"/>
+      <xsl:with-param name="colorAnchorId" select="@colorAnchorId"/>
     </xsl:apply-templates>
   </decorations>
 </xsl:template>
 <xsl:template match="facet" mode="decorate">
-  <xsl:param name="colorDirection"/><xsl:param name="colorIri"/>
-  <xsl:variable name="isColorFacet" select="@direction=$colorDirection and @iri=$colorIri"/>
-  <facet-decoration direction="{@direction}" iri="{@iri}">
+  <xsl:param name="colorDirection"/><xsl:param name="colorIri"/><xsl:param name="colorAnchorId"/>
+  <xsl:variable name="isColorFacet" select="(@anchorId != '' and @anchorId=$colorAnchorId) or (@anchorId = '' and @direction=$colorDirection and @iri=$colorIri)"/>
+  <facet-decoration direction="{@direction}" iri="{@iri}" anchorId="{@anchorId}">
     <control icon="paintbrush" action="toggle-colorby" active="{$isColorFacet}">
       <xsl:attribute name="label"><xsl:choose>
         <xsl:when test="$isColorFacet">Stop coloring map by this facet</xsl:when>

@@ -34,35 +34,35 @@ test('hydration shows shell, navigation and region placeholders without mounting
 });
 test('graph checks cannot hide an otherwise ready Record region', () => {
   const value = select({ graphPhase: 'checking', endpointReady: false, recordSelected: true, recordReady: true });
-  assert.equal(value.facets, 'degraded');
-  assert.equal(value.results, 'degraded');
-  assert.equal(value.record, 'degraded');
+  assert.equal(value.facets, 'ready');
+  assert.equal(value.results, 'ready');
+  assert.equal(value.record, 'ready');
 });
 test('failed graph checks display degraded fixtures without error billboards', () => {
   const value = select({ graphPhase: 'unavailable', endpointReady: false, endpointFailed: true });
   assert.equal(value.graphSelector, 'error');
-  assert.equal(value.facets, 'degraded');
-  assert.equal(value.results, 'degraded');
-  assert.equal(value.record, 'degraded');
+  assert.equal(value.facets, 'ready');
+  assert.equal(value.results, 'ready');
+  assert.equal(value.record, 'ready');
 });
 test('a failed registry discovery does not leave an infinite graph selector skeleton', () => {
   assert.equal(select({ registryReady: false, endpointReady: false, endpointFailed: true }).graphSelector, 'error');
 });
 test('a retry from unavailable to checking and ready restores regions', () => {
-  assert.equal(select({ graphPhase: 'unavailable', endpointReady: false, endpointFailed: true }).results, 'degraded');
-  assert.equal(select({ graphPhase: 'checking', endpointReady: false }).results, 'degraded');
+  assert.equal(select({ graphPhase: 'unavailable', endpointReady: false, endpointFailed: true }).results, 'ready');
+  assert.equal(select({ graphPhase: 'checking', endpointReady: false }).results, 'ready');
   assert.equal(select({ graphPhase: 'ready', endpointReady: true }).results, 'ready');
 });
 test('facets reveal available partial results while unrelated facet queries continue', () => {
-  assert.equal(select({ facetsLoading: true, facetContentPresent: false }).facets, 'loading');
+  assert.equal(select({ facetsLoading: true, facetContentPresent: false }).facets, 'ready');
   assert.equal(select({ facetsLoading: true, facetContentPresent: true }).facets, 'ready');
   assert.equal(select({ facetsLoading: false, facetContentPresent: false, facetFailed: true }).facets, 'ready');
 });
 test('Record loading is independent; empty Record panes are not loading', () => {
   assert.equal(select({ recordSelected: false, recordLoading: true }).record, 'ready');
-  assert.equal(select({ recordSelected: true, recordLoading: true }).record, 'loading');
+  assert.equal(select({ recordSelected: true, recordLoading: true }).record, 'ready');
   assert.equal(select({ recordSelected: true, recordLoading: true, recordReady: true }).record, 'ready');
-  assert.equal(select({ recordSelected: true, recordFailed: true }).record, 'error');
+  assert.equal(select({ recordSelected: true, recordFailed: true }).record, 'ready');
 });
 test('View and Analyze content are not replaced solely because graph health changes', () => {
   for (const tab of ['view', 'analyze']) {
@@ -71,8 +71,8 @@ test('View and Analyze content are not replaced solely because graph health chan
   }
 });
 test('initial Browse query skeleton releases to the live result clocks after execution starts', () => {
-  assert.equal(select({ initialQueryStarted: false, queryPhase: 'readyToExecute' }).results, 'loading');
-  assert.equal(select({ initialQueryStarted: true, queryPhase: 'readyToExecute' }).results, 'loading');
+  assert.equal(select({ initialQueryStarted: false, queryPhase: 'readyToExecute' }).results, 'ready');
+  assert.equal(select({ initialQueryStarted: true, queryPhase: 'readyToExecute' }).results, 'ready');
   assert.equal(select({ initialQueryStarted: true, queryPhase: 'executing' }).results, 'ready');
 });
 test('composition uses one resizable group and no full-workspace skeleton switch', () => {
@@ -84,8 +84,18 @@ test('composition uses one resizable group and no full-workspace skeleton switch
   assert.doesNotMatch(workspace, /<WorkspaceSkeleton\b/);
   assert.doesNotMatch(workspace, /if\s*\(!urlStateInitialized\)\s*return\s+null/);
   assert.match(workspace, /selectWorkspaceSkeletonBoundaries\(/);
-  assert.match(workspace, /<RecordLoadingSkeleton\s*\/>/);
-  assert.match(workspace, /urlStateInitialized && endpointReadyForQuery && personalWidgets\.map/);
+  assert.doesNotMatch(workspace, /<RecordLoadingSkeleton\s*\/>/);
+  assert.doesNotMatch(workspace, /<AppbarLoadingSkeleton\s*\/>/);
+  assert.doesNotMatch(workspace, /<RibbonLoadingSkeleton\s*\/>/);
+  assert.match(workspace, /<AppBarSection workspace=\{workspace\} \/>/);
+  assert.match(workspace, /<RightCanvasPanel workspace=\{workspace\} \/>/);
+  // An anchor from the prior Browse scope must be checked against the current
+  // authoritative tree before its Personal listener mounts on Bookmarks/History.
+  assert.match(workspace, /urlStateInitialized && endpointReadyForQuery && personalWidgets\.filter\(\(widget\) =>/);
+  assert.match(workspace, /activeTransportedFacets\(queryTree\)/);
+  assert.match(workspace, /candidate\.id === widget\.anchor\?\.id && candidate\.parentId === widget\.anchor\.parentId/);
+  assert.match(workspace, /candidate\.path\.every\(\(hop, index\) => hop === widget\.anchor\?\.path\[index\]\)/);
+  assert.match(workspace, /\}\)\.map\(\(widget\) => \(\s*<PersonalWidgetQueryListener/);
   assert.match(view, /<ProviderCatalogLoadingSkeleton\b/);
   assert.match(appbar, /Loading graph servers/);
 });
@@ -135,21 +145,23 @@ test('loading left region uses live pane mode, and navigation remains available 
   const pane = fs.readFileSync(path.join(root, 'src/canvas/workspace-skeleton.tsx'), 'utf8');
   assert.match(workspace, /facetsLoading: leftPaneLoading/);
   assert.match(workspace, /facetContentPresent: leftPaneContentPresent/);
-  assert.match(workspace, /pane=\{defaultLeftTab\}/);
+  assert.match(workspace, /pane=\{restoringLeftPane\}/);
   assert.match(workspace, /onShowFilters=\{commitConfigureFacetChanges\}/);
-  assert.match(pane, /widgets\.map\(widget\s*=>\s*<SkeletonFacet/);
+  assert.match(pane, /widgets\.map\(widget\s*=>\s*pane === "facets"/);
+  assert.match(pane, /<SkeletonConfigureSection key=\{widget.key\}/);
+  assert.match(pane, /<SkeletonFacet key=\{widget.key\}/);
   assert.doesNotMatch(pane, /<SkeletonFacet title="Properties"/);
   assert.doesNotMatch(pane, /<SkeletonFacet title="Categories"/);
-  assert.match(pane, /onConfigureProperties/);
-  assert.match(pane, /onConfigureRoles/);
+  assert.match(fs.readFileSync(path.join(root, 'src/canvas/left/pane-navigation.tsx'), 'utf8'), /!restoring && showConfigureProperties/);
+  assert.match(fs.readFileSync(path.join(root, 'src/canvas/left/pane-navigation.tsx'), 'utf8'), /!restoring && showConfigureRoles/);
 });
 
 test('a green graph server stays healthy while auto-fill discovery is pending', () => {
   const value = select({ graphPhase: 'ready', queryPhase: 'waitingForServer',
     endpointReady: true, discoveryPending: true, initialQueryStarted: false });
   assert.equal(value.graphSelector, 'ready');
-  assert.equal(value.facets, 'loading');
-  assert.equal(value.results, 'loading');
+  assert.equal(value.facets, 'ready');
+  assert.equal(value.results, 'ready');
 });
 
 test('a timed-out graph auto-fill does not turn a healthy server, facet, or results region into an error', () => {
@@ -158,7 +170,7 @@ test('a timed-out graph auto-fill does not turn a healthy server, facet, or resu
   assert.equal(value.graphSelector, 'ready');
   assert.equal(value.facets, 'ready');
   // The existing FCT pipeline owns loading and results; auto-fill is advisory.
-  assert.equal(value.results, 'loading');
+  assert.equal(value.results, 'ready');
   assert.equal(value.record, 'ready');
   assert.equal(select({ graphPhase: 'ready', queryPhase: 'executing',
     endpointReady: true, discoveryFailed: true }).results, 'ready');
@@ -173,9 +185,9 @@ test('disabling auto-fill returns to ordinary FCT view without an XState health 
 test('degraded graph overrides a stale Record loading or failure state, but a healthy server restores the live pane', () => {
   const offline = select({ graphPhase: 'unavailable', endpointReady: false, endpointFailed: true,
     recordSelected: true, recordLoading: true, recordFailed: true });
-  assert.deepEqual([offline.facets, offline.results, offline.record], ['degraded', 'degraded', 'degraded']);
+  assert.deepEqual([offline.facets, offline.results, offline.record], ['ready', 'ready', 'ready']);
   const online = select({ graphPhase: 'ready', endpointReady: true, recordSelected: true, recordLoading: true });
-  assert.equal(online.record, 'loading');
+  assert.equal(online.record, 'ready');
 });
 
 test('degraded panes keep Graphs, zero counts, group-by and a static null Record', () => {
@@ -199,5 +211,5 @@ test('retrying a failed graph retains zero-data furniture instead of reentering 
   const checking = select({ graphPhase: 'checking', queryPhase: 'waitingForServer', endpointReady: false,
     endpointFailed: false, recordSelected: true, recordLoading: true });
   assert.equal(checking.graphSelector, 'loading');
-  assert.deepEqual([checking.facets, checking.results, checking.record], ['degraded','degraded','degraded']);
+  assert.deepEqual([checking.facets, checking.results, checking.record], ['ready','ready','ready']);
 });

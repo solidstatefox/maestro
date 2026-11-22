@@ -1,4 +1,5 @@
 "use client";
+import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** SHACL-selected Personal facet providers are discovered, validated and
  * approval-filtered exclusively in the browser and the user's RDF graphs. */
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
@@ -21,7 +22,7 @@ export async function discoverClientFacetProviders(
 ):Promise<ProviderMatches>{
   const properties=unique(input.properties.filter(valid)).slice(0,200);
   if(!properties.length)return {temporal:[],numeric:[],tags:[]};
-  const ctx=await personalContext(),graph=`${ctx.base}/shacl/policies`,ontology=`${ctx.base}/ontology-cache`;
+  const ctx=await personalContext(),graph=`${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`,ontology=`${resolveGraph(GRAPH.ONTOLOGY_CACHE, ctx.base)}`;
   const values=properties.map(value=>`<${value}>`).join(" ");
   const prefixes=`PREFIX mui: <${MUI}> PREFIX sh: <${SH}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>`;
   // Start the Tag Cloud lookup immediately. This provider is structurally

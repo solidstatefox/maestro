@@ -1,8 +1,9 @@
 "use client";
 /** Personal RDF reads and updates are constructed in the SPA.  The existing
  * /proxy/api/sparql HTTP middleware forwards SPARQL to Virtuoso. */
-import { graphForPrefix, personalReadEndpoint, loadPersonalAuthSession, type PersonalAuthSession } from "@/lib/personal-auth";
+import { graphForPrefix, personalWriteEndpoint, loadPersonalAuthSession, type PersonalAuthSession } from "@/lib/personal-auth";
 import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
+import { personalRequestHeaders } from "@/lib/client-personal-request";
 import { maestroQueryFetch } from "@/lib/client-query-cache";
 /** Personal-store transport observations update the existing graph-server dropdown.
  * No credentials, query text, or response body is broadcast. */
@@ -21,16 +22,16 @@ export async function personalContext():Promise<PersonalContext> {
   if(!session?.graphStore||!session.graphPrefix||!session.authHeader)
     throw new Error("Log in to use the personal graph server.");
   const base=graphForPrefix(session.graphPrefix);
-  const endpoint=personalReadEndpoint(session);
+  const endpoint=personalWriteEndpoint(session);
   return {session,base,addr:`${base}@${endpoint}`};
 }
 async function perform(input:{query?:string;update?:string;addr?:string;bookmarkQueryXml?:string;personalRead?:boolean},signal?:AbortSignal, requestSource?:string):Promise<Record<string,unknown>> {
   const ctx=await personalContext();
   const address=input.addr??ctx.addr;
-  const response=await (requestSource ? maestroQueryFetch : fetch)("/proxy/api/sparql",{
+  const response=await maestroQueryFetch("/proxy/api/sparql",{
     method:"POST",cache:"no-store",credentials:"same-origin",signal,
-    headers:{"Content-Type":"application/json","Accept":"application/json",
-      ...(requestSource ? {"x-maestro-debug-source":requestSource,"x-maestro-debug-component":"StatusFacet"} : {})},
+    headers:{"Content-Type":"application/json","Accept":"application/json", ...personalRequestHeaders(ctx.session),
+      ...(requestSource ? {"x-maestro-debug-source":requestSource.startsWith("urn:") ? requestSource : `urn:maestro:component:${requestSource}`,"x-maestro-debug-component":requestSource} : {})},
     body:JSON.stringify({...input,addr:input.addr??ctx.addr}),
   });
   // A successful personal SELECT/UPDATE is fresh evidence of availability;

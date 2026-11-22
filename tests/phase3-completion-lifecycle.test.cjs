@@ -12,6 +12,10 @@ const take = async (classes, contextProviders) => {
   const module={exports:{}};
   const code=ts.transpileModule(source('src/lib/client-personal-perspectives.ts'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
   const mocks = {
+    '@/lib/constants/graphs':{ GRAPH:{SHACL_POLICIES:'shacl-policies',STATUS:'status'}, resolveGraph:(key,base)=>base+'/'+(key==='shacl-policies'?'shacl/policies':key) },
+    '@/lib/client-query-cache': {maestroQueryFetch:async()=>{
+      throw Error('Unexpected record probe during query-context discovery');
+    }},
     '@/lib/client-personal-sparql':{
       personalContext:async()=>({base:'https://personal.example'}),
       selectPersonal:async(query)=>{
@@ -59,9 +63,20 @@ test('autocomplete portaled popup does not close on pointer exit and matching al
   assert.doesNotMatch(ui,/<ComboboxContent[^>]+onMouseLeave/);
   assert.match(ui,/createRootUriAutocompleteQuery\(prefix, addr, settings, propertyUris\)/);
 });
-test('query hover menu never fabricates a zero queue position',()=>{
+test('query hover menu reports only observed browser slots and proxy lane addresses',()=>{
   const ui=source('src/canvas/top/appbar-pane.tsx');
-  assert.match(ui,/query\.serverQueueLaneIndex/);
-  assert.match(ui,/query\.queueIndex > 0 \? `browser\.\$\{query\.queueIndex\}` : "—"/);
+  // A projected proxy address requires a positive proxy queue index and
+  // both lane coordinates supplied by the proxy telemetry.
+  assert.match(ui,/query\.serverQueueIndex && query\.serverQueueIndex > 0 && query\.serverQueueLane &&/);
+  assert.match(ui,/query\.serverQueueLaneNumber && query\.serverQueueLanePosition/);
+  assert.match(ui, /`\$\{lane\}\$\{query\.serverQueueLaneNumber\}:\$\{query\.serverQueueLanePosition\} · \$\{query\.serverQueueLane\}`/);
+  // Browser waiting ordinals are local to that queue, not a synthetic rank
+  // combining browser and proxy scheduler positions.
+  assert.match(ui,/query\.state === "queued" && query\.queueIndex > 0/);
+  assert.match(ui,/`B:\$\{query\.queueIndex\} · browser`/);
+  assert.doesNotMatch(ui,/browser\.\$\{query\.queueIndex\}/);
+  // Missing telemetry must not display a fabricated zero lane or queue slot.
+  assert.match(ui,/return \{ text: "Browser admitted"/);
+  assert.match(ui,/return \{ text: "Preparing"/);
   assert.doesNotMatch(ui,/query\.queueIndex > 0 \? query\.queueIndex : "0"/);
 });

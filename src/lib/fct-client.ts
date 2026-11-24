@@ -133,7 +133,7 @@ export async function fctStatusFacet(liveXml: string, signal?: AbortSignal) {
     const response = await cachedFetchFct("/proxy/api/sparql", {
       method: "POST", credentials: "same-origin", cache: "no-store", signal,
       headers: { "Content-Type": "application/json", "Accept": "application/json",
-        "x-maestro-debug-source": "status-facet-remote", "x-maestro-debug-component": "StatusFacet" },
+        "x-maestro-debug-source": "urn:maestro:component:status-facet-remote", "x-maestro-debug-component": "StatusFacet" },
       body: JSON.stringify({ addr: sourceAddr, query: compiled.query }),
     });
     const raw = await response.text();

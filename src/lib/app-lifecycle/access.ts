@@ -16,20 +16,28 @@ export type AccessContext = {
   verificationPending: boolean;
   bookmarkExecutor: BookmarkCheckExecutor | null;
   loginPending: boolean;
+  challengeResponsePending: boolean;
+  initializationPulse: boolean;
   policyStage: "unavailable" | "seeding" | "verifying" | "ready" | "failed";
   policyError: string;
+  /** Last completed protected HTTP request, separate from graph-policy readiness. */
+  authState: "unknown" | "success" | "rejected" | "degraded";
+  authResponseStatus: number | null;
+  authResponseAt: number;
 };
 export type AccessEvent =
   | { type: "LOGIN_ACTIVITY"; pending: boolean }
+  | { type: "AUTH_CHALLENGE_SENT" }
   | { type: "SESSION_OBSERVED"; restored: boolean; sessionKey: string }
   | { type: "QUERY_CHANGED"; queryKey: string }
+  | { type: "AUTH_STATUS_OBSERVED"; sessionKey: string; state: "success" | "rejected" | "degraded"; status: number | null; at: number }
   | { type: "POLICY_STATUS_OBSERVED"; sessionKey: string; stage: "seeding" | "verifying" | "ready" | "failed"; error?: string }
   | { type: "BOOKMARK_CHECK_REQUESTED"; queryKey: string; sessionKey: string; execute: BookmarkCheckExecutor }
   | { type: "BOOKMARK_CONFIRMED"; queryKey: string; bookmarkId: string }
   | { type: "BOOKMARK_REVOKED"; queryKey: string };
 
 const initialContext: AccessContext = {
-  sessionKey: "", queryKey: "", bookmark: "unavailable", bookmarkId: "", verificationPending: false, bookmarkExecutor: null, loginPending: false, policyStage: "unavailable", policyError: "",
+  sessionKey: "", queryKey: "", bookmark: "unavailable", bookmarkId: "", verificationPending: false, bookmarkExecutor: null, loginPending: false, challengeResponsePending: false, initializationPulse: false, policyStage: "unavailable", policyError: "", authState: "unknown", authResponseStatus: null, authResponseAt: 0,
 };
 /** A pure context updater, not a reusable XState action. XState infers the
  * precise SESSION_OBSERVED event type at each assign(...) call site. */
@@ -40,7 +48,13 @@ const updateObservedSession = (
   const sessionKey = event.restored ? event.sessionKey : "";
   if (sessionKey === context.sessionKey) return {};
   return { sessionKey, bookmark: sessionKey ? "checking" : "unavailable", bookmarkId: "", verificationPending: false, bookmarkExecutor: null,
-    policyStage: sessionKey ? "verifying" : "unavailable", policyError: "" };
+    policyStage: sessionKey ? "verifying" : "unavailable", policyError: "",
+    initializationPulse: Boolean(sessionKey && !context.sessionKey && context.initializationPulse),
+    // Carry the successful Connect response into the newly observed session;
+    // this is an HTTP observation, never a grant of personal-store readiness.
+    ...(!context.sessionKey && sessionKey && context.loginPending && context.authState === "success"
+      ? { authState: context.authState, authResponseStatus: context.authResponseStatus, authResponseAt: context.authResponseAt }
+      : { authState: "unknown" as const, authResponseStatus: null, authResponseAt: 0 }) };
 };
 
 export const maestroAccessMachine = setup({
@@ -57,15 +71,26 @@ export const maestroAccessMachine = setup({
   initial: "restoring",
   context: initialContext,
   on: {
-    LOGIN_ACTIVITY: { actions: assign(({ event }) => ({ loginPending: event.pending })) },
+    LOGIN_ACTIVITY: { actions: assign(({ context, event }) => ({ loginPending: event.pending, challengeResponsePending: false, initializationPulse: !event.pending && Boolean(context.sessionKey) && context.initializationPulse && (context.policyStage === "seeding" || context.policyStage === "verifying"),
+      ...(event.pending && !context.sessionKey ? { authState: "unknown" as const, authResponseStatus: null, authResponseAt: 0 } : {}) })) },
+    AUTH_CHALLENGE_SENT: { guard: ({context}) => context.loginPending,
+      actions: assign({ challengeResponsePending: true, initializationPulse: true }) },
     SESSION_OBSERVED: [
       { guard: ({ event }) => !event.restored, target: ".restoring", actions: assign(({ context, event }) => updateObservedSession(context, event)) },
       { guard: ({ event }) => !!event.sessionKey, target: ".signedIn", actions: assign(({ context, event }) => updateObservedSession(context, event)) },
       { target: ".signedOut", actions: assign(({ context, event }) => updateObservedSession(context, event)) },
     ],
+    AUTH_STATUS_OBSERVED: {
+      // Connect can finish with 4xx/5xx before a session exists. Observing
+      // that response must not change the session state or capabilities.
+      guard: ({ context, event }) => context.sessionKey === event.sessionKey &&
+        (Boolean(context.sessionKey) || context.loginPending) && event.at >= context.authResponseAt,
+      actions: assign(({ event }) => ({ authState: event.state, authResponseStatus: event.status, authResponseAt: event.at, challengeResponsePending: false })),
+    },
     POLICY_STATUS_OBSERVED: {
-      guard: ({ context, event }) => Boolean(context.sessionKey) && context.sessionKey === event.sessionKey,
-      actions: assign(({ event }) => ({ policyStage: event.stage, policyError: event.error ?? "" })),
+      guard: ({ context, event }) => Boolean(context.sessionKey) && context.sessionKey === event.sessionKey &&
+        (context.policyStage !== "ready" || event.stage === "ready"),
+      actions: assign(({ context, event }) => ({ policyStage: event.stage, policyError: event.error ?? "", initializationPulse: event.stage === "ready" || event.stage === "failed" ? false : context.initializationPulse })),
     },
     QUERY_CHANGED: [
       // Reentering signedIn stops the previous invoked verifier immediately.
@@ -154,10 +179,30 @@ export function selectMaestroCapabilities(snapshot: MaestroAccessSnapshot, input
   // Authentication is necessary but not sufficient: until the graph manifest
   // has been seeded and verified, no personal graph UI may issue reads/writes.
   const policyReady = sessionReady && snapshot.context.policyStage === "ready";
+  const status = snapshot.context.authResponseStatus;
+  const challenge = snapshot.context.challengeResponsePending;
+  const initializing = sessionReady && (snapshot.context.policyStage === "seeding" || snapshot.context.policyStage === "verifying");
+  const userSignal = status !== null && status >= 500 && status < 600 ? "red"
+    : status !== null && status >= 400 && status < 500 && !challenge ? "amber"
+    : challenge || (snapshot.context.initializationPulse && !policyReady && (initializing || snapshot.context.loginPending)) ? "pulsingAmber"
+    : policyReady && status !== null && status >= 200 && status < 300 ? "green"
+    : "amber";
+  const userSignalLabel = challenge ? "401 — awaiting authenticated result"
+    : status !== null && status >= 400 ? `HTTP ${status}`
+    : snapshot.context.policyStage === "failed" ? "Personal initialization failed"
+    : initializing ? "Loading personal store"
+    : userSignal === "green" ? `HTTP ${status} — ready`
+    : snapshot.context.loginPending ? "Connecting"
+    : snapshot.context.authState === "degraded" ? "Personal endpoint request failed" : "No authenticated response yet";
   const queryMatches = Boolean(input.queryKey) && snapshot.context.queryKey === input.queryKey;
   const bookmarked = policyReady && queryMatches && snapshot.context.bookmark === "bookmarked";
   return {
     canUsePersonalStore: policyReady,
+    userSignal, userSignalLabel,
+    authState: snapshot.context.authState,
+    authResponseStatus: snapshot.context.authResponseStatus,
+    challengeResponsePending: snapshot.context.challengeResponsePending,
+    authResponseAt: snapshot.context.authResponseAt,
     // XState is authoritative for every Sheet cache-clearing action.
     canClearCaches: !snapshot.context.loginPending && snapshot.context.policyStage !== "seeding" &&
       snapshot.context.policyStage !== "verifying" && snapshot.value !== "restoring",

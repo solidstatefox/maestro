@@ -27,7 +27,7 @@ export async function readOntologyMetadata(uris: string[], signal?:AbortSignal):
       OPTIONAL { GRAPH ?g { ?class rdfs:subClassOf ?parent . FILTER(isIRI(?parent)) } }
       OPTIONAL { GRAPH ?g { ?class rdfs:isDefinedBy ?ontology . FILTER(isIRI(?ontology)) } }
       OPTIONAL { GRAPH ?g { ?ontology a owl:Ontology . OPTIONAL { ?ontology rdfs:label ?ontologyLabel } } }
-    }`,ctx,signal);
+    }`,ctx,signal,"client-ontology-metadata:readOntologyMetadata");
   const metadata=new Map<string,OntologyClassMetadata>();
   for (const row of items) {
     const uri=row.class?.value??"";if(!requested.includes(uri))continue;
@@ -48,7 +48,7 @@ export async function readOntologyMetadata(uris: string[], signal?:AbortSignal):
           FILTER(?middle != ?class && ?middle != ?candidateParent)
           GRAPH ?g { ?class rdfs:subClassOf+ ?middle . ?middle rdfs:subClassOf+ ?candidateParent }
         }
-      }`,ctx,signal);
+      }`,ctx,signal,"client-ontology-metadata:readOntologyMetadata");
     const parents=new Map<string,string[]>();
     for(const row of candidates){const child=row.class?.value??"",parent=row.candidateParent?.value??"";
       if(!requested.includes(child)||!requested.includes(parent)||child===parent)continue;

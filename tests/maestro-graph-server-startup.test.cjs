@@ -65,7 +65,13 @@ test('the dropdown is released by directory hydration, not the presence of addr'
   const controller=read('src/canvas/controllers/graph-servers.ts');
   assert.match(menu,/!graphServerDirectoryHydrated \? \(/);
   assert.doesNotMatch(menu,/!graphRegistryReady \? \(/);
-  assert.match(menu,/disabled=\{fctEndpoints\.length === 0\}/);
+  // An empty courtesy registry stays interactive only when discovery failed,
+  // so users can open the hydrated dropdown and retry. No server is selected
+  // or implied solely by a nonempty FCT addr.
+  assert.match(menu,/disabled=\{fctEndpoints\.length === 0 && !endpointMenuError\}/);
+  assert.match(menu,/endpointMenuError && <div role="alert"/);
+  assert.match(menu,/Retry courtesy discovery/);
+  assert.match(menu,/Saved Shared servers remain usable/);
   assert.match(controller,/setGraphServerDirectoryHydrated\(true\)/);
 });
 test('addressed startup helper builds an empty FCT query without copying old filters',()=>{

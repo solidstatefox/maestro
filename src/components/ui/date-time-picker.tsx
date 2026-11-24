@@ -1,5 +1,6 @@
 "use client";
 
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { useEffect, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
@@ -62,13 +63,13 @@ export function DateTimePicker({ label, value, onChange, minDate, maxDate, disab
             </div>
             <div className="mt-3 flex items-center gap-2 border-t pt-3 text-xs">
               <span className="text-muted-foreground">Time</span>
-              <select aria-label={`${label} hour`} className="rounded-md border bg-background px-2 py-1" value={hours} onChange={event=>{setHours(event.target.value);if(selected)emit(selected,event.target.value,minutes);}}>
+              <MaestroSelect aria-label={`${label} hour`} className="rounded-md border bg-background px-2 py-1" value={hours} onChange={event=>{setHours(event.target.value);if(selected)emit(selected,event.target.value,minutes);}}>
                 {Array.from({length:24},(_,i)=><option key={i} value={pad(i)}>{pad(i)}</option>)}
-              </select>
+              </MaestroSelect>
               <span>:</span>
-              <select aria-label={`${label} minute`} className="rounded-md border bg-background px-2 py-1" value={minutes} onChange={event=>{setMinutes(event.target.value);if(selected)emit(selected,hours,event.target.value);}}>
+              <MaestroSelect aria-label={`${label} minute`} className="rounded-md border bg-background px-2 py-1" value={minutes} onChange={event=>{setMinutes(event.target.value);if(selected)emit(selected,hours,event.target.value);}}>
                 {Array.from({length:60},(_,i)=><option key={i} value={pad(i)}>{pad(i)}</option>)}
-              </select>
+              </MaestroSelect>
             </div>
           </Popover.Popup>
         </Popover.Positioner>

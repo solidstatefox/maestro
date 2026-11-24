@@ -93,8 +93,8 @@ test('composition uses one resizable group and no full-workspace skeleton switch
   // authoritative tree before its Personal listener mounts on Bookmarks/History.
   assert.match(workspace, /urlStateInitialized && endpointReadyForQuery && personalWidgets\.filter\(\(widget\) =>/);
   assert.match(workspace, /activeTransportedFacets\(queryTree\)/);
-  assert.match(workspace, /candidate\.id === widget\.anchor\?\.id && candidate\.parentId === widget\.anchor\.parentId/);
-  assert.match(workspace, /candidate\.path\.every\(\(hop, index\) => hop === widget\.anchor\?\.path\[index\]\)/);
+  assert.match(workspace, /sameTransportedFacetIdentity\(candidate, widget\.anchor\)/);
+  assert.doesNotMatch(workspace, /hop === widget\.anchor\?\.path\[index\]/);
   assert.match(workspace, /\}\)\.map\(\(widget\) => \(\s*<PersonalWidgetQueryListener/);
   assert.match(view, /<ProviderCatalogLoadingSkeleton\b/);
   assert.match(appbar, /Loading graph servers/);

@@ -11,7 +11,7 @@ const pages = read("src/components/ui/record-value-pages.tsx");
 const bridge = read("src/components/maestro-xslt-components.tsx");
 
 test("EURIO Project uses explicit domain labels and retains original RDF predicates", () => {
-  for (const name of ["Cost", "Funded by", "Research fields", "EU contribution", "Project ID", "CORDIS RCN", "Signature date"]) {
+  for (const name of ["Cost", "Funding", "Research fields", "EU contribution", "Project ID", "CORDIS RCN", "Signature date"]) {
     assert.ok(xsl.includes(`'${name}'`), `missing hardcoded domain label ${name}`);
   }
   assert.match(xsl, /name="fmt:property-label"[\s\S]*?<xsl:choose>/);
@@ -38,7 +38,7 @@ test("Results follow narrative in their own section, with 5 / 10 / 20 pagination
   assert.ok(narrative >= 0 && abstracts > narrative && descriptions > abstracts && extra > descriptions && results > extra && details > results);
   assert.ok(results > xsl.indexOf('</section>', narrative), "Results must be outside narrative in their own section");
   assert.match(xsl, /<section id="eu-project-results-section"/);
-  assert.match(xsl, /<h3 id="eu-project-results-title"[^>]*>Findings and Results<\/h3>/);
+  assert.match(xsl, /<h3 id="eu-project-results-title"[^>]*>Deliverables<\/h3>/);
   assert.match(xsl, /<RecordValuePages id="eu-project-results-list" pageSize="5" maxPageSize="20" pageSizeSelect="true" listTag="ol"/);
   assert.match(xsl, /<\/RecordValuePages>/);
   assert.match(xsl, /id="eu-project-result-link-\{\$n\}"[^>]+rel="\{\$resultPredicate\}" resource="\{\$resultUri\}"/);
@@ -46,7 +46,7 @@ test("Results follow narrative in their own section, with 5 / 10 / 20 pagination
   assert.match(pages, /const choices = \[5, 10, 20\]\.filter/);
   assert.match(pages, /Math\.min\(cap, Math\.floor\(pageSize\)\)/);
   assert.match(pages, /setPage\(Math\.floor\(start \/ selected\)\)/);
-  assert.match(pages, /<select id=\{`\$\{id \?\? "record"\}-page-size`\} aria-label="Results per page"/);
+  assert.match(pages, /<MaestroSelect id=\{`\$\{id \?\? "record"\}-page-size`\} aria-label="Results per page"/);
   assert.match(pages, /<Button type="button" variant="outline" size="icon-sm"/);
   assert.match(pages, /Page \{current \+ 1\} of \{pages\}/);
   assert.match(pages, /const ListContainer = isResultList \? "ol" : "div"/);
@@ -73,7 +73,7 @@ test("plain-language administrative status replaces technical legends", () => {
   assert.doesNotMatch(xsl, /Blue: elapsed|muted: remaining scheduled duration|duration and end date are recorded project fields/);
 });
 
-test("both RDF Record implementations contain the exact production stylesheet", () => {
+test("the RDF Record implementation contains the exact production stylesheet", () => {
   const embedded = `mui:templateContent """${xsl.replace(/\\/g, "\\\\")} """`.replace(/ """$/, '"""');
-  assert.equal(ttl.split(embedded).length - 1, 2);
+  assert.equal(ttl.split(embedded).length - 1, 1);
 });

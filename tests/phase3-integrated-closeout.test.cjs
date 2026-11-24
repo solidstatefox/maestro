@@ -92,10 +92,10 @@ test('Role value requests depend on the serialized FCT query, not a transient tr
   const source=fs.readFileSync(path.join(root,'src/canvas/left/filter.tsx'),'utf8');
   // The serialized FCT XML remains the query identity; the explicit retry
   // epoch is an independent request trigger, not the transient tree object.
-  assert.match(source,/\[uri, widgetQueryXml, roleOrderLikeGroups, endpointReady, refreshRevision, retryRevision\]/);
+  assert.match(source,/\[uri, widgetQueryXml, endpointReady, refreshRevision, retryRevision\]/);
   assert.match(source,/useMaestroComponentRetry\(`personal-role:\$\{uri\}`\)/);
   assert.match(source,/componentRetryHeaders\(retryRevision\)/);
-  assert.doesNotMatch(source,/\[uri, widgetQueryXml, tree, roleOrderLikeGroups/);
+  assert.doesNotMatch(source,/\[uri, widgetQueryXml, tree, endpointReady/);
 });
 
 test('bookmarked Status counts and query inspector stay bound to matching FCT scope', () => {

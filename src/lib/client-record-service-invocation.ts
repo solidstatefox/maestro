@@ -41,7 +41,7 @@ SELECT ?endpoint ?method ?inputXslt ?outputXslt ?requires ?queryParam ?paramName
     OPTIONAL { <${operation}> svc:extract ?param . ?param svc:name ?paramName ; svc:pointer ?pointer . OPTIONAL { ?param svc:format ?bindingFormat } }
   }
 } LIMIT 150`;
-  const rows=await selectPersonal(query,ctx,signal);
+  const rows=await selectPersonal(query,ctx,signal,"client-record-service-invocation:describeOperation");
   if(!rows.length)throw new Error("Service operation is not described in the personal policy graph.");
   const first=rows[0], op:Operation={uri:operation,endpoint:first.endpoint?.value??"",method:first.method?.value??"",
     inputXslt:first.inputXslt?.value??"",outputXslt:first.outputXslt?.value??"",requires:[],queryParams:[],extracts:[]};

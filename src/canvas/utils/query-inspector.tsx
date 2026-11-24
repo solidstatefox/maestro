@@ -1,4 +1,6 @@
 "use client";
+import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
+
 import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useEffect, useState } from "react";
@@ -62,8 +64,8 @@ export function QueryInspectorButton({
     const operation = new AbortController();
     setExecution({ code: "", error: "", loading: true });
     try {
-      const response = await fetch("/proxy/api/sparql", { method: "POST", cache: "no-store",
-        headers: { "Content-Type": "application/json" }, signal: operation.signal,
+      const response = await attributedSparqlFetch("/proxy/api/sparql", { method: "POST", cache: "no-store",
+        headers: {"x-maestro-debug-source":"urn:maestro:component:QueryInspector","x-maestro-debug-component":"QueryInspector", "Content-Type": "application/json" }, signal: operation.signal,
         body: JSON.stringify({ query: displayedCode, addr: displayedExecutionAddr }) });
       const value = await response.json();
       if (!response.ok) throw new Error(typeof value.error === "string" ? value.error : `SPARQL HTTP ${response.status}`);
@@ -115,7 +117,7 @@ export function QueryInspectorButton({
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>{displayedFilename} · {displayedLanguage.toUpperCase()}</span>
               {displayedLanguage === "sparql" && displayedExecutionAddr && <button type="button" onClick={() => void execute()} disabled={execution.loading || !/\b(?:SELECT|ASK)\b/i.test(displayedCode)}
-                className="rounded border border-input px-3 py-1 text-foreground hover:bg-accent disabled:opacity-50">{execution.loading ? "Executing…" : "Execute"}</button>}
+                className="rounded border border-input px-3 py-1 text-foreground hover:bg-accent disabled:opacity-50">{execution.loading ? "Executing…" : "Execute Query"}</button>}
             </div>
             {execution.error && <ErrorDetails prefix="Query execution" error={execution.error} />}
             {execution.code && <div className="max-h-44 overflow-auto rounded border p-2"><pre className="whitespace-pre-wrap break-all text-xs">{execution.code}</pre></div>}

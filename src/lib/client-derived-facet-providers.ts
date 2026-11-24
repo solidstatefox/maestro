@@ -18,16 +18,19 @@ export async function discoverApprovedRegexDerivations(property: string,
   const graph = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`;
   const rows = await selectPersonal(`PREFIX mui: <${MUI}> PREFIX sh: <${SH}>
     PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
-    SELECT DISTINCT ?provider ?pattern ?sourceValuePredicate ?resultIri ?fieldLabel ?capture WHERE {
+    SELECT DISTINCT ?provider ?pattern ?splitPattern ?sourceValuePredicate ?resultIri ?fieldLabel ?capture WHERE {
       GRAPH <${graph}> {
-        ?provider a mui:Provider ; mui:accepts ?shape ; mui:sourcePattern ?pattern ; mui:derivedField ?field .
+        ?provider a mui:Provider ; mui:accepts ?shape ; mui:derivedField ?field .
+        OPTIONAL { ?provider mui:sourcePattern ?pattern }
+        OPTIONAL { ?provider mui:splitPattern ?splitPattern }
         OPTIONAL { ?provider mui:sourceValuePredicate ?sourceValuePredicate }
         ?shape a mui:InputShape .
         { ?shape sh:property/sh:path <${property}> }
         UNION { ?shape sh:or/rdf:rest*/rdf:first/sh:property/sh:path <${property}> }
-        ?field mui:resultPredicate ?resultIri ; rdfs:label ?fieldLabel ; mui:capture ?capture .
+        ?field mui:resultPredicate ?resultIri ; rdfs:label ?fieldLabel .
+        OPTIONAL { ?field mui:capture ?capture }
       }
-    } ORDER BY ?provider ?capture LIMIT 100`, ctx, signal);
+    } ORDER BY ?provider ?capture LIMIT 100`, ctx, signal,"client-derived-facet-providers:discoverApprovedRegexDerivations");
   const candidates = [...new Set(rows.map(row => row.provider?.value || "").filter(validIri))];
   if (!candidates.length) return [];
   const approved = new Set((await readClientPolicyApprovals(candidates, signal))
@@ -37,10 +40,16 @@ export async function discoverApprovedRegexDerivations(property: string,
     if (!approved.has(row.provider?.value || "")) continue;
     const iri=row.resultIri?.value || "", label=row.fieldLabel?.value || "",
       pattern=row.pattern?.value || "", capture=row.capture?.value || "";
+    const splitPattern = row.splitPattern?.value || "";
     const sourceValuePredicate = row.sourceValuePredicate?.value || "";
-    if (!validIri(iri) || !label.trim() || !pattern || pattern.length > 2000 || !/^[1-9]$/.test(capture) ||
+    if (!validIri(iri) || !label.trim() ||
         (sourceValuePredicate && !validIri(sourceValuePredicate))) continue;
-    fields.push({iri,label,pattern,capture,...(sourceValuePredicate ? {sourceValuePredicate} : {})});
+    const metadata = {iri, label, ...(sourceValuePredicate ? {sourceValuePredicate} : {})};
+    if (splitPattern && splitPattern.length <= 2000 && !pattern) {
+      fields.push({...metadata, mode:"split", splitPattern});
+    } else if (pattern && pattern.length <= 2000 && /^[1-9]$/.test(capture)) {
+      fields.push({...metadata, mode:"regex", pattern, capture});
+    }
   }
   return [...new Map(fields.map(field => [field.iri,field] as const)).values()];
 }

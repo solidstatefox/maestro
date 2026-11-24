@@ -5,7 +5,7 @@ import type { DiscoveredViewProvider } from "@/lib/personal-sparql-reads";
  * session aborts a pending discovery; a late result cannot replace a new one. */
 type Executor = (signal: AbortSignal) => Promise<DiscoveredViewProvider[]>;
 type Context = { key: string; items: DiscoveredViewProvider[]; error: string; execute: Executor | null };
-type Event = { type: "DISCOVER"; key: string; execute: Executor } | { type: "INACTIVE" };
+type Event = { type: "DISCOVER"; key: string; execute: Executor } | { type: "INACTIVE" } | { type: "CANCEL" };
 const blank = (): Context => ({ key: "", items: [], error: "", execute: null });
 export const maestroViewDiscoveryMachine = setup({
   types: { context: {} as Context, events: {} as Event },
@@ -19,12 +19,12 @@ export const maestroViewDiscoveryMachine = setup({
   },
   states: {
     inactive: {},
-    loading: { invoke: { src: "load", input: ({ context }) => ({ key: context.key, execute: context.execute! }),
+    loading: { on: { CANCEL: { target: "cancelled", actions: assign({ execute: null }) } }, invoke: { src: "load", input: ({ context }) => ({ key: context.key, execute: context.execute! }),
       onDone: { target: "ready", actions: assign(({ event }) => ({ key: event.output.key, items: event.output.items, execute: null, error: "" })) },
       onError: { target: "failed", actions: assign(({ event }) => ({ execute: null,
         error: event.error instanceof Error ? event.error.message : "Could not discover Views." })) },
     } },
-    ready: {}, failed: {},
+    ready: {}, failed: {}, cancelled: {},
   },
 });
 export function createMaestroViewDiscoveryController() {
@@ -38,6 +38,7 @@ export function createMaestroViewDiscoveryController() {
     start() { if (actor) return; actor = create(); subscription = actor.subscribe(next => { snapshot = next; publish(); }); actor.start(); },
     stop() { subscription?.unsubscribe(); subscription = null; actor?.stop(); actor = null; snapshot = create().getSnapshot(); publish(); },
     discover(key: string, execute: Executor) { actor?.send({ type: "DISCOVER", key, execute }); },
+    cancel() { actor?.send({ type: "CANCEL" }); },
     inactive() { actor?.send({ type: "INACTIVE" }); },
     getSnapshot: () => snapshot,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },

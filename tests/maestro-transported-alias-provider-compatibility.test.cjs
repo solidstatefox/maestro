@@ -12,9 +12,11 @@ test("transported ancestor reference is scope-qualified, persisted and projected
   assert.match(source, /export function activeTransportedFacets/);
   assert.match(source, /const resolved = getPath\(index, parent, href\)/);
   assert.match(source, /id: `transported-anchor-\$\{ancestorId\}-\$\{focus\.id\}`/);
-  assert.match(source, /createGroupValuesQuery\(fctQueryTreeApi\.getDataTree\(source\)/);
-  assert.match(groups, /transportedGroupTarget: option\.nodeId/);
-  assert.match(groups, /if \(option\.anchorId\) return projectTransportedGroup/);
+  assert.doesNotMatch(source, /createTransportedFacetQuery|createGroupValuesQuery/);
+  assert.doesNotMatch(groups, /transportedGroupTarget: option\.nodeId/);
+  assert.match(groups, /return createPersonalFacetValuesQuery\(sourceTree, option\.uri, option\.direction, paging,/);
+  assert.match(groups, /option\.anchorId \? option\.nodeId : undefined/);
+  assert.match(groups, /if \(option\.anchorId\) return projectTransportedGroupMember/);
 });
 
 test("viewer-only anchors stay out of the generic provider FCT WHERE snapshot", () => {

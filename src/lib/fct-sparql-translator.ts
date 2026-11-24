@@ -34,6 +34,8 @@ export type CompiledFctQuery = {
   /** Unpaginated datatype distribution over exactly the same facet-value scope.
    * Its existence, unlike paginated LIST/LIST_COUNT rows, is SHACL evidence. */
   datatypeEvidenceQuery?: string;
+  /** Cheap population-scoped ASK; omit aggregate for resource-only properties. */
+  datatypeLiteralProbeQuery?: string;
   /** A literal-focused DESCRIBE projects incoming Roles as SPARQL SELECT triples. */
   describeLiteral?: boolean;
   /** Opt-in bnode closure uses typed SELECT triples in a single response. */
@@ -327,7 +329,7 @@ function compileConstraints(
   subject: SparqlTerm,
   patterns: SparqlPattern[],
   errors: string[],
-  state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null; transportedGroupTarget?: string; focusParent?: { term: SparqlTerm; predicate: string; direction: "forward" | "reverse" }; focusAncestors?: SparqlTerm[]; statusBindings: Array<{ variable: string; uri: string; addr?: string }>; badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }>; grouping: Array<{ subject: SparqlTerm; predicate: SparqlTerm; direction: "forward" | "reverse" }>; relationBindings: Map<string, SparqlTerm>; mergeProjectionNodes?: ReadonlySet<XmlNode>; references?: FctValueReferenceResolver },
+  state: { next: number; target: SparqlTerm | null; targetParent: SparqlTerm | null; focusParent?: { term: SparqlTerm; predicate: string; direction: "forward" | "reverse" }; focusAncestors?: SparqlTerm[]; statusBindings: Array<{ variable: string; uri: string; addr?: string }>; badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }>; grouping: Array<{ subject: SparqlTerm; predicate: SparqlTerm; direction: "forward" | "reverse" }>; relationBindings: Map<string, SparqlTerm>; mergeProjectionNodes?: ReadonlySet<XmlNode>; references?: FctValueReferenceResolver },
   isViewScope = true,
   ancestors: SparqlTerm[] = [variable("s1")],
 ): void {
@@ -382,6 +384,48 @@ function compileConstraints(
       // Provider-generated facets compute a binding from an already bound
       // sibling, never an invented RDF predicate. pid references the spawning
       // relationship's rid; the structure determines the shared query scope.
+      if (node.attributes.derive === "split") {
+        const correlatedSubject = state.references?.subjects.get(node.attributes.id ?? "");
+        if (correlatedSubject) patterns.push({kind:"bind",expression:termExpr(subject),as:variable(correlatedSubject)});
+        const source = state.relationBindings.get(node.attributes.pid || "");
+        const delimiter = node.attributes.splitPattern || "";
+        if (!source || !delimiter || delimiter.length > 2000) {
+          errors.push("Malformed derived split facet: source rid and delimiter pattern are required.");
+          continue;
+        }
+        const sourceValuePredicate = node.attributes.sourceValuePredicate || "";
+        const predicate = sourceValuePredicate ? iri(sourceValuePredicate) : null;
+        if (sourceValuePredicate && !predicate) {
+          errors.push("Malformed derived split facet: invalid source-value predicate.");
+          continue;
+        }
+        const lex = predicate ? variable(`s${state.next++}`) : source;
+        if (predicate) patterns.push({kind:"triple",subject:source,predicate,object:lex});
+        patterns.push({kind:"filter",expression:{kind:"function",name:"isLiteral",args:[termExpr(lex)]}});
+        const normalized = variable(`s${state.next++}`);
+        patterns.push({kind:"bind",as:normalized,expression:{kind:"function",name:"REPLACE",args:[
+          {kind:"function",name:"STR",args:[termExpr(lex)]},termExpr(literalTerm(delimiter)),termExpr(literalTerm(";")),termExpr(literalTerm("i"))]}});
+        const index = variable(`s${state.next++}`);
+        patterns.push({kind:"values",variable:index,values:Array.from({length:64},(_,i)=>({kind:"raw-term",value:String(i)} as SparqlTerm))});
+        const tokenPattern = {kind:"function",name:"CONCAT",args:[termExpr(literalTerm("^(?:[^;]*;){")),
+          {kind:"function",name:"STR",args:[termExpr(index)]},termExpr(literalTerm("}([^;]+)(?:;.*)?$"))]} as SparqlExpression;
+        patterns.push({kind:"filter",expression:{kind:"function",name:"REGEX",args:[termExpr(normalized),tokenPattern]}});
+        const extracted = variable(`s${state.next++}`);
+        patterns.push({kind:"bind",as:extracted,expression:{kind:"function",name:"REPLACE",args:[
+          termExpr(normalized),tokenPattern,termExpr(literalTerm("$1"))]}});
+        const related = variable(`s${state.next++}`);
+        patterns.push({kind:"bind",as:related,expression:{kind:"function",name:"REPLACE",args:[
+          termExpr(extracted),termExpr(literalTerm("^\\s+|\\s+$")),termExpr(literalTerm(""))]}});
+        patterns.push({kind:"filter",expression:binary(">",{kind:"function",name:"STRLEN",args:[termExpr(related)]},termExpr({kind:"raw-term",value:"0"}))});
+        if (node.attributes.rid) state.relationBindings.set(node.attributes.rid, related);
+        if (node.children.some(child=>child.name==="view")) {
+          state.targetParent=subject;
+          state.focusParent={term:subject,predicate:node.attributes.iri || "",direction:"forward"};
+        }
+        compileConstraints(node.children,related,patterns,errors,state,
+          node.children.some(child=>child.name==="view"),[...ancestors,related]);
+        continue;
+      }
       if (node.attributes.derive === "regex") {
         const correlatedSubject = state.references?.subjects.get(node.attributes.id ?? "");
         if (correlatedSubject) patterns.push({kind:"bind",expression:termExpr(subject),as:variable(correlatedSubject)});
@@ -435,7 +479,7 @@ function compileConstraints(
       if (grouped) {
         const viewNearby = nodes.some((sibling) => sibling.name === "view" ||
           ((sibling.name === "property" || sibling.name === "property-of") && sibling.children.some((child) => child.name === "view")));
-        if (!viewNearby && !(state.transportedGroupTarget && state.transportedGroupTarget === node.attributes.id)) {
+        if (!viewNearby) {
           throw new Error(`Malformed FCT Query: group="true" on <${node.name} iri="${node.attributes.iri ?? ""}">` +
             ` id="${node.attributes.id ?? ""}" has no <view> in its immediate scope.`);
         }
@@ -903,8 +947,7 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     focusAncestors?: SparqlTerm[];
     statusBindings: Array<{ variable: string; uri: string; addr?: string }>;
     badgeColumns?: Array<{ colName: string; property: string; direction: "forward" | "reverse"; variable: SparqlTerm }>;
-  grouping: Array<{ subject: SparqlTerm; predicate: SparqlTerm; direction: "forward" | "reverse" }>;
-    transportedGroupTarget?: string;
+    grouping: Array<{ subject: SparqlTerm; predicate: SparqlTerm; direction: "forward" | "reverse" }>;
     relationBindings: Map<string, SparqlTerm>;
     mergeProjectionNodes?: ReadonlySet<XmlNode>;
     references?: FctValueReferenceResolver;
@@ -914,7 +957,6 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     targetParent: null,
     statusBindings: [],
     grouping: [],
-    transportedGroupTarget: viewNode?.attributes.transportedGroupTarget,
     relationBindings: new Map(),
     references: referenceResolver,
     mergeProjectionNodes: view === FCT_VIEW_TYPES.MERGE_VALUES ? mergeProjectionNodes : undefined,
@@ -1139,6 +1181,7 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
   };
   let query: string;
   let datatypeEvidenceQuery: string | undefined;
+  let datatypeLiteralProbeQuery: string | undefined;
   // A Personal facet's values are enumerated through a view on a relationship.
   // The datatype aggregate examines the ENTIRE scoped value population before
   // the ordinary LIST/LIST_COUNT output window, without copying LIMIT/OFFSET.
@@ -1167,6 +1210,9 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
     const scopedValues = graphTerm ? [{ kind: "graph", graph: graphTerm,
       patterns: [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)] } satisfies SparqlPattern]
       : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)];
+    datatypeLiteralProbeQuery = buildStatusAsk(directives, [...scopedValues,
+      { kind: "filter", expression: { kind: "function", name: "isLiteral", args: [termExpr(target)] } },
+    ]);
     datatypeEvidenceQuery = buildStatusSelect({ directives,
       projections: [
         { expression: inferred, as: variable("datatype") },
@@ -1826,7 +1872,15 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
     // wrapper resolves the human-readable label; do not call the SQL-only
     // fct_label procedure from inside SPARQL. For an explicitly count-sorted
     const isCountSorted = viewNode?.attributes.sort === "count";
-    const subjectTerm = state.targetParent ?? variable("s1");
+    let subjectTerm = state.targetParent ?? variable("s1");
+    if (view === FCT_VIEW_TYPES.LIST && isCountSorted && viewNode?.attributes.countAncestor !== undefined) {
+      const lexical = viewNode.attributes.countAncestor;
+      const distance = Number(lexical);
+      const path = state.focusAncestors ?? [];
+      if (!/^\d+$/.test(lexical) || !Number.isSafeInteger(distance) || distance < 1 || distance >= path.length)
+        throw new Error("Invalid countAncestor: expected an ancestor of the counted LIST view.");
+      subjectTerm = path[path.length - 1 - distance];
+    }
     query = buildStatusSelect({
       directives,
       distinct: !isCountSorted,
@@ -1868,6 +1922,7 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
     ...(discoverGraph ? { graphDiscoveryHasSourcePattern } : {}),
     statusBindings: state.statusBindings,
     datatypeEvidenceQuery,
+    datatypeLiteralProbeQuery,
     describeLiteral,
     describeExpanded,
     ...(describeBounds ? { describeMaxTriples: describeBounds.maxTriples } : kindFilteredDescribe ? { describeMaxTriples: limit } : {}),

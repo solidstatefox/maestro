@@ -1,4 +1,5 @@
 "use client";
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { describeFctSource } from "@/lib/rdf-source";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
@@ -46,7 +47,7 @@ export interface ViewPageProps {
   onSelectGraphCard?: (uri: string) => void;
 }
 export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider, viewProviderLoading, viewProviderError, viewProviderCount, viewProviderHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, selectedViewUri = "", viewSelectionPending = false, viewRenderError, viewHtml, viewResultCount, onSelectEndpoint, onRefreshEndpoint, onPolicyAction, onOpenResource, onSelectProvider, onBrowse, kanbanGroupingOptions = [], kanbanGroupKey = "none", onKanbanGroupChange, onKanbanMoveCard, graphServerCards = [], selectedGraphCardUri = "", onSelectGraphCard }: ViewPageProps) {
-  const kanbanActive = selectedView?.uri === "gttp://ggg.maestro.ui/provider/kanban" && !viewProvider;
+  const kanbanActive = selectedViewUri === "gttp://ggg.maestro.ui/provider/kanban" && selectedView?.uri === selectedViewUri && !viewProvider;
   // The XSLT still owns cards. Decorate its *sanitized* HTML with trusted,
   // page-bounded selection metadata so native React can implement a toggle
   // without mutating FCT or selecting a different execution server.
@@ -108,10 +109,10 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
                   {kanbanActive && !policyCode && <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm" role="status">
                     <span><strong>Temporary board:</strong> Grouping and drag-and-drop changes are not persisted and do not update RDF or the FCT query.</span>
                     <label className="inline-flex items-center gap-2">Group cards by
-                      <select aria-label="Group Kanban cards by facet" className="rounded-md border bg-background px-2 py-1 text-sm" value={kanbanGroupKey}
+                      <MaestroSelect aria-label="Group Kanban cards by facet" className="rounded-md border bg-background px-2 py-1 text-sm" value={kanbanGroupKey}
                         onChange={event => onKanbanGroupChange?.(event.currentTarget.value)}>
                         {kanbanGroupingOptions.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
-                      </select>
+                      </MaestroSelect>
                     </label>
                   </div>}
                   {requiresBookmark && !policyCode && <div data-policy-bookmark-banner="true" role="status" className="mb-4 rounded-md border border-amber-400/50 bg-amber-100/80 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{BOOKMARK_APPROVAL_MESSAGE.replace("{kind}", PROVIDER_APPROVAL_LABEL[viewProvider ?? "policies"])}</div>}

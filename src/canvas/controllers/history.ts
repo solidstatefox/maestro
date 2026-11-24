@@ -7,6 +7,7 @@ export function useHistoryState() {
   const [deleteHistoryDialogOpen, setDeleteHistoryDialogOpen] = useState(false);
   const [isDeletingHistory, setIsDeletingHistory] = useState(false);
   const [isLoadingHistoryQuery, setIsLoadingHistoryQuery] = useState(false);
+  const [historyLoadingTarget, setHistoryLoadingTarget] = useState<"history"|"bookmarks"|null>(null);
   const [historyHasOlder, setHistoryHasOlder] = useState(false);
   const [historyHasNewer, setHistoryHasNewer] = useState(false);
   const [historyActionItems, setHistoryActionItems] = useState<Array<{ historyId: string; created: string; action: { operator: "+" | "-"; xpath: string; value?: string } | null }>>([]);
@@ -26,6 +27,8 @@ export function useHistoryState() {
     setIsDeletingHistory,
     isLoadingHistoryQuery,
     setIsLoadingHistoryQuery,
+    historyLoadingTarget,
+    setHistoryLoadingTarget,
     historyHasOlder,
     setHistoryHasOlder,
     historyHasNewer,

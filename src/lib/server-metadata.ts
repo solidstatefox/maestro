@@ -1,9 +1,11 @@
+
+import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
 /** Graph server metadata via the one SPARQL endpoint; no server-specific API route. */
 type Binding = { value?: string };
 type SparqlResults = { results?: { bindings?: Record<string, Binding>[] } };
 const select = async (endpoint: string, query: string, signal?: AbortSignal): Promise<SparqlResults> => {
-  const response = await fetch("/proxy/api/sparql", {
-    method: "POST", headers: { "Content-Type": "application/json" },
+  const response = await attributedSparqlFetch("/proxy/api/sparql", {
+    method: "POST", headers: {"x-maestro-debug-source":"urn:maestro:component:GraphServerMetadata","x-maestro-debug-component":"GraphServerMetadata", "Content-Type": "application/json" },
     body: JSON.stringify({ addr: `@${endpoint}`, query }), signal,
   });
   if (!response.ok) throw new Error(`SPARQL HTTP ${response.status}`);

@@ -1,3 +1,5 @@
+
+import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
 /** Read-only, bounded Virtuoso TRANSITIVE connection discovery.
  * The endpoints may be members of the current FCT scope; intermediate nodes
  * are intentionally not assumed to be part of that scope. This service does
@@ -151,7 +153,7 @@ export function shortResourceLabel(uri:string):string {
 }
 
 async function readSparql(endpoint:string,query:string,signal:AbortSignal):Promise<SparqlResponse> {
-  const response=await fetch("/proxy/api/sparql", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({addr:`@${endpoint}`,query}),signal});
+  const response=await attributedSparqlFetch("/proxy/api/sparql", {method:"POST",headers:{"x-maestro-debug-source":"urn:maestro:component:Overview:ConnectionPath","x-maestro-debug-component":"Overview:ConnectionPath","Content-Type":"application/json"},body:JSON.stringify({addr:`@${endpoint}`,query}),signal});
   const json = await response.json().catch(() => null) as (SparqlResponse & {incomplete?:boolean;error?:string;details?:string}) | null;
   if (!response.ok) throw new Error(json?.error || json?.details || `Virtuoso connection query failed (HTTP ${response.status}).`);
   if (json?.incomplete || response.headers.get("X-Maestro-Incomplete") === "true")

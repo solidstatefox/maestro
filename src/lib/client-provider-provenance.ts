@@ -21,7 +21,7 @@ export async function isClientQueryBookmarked(queryXml: string, signal?: AbortSi
   const canonical = canonicalQueryIdentityXml(queryXml);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
   const hash = `sha256:${[...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2,"0")).join("")}`;
-  return personalExists(`GRAPH ${iri(`${resolveGraph(GRAPH.BOOKMARKS, ctx.base)}`)} { ?bookmark <${SCHEMA}> ${quote(hash)} }`, ctx, signal);
+  return personalExists(`GRAPH ${iri(`${resolveGraph(GRAPH.BOOKMARKS, ctx.base)}`)} { ?bookmark <${SCHEMA}> ${quote(hash)} }`, ctx, signal,"client-provider-provenance:isClientQueryBookmarked");
 }
 
 export type ClientPolicyDiscoveryContext = { component: string; queryXml: string; history?: string; record?: string };
@@ -42,7 +42,7 @@ export async function writeClientProviderDiscovery(uris: string[], context: Clie
   const historyValid = Boolean(context.history && context.queryXml.length <= 200_000 &&
     await personalExists(`GRAPH ${iri(`${resolveGraph(GRAPH.HISTORY, ctx.base)}`)} {
       ${iri(context.history!)} a <${HISTORY_VISIT}> ; <${HISTORY_QUERY}> ${quote(context.queryXml)} .
-    }`, ctx, signal));
+    }`, ctx, signal,"client-provider-provenance:writeClientProviderDiscovery"));
   const match = iri(context.record ?? context.component);
   const metadata = [
     `<${MUI}lastRequestedBy> ${match}`,
@@ -56,5 +56,5 @@ export async function writeClientProviderDiscovery(uris: string[], context: Clie
     INSERT { GRAPH ${graph} { ?policy ${metadata.join(" ; ")} . } }
     WHERE { VALUES ?policy { ${policies.map(iri).join(" ")} } BIND(NOW() AS ?now)
       ${remove.map((name,index) => `OPTIONAL { GRAPH ${graph} { ?policy <${MUI}${name}> ?old${index} } }`).join(" ")}
-    }`,signal);
+    }`,signal,undefined,"client-provider-provenance:writeClientProviderDiscovery");
 }

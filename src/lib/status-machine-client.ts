@@ -6,12 +6,12 @@ import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 import { compileStatusMachines, statusMachineRows, statusMachineSelect, type CompiledStatusMachine } from "@/lib/status-machine-runtime";
 
-const cache = new Map<string, { until: number; machines: CompiledStatusMachine[] }>();
+const cache = new Map<string, CompiledStatusMachine[]>();
 export function invalidateClientStatusMachines(): void { cache.clear(); }
 /** Seed the existing XState runtime cache from the authenticated bootstrap SELECT. */
 export function primeClientStatusMachines(addr: string, base: string, machines: CompiledStatusMachine[]): void {
   const graph = resolveGraph(GRAPH.STATE_MACHINES, base);
-  cache.set(`${addr}\u0000${graph}`, { until: Date.now() + 60_000, machines });
+  cache.set(`${addr}\u0000${graph}`, machines);
 }
 
 export async function loadClientStatusMachines(signal?: AbortSignal): Promise<CompiledStatusMachine[]> {
@@ -19,10 +19,10 @@ export async function loadClientStatusMachines(signal?: AbortSignal): Promise<Co
   const graph = resolveGraph(GRAPH.STATE_MACHINES, ctx.base);
   const key = `${ctx.addr}\u0000${graph}`;
   const hit = cache.get(key);
-  if (hit && hit.until > Date.now()) return hit.machines;
-  const rows = await selectPersonal(statusMachineSelect(graph), ctx, signal);
+  if (hit) return hit;
+  const rows = await selectPersonal(statusMachineSelect(graph), ctx, signal,"status-machine-client:loadClientStatusMachines");
   const machines = compileStatusMachines(statusMachineRows(rows));
   if (cache.size > 16) cache.clear();
-  cache.set(key, { until: Date.now() + 60_000, machines });
+  cache.set(key, machines);
   return machines;
 }

@@ -39,6 +39,18 @@
   sh:targetClass <http://data.europa.eu/s66#Result> ;
   sh:nodeKind sh:BlankNodeOrIRI .
 
+<gttp://ggg.maestro.ecosys/eu-data/shape#ProjectPublicationRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · ProjectPublication Record projection"@en ;
+  rdfs:comment "Partial Record compatibility shape, not a source-conformance check."@en ;
+  sh:targetClass eurio:ProjectPublication ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
+<gttp://ggg.maestro.ecosys/eu-data/shape#ProjectReportSummaryRecord> a sh:NodeShape ;
+  rdfs:label "EU Data · ProjectReportSummary Record projection"@en ;
+  rdfs:comment "Partial Record compatibility shape, not a source-conformance check."@en ;
+  sh:targetClass eurio:ProjectReportSummary ;
+  sh:nodeKind sh:BlankNodeOrIRI .
+
 <gttp://ggg.maestro.ecosys/eu-data/shape#RoleRecord> a sh:NodeShape ;
   rdfs:label "EU Data · Participation role Record projection"@en ;
   rdfs:comment "This is a partial-Record compatibility shape, NOT a complete-source conformance check."@en ;

@@ -24,7 +24,7 @@ export async function readClientRecordPage(uris: readonly string[], signal?: Abo
   const rows = await selectPersonal(`SELECT ?s ?status WHERE {
     VALUES ?s { ${unique.map(iri).join(" ")} }
     OPTIONAL { GRAPH ${g} { ?s ${iri(MUI_STATUS)} ?status } }
-  }`, ctx, signal);
+  }`, ctx, signal,"client-status-reads:readClientRecordPage");
   const statuses: Record<string, RecordStatusName[]> = {};
   const assertions = new Map<string, string[]>();
   const hidden = new Set<string>();
@@ -76,7 +76,7 @@ export async function readClientStatusFacetCounts(queryHash: string, signal?: Ab
   };
   const query = (where: string) => `PREFIX mui: <${MUI_NS}>\nSELECT (COUNT(DISTINCT ?c1) AS ?ct) WHERE { ${where} }`;
   const entries = await Promise.all((Object.entries(definitions) as Array<[keyof typeof definitions, string]>).map(async ([name, where]) => {
-    const rows = await selectPersonal(query(where), ctx, signal);
+    const rows = await selectPersonal(query(where), ctx, signal,"client-status-reads:readClientStatusFacetCounts");
     const value = Number(rows[0]?.ct?.value ?? NaN);
     if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Invalid personal ${name} count.`);
     return [name, value] as const;

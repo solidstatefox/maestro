@@ -1,3 +1,5 @@
+
+import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
 /** Optional Virtuoso node-scoring request lifecycle. The machine owns the
  * request and cancels it on query changes, rerun, and view unmount. */
 import {assign,createActor,fromPromise,setup} from "xstate";
@@ -11,7 +13,7 @@ const empty:Context={request:null,result:[],error:""};
 const metricActor=fromPromise(async ({input,signal}:{input:OverviewMetricRequest;signal:AbortSignal})=>{
   const query=makeNodeAnalyticsQuery({uris:input.uris,predicate:input.predicate,metric:input.metric,graph:input.graph,direction:input.direction,nativeEnabled:input.nativeEnabled});
   if(!query || !/^https?:\/\//i.test(input.endpoint)) throw new Error("No valid node-analytics query is available for this scope.");
-  const response=await fetch("/proxy/api/sparql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({addr:`@${input.endpoint}`,query}),signal});
+  const response=await attributedSparqlFetch("/proxy/api/sparql",{method:"POST",headers:{"x-maestro-debug-source":"urn:maestro:component:Overview:Metric","x-maestro-debug-component":"Overview:Metric","Content-Type":"application/json"},body:JSON.stringify({addr:`@${input.endpoint}`,query}),signal});
   if(!response.ok) throw new Error(`Node analytics returned HTTP ${response.status}.`);
   const json=await response.json();
   return readNodeAnalytics(json,input.metric==="wcc"||input.metric==="scc"||input.metric==="community"?120:30);

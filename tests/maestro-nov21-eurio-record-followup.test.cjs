@@ -14,7 +14,7 @@ const pane = file('src/canvas/right/pane.tsx');
 const record = file('src/canvas/right/record.tsx');
 const sanitizer = file('src/lib/download-filename.ts');
 test('Project Results heading, conditional standard pagination', () => {
- assert.match(xsl, /id="eu-project-results-title"[^>]*>Findings and Results<\/h3>/);
+ assert.match(xsl, /id="eu-project-results-title"[^>]*>Deliverables<\/h3>/);
  assert.match(xsl, /<RecordValuePages[^>]+pageSize="5"[^>]+pageSizeSelect="true"/);
  assert.match(pages, /\{pages > 1 && \(/);
 });
@@ -55,9 +55,9 @@ test('exports use Record title and cross-platform sanitized filenames',()=>{
  assert.match(sanitizer,/CON\|PRN\|AUX\|NUL\|COM\[1-9\]\|LPT\[1-9\]/);
  assert.match(sanitizer,/normalize\("NFKC"\)/);
 });
-test('embedded EURIO Record stylesheets remain identical to standalone',()=>{
+test('embedded EURIO Record stylesheet remains identical to standalone',()=>{
  const embedded = `mui:templateContent """${xsl.replace(/\\/g,'\\\\')}"""`;
- assert.equal(ttl.split(embedded).length-1,2);
+ assert.equal(ttl.split(embedded).length-1,1);
 });
 test('literal Record value looks like a link only while Shift-hovered',()=>{
  const css = file('src/app/globals.css');

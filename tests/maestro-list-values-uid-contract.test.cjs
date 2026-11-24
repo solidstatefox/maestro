@@ -64,7 +64,7 @@ test('perspective ribbon has no provider-specific Map discovery and one timer la
   assert.match(ribbon,/clockScope="views"/);
   const discovery=read('src/lib/personal-sparql-reads.ts');
   assert.match(discovery,/sh:or \?conditions/);
-  assert.match(discovery,/maestroQueryFetch\("\/proxy\/api\/sparql"/);
+  assert.match(discovery,/personalAuthenticatedFetch\(session,\s*"\/proxy\/api\/sparql"/);
   const page=read('src/canvas/tab/view/page.tsx');
   assert.doesNotMatch(page,/useMapProviderDefinition|mapProvider/);
 });

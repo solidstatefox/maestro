@@ -3,6 +3,7 @@ import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Personal graph-server registry: browser-owned RDF/SPARQL, separate from the
  * statically reseeded /graph and from the public courtesy endpoints. */
 import { personalContext, selectPersonal, updatePersonal } from "@/lib/client-personal-sparql";
+import { readSessionHydration, updateSessionSnapshot } from "@/lib/client-digest-session";
 import { personalReadEndpoint } from "@/lib/personal-auth";
 import { validGraphServerUrl } from "@/lib/graph-server-directory";
 import type { EndpointOption } from "@/canvas/top/appbar";
@@ -47,7 +48,8 @@ async function insertServer(url: string, label: string, description: string, isP
       ${iri(SCHEMA_URL)} ${iri(url)} ; ${iri(RDFS_LABEL)} ${literal(label.trim())} ;
       ${iri(SCHEMA_DESCRIPTION)} ${literal(description.trim())} ;
       ${iri(DCT_PART)} ${iri(isPersonal ? names.group : names.entries)} .
-  } }`);
+  } }`,undefined,undefined,"client-personal-graph-servers:insertServer");
+  await refreshPersonalGraphServers(ctx.session);
   notify(); return subject;
 }
 export async function addPersonalGraphServer(input: { url: string; label: string; description?: string; personal?: boolean }): Promise<string> {
@@ -70,7 +72,8 @@ export async function ensureLoggedInPersonalServer(): Promise<string> {
       await updatePersonal(`INSERT DATA { GRAPH ${iri(names.graph)} {
         ${iri(existing.uri)} ${iri(RDF_TYPE)} ${iri(PERSONAL_SERVER_TYPE)} ;
           ${iri(DCT_PART)} ${iri(names.group)} .
-      } }`);
+      } }`,undefined,undefined,"client-personal-graph-servers:ensureLoggedInPersonalServer");
+      await refreshPersonalGraphServers(ctx.session);
       notify();
     }
     return existing.uri;
@@ -78,7 +81,19 @@ export async function ensureLoggedInPersonalServer(): Promise<string> {
   return insertServer(url, "Personal SPARQL", "Authenticated personal graph server", true);
 }
 export async function listPersonalGraphServers(signal?: AbortSignal): Promise<PersonalGraphServer[]> {
-  const ctx = await personalContext(); const names = graphNames(ctx.base);
+  const ctx=await personalContext();
+  const saved=await readSessionHydration(ctx.session);
+  signal?.throwIfAborted();
+  return saved.snapshot ? saved.snapshot.servers : fetchPersonalGraphServers(ctx,signal);
+}
+async function refreshPersonalGraphServers(session:Awaited<ReturnType<typeof personalContext>>["session"]):Promise<void>{
+  const ctx=await personalContext();
+  if(ctx.session!==session)throw new Error("Personal user session changed.");
+  const servers=await fetchPersonalGraphServers(ctx);
+  await updateSessionSnapshot(session,{servers});
+}
+async function fetchPersonalGraphServers(ctx:Awaited<ReturnType<typeof personalContext>>,signal?:AbortSignal):Promise<PersonalGraphServer[]> {
+  const names = graphNames(ctx.base);
   const rows = await selectPersonal(`SELECT DISTINCT ?server ?url ?label ?description ?type WHERE { GRAPH ${iri(names.graph)} {
     ?server ${iri(RDF_TYPE)} ${iri(SCHEMA_ENTRYPOINT)} ; ${iri(SCHEMA_URL)} ?url .
     OPTIONAL { ?server ${iri(RDFS_LABEL)} ?label }
@@ -102,7 +117,8 @@ export async function deletePersonalGraphServer(subject: string): Promise<void> 
   const ctx = await personalContext(); const names = graphNames(ctx.base);
   if (!subject.startsWith(`${resolveGraph(GRAPH.GRAPH_SERVERS, ctx.base)}#endpoint-`) || subject.length > 4096 || /[<>\s]/.test(subject))
     throw new Error("Only graph servers added to the active personal store can be deleted.");
-  await updatePersonal(`DELETE WHERE { GRAPH ${iri(names.graph)} { ${iri(subject)} ?predicate ?object } }`);
+  await updatePersonal(`DELETE WHERE { GRAPH ${iri(names.graph)} { ${iri(subject)} ?predicate ?object } }`,undefined,undefined,"client-personal-graph-servers:deletePersonalGraphServer");
+  await refreshPersonalGraphServers(ctx.session);
   notify();
 }
 export function asEndpointOption(entry: PersonalGraphServer): EndpointOption {

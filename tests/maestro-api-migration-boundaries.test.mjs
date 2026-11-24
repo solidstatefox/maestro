@@ -30,8 +30,10 @@ test('Archived root query tree appears as the live Everything/text/value stack',
   // Root-stack deletion now shares the referential-integrity guard used by
   // other Query Tree deletion paths; do not regress to raw deleteNode calls.
   assert.match(controller,/if \(isRootCarrierRow\) \{\s*if \(rootTextOrValue\) updateSearchText\(""\);\s*else if \(topInlineStatus\) guardedDeleteQueryNode\(topInlineStatus\.id\);\s*else if \(topInlineClass\) guardedDeleteQueryNode\(topInlineClass\.id\)/);
-  assert.match(controller,/function guardedDeleteQueryNode\(nodeId:string\):boolean \{[\s\S]*?dependentFctValueReferences\(queryTree,nodeId\)/);
-  assert.match(controller,/if \(dependents\.length\) \{setBlockedReferenceDeletion\(\{nodeId,dependents\}\);return false;\}/);
+  assert.match(controller,/function guardedDeleteQueryNode\(nodeId:string\):boolean \{[\s\S]*?error instanceof FctNodeInUseError/);
+  assert.match(controller,/setBlockedReferenceDeletion\(\{nodeId:error.nodeId,dependents:error.dependents,hrefLabels\}\)/);
+  assert.match(controller, /const resolved = getTransportedQueryTreePath\(ref\.anchorId, ref\.targetId\)/);
+  assert.match(controller, /blockedReferenceDeletion\?\.hrefLabels\[ref\.anchorId\]/);
   assert.match(controller,/<AlertDialogTitle>Cannot delete a node that is in use<\/AlertDialogTitle>/);
 });
 test('IteraCompute key stays in IndexedDB, not URL, FCT query or server registry', () => {

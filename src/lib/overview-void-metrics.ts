@@ -1,3 +1,5 @@
+
+import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
 /** Optional published VoID metrics: graph-wide metadata, never a statistic about an FCT filter. */
 const VOID = "http://rdfs.org/ns/void#";
 export const VOID_METRIC_NAMES = ["triples", "entities", "distinctSubjects", "distinctObjects", "classes", "properties"] as const;
@@ -31,7 +33,7 @@ export async function fetchPublishedVoID(graph: string, endpoint: string, signal
   const predicates = VOID_METRIC_NAMES.map(name => `<${VOID}${name}>`).join(" ");
   const query = `SELECT ?metric ?amount WHERE { <${graph}> ?metric ?amount . VALUES ?metric { ${predicates} } } LIMIT 12`;
   // Reuse the authenticated, bounded Maestro SPARQL transport; do not call Virtuoso SQL procedures or write stats.
-  const response = await fetch("/proxy/api/sparql", {method:"POST", headers:{"Content-Type":"application/json"},
+  const response = await attributedSparqlFetch("/proxy/api/sparql", {method:"POST", headers:{"x-maestro-debug-source":"urn:maestro:component:Overview:VoidMetrics","x-maestro-debug-component":"Overview:VoidMetrics","Content-Type":"application/json"},
     body:JSON.stringify({addr:`@${endpoint}`,query}),signal});
   if (!response.ok) return null;
   return readPublishedVoID(graph, await response.json() as SparqlBindings);

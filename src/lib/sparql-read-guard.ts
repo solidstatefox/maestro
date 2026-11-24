@@ -16,14 +16,18 @@ export function isBoundedReadOnlySparql(query: string, maximumQueryLength: numbe
   // SELECT on the SAME line, as History query SHACL discovery does. SPARQL
   // permits arbitrary whitespace between declarations and the query verb.
   // Keep the DEFINE allowlist unchanged: never accept arbitrary directives.
-  const withoutSafeDirectives = trimmed.replace(
+  // The Record Kinds inspector starts with two diagnostic comment lines.
+  // SPARQL allows such leading comments: strip ONLY complete leading comment
+  // lines for the safety gate; forward the original query unchanged.
+  const withoutHeaderComments = trimmed.replace(/^(?:#[^\r\n]*(?:\r?\n|$)\s*)+/, "");
+  const withoutSafeDirectives = withoutHeaderComments.replace(
     /^(?:(?:DEFINE\s+input:(?:inference|same-as)\s+"(?:\\.|[^"\\])*"\s*)|(?:PREFIX\s+(?:[A-Za-z_][\w.-]*)?:\s*<[^<>\s]*>\s*))+/i,
     "",
   );
   if (!/^(?:SELECT|ASK)\b/i.test(withoutSafeDirectives)) return false;
 
   // Strings and IRI references are data, not SPARQL operators.
-  const executable = trimmed.replace(/<[^>]*>|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
+  const executable = withoutHeaderComments.replace(/<[^>]*>|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
   // A keyword must be a complete bare token. Variables and prefixed local
   // names may legitimately contain any of these words.
   return !/(?<![\w?:$])(?:INSERT|DELETE|LOAD|CLEAR|CREATE|DROP|MOVE|COPY|ADD|SERVICE)(?![\w:-])/i.test(executable);

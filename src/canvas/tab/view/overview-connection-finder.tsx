@@ -1,4 +1,5 @@
 "use client";
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
@@ -55,21 +56,21 @@ export function OverviewConnectionFinder({population,endpoint,graph,scopeKey,dis
     <div className="flex items-center gap-2"><ArrowLeftRight className="size-4 text-blue-600"/><h4 className="text-xs font-semibold">Find connections between resources</h4></div>
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="grid min-w-0 gap-1 text-xs"><span className="text-muted-foreground">From · FCT population</span>
-        <select className="w-full min-w-0 rounded-md border bg-background px-2 py-2" value={validSource?source:""} onChange={event=>{setSource(event.target.value);controller.reset();}}>
+        <MaestroSelect className="w-full min-w-0 rounded-md border bg-background px-2 py-2" value={validSource?source:""} onChange={event=>{setSource(event.target.value);controller.reset();}}>
           {!validSource&&<option value="">Select resource</option>}
           {population.map(item=><option key={item.uri} value={item.uri}>{item.label||shortResourceLabel(item.uri)}</option>)}
-        </select></label>
+        </MaestroSelect></label>
       <label className="grid min-w-0 gap-1 text-xs"><span className="text-muted-foreground">To · FCT population</span>
-        <select className="w-full min-w-0 rounded-md border bg-background px-2 py-2" value={validTarget?target:""} onChange={event=>{setTarget(event.target.value);controller.reset();}}>
+        <MaestroSelect className="w-full min-w-0 rounded-md border bg-background px-2 py-2" value={validTarget?target:""} onChange={event=>{setTarget(event.target.value);controller.reset();}}>
           {!validTarget&&<option value="">Select resource</option>}
           {population.map(item=><option key={item.uri} value={item.uri}>{item.label||shortResourceLabel(item.uri)}</option>)}
-        </select></label>
+        </MaestroSelect></label>
     </div>
     <div className="flex flex-wrap items-end gap-3">
       <label className="grid gap-1 text-xs"><span className="text-muted-foreground">Maximum hops</span>
-        <select className="rounded-md border bg-background px-2 py-2" value={hops} onChange={event=>{setHops(Number(event.target.value));controller.reset();}}>
+        <MaestroSelect className="rounded-md border bg-background px-2 py-2" value={hops} onChange={event=>{setHops(Number(event.target.value));controller.reset();}}>
           {Array.from({length:OVERVIEW_CONNECTION_MAX_HOPS},(_,i)=>i+1).map(value=><option key={value} value={value}>{value}</option>)}
-        </select></label>
+        </MaestroSelect></label>
       <label className="grid min-w-0 flex-1 gap-1 text-xs"><span className="text-muted-foreground">Relationship (optional)</span>
         <input list={listId} value={predicate} onChange={event=>{setPredicate(event.target.value);controller.reset();}} placeholder="Any predicate" className="w-full min-w-0 rounded-md border bg-background px-2 py-2" />
         <datalist id={listId}>{predicates.map(item=><option key={item.uri} value={item.uri} label={item.label}/>)}</datalist>

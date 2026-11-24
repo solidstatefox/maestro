@@ -61,7 +61,7 @@ export function recordGraphServerStatusObservation(endpoint: string, status: End
           ${iri(GRAPH_SERVER_STATUS_STATE)} ${JSON.stringify(status.state)} ;
           ${iri(DCT_CREATED)} ${typed(observedAt, XSD_DATE_TIME)}
           ${status.status === null ? "." : `; ${iri(GRAPH_SERVER_STATUS_CODE)} ${typed(String(status.status), XSD_INTEGER)} .`}
-      } }`);
+      } }`,undefined,undefined,"client-graph-server-status-history:operation");
     } catch (error) {
       const current = latestSaved.get(key);
       if (current?.at === now) latestSaved.delete(key);

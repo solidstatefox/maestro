@@ -12,8 +12,12 @@ test('browser indexes stay browser-local and proxy lane addresses come only from
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
   }).outputText;
   const mod = { exports: {} }; const pendingNetwork = []; const telemetryCallbacks=[];
+  const attribution={exports:{}};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,"../src/lib/sparql-request-attribution.ts"),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:attribution.exports,Headers,Request,URL});
   const mocks = {
+    "@/lib/sparql-request-attribution":attribution.exports,
     '@/lib/client-personal-request': { withPersonalProxyCredentials: async (_url,init)=>({init,authenticated:false}) },
+    '@/lib/personal-session-hint': { observePersonalAuthResponse: response => response },
     './maestro-language': { maestroLanguageHeader: () => 'en' },
     './maestro-concurrency': { readMaestroConcurrency: () => ({proxyConnections:1}) },
     './maestro-query-execution-clock': { maestroQueryClockScope:()=>null },
@@ -29,7 +33,7 @@ test('browser indexes stay browser-local and proxy lane addresses come only from
   });
   const client=mod.exports;let pending=[];
   client.subscribePendingMaestroQueryDetails(xs=>{pending=xs.map(x=>({...x}))});
-  const send=(label)=>client.maestroQueryFetch('/proxy/api/sparql',{method:'POST',body:'ASK {}',headers:{'x-maestro-debug-source':label}});
+  const send=(label)=>client.maestroQueryFetch('/proxy/api/sparql',{method:'POST',body:'ASK {}',headers:{'x-maestro-debug-source':`urn:maestro:component:${label}`,'x-maestro-debug-component':label}});
   const first=send('first'),second=send('second'),third=send('count-third');
   for(let i=0;i<7;i++)await Promise.resolve();
   assert.equal(pending.find(x=>x.label==='second').queueIndex,1);
@@ -117,4 +121,36 @@ test('all changed TypeScript and TSX documents have parse-valid ASTs',()=>{
     const source=ts.createSourceFile(file,read(file),ts.ScriptTarget.Latest,true,file.endsWith('x')?ts.ScriptKind.TSX:ts.ScriptKind.TS);
     assert.deepEqual(source.parseDiagnostics.map(d=>ts.flattenDiagnosticMessageText(d.messageText,' ')),[],file);
   }
+});
+
+
+test('Record SELECT preserves incoming blank-node subjects and empty/language-tagged literal values', async () => {
+  const focus = 'http://dbpedia.org/resource/India';
+  const predicate = 'urn:example:related';
+  const result = { results: { bindings: [
+    { subject: { type: 'bnode', value: 'node42' }, predicate: { type: 'uri', value: predicate }, object: { type: 'uri', value: focus } },
+    { subject: { type: 'uri', value: focus }, predicate: { type: 'uri', value: predicate }, object: { type: 'literal', value: '  India  ', 'xml:lang': 'en' } },
+    { subject: { type: 'uri', value: focus }, predicate: { type: 'uri', value: predicate }, object: { type: 'literal', value: '' } },
+  ] } };
+  const code = ts.transpileModule(read('src/canvas/controllers/record-description-loader.ts'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const mod = { exports: {} };
+  vm.runInNewContext(code, { module: mod, exports: mod.exports, require(name) {
+    if (name === '@/lib/client-query-cache') return { cachedFetchFct: async () => new Response(JSON.stringify(result)) };
+    if (name === '@/lib/proxy-debug') return { proxyDebugHeaders: () => ({}) };
+    if (name === '@/lib/maestro-component-retry') return { componentRetryHeaders: () => ({}) };
+    throw Error(name);
+  }, Response, AbortController, JSON, Map, Set, Promise });
+  const record = await mod.exports.loadRecordDescription({ queryXml: '<query/>', value: focus, termType: 'uri', limit: 100, preferredLanguage: 'en', signal: new AbortController().signal });
+  assert.match(record.xml, /termType="bnode">_:node42</);
+  assert.match(record.xml, /termType="literal" xml:lang="en">  India  </);
+  assert.match(record.xml, /termType="literal"><\/fct:column>/);
+  assert.equal(record.rows.find(r => r.direction === 'property-of').termType, 'bnode');
+  assert.equal(record.rows.find(r => r.direction === 'property-of').value, '_:node42');
+  assert.equal(record.rows.length, 3);
+  const validator = read('src/canvas/right/validator.tsx');
+  assert.match(validator, /subjectType = subjectCell.getAttribute\("termType"\)/);
+  assert.match(validator, /objectCell.getAttributeNS\("http:\/\/www.w3.org\/XML\/1998\/namespace", "lang"\)/);
+  assert.doesNotMatch(validator, /textContent\?\.trim\(/);
+  const shacl = read('src/lib/client-record-shacl.ts');
+  assert.match(shacl, /Record RDF triple \$\{index \+ 1\}/);
 });

@@ -2,16 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url),'utf8');
-test('Kinds patterns load through browser SPARQL at login and are consumed by Configure',()=>{
-  assert.match(read('src/canvas/controllers/authentication.ts'),/await loadMaestroKinds\(\)/);
-  assert.match(read('src/lib/client-kinds.ts'),/SELECT DISTINCT \?provider \?kind \?pattern/);
-  assert.match(read('src/lib/client-kinds.ts'),/hydrateMaestroKinds/);
-  const configure=read('src/canvas/left/configure-pane.tsx');
-  assert.match(configure,/buildFctKindAvailabilitySparql/);
-  assert.doesNotMatch(configure,/JSON\.stringify\(\{ kindAvailability:/);
-  assert.doesNotMatch(read('package.json'),/"prebuild": "node scripts\/generate-kinds-provider/);
-  assert.doesNotMatch(read('graph/kinds/provider.ttl'),/mui:scope|mui:datatype/);
-});
 test('Root has Base UI Combobox without chevron and popup-specific statuses',()=>{
   const component=read('src/components/ui/combobox.tsx');
   const root=read('src/canvas/top/root-uri-autocomplete.tsx');

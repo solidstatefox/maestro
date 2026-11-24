@@ -1,0 +1,30 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix eurio: <http://data.europa.eu/s66#> .
+
+# SPARQL-backed, approved provider: each author token is a real FCT facet value.
+# Splits either official authorList or CORDIS-example author literals on semicolons
+# and the word "and"; commas remain part of names.
+# The generic FCT compiler evaluates the pattern against the source relationship
+# and its transported/structural scope. It does not rewrite the original author list.
+<gttp://ggg.maestro.ecosys/eu-data/provider/result-authors> a mui:Provider, mui:FacetProvider ;
+  rdfs:label "EURIO Research Result · Individual authors"@en ;
+  mui:icon "pickaxe" ;
+  mui:accepts <gttp://ggg.maestro.ecosys/eu-data/provider/result-authors-input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/eu-data/widget/result-authors> ;
+  mui:splitPattern "\\s*;\\s*|\\s+and\\s+" ;
+  mui:derivedField <gttp://ggg.maestro.ecosys/eu-data/derived/result-author> .
+
+<gttp://ggg.maestro.ecosys/eu-data/provider/result-authors-input> a mui:InputShape, sh:NodeShape ;
+  sh:or ( [ sh:property [ sh:path eurio:authorList ] ]
+          [ sh:property [ sh:path eurio:author ] ] ) .
+
+<gttp://ggg.maestro.ecosys/eu-data/widget/result-authors> a mui:FacetWidget ;
+  rdfs:label "Individual authors"@en .
+
+<gttp://ggg.maestro.ecosys/eu-data/derived/result-author> a mui:DerivedFacet ;
+  rdfs:label "Author"@en ;
+  mui:icon "pickaxe" ;
+  mui:resultPredicate <gttp://ggg.maestro.ecosys/eu-data/derived/result#author> .

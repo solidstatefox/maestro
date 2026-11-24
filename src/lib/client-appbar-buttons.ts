@@ -8,6 +8,8 @@ import { serializeFctQuery } from "@/lib/fct-query-serialize";
 import type { FctQueryTree } from "@/lib/fct-query-api";
 import { personalContext, selectPersonal, updatePersonal, personalExists, type PersonalContext } from "@/lib/client-personal-sparql";
 
+import { currentBootstrapButtons, replaceBootstrapButtons } from "@/lib/client-auth-bootstrap";
+
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
 const SCHEMA_URL = "https://schema.org/url";
 const BOOKMARK = "http://www.w3.org/2002/01/bookmark#Bookmark";
@@ -25,7 +27,7 @@ export type AppbarButton = { uri: string; action: string; icon: string; tooltip:
 async function listButtons(ctx: PersonalContext): Promise<AppbarButton[]> {
   const rows = await selectPersonal(`SELECT ?button ?action ?icon ?tooltip ?url ?directUrl WHERE { GRAPH ${graph(ctx)} {
     ?button a <${MUI}AppbarButtonProvider> ; <${MUI}action> ?action ; <${MUI}icon> ?icon ; <${MUI}tooltip> ?tooltip .
-  } OPTIONAL { GRAPH ${bookmarks(ctx)} { ?action <${SCHEMA_URL}> ?url } } OPTIONAL { GRAPH ${graph(ctx)} { ?button <${SCHEMA_URL}> ?directUrl } } } ORDER BY STR(?button)`, ctx);
+  } OPTIONAL { GRAPH ${bookmarks(ctx)} { ?action <${SCHEMA_URL}> ?url } } OPTIONAL { GRAPH ${graph(ctx)} { ?button <${SCHEMA_URL}> ?directUrl } } } ORDER BY STR(?button)`, ctx,undefined,"client-appbar-buttons:listButtons");
   const byId = new Map<string, AppbarButton>();
   for (const b of rows) {
     const uri = b.button?.value ?? "";
@@ -89,7 +91,7 @@ async function ensureProviderBookmarks(ctx: PersonalContext) {
       // Refresh the icon of an existing generated shortcut as well.
       await updatePersonal(`DELETE { GRAPH ${appbarGraph} { ${entry.button} <${MUI}icon> ?oldIcon } }
         INSERT { GRAPH ${appbarGraph} { ${entry.button} <${MUI}icon> "filter" } }
-        WHERE { GRAPH ${appbarGraph} { ${entry.button} a <${MUI}AppbarButtonProvider> ; <${MUI}icon> ?oldIcon } }`);
+        WHERE { GRAPH ${appbarGraph} { ${entry.button} a <${MUI}AppbarButtonProvider> ; <${MUI}icon> ?oldIcon } }`,undefined,undefined,"client-appbar-buttons:ensureProviderBookmarks");
     }
     // 1. Create a real vfct:QueryHistoryVisit at login. The stable ID prevents
     // duplicate visits on refresh, while the first-login creation time persists.
@@ -102,7 +104,7 @@ async function ensureProviderBookmarks(ctx: PersonalContext) {
         <${VFCT}historyStateUrl> ${JSON.stringify(entry.url)} .
     } } WHERE { FILTER NOT EXISTS { GRAPH ${historyGraph} {
       ${entry.historyId} a <${VFCT}QueryHistoryVisit> .
-    } } }`);
+    } } }`,undefined,undefined,"client-appbar-buttons:ensureProviderBookmarks");
     // 2. Bookmark that same History visit using the existing bookmark schema,
     // not a separate synthetic bookmark identity. The canonical hash is what
     // the appbar bookmark toggle and query-favorites/check actually look up.
@@ -132,13 +134,13 @@ async function ensureProviderBookmarks(ctx: PersonalContext) {
         OPTIONAL { GRAPH ${bookmarkGraph} { ${entry.historyId} ?oldPredicate ?oldValue .
           FILTER(?oldPredicate IN (${editable.map(([predicate]) => predicate).join(", ")})) } }
         OPTIONAL { GRAPH ${bookmarkGraph} { ${entry.queryResource} <${RDF}value> ?oldXml } }
-      }`);
+      }`,undefined,undefined,"client-appbar-buttons:ensureProviderBookmarks");
     // Preserve the timestamp of an existing bookmark on subsequent page loads.
     await updatePersonal(`INSERT { GRAPH ${bookmarkGraph} {
       ${entry.historyId} <${DC}created> ${JSON.stringify(loginTimestamp)}^^<${XSD}dateTime> .
     } } WHERE { FILTER NOT EXISTS { GRAPH ${bookmarkGraph} {
       ${entry.historyId} <${DC}created> ?existing .
-    } } }`);
+    } } }`,undefined,undefined,"client-appbar-buttons:ensureProviderBookmarks");
     // 3. Pin the saved History bookmark rather than an unrelated provider URI.
     await updatePersonal(`DELETE { GRAPH ${appbarGraph} { ${entry.button} <${MUI}action> ?oldAction } }
       INSERT { GRAPH ${appbarGraph} {
@@ -146,7 +148,7 @@ async function ensureProviderBookmarks(ctx: PersonalContext) {
           <${MUI}action> ${entry.historyId} ;
           <${MUI}tooltip> ${JSON.stringify(entry.title)} ;
           <${MUI}icon> ${JSON.stringify(entry.icon)} .
-      } } WHERE { OPTIONAL { GRAPH ${appbarGraph} { ${entry.button} <${MUI}action> ?oldAction } } }`);
+      } } WHERE { OPTIONAL { GRAPH ${appbarGraph} { ${entry.button} <${MUI}action> ?oldAction } } }`,undefined,undefined,"client-appbar-buttons:ensureProviderBookmarks");
   }
   return listButtons(ctx);
 }
@@ -159,12 +161,13 @@ export async function manageAppbarButtons(body: {
   bookmark?: string; provider?: string; tooltip?: string; icon?: string;
 }): Promise<{ buttons: AppbarButton[] }> {
   const ctx = await personalContext();
-  if (body.action === "list") return {buttons: await listButtons(ctx)};
-  if (body.action === "ensure-providers") return {buttons: await ensureProviderBookmarks(ctx)};
+  if (body.action === "list") return {buttons: currentBootstrapButtons()};
+  const commit=async(buttons:AppbarButton[])=>{await replaceBootstrapButtons(ctx.session,buttons);return {buttons};};
+  if (body.action === "ensure-providers") return commit(await ensureProviderBookmarks(ctx));
   if (body.action === "remove") {
     if (!body.provider) throw new Error("Provider required");
-    await updatePersonal(`DELETE WHERE { GRAPH ${graph(ctx)} { ${iri(body.provider)} ?p ?o } }`);
-    return {buttons: await listButtons(ctx)};
+    await updatePersonal(`DELETE WHERE { GRAPH ${graph(ctx)} { ${iri(body.provider)} ?p ?o } }`,undefined,undefined,"client-appbar-buttons:manageAppbarButtons");
+    return commit(await listButtons(ctx));
   }
   if (body.action !== "add" || !body.bookmark || typeof body.tooltip !== "string" || typeof body.icon !== "string") {
     throw new Error("Bookmark, icon, and tooltip are required");
@@ -173,12 +176,12 @@ export async function manageAppbarButtons(body: {
   if (!tooltip || tooltip.length > 120 || !/^[a-z][a-z0-9-]{0,63}$/.test(icon)) {
     throw new Error("Enter a tooltip (1–120 characters) and a Lucide kebab-case icon name");
   }
-  const isBookmark = await personalExists(`GRAPH ${bookmarks(ctx)} { ${iri(body.bookmark)} a <${BOOKMARK}> ; <${SCHEMA_URL}> ?url }`, ctx);
+  const isBookmark = await personalExists(`GRAPH ${bookmarks(ctx)} { ${iri(body.bookmark)} a <${BOOKMARK}> ; <${SCHEMA_URL}> ?url }`, ctx,undefined,"client-appbar-buttons:manageAppbarButtons");
   if (!isBookmark) throw new Error("The selected bookmark is not saved in the personal graph");
   const existing = await listButtons(ctx);
   if (existing.some(item => item.action === body.bookmark)) return {buttons: existing};
   if (existing.length >= 5) throw new Error("Only five bookmark buttons may be added to the appbar");
   const node = iri(`gttp://ggg.maestro.ecosys/appbar/button#${crypto.randomUUID()}`);
-  await updatePersonal(`INSERT DATA { GRAPH ${graph(ctx)} { ${node} a <${MUI}AppbarButtonProvider> ; <${MUI}action> ${iri(body.bookmark)} ; <${MUI}tooltip> ${JSON.stringify(tooltip)} ; <${MUI}icon> ${JSON.stringify(icon)} . } }`);
-  return {buttons: await listButtons(ctx)};
+  await updatePersonal(`INSERT DATA { GRAPH ${graph(ctx)} { ${node} a <${MUI}AppbarButtonProvider> ; <${MUI}action> ${iri(body.bookmark)} ; <${MUI}tooltip> ${JSON.stringify(tooltip)} ; <${MUI}icon> ${JSON.stringify(icon)} . } }`,undefined,undefined,"client-appbar-buttons:manageAppbarButtons");
+  return commit(await listButtons(ctx));
 }

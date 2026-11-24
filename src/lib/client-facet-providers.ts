@@ -36,7 +36,7 @@ export async function discoverClientFacetProviders(
         { { ?shape sh:property/sh:path ?property }
           UNION { ?shape sh:or/rdf:rest*/rdf:first/sh:property/sh:path ?property } }
         } VALUES ?property { ${values} }
-      } LIMIT 200`, ctx, signal);
+      } LIMIT 200`, ctx, signal,"client-facet-providers:discoverClientFacetProviders");
       const candidates:TagProviderMatch[] = [...new Map(rows.map(row => ({
         uri: row.provider?.value ?? "", property: row.property?.value ?? "",
       })).filter(row => valid(row.uri) && properties.includes(row.property))
@@ -59,7 +59,7 @@ export async function discoverClientFacetProviders(
     }
     VALUES ?property { ${values} }
     OPTIONAL { GRAPH <${ontology}> { ?property rdfs:range ?range } }
-  } LIMIT 200`,ctx,signal);
+  } LIMIT 200`,ctx,signal,"client-facet-providers:discoverClientFacetProviders");
   const dates:DateProviderMatch[]=[...new Map(dateRows.filter(row=>!row.range?.value ||
     row.acceptedDatatype?.value===row.range.value).map(row=>({
       uri:row.provider?.value??"",property:row.property?.value??"",label:row.label?.value??"Date/time range",
@@ -79,7 +79,7 @@ export async function discoverClientFacetProviders(
       ?shape a mui:InputShape ; sh:property/sh:path mui:inferredDatatype .
       OPTIONAL { ?widget rdfs:label ?label }
     }
-  } LIMIT 30`,ctx,signal);
+  } LIMIT 30`,ctx,signal,"client-facet-providers:discoverClientFacetProviders");
   for (const row of inferredDateRows) {
     const uri=row.provider?.value??"",shape=row.shape?.value??"";
     if (!valid(uri) || !valid(shape)) continue;
@@ -113,7 +113,7 @@ export async function discoverClientFacetProviders(
           <http://www.w3.org/2001/XMLSchema#decimal>,<http://www.w3.org/2001/XMLSchema#double>,
           <http://www.w3.org/2001/XMLSchema#float>)) }
     }
-  } LIMIT 20`,ctx,signal);
+  } LIMIT 20`,ctx,signal,"client-facet-providers:discoverClientFacetProviders");
   const numericByUri=new Map<string,NumericEntry>();
   for(const row of numericRows){
     const uri=row.provider?.value??"",shape=row.shape?.value??"",aggregate=row.aggregate?.value??"",

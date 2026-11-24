@@ -33,14 +33,14 @@ export function isRetryableGatewayError(error: string): boolean {
 /** Shared error affordance: compact label, full diagnostic popover, and copy/check feedback.
  * Render in the same place as an existing inline error; errors remain selectable and accessible.
  */
-export function ErrorDetails({ error, prefix, className, onRetry }: { error: string; prefix?: string; className?: string; onRetry?: () => void }) {
+export function ErrorDetails({ error, prefix, className, onRetry, verbatim = false }: { error: string; prefix?: string; className?: string; onRetry?: () => void; verbatim?: boolean }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => { setCopied(false); }, [error]);
   if (!error) return null;
   const summary = shortErrorName(error);
   // The prefix is part of the diagnostic context; do not discard it in the
   // details pane or clipboard (previously "Graph server" was lost on Copy).
-  const fullDiagnostic = prefix && !error.trimStart().startsWith(`${prefix}:`)
+  const fullDiagnostic = !verbatim && prefix && !error.trimStart().startsWith(`${prefix}:`)
     ? `${prefix}: ${error}` : error;
   const copy = async () => {
     try { await navigator.clipboard.writeText(fullDiagnostic); setCopied(true); }

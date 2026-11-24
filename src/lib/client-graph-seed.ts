@@ -59,6 +59,40 @@ function target(base:string,destination:string):string {
   return resolveGraph(destination as GraphKey,base);
 }
 
+/** Static RDF is a browser resource, not an authenticated graph write.
+ * Hydrate it once on page load, independently of the personal session. A
+ * failed fetch is retriable and never blocks public browsing or login. */
+let browserAssets:Promise<Array<{entry:Entry;asset:Asset}>>|null=null;
+function browserGraphAssets():Promise<Array<{entry:Entry;asset:Asset}>> {
+  if(browserAssets)return browserAssets;
+  browserAssets=(async()=>{
+    const manifest=await staticJson<Entry[]>(`${PREFIX}manifest.json`,AbortSignal.timeout(30_000));
+    if(!Array.isArray(manifest)||!manifest.length)throw new Error("No static graph-seed manifest entries.");
+    const entries=manifest.filter(entry=>!["dataserver-seed.ttl","eu-data/endpoints.ttl"].includes(entry.file));
+    const assets:Array<{entry:Entry;asset:Asset}>=new Array(entries.length);
+    let cursor=0;
+    const worker=async()=>{
+      for(;;){
+        const index=cursor++;
+        if(index>=entries.length)return;
+        const entry=entries[index];
+        if(!/^(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_.-]+$/.test(entry.file)||
+          !/^[a-f0-9]{64}\.json$/.test(entry.asset))throw new Error("Unsafe static graph-seed entry.");
+        const asset=await staticJson<Asset>(`${PREFIX}${entry.asset}`,AbortSignal.timeout(30_000));
+        if(asset.file!==entry.file||asset.destination!==entry.destination||
+          !/^sha256:[0-9a-f]{64}$/.test(asset.digest)||!Array.isArray(asset.triples))
+          throw new Error(`Invalid graph-seed asset for ${entry.file}.`);
+        assets[index]={entry,asset};
+      }
+    };
+    await Promise.all(Array.from({length:Math.min(4,entries.length)},()=>worker()));
+    return assets;
+  })().catch(error=>{browserAssets=null;throw error;});
+  return browserAssets;
+}
+/** May run before authentication: no personalContext, SPARQL or credentials. */
+export async function initializeBrowserGraphAssets():Promise<void>{await browserGraphAssets();}
+
 const seedInFlight=new Map<string,Promise<Array<{file:string;graph:string}>>>();
 export async function seedPersonalGraphs(signal?:AbortSignal):Promise<Array<{file:string;graph:string}>> {
   const ctx=await personalContext(),key=ctx.addr+"|"+ctx.base;
@@ -68,20 +102,17 @@ export async function seedPersonalGraphs(signal?:AbortSignal):Promise<Array<{fil
     // The graph-server courtesy list is NOT a personal RDF seed graph.
     // It lives in the browser's grouped directory and is digest-checked against
     // the proxy's static flat files. Never CLEAR the user's Shared group.
-    const entries=(await staticJson<Entry[]>(`${PREFIX}manifest.json`,signal))
-      .filter(entry => !["dataserver-seed.ttl", "eu-data/endpoints.ttl"].includes(entry.file));
-    if(!Array.isArray(entries)||!entries.length)throw new Error("No static graph-seed manifest entries.");
+    // Static assets are already available from the independent browser boot
+    // when possible. Awaiting them here never starts an authenticated fetch.
+    const entries=await browserGraphAssets();
+    if(signal?.aborted)throw signal.reason;
     // Preflight *every* compiled /graph document before clearing a single
     // personal graph. An unavailable or stale asset must not erase the user's
     // existing provider definitions, registry, ontology or Status machines.
     const documents:Array<{entry:Entry;graph:string;triples:Triple[];digest:string}>=[];
-    for(const entry of entries){
-      if(!/^(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_.-]+$/.test(entry.file)||
-        !/^[a-f0-9]{64}\.json$/.test(entry.asset))throw new Error("Unsafe static graph-seed entry.");
+    for(const {entry,asset} of entries){
+      if(signal?.aborted)throw signal.reason;
       const graph=target(ctx.base,entry.destination);
-      const asset=await staticJson<Asset>(`${PREFIX}${entry.asset}`,signal);
-      if(asset.file!==entry.file||asset.destination!==entry.destination||!/^sha256:[0-9a-f]{64}$/.test(asset.digest)||!Array.isArray(asset.triples))
-        throw new Error(`Invalid graph-seed asset for ${entry.file}.`);
       const triples=[...asset.triples];
       for(const resource of new Set(triples.filter(t=>t.predicate.value===RDF_TYPE&&t.object.value===MUI_PROVIDER&&t.subject.termType==="NamedNode").map(t=>t.subject.value)))
         triples.push({subject:{termType:"NamedNode",value:resource},predicate:{termType:"NamedNode",value:`${MUI_NS}implementationDigest`},object:{termType:"Literal",value:asset.digest}});
@@ -117,16 +148,16 @@ export async function seedPersonalGraphs(signal?:AbortSignal):Promise<Array<{fil
     const cleared=new Set<string>(),loaded:Array<{file:string;graph:string}>=[];
     for(const {entry,graph,triples} of documents){
       if(!changed.has(graph)){loaded.push({file:entry.file,graph});continue;}
-      if(!cleared.has(graph)){await updatePersonal(`CLEAR SILENT GRAPH ${iri(graph)}`,signal);cleared.add(graph);}
+      if(!cleared.has(graph)){await updatePersonal(`CLEAR SILENT GRAPH ${iri(graph)}`,signal,undefined,"client-graph-seed:seedPersonalGraphs");cleared.add(graph);}
       // The browser sends RDF triples to the existing SPARQL Update transport.
       // The remote graph server never dereferences Maestro's localhost URL.
-      if(triples.length)await updatePersonal(buildInsertData(graph,triples,ctx.base),signal);
+      if(triples.length)await updatePersonal(buildInsertData(graph,triples,ctx.base),signal,undefined,"client-graph-seed:seedPersonalGraphs");
       loaded.push({file:entry.file,graph});
     }
     // A marker is written only after all assets for that destination have
     // succeeded. A partial import therefore self-heals on the next login.
     for(const graph of changed)await updatePersonal(`INSERT DATA { GRAPH ${iri(graph)} {
-      ${iri(graph)} ${iri(seedPredicate)} "${desired.get(graph)}" . } }`,signal);
+      ${iri(graph)} ${iri(seedPredicate)} "${desired.get(graph)}" . } }`,signal,undefined,"client-graph-seed:seedPersonalGraphs");
     invalidateClientStatusMachines();
     return loaded;
   })();

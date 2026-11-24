@@ -26,7 +26,7 @@ export async function executeProviderDerivedQuery(query: ProviderQueryRequest, s
   }
   if (!query.addr || !query.sparql || query.sparql.length > 250000) throw new Error("A graph address and bounded SPARQL query are required.");
   const response = await maestroQueryFetch("/proxy/api/sparql", {
-    method: "POST", cache: "no-store", signal, headers: { "Content-Type": "application/json" },
+    method: "POST", cache: "no-store", signal, headers: {"x-maestro-debug-source":"urn:maestro:component:ProviderQueryExecutor","x-maestro-debug-component":"ProviderQueryExecutor", "Content-Type": "application/json" },
     body: JSON.stringify({ addr: query.addr, resultsQuery: { sparql: query.sparql } }),
   });
   const result = await response.json() as {

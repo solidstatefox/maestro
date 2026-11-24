@@ -65,7 +65,14 @@ export type ServiceResult = { html: string; error: string; loading: boolean; nam
 /** Renderer state shared by Record default, format, and service views. */
 export function useRecordPresentationState(preferredAlphabetLanguage: string, lifecycle: MaestroRecordSessionController) {
   const [formattedRecordHtml, setFormattedRecordHtmlState] = useState("");
-  const setFormattedRecordHtml = (html: string) => {
+  // Record enrichment can complete after its initial DOM snapshot is visible.
+  // Resolve functional updates against the latest committed value immediately,
+  // not inside React's state updater (which can be replayed in Strict Mode),
+  // so XState lifecycle events remain one-to-one with intentional commits.
+  const formattedRecordHtmlRef = useRef("");
+  const setFormattedRecordHtml = (update: SetStateAction<string>) => {
+    const html = typeof update === "function" ? update(formattedRecordHtmlRef.current) : update;
+    formattedRecordHtmlRef.current = html;
     setFormattedRecordHtmlState(html);
     const snapshot = lifecycle.getSnapshot();
     if (html) lifecycle.operation("format", "OP_SUCCEEDED", snapshot.context.key);

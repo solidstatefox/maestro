@@ -1,7 +1,6 @@
 "use client";
 
-import { fctQueryTreeApi, type FctQueryTree, type FctQueryNode } from "./fct-query-api";
-import { createGroupValuesQuery } from "./fct-query-derived";
+import type { FctQueryTree, FctQueryNode } from "./fct-query-api";
 import { getPath, indexFctPaths } from "./fct-get-path";
 
 export type TransportedFacet = {
@@ -15,6 +14,16 @@ export type TransportedFacet = {
   /** The original getPath relationship chain, not a new synthetic predicate. */
   path: Array<{ id: string; iri: string; direction: "forward" | "reverse" }>;
 };
+
+/** Compare stable anchor identity, never freshly allocated getPath hop objects. */
+export function sameTransportedFacetIdentity(a: TransportedFacet | undefined, b: TransportedFacet | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.id === b.id && a.href === b.href && a.parentId === b.parentId &&
+    a.path.length === b.path.length && a.path.every((hop, index) => {
+      const other = b.path[index];
+      return hop.id === other.id && hop.iri === other.iri && hop.direction === other.direction;
+    });
+}
 
 const isRelationship = (node: FctQueryNode) => node.name === "property" || node.name === "property-of";
 const hasView = (node: FctQueryNode) => node.name === "view" || node.children.some(hasView);
@@ -94,21 +103,6 @@ export function toggleTransportedAnchor(tree: FctQueryTree, ancestorId: string):
       ? { ...node, children: [...node.children, anchor] }
       : { ...node, children: add(node.children) });
   return { ...tree, children: add(tree.children) };
-}
-
-/** An alias's values travel through the ordinary Personal facet values query,
- * selecting the original descendant property (by ID), not a synthetic alias
- * property. The viewer-only <a> remains excluded from every derived query. */
-export function createTransportedFacetQuery(source: FctQueryTree, alias: TransportedFacet): FctQueryTree {
-  // A transported facet must count its *ancestor* population, grouped by
-  // the full descendant path. Enumerating the terminal predicate at its own
-  // focus would count DOI values instead of the Projects owning those DOIs.
-  return createGroupValuesQuery(fctQueryTreeApi.getDataTree(source), {
-    key: `alias:${alias.id}`, uri: alias.target.attributes.iri ?? "",
-    direction: alias.target.name === "property-of" ? "reverse" : "forward",
-    label: alias.path.map(step => step.iri).join(" › "),
-    nodeId: alias.href, anchorId: alias.id, parentId: alias.parentId,
-  }, { limit: 1000, offset: 0 });
 }
 
 /** The scope of an alias is the node which owns <a>, not the terminal value. */

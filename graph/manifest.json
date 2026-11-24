@@ -34,6 +34,7 @@
   "dbpedia/maestro-dbpedia-policies.ttl": "shacl-policies",
   "eu-data/provider.ttl": "shacl-policies",
   "eu-data/involved-party-derived.ttl": "shacl-policies",
+  "eu-data/author-derived.ttl": "shacl-policies",
   "eu-data/record-policies.ttl": "shacl-policies",
   "eu-data/record-shapes.ttl": "shacl-policies",
   "eu-data/eurio-validation.ttl": "shacl-policies",

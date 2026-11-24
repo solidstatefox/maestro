@@ -10,9 +10,10 @@ if(ts)require.extensions['.ts']=(module,filename)=>module._compile(ts.transpileM
 
 test('Group-by headings reuse the same derived Personal facet FCT paths',()=>{
   const src=read('src/lib/fct-query-derived.ts');
-  const fn=src.slice(src.indexOf('export function createGroupValuesQuery('),src.indexOf('export function createGroupMemberQuery('));
+  const fn=src.slice(src.indexOf('export function createPersonalFacetValuesQuery('),src.indexOf('function projectTransportedGroupMember('));
   assert.match(fn,/ungroupForMembers\(sourceTree\)/);
-  assert.match(fn,/createPropertyWidgetQuery\(clean, option\.uri, option\.direction, option\.nodeId, true\)/);
+  assert.match(fn,/createPropertyWidgetQuery\(clean, propertyUri, direction, nodeId, true, href\)/);
+  assert.match(fn,/return createPersonalFacetValuesQuery\(sourceTree, option\.uri, option\.direction, paging/);
   assert.match(fn,/createPersonalRoleValuesQuery\(clean, selected\)/);
   assert.match(fn,/FCT_VIEW_TYPES\.CLASSES/);
   assert.doesNotMatch(fn,/markFctGroup/);

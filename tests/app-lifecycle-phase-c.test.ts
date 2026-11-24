@@ -153,3 +153,20 @@ test("Strict Mode stop/start and separate workspace actors fail closed", () => {
   assert.equal(canExecute(c), false);
   c.stop(); other.stop();
 });
+
+test("explicit Bookmarks and History preserve the first Browse Return owner", () => {
+  const c = ready();
+  c.send({ type: "NAVIGATION_OBSERVED", key: queryA, url: "https://maestro.test/?q=browse", hydrated: true, tab: "browse", viewPanel: "trail", isProviderQuery: false, restoringHistory: false });
+  c.send({ type: "RIBBON_ENTRY_FROM_BROWSE", sourceKey: queryA, fromUrl: "https://maestro.test/?q=browse" });
+  c.send({ type: "NAVIGATION_OBSERVED", key: queryA, url: "https://maestro.test/?q=browse&tab=view", hydrated: true, tab: "view", viewPanel: "perspectives", isProviderQuery: false, restoringHistory: false });
+  assert.equal(c.getSnapshot().navigation.returnVisible, false);
+  c.send({ type: "PERSONAL_PERSPECTIVE_ENTERED", fromUrl: "https://maestro.test/?q=browse&tab=view" });
+  assert.equal(c.getSnapshot().navigation.returnVisible, true);
+  assert.equal(c.getSnapshot().navigation.returnUrl, "https://maestro.test/?q=browse");
+  c.send({ type: "NAVIGATION_OBSERVED", key: queryB, url: "https://maestro.test/?q=bookmarks", hydrated: true, tab: "view", viewPanel: "perspectives", isProviderQuery: false, restoringHistory: false });
+  c.send({ type: "PERSONAL_PERSPECTIVE_ENTERED", fromUrl: "https://maestro.test/?q=bookmarks" });
+  assert.equal(c.getSnapshot().navigation.returnUrl, "https://maestro.test/?q=browse");
+  c.send({ type: "CONTEXT_RETURNED" });
+  assert.equal(c.getSnapshot().navigation.returnVisible, false);
+  c.stop();
+});

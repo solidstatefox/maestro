@@ -24,7 +24,7 @@ export async function readProviderShapeXml(shape: string, signal?: AbortSignal):
         <${shape}> (sh:property|sh:in|sh:or|sh:and|sh:xone|sh:not|sh:node|sh:qualifiedValueShape|sh:path|sh:alternativePath|sh:inversePath|sh:zeroOrMorePath|sh:oneOrMorePath|sh:zeroOrOnePath|rdf:first|rdf:rest)* ?s .
         ?s ?p ?o .
       }
-    } LIMIT 10000`, ctx, signal);
+    } LIMIT 10000`, ctx, signal,"provider-shape:readProviderShapeXml");
   if (!rows.length) throw new Error(`SHACL input shape ${shape} is missing or inaccessible.`);
   if (rows.length >= 10000) throw new Error("SHACL shape closure exceeds its safety limit.");
   const binding = (term: {type?:string; value?:string; datatype?:string} | undefined) => ({

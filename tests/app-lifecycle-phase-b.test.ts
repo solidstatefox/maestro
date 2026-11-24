@@ -36,6 +36,31 @@ async function settleActor() {
   await new Promise<void>(resolve => setImmediate(resolve));
 }
 
+test("Connect HTTP outcomes are observable while anonymous without unlocking personal access", () => {
+  const c = createMaestroAccessController(); c.start();
+  c.send({ type: "SESSION_OBSERVED", restored: true, sessionKey: "" });
+  c.send({ type: "LOGIN_ACTIVITY", pending: true });
+  assert.equal(caps(c).challengeResponsePending, false);
+  c.send({ type: "AUTH_CHALLENGE_SENT" });
+  assert.equal(caps(c).challengeResponsePending, true);
+  for (const [status, state] of [[401, "rejected"], [504, "degraded"], [201, "success"]] as const) {
+    c.send({ type: "AUTH_STATUS_OBSERVED", sessionKey: "", status, state, at: status === 401 ? 1 : status === 504 ? 2 : 3 });
+    assert.equal(caps(c).authResponseStatus, status);
+    assert.equal(caps(c).challengeResponsePending, false);
+    assert.equal(c.getSnapshot().value, "signedOut");
+    assert.equal(caps(c).canUsePersonalStore, false);
+  }
+  c.send({ type: "SESSION_OBSERVED", restored: true, sessionKey: session });
+  assert.equal(caps(c).authResponseStatus, 201);
+  assert.equal(caps(c).canUsePersonalStore, false);
+  c.send({ type: "LOGIN_ACTIVITY", pending: false });
+  c.send({ type: "SESSION_OBSERVED", restored: true, sessionKey: "" });
+  assert.equal(caps(c).authResponseStatus, null);
+  c.send({ type: "AUTH_STATUS_OBSERVED", sessionKey: session, status: 504, state: "degraded", at: 4 });
+  assert.equal(caps(c).authResponseStatus, null);
+  c.stop();
+});
+
 test("restoration and sign-out deny all personal UI without credentials", () => {
   const c = createMaestroAccessController(); c.start();
   assert.equal(caps(c).canUsePersonalStore, false);
@@ -128,4 +153,50 @@ test("access controllers are isolated and survive Strict Mode stop/start", () =>
   c.send({ type: "QUERY_CHANGED", queryKey: a });
   assert.equal(caps(c).canShowStatusFacet, false, "a new actor requires re-verification");
   c.stop(); other.stop();
+});
+
+ test("personal readiness and HTTP traffic signals are independent, scoped to the current session",()=>{
+  const c=createMaestroAccessController();c.start();
+  c.send({type:"SESSION_OBSERVED",restored:true,sessionKey:session});
+  c.send({type:"AUTH_STATUS_OBSERVED",sessionKey:session,state:"success",status:200,at:1});
+  assert.equal(caps(c).canUsePersonalStore,false);assert.notEqual(caps(c).userSignal,"green");
+  c.send({type:"POLICY_STATUS_OBSERVED",sessionKey:session,stage:"ready"});
+  assert.equal(caps(c).canUsePersonalStore,true);assert.equal(caps(c).userSignal,"green");
+  c.send({type:"AUTH_STATUS_OBSERVED",sessionKey:session,state:"rejected",status:401,at:2});
+  assert.equal(caps(c).canUsePersonalStore,true);assert.equal(caps(c).userSignal,"amber");
+  c.send({type:"AUTH_STATUS_OBSERVED",sessionKey:session,state:"degraded",status:504,at:3});
+  assert.equal(caps(c).canUsePersonalStore,true);assert.equal(caps(c).userSignal,"red");
+  c.send({type:"POLICY_STATUS_OBSERVED",sessionKey:session,stage:"failed"});
+  assert.equal(caps(c).canUsePersonalStore,true,"late verification cannot revoke an initialized session");
+  c.send({type:"AUTH_STATUS_OBSERVED",sessionKey:session,state:"success",status:200,at:4});
+  assert.equal(caps(c).userSignal,"green");
+  c.send({type:"SESSION_OBSERVED",restored:true,sessionKey:""});
+  c.send({type:"AUTH_STATUS_OBSERVED",sessionKey:session,state:"success",status:200,at:5});
+  assert.equal(caps(c).canUsePersonalStore,false);assert.notEqual(caps(c).userSignal,"green");c.stop();
+});
+
+test("first challenge pulses only until ready; restored sessions never pulse", () => {
+  const first = createMaestroAccessController(); first.start();
+  first.send({type:"SESSION_OBSERVED",restored:true,sessionKey:""});
+  first.send({type:"LOGIN_ACTIVITY",pending:true});
+  assert.notEqual(caps(first).userSignal,"pulsingAmber");
+  first.send({type:"AUTH_CHALLENGE_SENT"});
+  assert.equal(caps(first).userSignal,"pulsingAmber");
+  first.send({type:"AUTH_STATUS_OBSERVED",sessionKey:"",state:"success",status:200,at:1});
+  first.send({type:"SESSION_OBSERVED",restored:true,sessionKey:session});
+  assert.equal(caps(first).userSignal,"pulsingAmber");
+  first.send({type:"LOGIN_ACTIVITY",pending:false});
+  assert.equal(caps(first).userSignal,"pulsingAmber");
+  first.send({type:"POLICY_STATUS_OBSERVED",sessionKey:session,stage:"ready"});
+  assert.equal(caps(first).userSignal,"green");
+  first.send({type:"LOGIN_ACTIVITY",pending:false});
+  const restored=createMaestroAccessController(); restored.start();
+  restored.send({type:"SESSION_OBSERVED",restored:true,sessionKey:session});
+  assert.notEqual(caps(restored).userSignal,"pulsingAmber");
+  restored.send({type:"AUTH_STATUS_OBSERVED",sessionKey:session,state:"success",status:200,at:1});
+  assert.notEqual(caps(restored).userSignal,"green");
+  assert.notEqual(caps(restored).userSignal,"pulsingAmber");
+  restored.send({type:"POLICY_STATUS_OBSERVED",sessionKey:session,stage:"ready"});
+  assert.equal(caps(restored).userSignal,"green");
+  first.stop(); restored.stop();
 });

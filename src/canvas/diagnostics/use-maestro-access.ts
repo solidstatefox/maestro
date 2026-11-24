@@ -6,6 +6,7 @@ import type { PersonalAuthSession } from "@/lib/personal-auth";
 import { loadClientStatusMachines } from "@/lib/status-machine-client";
 import { machineForTarget } from "@/lib/status-machine-runtime";
 import { createMaestroAccessController } from "@/lib/app-lifecycle/access";
+import { lastPersonalHttpOutcome, PERSONAL_AUTH_OUTCOME } from "@/lib/personal-session-hint";
 
 /** The session resolver is the authentication authority. XState owns all UI
  * gates and bookmark verification; credentials never enter machine context. */
@@ -24,7 +25,7 @@ export function useMaestroAccess(session: PersonalAuthSession | null, restored: 
       return id;
     };
   });
-  const sessionKey = restored && session?.graphStore && session?.graphPrefix && session?.authHeader
+  const sessionKey = restored && session?.graphStore && session?.graphPrefix && session?.authType === "sparql-auth"
     ? [session.graphStore, session.graphPrefix, session.authType, session.username ?? session.userName ?? "", String(sessionInstanceId(session))].join("|")
     : "";
   useLayoutEffect(() => {
@@ -34,6 +35,22 @@ export function useMaestroAccess(session: PersonalAuthSession | null, restored: 
   useLayoutEffect(() => {
     controller.send({ type: "SESSION_OBSERVED", restored, sessionKey });
   }, [controller, restored, sessionKey]);
+  useLayoutEffect(() => {
+    if (!session || !sessionKey) return;
+    let active = true;
+    const sendSavedOutcome = () => {
+      const saved = lastPersonalHttpOutcome(session);
+      if (!saved) return false;
+      controller.send({ type: "AUTH_STATUS_OBSERVED", sessionKey,
+        state: saved.state, status: saved.status, at: saved.timestamp });
+      return true;
+    };
+    // Only the current restored session's completed HTTP observations are published.
+    sendSavedOutcome();
+    const onResponse = () => { if (active) sendSavedOutcome(); };
+    window.addEventListener(PERSONAL_AUTH_OUTCOME, onResponse);
+    return () => { active = false; window.removeEventListener(PERSONAL_AUTH_OUTCOME, onResponse); };
+  }, [controller, session, sessionKey]);
   useLayoutEffect(() => {
     if (!sessionKey) return;
     if (seedError) {
@@ -80,7 +97,7 @@ export function useMaestroAccess(session: PersonalAuthSession | null, restored: 
     const isTransition = previous.sessionKey !== sessionKey || previous.stage !== stage || previous.error !== snapshot.context.policyError;
     lastNotifiedStageRef.current = {sessionKey,stage,error:snapshot.context.policyError};
     if (stage === "ready" && isTransition) {
-      toast.add({ title: "Personal graphs ready", description: "Authenticated bootstrap, graph seeding, and State-machine verification completed.", type: "success" });
+      toast.add({ title: "Personal graphs ready", description: "Personal graph reads and State-machine verification completed.", type: "success" });
     }
     if (stage === "failed") {
       if (isTransition) {

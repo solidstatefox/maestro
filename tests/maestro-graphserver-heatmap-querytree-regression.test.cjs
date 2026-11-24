@@ -39,7 +39,7 @@ test('Graph Server card selection is separate from execution-server selection', 
 test('Query Tree uses one native button group and editor labels preserve FCT operators', () => {
   const workspace = source('src/canvas/utils/workspace-controller.tsx');
   assert.match(workspace, /<ButtonGroup className="ml-auto shrink-0 self-start"/);
-  for(const label of ['from','fromValue','constant']) assert.match(workspace,new RegExp(`>${label}<\\/option>`));
+  for(const label of ['from','fromView','constant']) assert.match(workspace,new RegExp(`>${label}<\\/option>`));
   assert.match(workspace,/Select value=\{editor\.op\}/);
   assert.match(workspace,/op:editor\.op/);
 });

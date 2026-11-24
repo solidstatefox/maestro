@@ -16,6 +16,8 @@ export function maestroQueryClockScope(headers?: Headers): MaestroQueryClockScop
   if (!headers) return null;
   const label = `${headers.get("x-maestro-debug-source") ?? ""} ${headers.get("x-maestro-debug-component") ?? ""}`.toLowerCase();
   // Match query identity from proxy request headers, not component mount time.
+  if (label.includes("querycontextvalidation")) return "component:query-context";
+  if (label.includes("configure:kinds")) return "component:kinds";
   if (label.includes("results-search") || label.includes("resultstotalcount") || label.includes("results-total-count") || label.includes("results-enrichment")) return "results";
   if (label.includes("group-values-fct") || label.includes("group-members-fct")) return "groups";
   if (label.includes("record-graph-discovery")) return "recordGraphs";

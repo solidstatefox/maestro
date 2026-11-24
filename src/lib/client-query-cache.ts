@@ -1,4 +1,4 @@
-import { withPersonalProxyCredentials } from "@/lib/client-personal-request";
+import { requireSparqlAttribution } from "@/lib/sparql-request-attribution";
 import { maestroLanguageHeader } from "./maestro-language";
 import { readMaestroConcurrency } from "./maestro-concurrency";
 import { maestroQueryClockScope } from "./maestro-query-execution-clock";
@@ -281,7 +281,6 @@ function labelMaestroRequest(input: RequestInfo | URL, init?: RequestInit): stri
   const headers = new Headers(init?.headers);
   const component = headers.get("x-maestro-debug-component") || "";
   const source = headers.get("x-maestro-debug-source") || "";
-  if (component && source && component.toLowerCase() !== source.toLowerCase()) return `${component} · ${source}`;
   return component || source || (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url).split("?")[0].split("/").pop() || "Query";
 }
 
@@ -521,10 +520,6 @@ export const MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS = "maestro:graph-server-reques
 export const MAESTRO_GRAPH_SERVER_TRANSPORT_FAILURE = "maestro:graph-server-transport-failure";
 const CONNECTIVITY_ERROR = /\b(?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_HAS_EXPIRED|ERR_TLS_[A-Z_]+)\b|connect(?:ion)? (?:timed? ?out|refused)|unable to get local issuer certificate/i;
 async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const destination = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-  const scoped = await withPersonalProxyCredentials(destination, init);
-  init = scoped.init;
-
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const body = typeof init?.body === "string" ? init.body : "";
   let fctXml = body;
@@ -540,7 +535,11 @@ async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit)
   const isStatusProjection = /<view\b[^>]*\btype\s*=\s*["']list-status["']/i.test(fctXml);
   const address = isFctQuery && !isStatusProjection ? fctXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "" : "";
   const endpointUrl = address.includes("@") ? address.slice(address.indexOf("@") + 1).replace(/&amp;/g, "&") : "";
-  const response = await scheduledGraphFetch(input, init);
+  let response: Response;
+  try { response = await scheduledGraphFetch(input, init); }
+  catch (error) {
+    throw error;
+  }
   if (!init?.signal?.aborted && typeof window !== "undefined" && endpointUrl &&
       response.headers.get("X-Maestro-Cache") !== "HIT" &&
       response.headers.get("X-Maestro-Client-Cache") !== "HIT") {
@@ -646,8 +645,6 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
       (/<(?:[\w.-]+:)?status\b/i.test(init.body) || init.body.includes("urn:maestro:providers:"))) {
     return track(await monitoredProxyFetch(input, init));
   }
-  const scoped = await withPersonalProxyCredentials(urlStr, init);
-  if (scoped.authenticated) return track(await monitoredProxyFetch(input, scoped.init));
   const key = computeClientCacheKey(urlStr, init);
   if (!key) {
     return track(await monitoredProxyFetch(input, init));
@@ -675,9 +672,11 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
 
 /** Track query requests so a live FCT change or user Abort cancels outstanding work. */
 export function maestroQueryFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  requireSparqlAttribution(input, init);
   return trackMaestroQuery(init?.signal, (signal) => maestroQueryFetchImpl(input, { ...init, signal }), labelMaestroRequest(input, init));
 }
 export function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  requireSparqlAttribution(input, init);
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   // Endpoint selection, health checks, and other control-plane requests must
   // not be aborted merely because the live query changes.

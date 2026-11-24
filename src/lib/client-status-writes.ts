@@ -24,12 +24,12 @@ async function executeTarget(resource: string, intended: string, signal?: AbortS
   const graph = `${resolveGraph(GRAPH.STATUS, ctx.base)}`;
   const machines = await loadClientStatusMachines(signal);
   const machine = machineForTarget(machines, `${STATUS_RDFS}Resource`);
-  const rows = await selectPersonal(`SELECT DISTINCT ?status WHERE { GRAPH ${iri(graph)} { ${iri(resource)} ${iri(MUI_STATUS)} ?status } }`, ctx, signal);
+  const rows = await selectPersonal(`SELECT DISTINCT ?status WHERE { GRAPH ${iri(graph)} { ${iri(resource)} ${iri(MUI_STATUS)} ?status } }`, ctx, signal,"client-status-writes:executeTarget");
   const assertions = rows.map(row => row.status?.value ?? "").filter(Boolean);
   const transition = transitionStatusTo(machine, assertions, intended);
   if (!transition) return;
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
-  await updatePersonal(statusTransitionUpdate({ machine, transition, assertions, graph, resource, predicate: MUI_STATUS }), signal, queryXml);
+  await updatePersonal(statusTransitionUpdate({ machine, transition, assertions, graph, resource, predicate: MUI_STATUS }), signal, queryXml,"client-status-writes:executeTarget");
 }
 
 export async function setClientRecordStatus(hash: string, uri: string, status: RecordStatusName, enabled: boolean, signal?: AbortSignal, queryXml?: string): Promise<void> {
@@ -66,5 +66,5 @@ export async function recordClientLocatedPage(hash: string, uris: readonly strin
         <http://purl.org/dc/terms/description> ${JSON.stringify(description)} .
     } }
     WHERE { VALUES ?s { ${unique.map(iri).join(" ")} }
-      OPTIONAL { GRAPH ${g} { ?s ${locatedPredicate} ?old } } }`, signal);
+      OPTIONAL { GRAPH ${g} { ?s ${locatedPredicate} ?old } } }`, signal,undefined,"client-status-writes:recordClientLocatedPage");
 }

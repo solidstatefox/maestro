@@ -8,9 +8,9 @@ const xsl = fs.readFileSync(path.join(base, "graph/eu-data/record.xsl"), "utf8")
 const provider = fs.readFileSync(path.join(base, "graph/eu-data/provider.ttl"), "utf8");
 const workspace = fs.readFileSync(path.join(base, "src/canvas/utils/workspace-controller.tsx"), "utf8");
 
-test("the Record Project standalone stylesheet and both embedded RDF stylesheets are identical", () => {
+test("the Record Project standalone stylesheet and the embedded Record stylesheet are identical", () => {
   const embedded = `mui:templateContent """${xsl.replace(/\\/g, "\\\\")}"""`;
-  assert.equal(provider.split(embedded).length - 1, 2);
+  assert.equal(provider.split(embedded).length - 1, 1);
 });
 
 test("the status-colored rail and class banner styling remain unchanged", () => {
@@ -23,7 +23,7 @@ test("the status-colored rail and class banner styling remain unchanged", () => 
 
 test("the domain formatter labels Project properties without querying the ontology", () => {
   assert.match(xsl, /name="fmt:property-label"/);
-  for (const name of ["Cost", "Funded by", "Research fields", "EU contribution", "CORDIS RCN", "Project ID", "Signature date"]) {
+  for (const name of ["Cost", "Funding", "Research fields", "EU contribution", "CORDIS RCN", "Project ID", "Signature date"]) {
     assert.ok(xsl.includes(`'${name}'`), `missing label ${name}`);
   }
   assert.match(xsl, /name="label" select="fmt:property-label\(\$iri\)"/);

@@ -16,10 +16,14 @@ test("two matching shadcn resizable handles are siblings of the three workspace 
   const workspace = read("src/canvas/workspace.tsx");
   const right = read("src/canvas/right/pane.tsx");
   const shells = read("src/canvas/workspace-pane-shells.tsx");
-  assert.equal(workspace.match(/<ResizableHandle withHandle className="shrink-0" \/>/g)?.length, 2);
-  assert.match(workspace, /\(!urlStateInitialized \|\| workspaceTab === "browse"\) && <ResizableHandle/);
-  assert.match(workspace, /\(!urlStateInitialized \|\| workspaceTab === "browse"\) && \(\s*skeletons\.record/);
-  assert.ok(workspace.indexOf('<ResizableHandle withHandle') < workspace.indexOf('<CenterCanvasPanel'));
+  // A single handle declaration is emitted once per inter-pane boundary.
+  assert.equal((workspace.match(/<ResizableHandle\b/g) || []).length, 1);
+  assert.match(workspace, /<ResizableHandle withHandle className="shrink-0" onDragging=\{dragging => \{ if \(!dragging\) saveBrowseLayout\(\); \}\} \/>/);
+  assert.match(workspace, /onKeyUpCapture=\{event => \{ if \(event\.target instanceof HTMLElement && event\.target\.hasAttribute\("data-panel-resize-handle-id"\)\) saveBrowseLayout\(\); \}\}/);
+  assert.match(workspace, /activeBrowsePaneOrder\(browsePanePreference\.order, !urlStateInitialized \|\| workspaceTab === "browse"\)/);
+  assert.match(workspace, /activePaneOrder\.map\(\(pane, index\) => <Fragment key=\{pane\}>/);
+  assert.match(workspace, /index < activePaneOrder\.length - 1 && <ResizableHandle/);
+  assert.match(workspace, /skeletons\.record === "degraded"/);
   assert.doesNotMatch(right, /<ResizableHandle/);
   assert.doesNotMatch(shells, /overflow-hidden border-r/);
 });

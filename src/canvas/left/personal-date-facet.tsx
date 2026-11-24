@@ -144,7 +144,7 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
       try {
         const response = await maestroQueryFetch("/proxy/api/sparql", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": `TemporalFacet:domain:${provider.property}` },
+          headers: {"x-maestro-debug-source":"urn:maestro:component:TemporalFacet:Domain","x-maestro-debug-component":"TemporalFacet:Domain", "Content-Type": "application/json", "X-Maestro-Query-Label": `TemporalFacet:domain:${provider.property}` },
           body: JSON.stringify({ facetValueCount: { ...domainRequest, sparql: domainRequest.query, temporalDomain: true } }),
         });
         const data = await response.json() as { error?: string; incomplete?: boolean; min?: string | null; max?: string | null };

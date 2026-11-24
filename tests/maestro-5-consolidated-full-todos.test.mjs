@@ -32,7 +32,11 @@ test('Fullscreen Wand presents predicate and value in-place with their shared no
 
 test('Categories contains a centered Provider group and a single connected Radial Arc group', () => {
   const categories=read('src/canvas/left/facet-presentation.tsx');
-  assert.match(categories,/justify-center gap-2 px-2 pt-1/);
+  // TODO 16 intentionally compacts the old control cluster while keeping
+  // Provider centered and both label-layout buttons inside one ToggleGroup.
+  assert.match(categories,/justify-center gap-1\.5 px-1 pt-0\.5/);
+  assert.match(categories,/<InputGroupAddon align="inline-start" className="h-7 shrink-0 border-r bg-muted\/40 px-1\.5 text-muted-foreground">/);
+  assert.match(categories,/className="inline-flex h-7 min-w-0 max-w-40/);
   assert.match(categories,/<InputGroupText className="text-xs">Provider<\/InputGroupText>/);
   assert.match(categories,/<ToggleGroup type="single" aria-label="Sunburst label layout"/);
   assert.equal((categories.match(/<ToggleGroupItem unstyled value=/g)||[]).length,2);

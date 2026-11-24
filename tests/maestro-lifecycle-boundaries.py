@@ -21,14 +21,14 @@ facets=get('src/canvas/left/filter.tsx')
 readiness=get('src/canvas/diagnostics/use-maestro-access.ts')
 root=get('src/canvas/top/breadcrumb-renderers.tsx')
 
-check('seedPersonalGraphs()' in auth and 'CLEAR SILENT GRAPH' in seed,
-      'login explicitly seeds all manifest-mapped personal graphs')
+check('seedPersonalGraphs(' not in auth and 'setLoginDialogOpen(true)' not in auth,
+      'login does not seed graphs or open itself')
 check('updatePersonal(buildInsertData(' in seed and '/maestro-seed/' in seed,
       'the browser imports precompiled RDF using the existing SPARQL transport')
-check('graphs.includes(`${base}/status`)' in sparql and 'update.includes("gttp://ggg.maestro.ecosys/ns/ui#status")' not in sparql,
-      'Status protection checks the actual named graph and cannot confuse statusTrack with status')
-check('verifyApprovalBookmark(body.bookmarkQueryXml, request)' in sparql,
-      'protected personal Status graph mutations still require a verified bookmark')
+check('hasExplicitPersonalUpdateTemplates(structure)' in sparql,
+      'personal graph mutation transport is graph-scoped')
+check('updatePersonalSparql(' not in sparql,
+      'no separate server Status mutation implementation')
 check('fromPromise(' in access and 'checkBookmark' in access and 'BOOKMARK_CHECK_REQUESTED' in access,
       'XState access actor owns invoked bookmark verification')
 check('type: "BOOKMARK_CHECK_REQUESTED"' in controller and 'BOOKMARK_CHECK_RESOLVED' not in controller,

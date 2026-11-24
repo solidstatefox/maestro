@@ -19,7 +19,7 @@ export async function discoverRecordServices(types: string[], signal?: AbortSign
   // session has not yet been restored. Bound each request independently;
   // merging batches preserves distinct services/operations across classes.
   for (const query of queries) {
-    const rows = await selectPersonal(query, ctx, signal);
+    const rows = await selectPersonal(query, ctx, signal,"client-record-services:discoverRecordServices");
     for (const row of rows) {
       const uri = row.service?.value ?? "", operation = row.operation?.value ?? "";
       if (!safeRecordServiceIri(uri) || !safeRecordServiceIri(operation)) continue;

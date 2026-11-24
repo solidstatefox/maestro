@@ -8,7 +8,7 @@
 # application writes a default triple when merely locating a result resource.
 <gttp://ggg.maestro.ecosys/shacl/provider/resource-status-machine>
     a mui:Provider, mui:StateMachineProvider ;
-    rdfs:label "Resource read and visibility status machine"@en ;
+    rdfs:label "Resource read and visibility state machine"@en ;
     dct:description "Independent epistemic and visibility tracks sharing mui:status."@en ;
     sh:targetClass rdfs:Resource ;
     mui:statusTrack [ a mui:StatusTrack ; mui:trackDimension mui:ReadStatus ;

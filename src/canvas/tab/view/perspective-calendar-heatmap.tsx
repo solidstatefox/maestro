@@ -146,8 +146,9 @@ export function PerspectiveCalendarHeatmap({ rows, queryXml, onDayFilter }: {
       </div>
     </header>
     <div className="max-w-full overflow-x-auto">
-      {layout === "calendar" ? <CalendarHeatmap data={calendar}>
-        <CalendarHeatmapBody>{({ activity: cell, dayIndex, weekIndex }) => <Tooltip>
+      {layout === "calendar" ? <CalendarHeatmap data={calendar} blockSize={9} blockMargin={2} blockRadius={1}
+        colors={{ scale: "oklch(0.55 0.15 145)" }}>
+        <CalendarHeatmapBody yearClassName="text-base font-semibold">{({ activity: cell, dayIndex, weekIndex }) => <Tooltip>
           <TooltipTrigger tabIndex={0} render={<CalendarHeatmapBlock activity={cell} dayIndex={dayIndex} weekIndex={weekIndex}
             onCellClick={() => filterDay(cell.date)} />}/>
           <TooltipContent side="top" sideOffset={6} className="pointer-events-none text-xs">
@@ -157,7 +158,7 @@ export function PerspectiveCalendarHeatmap({ rows, queryXml, onDayFilter }: {
         <CalendarHeatmapFooter><CalendarHeatmapStat/><CalendarHeatmapLegend/></CalendarHeatmapFooter>
       </CalendarHeatmap> : layout === "weekday" ? <WeekdayHeatmap data={weekday}
         labels={{ cellLabel: "{{weekday}} {{hour}}: {{value}} saved entries" }} isNormalized
-        colors={{ scale: "var(--color-chart-2)" }}
+        colors={{ scale: "oklch(0.65 0.18 45)" }}
         extraRow={{ label: "Total", compute: sumByHour }}
         extraColumn={{ label: "Total", compute: sumByWeekday }}>
         <WeekdayHeatmapBody
@@ -171,7 +172,7 @@ export function PerspectiveCalendarHeatmap({ rows, queryXml, onDayFilter }: {
         <WeekdayHeatmapFooter><WeekdayHeatmapStat>{() => <div className="text-muted-foreground tabular-nums">Total saved entries: {shownCount.toLocaleString()}</div>}</WeekdayHeatmapStat>
           <WeekdayHeatmapLegend labels={{ less: "Fewer", more: "More" }}/></WeekdayHeatmapFooter>
       </WeekdayHeatmap> : <DateHeatmap data={hourly}
-        labels={{ cellLabel: "{{date}} {{hour}}: {{value}} saved entries" }} colors={{ scale: "var(--color-chart-3)" }}
+        labels={{ cellLabel: "{{date}} {{hour}}: {{value}} saved entries" }} colors={{ scale: "oklch(0.56 0.19 255)" }}
         extraRow={{ label: "Total", compute: sumByHour }}
         extraColumn={{ label: "Total", compute: sumByDate }}>
         <DateHeatmapBody

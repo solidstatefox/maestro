@@ -1,5 +1,6 @@
 "use client";
 
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { FileQuestion, FileText, FolderOpen, LayoutList, Link2, SearchX } from "lucide-react";
 import { CONFIGURE_LIST_BACKGROUND_COLOR } from "@/canvas/left/configure";
 import { ReturnToFiltersButton } from "@/canvas/left/return-to-filters";
@@ -49,9 +50,9 @@ export function GraphUnavailableResults({ wide = false }: { wide?: boolean }) {
   return <CenterPaneFrame defaultSize={wide ? 75 : 45}><CenterPaneBody>
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 text-sm">
       <span className="font-medium">Group <span className="tabular-nums">0</span> results by:</span>
-      <select aria-label="Group by" disabled defaultValue="none" className="min-w-28 rounded-md border bg-background px-2 py-1 text-sm text-muted-foreground disabled:opacity-70">
+      <MaestroSelect aria-label="Group by" disabled defaultValue="none" className="min-w-28 rounded-md border bg-background px-2 py-1 text-sm text-muted-foreground disabled:opacity-70">
         <option value="none">None</option>
-      </select>
+      </MaestroSelect>
       <span className="text-muted-foreground">in pages of</span>
       <input aria-label="Group page size" value="0" readOnly disabled className="w-12 rounded-md border bg-background px-2 py-1 text-center tabular-nums text-muted-foreground disabled:opacity-70" />
     </div>

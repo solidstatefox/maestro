@@ -14,11 +14,11 @@ import SHACLValidator from "rdf-validate-shacl";
 import { Writer } from "n3";
 import { getShapesGraph, queryPersonalSparql } from "@/lib/personal-sparql";
 import { createBlankNodeLabelAllocator } from "@/lib/bnode";
+import { isValidRdfIri as goodIri } from "@/lib/rdf-iri";
 
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const SH = "http://www.w3.org/ns/shacl#";
 const XSD = "http://www.w3.org/2001/XMLSchema#";
-const iriRe = /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i;
 
 /** A compact RDF triple from a Record DESCRIBE. */
 export type ShaclDataTriple = {
@@ -54,7 +54,6 @@ export type StandardShaclResult = {
 
 type Binding = { type?: string; value?: string; datatype?: string; "xml:lang"?: string };
 type BindingRow = Record<string, Binding>;
-const goodIri = (s: string): boolean => s.length <= 4096 && iriRe.test(s);
 const xmlEscape = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 
 function term(binding: Binding | undefined, bnodeId: (label: string) => string) {
@@ -67,7 +66,13 @@ function term(binding: Binding | undefined, bnodeId: (label: string) => string) 
     return rdf.blankNode(bnodeId(binding.value));
   }
   if (binding["xml:lang"]) return rdf.literal(binding.value, binding["xml:lang"]);
-  return rdf.literal(binding.value, rdf.namedNode(binding.datatype || `${XSD}string`));
+  return rdf.literal(binding.value, datatypeTerm(binding.datatype));
+}
+
+function datatypeTerm(datatype?: string) {
+  const iri = datatype ?? `${XSD}string`;
+  if (!goodIri(iri)) throw new Error(`Invalid RDF datatype IRI: ${JSON.stringify(iri)}.`);
+  return rdf.namedNode(iri);
 }
 
 function dataTerm(iriOrBlank: string, bnodeId: (label: string) => string) {
@@ -150,7 +155,7 @@ export async function validateStandardShaclRows(
         ? dataTerm(triple.object.startsWith("_:") ? triple.object : `_:${triple.object}`, dataBlankNodes)
         : triple.lang
         ? rdf.literal(triple.object, triple.lang)
-        : rdf.literal(triple.object, rdf.namedNode(triple.datatype || `${XSD}string`));
+        : rdf.literal(triple.object, datatypeTerm(triple.datatype));
     data.add(rdf.quad(subject, predicate, object));
   }
   const report = await new SHACLValidator(shapes, { factory: rdf }).validate(data);

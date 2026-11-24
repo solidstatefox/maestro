@@ -81,8 +81,9 @@ test('Transported Personal facets use ordinary factory and append after local wi
  assert.match(ui,/\.\.\.propertyNodes\.map/);
  assert.match(ui,/\.\.\.anchored\.map/);
  assert.match(cards,/const alias = widget\.anchor/);
- assert.match(cards,/setValue\(queryTree, node\.id/);
- assert.match(cards,/createTransportedFacetQuery/);
+ assert.match(cards,/setPropertyValue\(activeLeafId, widget\.uri, binding, checked, boundNode\?\.id\)/);
+ assert.match(cards,/createPersonalFacetValuesQuery\(queryTree, widget\.uri, valueRelationship\.direction,[\s\S]*?undefined, valueRelationship\.href\)/);
+ assert.doesNotMatch(cards,/createTransportedFacetQuery/);
 });
 
 test('Ancestor hover applies only to breadcrumb labels and union marker, not the control group',()=>{

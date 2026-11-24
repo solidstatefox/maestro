@@ -77,10 +77,48 @@ export function inspectFctValueReferences<T extends ReferenceNode>(root: T): {
   return {byId, references, referencedSubjects};
 }
 
-/** XPath-equivalent dependency lookup over the existing FCT tree; no history
- * or duplicate reference schema. A deletion is blocked only for references
- * outside the removed subtree, as internal references disappear together. */
-export function dependentFctValueReferences<T extends ReferenceNode>(root: T, removeId: string): ValueReference[] {
+export type NodeDeletionReference = ValueReference | {
+  anchorId: string;
+  sourceId: string;
+  targetId: string;
+  kind: "href";
+};
+
+export function deletionReferenceId(ref: NodeDeletionReference): string {
+  return ref.kind === "href" ? ref.anchorId : ref.valueId;
+}
+
+export function describeDeletionReference(ref: NodeDeletionReference): string {
+  return ref.kind === "href"
+    ? `<a id="${ref.anchorId}" href="${ref.targetId}"/>`
+    : `<value id="${ref.valueId}" ${ref.kind}="${ref.targetId}"/>`;
+}
+
+/** Native browser XPath over the canonical FCT XML. Compare href against
+ * every ID in the selected subtree, excluding anchors within that subtree.
+ * The normalized node ID is quoted as an XPath literal, not executable text. */
+function xpathAnchorDependencies(xml: XMLDocument, removeId: string): NodeDeletionReference[] {
+  const literal = !removeId.includes("'") ? `'${removeId}'`
+    : !removeId.includes('"') ? `"${removeId}"`
+    : `concat(${removeId.split("'").map(part => `'${part}'`).join(`,"'",`)})`;
+  const subtree = `//*[@id=${literal}]/descendant-or-self::*`;
+  const matches = xml.evaluate(
+    `//*[local-name()='a'][@href=${subtree}/@id and not(ancestor-or-self::*[@id=${literal}])]`,
+    xml, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null,
+  );
+  const result: NodeDeletionReference[] = [];
+  for (let i = 0; i < matches.snapshotLength; i++) {
+    const anchor = matches.snapshotItem(i) as Element;
+    result.push({kind:"href", anchorId:anchor.getAttribute("id") ?? "",
+      sourceId:anchor.parentElement?.getAttribute("id") ?? "", targetId:anchor.getAttribute("href") ?? ""});
+  }
+  return result;
+}
+
+/** Shared dependency guard. Value links retain their existing tree lookup;
+ * browser href matches come directly from XPath. The equivalent object-tree
+ * evaluation also supports detached/headless query operations without a DOM. */
+export function dependentFctNodeReferences<T extends ReferenceNode>(root: T, removeId: string, xml?: XMLDocument): NodeDeletionReference[] {
   const {byId, references} = inspectFctValueReferences(root);
   const removed = byId.get(removeId);
   if (!removed) return [];
@@ -90,5 +128,24 @@ export function dependentFctValueReferences<T extends ReferenceNode>(root: T, re
     for (const child of node.children) gather(child);
   };
   gather(removed);
-  return references.filter(ref => ids.has(ref.targetId) && !ids.has(ref.valueId));
+  const dependents: NodeDeletionReference[] = references.filter(ref => ids.has(ref.targetId) && !ids.has(ref.valueId));
+  if (xml) return [...dependents, ...xpathAnchorDependencies(xml, removeId)];
+  const visit = (node: ReferenceNode, parent: ReferenceNode | null): void => {
+    const id = nodeId(node);
+    const href = node.attributes.href;
+    if (node.name === "a" && href && ids.has(href) && !ids.has(id)) {
+      dependents.push({kind:"href", anchorId:id, sourceId:parent ? nodeId(parent) : "", targetId:href});
+    }
+    for (const child of node.children) visit(child, node);
+  };
+  visit(root, null);
+  return dependents;
+}
+
+/** Carry the exact dependency matches from the store to the existing alert. */
+export class FctNodeInUseError extends Error {
+  constructor(readonly nodeId: string, readonly dependents: NodeDeletionReference[]) {
+    super(`Cannot delete node ${nodeId}: its path is in use by ${dependents.map(describeDeletionReference).join(", ")}. Remove those references first.`);
+    this.name = "FctNodeInUseError";
+  }
 }

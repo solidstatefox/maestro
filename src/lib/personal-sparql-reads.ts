@@ -4,6 +4,8 @@ import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 import { loadPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
 import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
 import { maestroQueryFetch } from "@/lib/client-query-cache";
+import { personalAuthenticatedFetch } from "@/lib/client-personal-request";
+import { personalWriteEndpoint } from "@/lib/personal-endpoints";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
@@ -28,9 +30,9 @@ async function personalSelect(makeQuery: (graphs: { shapes: string; ontology: st
   const graphs = { shapes: `${resolveGraph(GRAPH.SHACL_POLICIES, base)}`, ontology: `${resolveGraph(GRAPH.ONTOLOGY_CACHE, base)}`, status: `${resolveGraph(GRAPH.STATUS, base)}` };
   const query = makeQuery(graphs);
   if (query.length > 100000) throw new Error("Provider discovery query is too long.");
-  const response = await maestroQueryFetch("/proxy/api/sparql", { method: "POST", cache: "no-store", signal,
+  const response = await personalAuthenticatedFetch(session,"/proxy/api/sparql", { method: "POST", cache: "no-store", signal,
     headers: { "Content-Type": "application/json", ...proxyDebugHeaders("urn:maestro:component:view-discover", "view-perspective:provider-discovery") },
-    body: JSON.stringify({ addr: `${graphs.shapes}@${session.graphStore}`, query }) });
+    body: JSON.stringify({ addr: `${graphs.shapes}@${personalWriteEndpoint(session)}`, query, personalRead: true }) }, maestroQueryFetch);
   // The retired separate discovery routes returned JSON.
   // Their replacement is a W3C SPARQL Results SELECT through /proxy/api/sparql.
   // Never silently treat a Next.js HTML error page as zero discovered providers.
@@ -90,41 +92,52 @@ export async function discoverViews(classes: string[], signal?: AbortSignal, que
   // Shape-authored providers may describe their input by sh:or/sh:property
   // without a targetClass; discovery is generic and not tied to any domain.
   // Do not gate all providers solely on class availability.
-  const classBranch = requested.length ? `{
-      VALUES ?matchedClass { ${requested.map(iri => `<${iri}>`).join(" ")} }
-      ?inputShape (sh:class|sh:targetClass) ?matchedClass .
-    }` : "";
-  // Contextual providers are identifiers already accepted by the current
-  // query's validated SHACL History context. They still require approval.
-  const contextualBranch = contextual.length ? `{
-      VALUES ?provider { ${contextual.map(iri => `<${iri}>`).join(" ")} }
-    }` : "";
-  const inputShapeBranch = `{ FILTER EXISTS {
-      ?inputShape sh:or ?conditions .
-      ?conditions (rdf:rest*/rdf:first) ?choice .
-      ?choice sh:property/sh:path ?predicate .
-    } }`;
-  const branches = [classBranch, contextualBranch, inputShapeBranch].filter(Boolean).join(" UNION ");
+  // Keep provider/widget/shape bindings in one basic graph pattern. Match
+  // eligibility with correlated filters, not independent UNION branches
+  // which can expose unrelated providers on Virtuoso.
+  const classMatch = requested.length ? `EXISTS {
+    ?inputShape (sh:class|sh:targetClass) ?matchedClass .
+    VALUES ?matchedClass { ${requested.map(iri => `<${iri}>`).join(" ")} }
+  }` : "false";
+  const contextualMatch = contextual.length ? `?provider IN (${contextual.map(iri => `<${iri}>`).join(", ")})` : "false";
+  // Shape-driven query/result runtimes validate their own property evidence.
+  // Do not offer ordinary class-only widgets based on someone else's sh:or.
+  const runtimeMatch = `EXISTS {
+    ?provider mui:queryTemplate ?queryTemplate ; mui:resultTemplate ?resultTemplate .
+    ?inputShape sh:or ?conditions .
+    ?conditions (rdf:rest*/rdf:first) ?choice .
+    ?choice sh:property/sh:path ?predicate .
+  }`;
+  const matchedClassProjection = requested.length ? `OPTIONAL {
+    ?inputShape (sh:class|sh:targetClass) ?matchedClass .
+    FILTER(?matchedClass IN (${requested.map(iri => `<${iri}>`).join(", ")}))
+  }` : "";
   const rows = await personalSelect(({ shapes }) => `PREFIX sh: <${SH}> PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
-SELECT DISTINCT ?provider ?matchedClass ?label ?template ?stylesheet ?shapeUri ?queryStylesheet ?resultStylesheet ?paletteStylesheet WHERE {
+SELECT DISTINCT ?provider ?matchedClass ?label ?icon ?template ?stylesheet ?shapeUri ?queryStylesheet ?resultStylesheet ?paletteStylesheet WHERE {
   GRAPH <${shapes}> {
     ?provider a mui:Provider ; mui:widget ?template ; mui:accepts ?inputShape .
     ?template a mui:PerspectiveWidget ; (rdf:value|mui:templateContent) ?stylesheet .
-    OPTIONAL { ?provider rdfs:label ?label }
+    OPTIONAL { ?provider rdfs:label ?label FILTER(LANG(?label) = "" || LANGMATCHES(LANG(?label), "en")) }
+    OPTIONAL { ?provider mui:icon ?icon }
     BIND(?inputShape AS ?shapeUri)
     OPTIONAL { ?provider mui:queryTemplate ?qTemplate . ?qTemplate (rdf:value|mui:templateContent) ?queryStylesheet }
     OPTIONAL { ?provider mui:resultTemplate ?rTemplate . ?rTemplate (rdf:value|mui:templateContent) ?resultStylesheet }
     OPTIONAL { ?provider mui:paletteTemplate ?pTemplate . ?pTemplate (rdf:value|mui:templateContent) ?paletteStylesheet }
-    ${branches}
+    FILTER((${classMatch}) || (${contextualMatch}) || (${runtimeMatch}))
+    ${matchedClassProjection}
     FILTER(CONTAINS(STR(?stylesheet), 'xsl:stylesheet') || CONTAINS(STR(?stylesheet), 'xsl:transform'))
   }
-} LIMIT 100`, signal);
+} ORDER BY ?provider ?template ?shapeUri LIMIT 1000`, signal);
   const byProvider = new Map<string, DiscoveredViewProvider>();
   for (const row of rows) {
     const uri = get(row, "provider"), template = get(row, "template"), stylesheet = get(row, "stylesheet");
     if (!safeIri(uri) || !safeIri(template) || !stylesheet || stylesheet.length > 250000) continue;
+    const matchedClass = get(row, "matchedClass");
+    const queryStylesheet = get(row, "queryStylesheet"), resultStylesheet = get(row, "resultStylesheet");
+    // Reject rows whose claimed eligibility is not in the requested scope.
+    if (!requested.includes(matchedClass) && !contextual.includes(uri) && !(queryStylesheet && resultStylesheet)) continue;
     if (!byProvider.has(uri)) byProvider.set(uri, {
-      uri, matchedClass: get(row, "matchedClass"), label: get(row, "label") || uri,
+      uri, matchedClass: get(row, "matchedClass"), label: get(row, "label") || uri, icon: get(row, "icon") || undefined,
       template, stylesheet, shapeUri: get(row, "shapeUri"),
       queryStylesheet: get(row, "queryStylesheet"), resultStylesheet: get(row, "resultStylesheet"),
       paletteStylesheet: get(row, "paletteStylesheet"),
@@ -134,5 +147,16 @@ SELECT DISTINCT ?provider ?matchedClass ?label ?template ?stylesheet ?shapeUri ?
   const { readClientPolicyApprovals } = await import("@/lib/client-policy-approvals");
   const decisions = await readClientPolicyApprovals([...byProvider.keys()], signal, "urn:maestro:component:view-discover");
   const approved = new Set(decisions.filter(decision => decision.status === "Approved").map(decision => decision.uri));
-  return [...byProvider.values()].filter(view => approved.has(view.uri));
+  const widgets = new Map<string, DiscoveredViewProvider>();
+  const implementations = new Set<string>();
+  for (const view of byProvider.values()) {
+    if (!approved.has(view.uri)) continue;
+    const key = view.template;
+    const implementation = JSON.stringify([view.stylesheet, view.queryStylesheet, view.resultStylesheet, view.paletteStylesheet]);
+    if (!widgets.has(key) && !implementations.has(implementation)) {
+      widgets.set(key, view);
+      implementations.add(implementation);
+    }
+  }
+  return [...widgets.values()];
 }

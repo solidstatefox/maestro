@@ -15,7 +15,7 @@ export async function clientListTranscoders(rulesGraph: string, signal?: AbortSi
   const rows = await selectPersonal(`PREFIX otc: <${OTC}> PREFIX mui: <${MUI}> PREFIX dcterms: <${DCT}>
     SELECT DISTINCT ?transcoder ?title WHERE { GRAPH <${rulesGraph}> {
       ?transcoder a otc:Transcoder ; otc:hasRule ?rule . OPTIONAL { ?transcoder dcterms:title ?title }
-    } } LIMIT 100`, ctx, signal);
+    } } LIMIT 100`, ctx, signal,"client-otc-discovery:clientListTranscoders");
   return rows.map(row => ({uri: row.transcoder?.value ?? "", title: row.title?.value || row.transcoder?.value || ""}));
 }
 
@@ -30,7 +30,7 @@ export async function clientListChatSurveys(signal?: AbortSignal) {
       ?widget a mui:RdfTranscoderWidget .
       OPTIONAL { ?transcoder dcterms:title ?title }
       OPTIONAL { ?transcoder dcterms:description ?description }
-    } } ORDER BY ?title LIMIT 50`, ctx, signal);
+    } } ORDER BY ?title LIMIT 50`, ctx, signal,"client-otc-discovery:clientListChatSurveys");
   return { rulesGraph, surveys: rows.flatMap(row => {
     const uri = row.transcoder?.value;
     return uri ? [{ uri, title: row.title?.value || uri.split("#").pop() || uri,
@@ -42,5 +42,5 @@ export async function clientListChatSurveys(signal?: AbortSignal) {
 export async function clientVerifyOtcGraph(graph: string, signal?: AbortSignal): Promise<{exists: boolean}> {
   if (!safeIri(graph)) throw new Error("Invalid OTC graph IRI.");
   const ctx = await personalContext();
-  return { exists: await personalExists(`GRAPH <${graph}> { ?s ?p ?o }`, ctx, signal) };
+  return { exists: await personalExists(`GRAPH <${graph}> { ?s ?p ?o }`, ctx, signal,"client-otc-discovery:clientVerifyOtcGraph") };
 }

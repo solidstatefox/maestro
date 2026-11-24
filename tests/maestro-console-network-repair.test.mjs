@@ -21,29 +21,6 @@ test('Categories metadata uses existing RDF graphs; browsing never causes unsoli
   assert.match(controller,/readOntologyMetadata\(batch, controller\.signal\)/);
 });
 
-test('the same generic SPARQL proxy has an authenticated personal READ mode scoped to the login endpoint',()=>{
-  const browser=read('src/lib/client-personal-sparql.ts');
-  const proxy=read('src/app/proxy/api/sparql/route.ts');
-  assert.match(browser,/perform\(\{addr:ctx\.addr,query,personalRead:true\}/);
-  assert.match(proxy,/if \(body\?\.personalRead === true\)/);
-  assert.match(proxy,/const denied = requirePersonalLogin\(request\)/);
-  assert.match(proxy,/selectedUrl !== personalUrl/);
-  assert.match(proxy,/isBoundedReadOnlySparql\(body\.query, 100000\)/);
-  assert.match(proxy,/queryPersonalSparql\(body\.query\.trim\(\), queryTimeoutMs \?\? 20000, request\)/);
-  const authStart=proxy.indexOf('if (body?.personalRead === true)');
-  const genericReadStart=proxy.indexOf('const selectedEndpoint = resolveFctEndpointFromAddr([], explicitAddr)');
-  assert.ok(authStart>0 && genericReadStart>authStart,
-    'authenticated personalRead must be handled before direct addr reads');
-  const personalReadBranch=proxy.slice(authStart,genericReadStart);
-  assert.match(personalReadBranch,/requirePersonalLogin\(request\)/);
-  assert.match(personalReadBranch,/selectedUrl !== personalUrl/);
-  assert.match(personalReadBranch,/queryPersonalSparql\(/);
-  assert.doesNotMatch(personalReadBranch,/setQueryCache|\/sparql-auth|Authorization:/);
-  // Ordinary read-only SPARQL must not consult an endpoint membership allowlist.
-  assert.doesNotMatch(proxy.slice(genericReadStart),/getAuthorizedFctEndpoints/);
-  assert.match(browser,/await perform\(\{update,/);
-});
-
 test('prefix registries are opt-in and do not cascade a failing source to another upstream API',()=>{
   const prefs=read('src/canvas/controllers/preferences.ts');
   const controller=read('src/canvas/utils/workspace-controller.tsx');

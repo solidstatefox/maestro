@@ -41,6 +41,8 @@ export function sparqlEditorUrl(executionAddr: string | undefined, query: string
   url.hash = "";
   url.searchParams.set("qtxt", query);
   // The default dataset graph is part of the same execution address.
-  if (parsed.graph) url.searchParams.set("default-graph-uri", parsed.graph);
+  // $ALL$ is Maestro's unbound FCT graph sentinel, not an RDF graph IRI.
+  // Never submit it as a default dataset graph to Virtuoso's query editor.
+  if (parsed.graph && parsed.graph !== "$ALL$") url.searchParams.set("default-graph-uri", parsed.graph);
   return url.toString();
 }

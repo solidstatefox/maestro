@@ -1,4 +1,6 @@
 "use client";
+import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
+
 import { ErrorDetails } from "@/components/ui/error-details";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { createUriAutocompleteController, selectUriAutocomplete, type UriSuggestion } from "@/lib/app-lifecycle/uri-autocomplete";
@@ -34,9 +36,9 @@ export function RootUriAutocomplete({ value, addr, propertyUris, gateState, susp
         const execute = async () => {
           const query = createRootUriAutocompleteQuery(prefix, addr, settings, propertyUris);
           if (!query) return {results: { bindings: [] as Array<{uri?: {type?: string;value?: string};label?: {value?: string};type?:{type?:string;value?:string}}> }};
-          const response = await fetch("/proxy/api/sparql", {
+          const response = await attributedSparqlFetch("/proxy/api/sparql", {
             method: "POST", signal: requestSignal, cache: "no-store",
-            headers: {"Content-Type":"application/json", "X-Maestro-Query-Label":"Root:Autocomplete",
+            headers: {"x-maestro-debug-source":"urn:maestro:component:Root:Autocomplete","x-maestro-debug-component":"Root:Autocomplete","Content-Type":"application/json", "X-Maestro-Query-Label":"Root:Autocomplete",
               "x-maestro-query-timeout-ms": String(settings.timeoutSeconds * 1000)},
             body: JSON.stringify({addr,query,requestClass:"autocomplete"}),
           });

@@ -48,6 +48,7 @@ function loadDerived() {
     './fct-view-types': { FCT_VIEW_TYPES: fctTypes },
     './fct-groups-carrier': { ungroupForMembers: removeGrouping },
     './bnode': { isBlankNodeTerm: () => false },
+    './fct-get-path': {},
     './fct-query': { attachViewToPropertyInQueryTree: attach },
     './fct-query-api': { fctQueryTreeApi, cloneFctQueryNode: cleanTree },
   };
@@ -115,7 +116,9 @@ test('Facet and center derive group headings with identical createGroupValuesQue
   const facet = read('src/canvas/left/filter.tsx');
   const source = read('src/lib/fct-query-derived.ts');
   assert.match(center, /createGroupValuesQuery\(queryTree, selectedGroupByOption/);
-  assert.match(facet, /createGroupValuesQuery\(tree, groupBy\.option/g);
+  assert.match(facet, /createPersonalFacetValuesQuery\(tree, propertyUri/);
+  assert.match(facet, /createPersonalFacetValuesQuery\(tree, uri, "reverse"/);
+  assert.match(source, /return createPersonalFacetValuesQuery\(sourceTree, option\.uri, option\.direction, paging/);
   assert.match(source, /sort:\s*"count"/);
   const translator = read('src/lib/fct-sparql-translator.ts');
   assert.match(translator, /const isCountSorted = viewNode\?\.attributes\.sort === "count"/);
@@ -123,9 +126,32 @@ test('Facet and center derive group headings with identical createGroupValuesQue
   assert.ok(!source.includes('list-groups'), 'old Group-by has no separate view type');
 });
 
-test('Grouped Personal property and Role rows use their FCT group counts, not separate failing count requests', () => {
+test('Every Personal property and Role row uses the FCT group count without a scalar request', () => {
   const property = read('src/canvas/left/personal-widget-cards.tsx');
   const role = read('src/canvas/left/filter.tsx');
-  assert.match(property, /isGroupByFacet \? \([\s\S]*?shortenCount\(groupedCount\)[\s\S]*?\) : \([\s\S]*?<DistinctCount/);
-  assert.match(role, /isGroupByRole \? \([\s\S]*?shortenCount\(groupedCount\)[\s\S]*?\) : \([\s\S]*?<DistinctCount/);
+  const roleWidget = role.slice(role.indexOf('export function PersonalRoleWidget('), role.indexOf('export function useFacetRuntimeState('));
+  for (const widget of [property, roleWidget]) {
+    assert.match(widget, /facetMembershipCount\(value\)/);
+    assert.match(widget, /shortenCount\(groupedCount\)/);
+    assert.doesNotMatch(widget, /<DistinctCount|distinctCountQueryFor\(/);
+  }
+  assert.match(role, /countedFacetValues\(Array\.isArray\(data\.results\)/);
+});
+
+test('counted Personal response requires ?ct, excludes zero rows, and preserves language-tagged values and counts', {skip: !ts}, () => {
+  const js = ts.transpileModule(read('src/canvas/utils/fct-response.ts'), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+  const mod = {exports:{}};
+  // Only test pure row validation; no React, network or DOM is involved.
+  new Function('module','exports','require',js)(mod,mod.exports,() => ({}));
+  const {countedFacetValues,facetMembershipCount} = mod.exports;
+  const row = (value, count, lang='en') => ({uri:value,title:value,termType:'literal',lang,matches:[],columns:[
+    {value,termType:'literal',lang,attributes:{var:'c1'},raw:{}},
+    {value:count,termType:'literal',datatype:'http://www.w3.org/2001/XMLSchema#integer',attributes:{var:'ct'},raw:{}}
+  ]});
+  const values=countedFacetValues([row('Multilingualism','316'),row('linguistic','316'),row('excluded','0'),row('linguistic','316')]);
+  assert.deepEqual(values.map(v=>[v.uri,v.lang,facetMembershipCount(v)]),[['Multilingualism','en',316],['linguistic','en',316]]);
+  for(const bad of ['', 'NaN', '-1', '1.5', 'Infinity']) assert.throws(()=>countedFacetValues([row('invalid',bad)]),/valid membership count/);
+  const wrong=row('wrong','316');wrong.columns[1].attributes.var='n';
+  assert.throws(()=>countedFacetValues([wrong]),/valid membership count/);
+  assert.equal(facetMembershipCount({uri:'selected',matches:[]}),undefined);
 });

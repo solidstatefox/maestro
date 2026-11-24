@@ -39,13 +39,20 @@ ${snapshot.xml}`);
     const triples = Array.from(xml.getElementsByTagNameNS(ns, "row")).flatMap((row) => {
       const cells = Array.from(row.getElementsByTagNameNS(ns, "column"));
       if (cells.length < 3) return [];
-      const [subject, predicate, object] = cells.slice(0, 3).map((cell) => cell.textContent?.trim() ?? "");
+      const [subjectCell, predicateCell, objectCell] = cells;
+      const subject = subjectCell.textContent ?? "";
+      const predicate = predicateCell.textContent ?? "";
+      const object = objectCell.textContent ?? "";
       if (!subject || !predicate) return [];
-      // The viewer snapshot is normalized text-only FCT XML. Use the value's
-      // lexical form for term-kind checks until term metadata is retained.
-      const objectType = cells[2].getAttribute("termType") || (object.startsWith("_:") ? "bnode" : /^(?:https?:|gttp:|urn:)/i.test(object) ? "uri" : "literal");
-      const datatype = cells[2].getAttribute("datatype") || undefined;
-      return [{ subject, predicate, object, objectType, ...(datatype ? { datatype } : {}) }];
+      // The Record loader preserves RDF term metadata; never infer a literal's
+      // type from its lexical form or discard language/whitespace.
+      const subjectType = subjectCell.getAttribute("termType");
+      const objectType = objectCell.getAttribute("termType");
+      if (subjectType !== "uri" && subjectType !== "bnode") throw new Error(`Invalid Record subject term type: ${JSON.stringify(subjectType)} for ${JSON.stringify(subject)}`);
+      if (objectType !== "uri" && objectType !== "bnode" && objectType !== "literal") throw new Error(`Invalid Record object term type: ${JSON.stringify(objectType)} for ${JSON.stringify(object)}`);
+      const datatype = objectCell.getAttribute("datatype") || undefined;
+      const lang = objectCell.getAttributeNS("http://www.w3.org/XML/1998/namespace", "lang") || undefined;
+      return [{ subject, subjectType, predicate, object, objectType, ...(datatype ? { datatype } : {}), ...(lang ? { lang } : {}) }];
     });
     const response = await clientRecordPolicyResponse({
       method: "POST", cache: "no-store", signal,

@@ -16,15 +16,16 @@ import SHACLValidator from "rdf-validate-shacl";
 import { Writer } from "n3";
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { createBlankNodeLabelAllocator } from "@/lib/bnode";
+import { isValidRdfIri as goodIri } from "@/lib/rdf-iri";
 
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const SH = "http://www.w3.org/ns/shacl#";
 const XSD = "http://www.w3.org/2001/XMLSchema#";
-const iriRe = /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i;
 
 /** A compact RDF triple from a Record DESCRIBE. */
 export type ShaclDataTriple = {
   subject: string;
+  subjectType?: "uri" | "bnode";
   predicate: string;
   object: string;
   objectType?: string;
@@ -56,7 +57,6 @@ export type StandardShaclResult = {
 
 type Binding = { type?: string; value?: string; datatype?: string; "xml:lang"?: string };
 type BindingRow = Record<string, Binding>;
-const goodIri = (s: string): boolean => s.length <= 4096 && iriRe.test(s);
 const xmlEscape = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 
 function term(binding: Binding | undefined, bnodeId: (label: string) => string) {
@@ -69,14 +69,20 @@ function term(binding: Binding | undefined, bnodeId: (label: string) => string) 
     return rdf.blankNode(bnodeId(binding.value));
   }
   if (binding["xml:lang"]) return rdf.literal(binding.value, binding["xml:lang"]);
-  return rdf.literal(binding.value, rdf.namedNode(binding.datatype || `${XSD}string`));
+  return rdf.literal(binding.value, datatypeTerm(binding.datatype));
+}
+
+function datatypeTerm(datatype?: string) {
+  const iri = datatype ?? `${XSD}string`;
+  if (!goodIri(iri)) throw new Error(`Invalid RDF datatype IRI: ${JSON.stringify(iri)}.`);
+  return rdf.namedNode(iri);
 }
 
 function dataTerm(iriOrBlank: string, bnodeId: (label: string) => string) {
   if (iriOrBlank.startsWith("_:")) {
     return rdf.blankNode(bnodeId(iriOrBlank));
   }
-  if (!goodIri(iriOrBlank)) throw new Error("Invalid RDF subject or object IRI.");
+  if (!goodIri(iriOrBlank)) throw new Error(`Invalid RDF subject or object IRI: ${JSON.stringify(iriOrBlank)}.`);
   return rdf.namedNode(iriOrBlank);
 }
 
@@ -97,7 +103,7 @@ SELECT DISTINCT ?s ?p ?o WHERE {
     ?s ?p ?o .
   }
 } LIMIT ${max + 1}`;
-  const rows = await selectPersonal(sparql, ctx, signal) as BindingRow[];
+  const rows = await selectPersonal(sparql, ctx, signal,"client-record-shacl:readClientShaclShapeTriples") as BindingRow[];
   if (!rows.length) throw new Error(`SHACL shape ${shapeUri} is missing or inaccessible in ${shapesGraph}.`);
   if (rows.length > max) throw new Error("SHACL shape exceeds the 5000-triple validation limit.");
   return rows;
@@ -142,20 +148,27 @@ export async function validateClientShaclRows(
   }
   const data = rdf.dataset();
   const dataBlankNodes = createBlankNodeLabelAllocator("data");
-  for (const triple of triples) {
-    if (!triple || !goodIri(triple.predicate) || !triple.subject || typeof triple.object !== "string" || triple.object.length > 100000) {
-      throw new Error("Invalid DESCRIBE triple for SHACL validation.");
+  for (const [index, triple] of triples.entries()) {
+    try {
+      if (!triple || !goodIri(triple.predicate) || !triple.subject || typeof triple.object !== "string" || triple.object.length > 100000) {
+        throw new Error("Invalid DESCRIBE triple for SHACL validation.");
+      }
+      const subjectValue = triple.subjectType === "bnode" && !triple.subject.startsWith("_:") ? `_:${triple.subject}` : triple.subject;
+      if (triple.subjectType === "uri" && !goodIri(subjectValue)) throw new Error(`Invalid RDF subject IRI: ${JSON.stringify(subjectValue)}.`);
+      const subject = dataTerm(subjectValue, dataBlankNodes);
+      const predicate = rdf.namedNode(triple.predicate);
+      if (triple.objectType === "uri" && !goodIri(triple.object)) throw new Error(`Invalid RDF object IRI: ${JSON.stringify(triple.object)}.`);
+      const object = triple.objectType === "uri"
+        ? dataTerm(triple.object, dataBlankNodes)
+        : triple.objectType === "bnode"
+          ? dataTerm(triple.object.startsWith("_:") ? triple.object : `_:${triple.object}`, dataBlankNodes)
+          : triple.lang
+          ? rdf.literal(triple.object, triple.lang)
+          : rdf.literal(triple.object, datatypeTerm(triple.datatype));
+      data.add(rdf.quad(subject, predicate, object));
+    } catch (error) {
+      throw new Error(`Record RDF triple ${index + 1}: ${error instanceof Error ? error.message : String(error)}\n${JSON.stringify(triple)}`);
     }
-    const subject = dataTerm(triple.subject, dataBlankNodes);
-    const predicate = rdf.namedNode(triple.predicate);
-    const object = triple.objectType === "uri"
-      ? dataTerm(triple.object, dataBlankNodes)
-      : triple.objectType === "bnode"
-        ? dataTerm(triple.object.startsWith("_:") ? triple.object : `_:${triple.object}`, dataBlankNodes)
-        : triple.lang
-        ? rdf.literal(triple.object, triple.lang)
-        : rdf.literal(triple.object, rdf.namedNode(triple.datatype || `${XSD}string`));
-    data.add(rdf.quad(subject, predicate, object));
   }
   const report = await new SHACLValidator(shapes, { factory: rdf }).validate(data);
   const violations: StandardShaclViolation[] = report.results.map(result => ({

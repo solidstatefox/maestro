@@ -1,7 +1,8 @@
 "use client";
 
 import { FCT_VIEW_TYPES } from "./fct-view-types";
-import { ungroupForMembers } from "./fct-groups-carrier";
+import { findGroupCarrier, moveFctView, ungroupForMembers } from "./fct-groups-carrier";
+import { getPath, indexFctPaths } from "./fct-get-path";
 import { isBlankNodeTerm } from "./bnode";
 import { attachViewToPropertyInQueryTree } from "./fct-query";
 import { fctQueryTreeApi, cloneFctQueryNode } from "./fct-query-api";
@@ -108,7 +109,10 @@ export function createPersonalRoleValuesQuery(tree: FctQueryTree, roleNode: FctQ
 export function createCooccurringPropertyWidgetQuery(tree: FctQueryTree, propertyUri: string, selectedId: string): FctQueryTree {
   const data = fctQueryTreeApi.getDataTree(tree);
   const view = findQueryView(data.children);
-  if (!view) return createPropertyWidgetQuery(data, propertyUri, "forward", undefined, true);
+  if (!view) return createPersonalFacetValuesQuery(data, propertyUri, "forward", {limit: 300, offset: 0});
+  const focus = findGroupCarrier(data)?.parentOfCarrier ?? data;
+  const selectedPath = getPath(indexFctPaths<FctQueryTree | FctQueryNode>(data), focus, selectedId);
+  const countScope: Record<string, string> = selectedPath ? { countAncestor: String(selectedPath.path.length) } : {};
   const stripView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes
     .filter(node => node.name !== "view")
     .map(node => ({ ...node, attributes: { ...node.attributes }, children: stripView(node.children) }));
@@ -119,12 +123,22 @@ export function createCooccurringPropertyWidgetQuery(tree: FctQueryTree, propert
     if (!inserted && nodes.some(node => node.id === selectedId && node.name === "property" && node.attributes.iri === propertyUri)) {
       inserted = true;
       children.push({ id: `tag-cloud-projection-${encodeURIComponent(propertyUri)}`, name: "property",
-        attributes: { iri: propertyUri }, children: [{ ...view, attributes: { ...view.attributes, type: FCT_VIEW_TYPES.LIST, offset: "0", limit: "300" }, children: [] }] });
+        attributes: { iri: propertyUri }, children: [{ ...view, attributes: { ...view.attributes, type: FCT_VIEW_TYPES.LIST, sort: "count", offset: "0", limit: "300", ...countScope }, children: [] }] });
     }
     return children;
   };
   const projected = withProjection(stripView(data.children));
-  return inserted ? { ...data, children: projected } : createPropertyWidgetQuery(data, propertyUri, "forward", undefined, true);
+  return inserted ? { ...data, children: projected } : createPersonalFacetValuesQuery(data, propertyUri, "forward", {limit: 300, offset: 0});
+}
+
+/** Relocate the one cloned view to an exact existing relationship. No new edge,
+ * no live navigation, and no Group By projection. */
+function moveFacetView(tree: FctQueryTree, href: string): FctQueryTree {
+  const target = findQueryNode(tree.children, href);
+  const view = findQueryView(tree.children);
+  if (!target || (target.name !== "property" && target.name !== "property-of") || !view)
+    throw new Error(`Personal facet href does not resolve to a relationship: ${href}`);
+  return moveFctView(tree, target.id, { ...view.attributes });
 }
 
 export function createPropertyWidgetQuery(
@@ -133,6 +147,7 @@ export function createPropertyWidgetQuery(
   direction: RelationshipDirection = "forward",
   selectedNodeId?: string,
   forPersonalFacet = false,
+  href?: string,
 ): FctQueryTree {
   // Facet candidate values belong to the incoming resource selection. In
   // groups mode the live view is on the grouped term; derive a parent-scope
@@ -140,6 +155,14 @@ export function createPropertyWidgetQuery(
   // The selected group facet itself uses createGroupValuesQuery instead.
   tree = fctQueryTreeApi.getDataTree(tree);
   if (forPersonalFacet) tree = ungroupForMembers(tree);
+  if (href) {
+    // A Personal facet reference changes only the view's carrier. Retain the
+    // entire original path and all other population constraints.
+    tree = moveFacetView(tree, href);
+    const target = findQueryNode(tree.children, href)!;
+    if (forPersonalFacet) delete target.attributes.exclude;
+    return personalFacetListView(tree, forPersonalFacet);
+  }
   const copyNode = (node: FctQueryNode): FctQueryNode => cloneFctQueryNode(node, "data");
   const selectedRoleIsAncestor = direction === "reverse" && Boolean(selectedNodeId) &&
     treeNodeContainsView(tree.children, selectedNodeId!);
@@ -267,60 +290,35 @@ function findQueryView(nodes: FctQueryNode[]): FctQueryNode | null {
  * Each group's members are then built by createGroupMemberQuery, which clones
  * the source query, binds the heading value to the property and keeps the view
  * on the result resources. */
-/** Project the ancestor population from a transported path, using original
- * relationship IDs. This remains a derived FCT query; the live <view> never
- * leaves its focus. Both heading COUNT and member SELECT run server-side. */
-function projectTransportedGroup(
-  source: FctQueryTree, option: GroupByOption,
-  value?: QueryResultValue, paging?: {limit:number;offset:number},
+/** The single counted value-list used by Personal facets and Group By headings.
+ * LIST + sort=count is the existing Group By contract, NOT the LIST_COUNT view.
+ * href relocates the view; countAncestor identifies the original population
+ * along that same path rather than counting the terminal's immediate parent. */
+export function createPersonalFacetValuesQuery(
+  sourceTree: FctQueryTree,
+  propertyUri: string,
+  direction: RelationshipDirection,
+  paging: { limit: number; offset: number },
+  nodeId?: string,
+  href?: string,
 ): FctQueryTree {
-  if (!option.anchorId || !option.parentId) throw new Error("A transported group needs its anchor and parent identities.");
-  const clean = ungroupForMembers(source);
-  let originalView: FctQueryNode | undefined;
-  const stripView = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.flatMap(node => {
-    if (node.name === "view") { originalView = node; return []; }
-    return [{...node,children:stripView(node.children)}];
+  const clean = ungroupForMembers(sourceTree);
+  const selected = nodeId ? findQueryNode(clean.children, nodeId) : null;
+  let countAncestor: string | undefined;
+  if (href) {
+    const focus = findGroupCarrier(clean)?.parentOfCarrier ?? clean;
+    const path = getPath(indexFctPaths<FctQueryTree | FctQueryNode>(clean), focus, href);
+    if (!path) throw new Error(`Personal facet href must resolve below the active focus: ${href}`);
+    countAncestor = String(path.path.length);
+  }
+  const values = !href && direction === "reverse" && selected?.name === "property-of"
+    ? createPersonalRoleValuesQuery(clean, selected)
+    : createPropertyWidgetQuery(clean, propertyUri, direction, nodeId, true, href);
+  return setQueryViewAttributes(values, {
+    type: FCT_VIEW_TYPES.LIST, sort: "count",
+    limit: String(paging.limit), offset: String(paging.offset),
+    ...(countAncestor !== undefined ? { countAncestor } : {}),
   });
-  const contents = stripView(clean.children);
-  if (!originalView) throw new Error("The transported group requires an active view.");
-  const isValues = value === undefined;
-  const view: FctQueryNode = { ...originalView, attributes: {
-    ...originalView.attributes, type: FCT_VIEW_TYPES.LIST,
-    sort: isValues ? "count" : "",
-    limit: String(paging?.limit ?? (isValues ? 30 : Number(originalView.attributes.limit) || 100)),
-    offset: String(paging?.offset ?? 0),
-    ...(isValues ? { transportedGroupTarget: option.nodeId } : {}),
-  }, children: [] };
-  // A remote grouping target binds the original relation from the ancestor
-  // path. Its attribute never enters the live query and is validated by the
-  // FCT compiler's explicit derived-query permission.
-  const selected = value ? groupValueBinding(value) : undefined;
-  const selectedValue: FctQueryNode | undefined = selected ? {
-    id: `transported-group-value-${option.nodeId}`,
-    name: "value", attributes: {...(selected.datatype ? {datatype:selected.datatype} : {}),
-      ...(selected.lang ? {"xml:lang":selected.lang} : {})},
-    text:selected.text, children:[],
-  } : undefined;
-  let targetSeen = false;
-  let parentSeen = false;
-  const project = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map(node => {
-    let children = project(node.children);
-    const attrs = {...node.attributes};
-    if (node.id === option.nodeId && (node.name === "property" || node.name === "property-of")) {
-      targetSeen = true;
-      if (isValues) attrs.group = "true";
-      else children = [...children.filter(child => child.name !== "value"), selectedValue!];
-    }
-    if (node.id === option.parentId) {
-      parentSeen = true;
-      children.push(view);
-    }
-    return {...node, attributes:attrs, children};
-  });
-  let children = project(contents);
-  if (option.parentId === clean.attributes.id) { parentSeen = true; children = [...children,view]; }
-  if (!targetSeen || !parentSeen) throw new Error("The transported group path is no longer in the live FCT query.");
-  return {...clean, children};
 }
 
 export function createGroupValuesQuery(
@@ -328,35 +326,43 @@ export function createGroupValuesQuery(
   option: GroupByOption,
   paging: { limit: number; offset: number } = { limit: 30, offset: 0 },
 ): FctQueryTree {
-  // Preserve the committed `group="true"` in the live query, but enumerate
-  // headings with the *same derived FCT query* as the corresponding Personal
-  // facet. This is the working pre-grouped-LIST contract: the value/count
-  // pairs on the left and in the center are the same population.
-  if (option.anchorId) return projectTransportedGroup(sourceTree, option, undefined, paging);
-  const clean = ungroupForMembers(sourceTree);
-  const selected = findQueryNode(clean.children, option.nodeId);
-  let groups: FctQueryTree;
-  if (option.direction === "forward" && option.uri === RDF_TYPE_URI) {
-    // Category groups are the same classes view as the Categories widget.
-    groups = setQueryViewAttributes(clean, { type: FCT_VIEW_TYPES.CLASSES });
-  } else if (option.direction === "reverse" && selected?.name === "property-of") {
-    // A selected role's bound <value> filters must not hide other candidate
-    // role values from the groups list.
-    groups = createPersonalRoleValuesQuery(clean, selected);
-  } else {
-    groups = createPropertyWidgetQuery(clean, option.uri, option.direction, option.nodeId, true);
+  if (!option.anchorId && option.direction === "forward" && option.uri === RDF_TYPE_URI) {
+    // Category groups retain the existing count-sorted classes view.
+    return setQueryViewAttributes(ungroupForMembers(sourceTree), {
+      type: FCT_VIEW_TYPES.CLASSES, sort: "count", limit: String(paging.limit), offset: String(paging.offset),
+    });
   }
-  // Match the original Group-by facet contract exactly: sort="count" is
-  // semantic here, not just presentation. For list queries the SPARQL compiler
-  // projects COUNT(DISTINCT focus) as column two only with this attribute.
-  // Only a real COUNT projection may stand for group membership. Additional
-  // value/badge projections are not group counts.
-  return setQueryViewAttributes(groups, {
-    type: option.direction === "forward" && option.uri === RDF_TYPE_URI
-      ? FCT_VIEW_TYPES.CLASSES : FCT_VIEW_TYPES.LIST,
-    sort: "count",
-    limit: String(paging.limit),
-    offset: String(paging.offset),
+  return createPersonalFacetValuesQuery(sourceTree, option.uri, option.direction, paging,
+    option.nodeId, option.anchorId ? option.nodeId : undefined);
+}
+
+/** Only Result group membership binds a heading to the existing path. The
+ * value-list itself is the ordinary Personal facet query above. */
+function projectTransportedGroupMember(source: FctQueryTree, option: GroupByOption, value: QueryResultValue): FctQueryTree {
+  if (!option.anchorId || !option.parentId) throw new Error("A transported group needs its anchor and parent identities.");
+  const clean = ungroupForMembers(source);
+  const originalView = findQueryView(clean.children);
+  if (!originalView) throw new Error("The transported group requires an active view.");
+  const selected = groupValueBinding(value);
+  const selectedValue: FctQueryNode = {
+    id: `transported-group-value-${option.nodeId}`, name: "value",
+    attributes: { ...(selected.datatype ? { datatype: selected.datatype } : {}),
+      ...(selected.lang ? { "xml:lang": selected.lang } : {}) }, text: selected.text, children: [],
+  };
+  let targetSeen = false;
+  const bind = (nodes: FctQueryNode[]): FctQueryNode[] => nodes.map(node => {
+    let children = bind(node.children);
+    if (node.id === option.nodeId && (node.name === "property" || node.name === "property-of")) {
+      targetSeen = true;
+      children = [...children.filter(child => child.name !== "value"), selectedValue];
+    }
+    return { ...node, children };
+  });
+  const bound = { ...clean, children: bind(clean.children) };
+  if (!targetSeen || (option.parentId !== clean.attributes.id && !findQueryNode(clean.children, option.parentId)))
+    throw new Error("The transported group path is no longer in the live FCT query.");
+  return moveFctView(bound, option.parentId === clean.attributes.id ? null : option.parentId, {
+    ...originalView.attributes, type: FCT_VIEW_TYPES.LIST, sort: "", offset: "0",
   });
 }
 
@@ -365,7 +371,7 @@ export function createGroupMemberQuery(
   option: GroupByOption,
   groupValue: QueryResultValue,
 ): FctQueryTree {
-  if (option.anchorId) return projectTransportedGroup(sourceTree, option, groupValue);
+  if (option.anchorId) return projectTransportedGroupMember(sourceTree, option, groupValue);
   let tree: FctQueryTree = ungroupForMembers({
     ...sourceTree,
     attributes: { ...sourceTree.attributes },
@@ -498,13 +504,11 @@ export function createDistinctCountQuery(
   propertyUri?: string,
   candidateValue?: QueryResultValue,
   viewType: typeof FCT_VIEW_TYPES.LIST_COUNT | typeof FCT_VIEW_TYPES.TEXT | typeof FCT_VIEW_TYPES.PROPERTIES | typeof FCT_VIEW_TYPES.PROPERTIES_IN | typeof FCT_VIEW_TYPES.CLASSES = FCT_VIEW_TYPES.LIST_COUNT,
-  valueRelationship?: { direction: RelationshipDirection; nodeId?: string },
+  valueRelationship?: { direction: RelationshipDirection; nodeId?: string; href?: string },
 ): FctQueryTree {
-  let tree: FctQueryTree = {
-    ...sourceTree,
-    attributes: { ...sourceTree.attributes },
-    children: sourceTree.children.map(cloneQueryNode),
-  };
+  let tree = fctQueryTreeApi.getDataTree(sourceTree);
+  // Scalar counts (for non-Personal consumers) bind the referenced node but
+  // retain the original focus. Personal facets use the grouped LIST above.
 
   // Preserve the source query's <text> element even when it is empty. The
   // FCT proxy validates the presence of this element for ordinary FCT queries.
@@ -620,7 +624,7 @@ export function createDistinctCountQuery(
     // predicate IRI. Reverse and forward edges with identical IRIs are distinct,
     // and a breadcrumb may contain the same edge more than once.
     const relationshipName = valueRelationship?.direction === "reverse" ? "property-of" : "property";
-    const requestedNodeId = valueRelationship?.nodeId;
+    const requestedNodeId = valueRelationship?.href ?? valueRelationship?.nodeId;
     const matches = (node: FctQueryNode): boolean =>
       node.name === relationshipName && node.attributes.iri === propertyUri;
 

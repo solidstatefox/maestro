@@ -43,8 +43,15 @@ test('Results retain per-Result DOI only and Maestro native controls', () => {
  assert.match(pages, /Per page/);
  assert.doesNotMatch(browse, /<thead>/);
  assert.match(browse, /className=\{matchIndex \? "border-t border-border" : ""\}/);
- const escaped = `mui:templateContent """${xsl.replace(/\\/g,'\\\\')}"""`;
- assert.equal(ttl.split(escaped).length-1,2);
+ const embedded = [...ttl.matchAll(/mui:templateContent """([\s\S]*?)"""/g)];
+ const unescape = (source: string) => source.replace(/\\\\/g, '\\');
+ const recordWidget = ttl.match(/<gttp:\/\/ggg\.maestro\.ecosys\/eu-data\/widget#Record> a mui:RecordViewerWidget\s*;[\s\S]*?mui:templateContent """([\s\S]*?)"""/);
+ const perspectiveWidget = ttl.match(/<gttp:\/\/ggg\.maestro\.ecosys\/eu-data\/widget#Perspective> a mui:PerspectiveWidget\s*;[\s\S]*?mui:templateContent """([\s\S]*?)"""/);
+ assert.ok(recordWidget && perspectiveWidget, 'Both EURIO widgets must have a stylesheet');
+ assert.equal(unescape(recordWidget[1]), xsl);
+ assert.equal(embedded.filter(template => unescape(template[1]) === xsl).length, 1);
+ assert.match(perspectiveWidget[1], /match="\/results"/);
+ assert.doesNotMatch(perspectiveWidget[1], /<xsl:template name="RecordResult">/);
 });
 
 test('Record enrichment does not arbitrarily restrict All graphs to the first DESCRIBE graph', () => {

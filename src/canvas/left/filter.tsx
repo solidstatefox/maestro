@@ -17,10 +17,11 @@ import { cachedFetchFct, maestroQueryFetch } from "@/lib/client-query-cache";
 import { setMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 import { componentRetryHeaders, useMaestroComponentRetry } from "@/lib/maestro-component-retry";
 import { resetMaestroQueryExecutionScope } from "@/lib/maestro-query-execution-clock";
+import { configuredTimeoutMs } from "@/lib/maestro-query-timeouts";
 import { shortenCount } from "@/lib/utils";
-import { useFctQuery, serializeFctQuery, createPropertyWidgetQuery, createPersonalRoleValuesQuery, createGroupValuesQuery, createDistinctCountQuery, setQueryViewAttributes } from "@/lib/fct-query-api";
+import { useFctQuery, serializeFctQuery, createPersonalFacetValuesQuery, createDistinctCountQuery } from "@/lib/fct-query-api";
 import type { FctQueryTree, FctQueryNode, DistinctCountKind } from "@/lib/fct-query-api";
-import { readFctResponse, presentServerError, groupValueBinding, fctTermKey, facetValueKey, distinctFacetValues, type FctResult, type RelationshipDirection } from "@/canvas/utils/fct-response";
+import { readFctResponse, presentServerError, groupValueBinding, fctTermKey, facetValueKey, countedFacetValues, facetMembershipCount, type FctResult, type RelationshipDirection } from "@/canvas/utils/fct-response";
 
 
 export type FacetItem = {
@@ -105,13 +106,16 @@ export function paginateCategoryTree(roots: CategoryTreeNode[]): CategoryTreeNod
 const FACET_ITEM_GAP_CLASS = "space-y-0.5";
 
 import type { TransportedFacet } from "@/lib/fct-facet-alias";
-import { createTransportedFacetQuery, activeTransportedFacets } from "@/lib/fct-facet-alias";
+import { activeTransportedFacets } from "@/lib/fct-facet-alias";
 
 export type PersonalWidget = {
   /** Unique occurrence key, distinct from a repeated RDF predicate URI. */
   key?: string;
   /** Alias metadata passed through the SAME Personal widget pipeline. */
   anchor?: TransportedFacet;
+  /** Exact XML submitted by the ordinary Personal listener. */
+  valuesQueryXml?: string;
+  valuesQuerySparql?: string;
   uri: string;
   label: string;
   excluded: boolean;
@@ -130,7 +134,7 @@ export type ScopeRelationship = { uri: string; direction: RelationshipDirection 
 export type GroupByOption = ScopeRelationship & { key: string; label: string; nodeId: string; memberBindingNodeId?: string; ancestorRole?: boolean; anchorId?: string; parentId?: string };
 
 export type GroupMembersState = { results: FctResult[]; count?: number; loading: boolean; error: string };
-export type RoleWidgetStatus = { count: number; loading: boolean; error: string; sampleValue?: FctResult };
+export type RoleWidgetStatus = { count: number; loading: boolean; error: string; sampleValue?: FctResult; valuesQueryXml?: string; valuesQuerySparql?: string };
 
 
 
@@ -141,7 +145,7 @@ export function distinctCountQueryFor(
   uri: string,
   propertyUri?: string,
   candidateValue?: FctResult,
-  valueRelationship?: { direction: "forward" | "reverse"; nodeId?: string },
+  valueRelationship?: { direction: "forward" | "reverse"; nodeId?: string; href?: string },
 ): string {
   const viewType =
     kind === "property" ? FCT_VIEW_TYPES.PROPERTIES
@@ -153,48 +157,12 @@ export function distinctCountQueryFor(
   ) ?? "";
 }
 
-/** Expose the same Personal facet count input used by DistinctCount, without
- * changing the live query or requiring the counted item to remain visible. */
-export function personalFacetInspectorQueries(
-  tree: FctQueryTree,
-  valuesXml: string,
-  propertyUri: string,
-  candidate?: FctResult,
-  valueRelationship?: { direction: "forward" | "reverse"; nodeId?: string },
-  grouped = false,
-): { id: string; label: string; query: string; filename: string; language: "xml" | "sparql" }[] {
-  const compile = (xml: string): string => {
-    try {
-      return compileFctXmlToSparql(xml).query;
-    } catch (error) {
-      return `# Unable to compile the facet query: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  };
-  if (grouped) {
-    // A groups view supplies both group values and their distinct membership
-    // counts (?ct). The XML is the live query; no candidate LIST_COUNT or
-    // separate facet-values query represents the operation being inspected.
-    const compiled = compile(valuesXml);
-    return [
-      { id: "personal-groups-sparql", label: "SPARQL", query: compiled, filename: "personal-groups.sparql", language: "sparql" },
-      { id: "personal-groups-count-xml", label: "Counts XML", query: valuesXml, filename: "personal-groups-counts.xml", language: "xml" },
-      { id: "personal-groups-count-sparql", label: "Counts SPARQL", query: compiled, filename: "personal-groups-counts.sparql", language: "sparql" },
-    ];
-  }
-  const unavailable = "No value returned yet; a candidate-specific count query is not available.";
-  const countTree = candidate
-    ? createDistinctCountQuery(tree, "value", candidate.uri, propertyUri, candidate, FCT_VIEW_TYPES.LIST_COUNT, valueRelationship)
-    : null;
-  const countXml = countTree ? serializeFctQuery(countTree) : `<!-- ${unavailable} -->`;
-  // This is the *exact* scalar query that DistinctCount sends to /proxy/api/sparql.
-  const countSparql = candidate
-    ? distinctCountQueryFor(tree, "value", candidate.uri, propertyUri, candidate, valueRelationship)
-    : `# ${unavailable}`;
-  return [
-    { id: "personal-list-sparql", label: "SPARQL", query: compile(valuesXml), filename: "personal-values.sparql", language: "sparql" },
-    { id: "personal-count-xml", label: "Count XML", query: countXml, filename: "personal-first-value-count.xml", language: "xml" },
-    { id: "personal-count-sparql", label: "Count SPARQL", query: countSparql || "# Count query could not be compiled.", filename: "personal-first-value-count.sparql", language: "sparql" },
-  ];
+/** The primary XML tab and this SPARQL tab inspect one counted LIST request. */
+export function personalFacetInspectorQueries(valuesXml: string, executedSparql?: string): { id: string; label: string; query: string; filename: string; language: "sparql" }[] {
+  let query: string;
+  try { query = executedSparql || compileFctXmlToSparql(valuesXml).query; }
+  catch (error) { query = `# Unable to compile the facet query: ${error instanceof Error ? error.message : String(error)}`; }
+  return [{ id: "personal-list-sparql", label: "SPARQL", query, filename: "personal-values.sparql", language: "sparql" }];
 }
 
 /** Reuse complete scalar counts between simultaneous facet mounts (one minute).
@@ -219,7 +187,7 @@ export function DistinctCount({
   uri: string;
   propertyUri?: string;
   candidateValue?: FctResult;
-  valueRelationship?: { direction: "forward" | "reverse"; nodeId?: string };
+  valueRelationship?: { direction: "forward" | "reverse"; nodeId?: string; href?: string };
   onCountChange?: (query: string, count: number | null) => void;
   enabled?: boolean;
 }) {
@@ -272,7 +240,8 @@ export function DistinctCount({
         const fctData = await readFctResponse(fctResponse);
         responseDiagnostics = { view: fctData.viewType, complete: !fctData.incomplete };
         stage = "validating FCT count response";
-        const parsedCount = Number(fctData.rows[0]?.[0]?.value);
+        const lexicalCount = fctData.rows[0]?.[0]?.value;
+        const parsedCount = lexicalCount?.trim() ? Number(lexicalCount) : NaN;
         if (fctData.incomplete || fctData.viewType !== "count" || !Number.isSafeInteger(parsedCount) || parsedCount < 0)
           throw new Error("FCT returned an incomplete or invalid distinct facet count.");
         if (!cancelled) {
@@ -452,8 +421,8 @@ export function treeHasPropertyFilter(
  * same order, so a facet value always sits at the same position as its group card.
  */
 export function compareGroupValues(a: FctResult, b: FctResult): number {
-  const aCount = Number(a.columns?.[1]?.value ?? 0);
-  const bCount = Number(b.columns?.[1]?.value ?? 0);
+  const aCount = facetMembershipCount(a) ?? Number(a.columns?.[1]?.value ?? 0);
+  const bCount = facetMembershipCount(b) ?? Number(b.columns?.[1]?.value ?? 0);
   return bCount - aCount || (a.title || a.uri).localeCompare(b.title || b.uri);
 }
 
@@ -462,9 +431,8 @@ export function PersonalWidgetQueryListener({
   propertyUri,
   widgetKey,
   anchorId,
-  sortByCount,
+  href,
   limit,
-  groupBy,
   setPersonalWidgets,
   endpointReady,
   refreshRevision,
@@ -472,12 +440,10 @@ export function PersonalWidgetQueryListener({
   propertyUri: string;
   widgetKey?: string;
   anchorId?: string;
-  sortByCount: boolean;
+  href?: string;
   endpointReady: boolean;
   refreshRevision: number;
   limit: number;
-  /** When this facet is the active Group By, run the exact query the Results group pane runs. */
-  groupBy?: { option: GroupByOption; limit: number };
   setPersonalWidgets: Dispatch<SetStateAction<PersonalWidget[]>>;
 }) {
   const { tree } = useFctQuery();
@@ -489,13 +455,9 @@ export function PersonalWidgetQueryListener({
   const identity = widgetKey ?? propertyUri;
   const alias = anchorId ? activeTransportedFacets(tree).find(item => item.id === anchorId) : undefined;
   const retryRevision = useMaestroComponentRetry(`personal:${identity}`);
-  const widgetTree = alias
-    ? createTransportedFacetQuery(tree, alias)
-    : createPropertyWidgetQuery(tree, propertyUri, "forward", undefined, true);
-  const widgetQueryXml = groupBy
-    ? serializeFctQuery(createGroupValuesQuery(tree, groupBy.option, { limit: groupBy.limit, offset: 0 }))
-    : serializeFctQuery(setQueryViewAttributes(widgetTree, { sort: sortByCount ? "count" : "", limit: String(limit) }));
-  const orderLikeGroups = Boolean(groupBy);
+  const widgetQueryXml = serializeFctQuery(createPersonalFacetValuesQuery(tree, propertyUri,
+    alias?.target.name === "property-of" ? "reverse" : "forward", { limit, offset: 0 }, undefined,
+    alias?.href === href ? href : undefined));
 
   useEffect(() => {
     // A restored query can mount this widget before its graph server is loaded.
@@ -504,19 +466,27 @@ export function PersonalWidgetQueryListener({
     // Reconcile every mounted widget against the active <view> scope. A widget
     // whose filter belongs to another breadcrumb scope must not retain stale
     // values while the parent pane catches up with the new query revision.
-    if (anchorId ? !alias : !treeHasPropertyFilter(tree, propertyUri)) {
+    if (anchorId ? !alias || alias.href !== href : !treeHasPropertyFilter(tree, propertyUri)) {
       setPersonalWidgets((current) =>
         current.filter((widget) => (widget.key ?? widget.uri) !== identity),
       );
       return;
     }
     let cancelled = false;
+    let timedOut = false;
     const controller = new AbortController();
+    // Even if proxy dispatch/telemetry stalls, transported anchors cannot
+    // remain Updating indefinitely. Respect Sheet personal timeout when set.
+    const deadlineMs = (configuredTimeoutMs("personal") || 60_000) + 10_000;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new DOMException("Personal facet deadline exceeded", "TimeoutError"));
+    }, deadlineMs);
     resetMaestroQueryExecutionScope(`component:personal:${identity}`);
     setPersonalWidgets((current) =>
       current.map((widget) =>
         (widget.key ?? widget.uri) === identity
-          ? { ...widget, loading: true, error: "" }
+          ? { ...widget, valuesQueryXml: widgetQueryXml, valuesQuerySparql: undefined, loading: true, error: "" }
           : widget,
       ),
     );
@@ -541,7 +511,7 @@ export function PersonalWidgetQueryListener({
         if (!response.ok)
           throw new Error(data.error ?? `Failed to load ${propertyUri}.`);
         if (!cancelled) setMaestroIncompleteResults(`personal:${identity}`, { incomplete: data.incomplete, requestId: "", message: data.warning || data.sqlMessage || "" });
-        const fetchedValues = distinctFacetValues(Array.isArray(data.results)
+        const fetchedValues = countedFacetValues(Array.isArray(data.results)
           ? data.results
           : []);
         // The derived FCT query retains the value constraints on this
@@ -552,7 +522,7 @@ export function PersonalWidgetQueryListener({
         // Selected widget even when FCT returned rows. Trust the authoritative
         // server selection and let facet item keys handle checkbox state.
         const filteredValues = fetchedValues;
-        const values = orderLikeGroups ? filteredValues.slice().sort(compareGroupValues) : filteredValues;
+        const values = filteredValues.slice().sort(compareGroupValues);
         if (cancelled) return;
         setPersonalWidgets((current) =>
           current.map((widget) =>
@@ -560,6 +530,7 @@ export function PersonalWidgetQueryListener({
               ? {
                   ...widget,
                   values,
+                  valuesQuerySparql: data.sparql,
                   datatypeEvidence: [...new Set((data.datatypeEvidence ?? []).map(item => item.datatype))],
                   datatypeEvidenceScope: liveQueryScopeXml,
                   loading: false,
@@ -573,11 +544,14 @@ export function PersonalWidgetQueryListener({
           ),
         );
       } catch (error) {
-        if (
-          cancelled ||
-          (error instanceof Error && error.name === "AbortError")
-        )
+        if (cancelled) return;
+        if (!timedOut && error instanceof Error && error.name === "AbortError") {
+          // Individual/global transport cancellation is terminal for this live
+          // widget. Only effect cleanup belongs to a superseded query.
+          setPersonalWidgets((current) => current.map(widget =>
+            (widget.key ?? widget.uri) === identity ? { ...widget, loading: false } : widget));
           return;
+        }
         setPersonalWidgets((current) =>
           current.map((widget) =>
             (widget.key ?? widget.uri) === identity
@@ -585,7 +559,8 @@ export function PersonalWidgetQueryListener({
                   ...widget,
                   loading: false,
                   error: [
-                    `Personal facet update failed: ${error instanceof Error ? error.message : String(error)}`,
+                    timedOut ? `Personal facet timed out after ${Math.ceil(deadlineMs / 1000)} seconds (including transport grace).` :
+                      `Personal facet update failed: ${error instanceof Error ? error.message : String(error)}`,
                     `Component: PersonalWidgetQueryListener:${propertyUri}`,
                     `RDF property: ${propertyUri}`,
                     `x-maestro-debug-source: ${attribution["X-Maestro-Debug-Source"]}`,
@@ -600,15 +575,18 @@ export function PersonalWidgetQueryListener({
               : widget,
           ),
         );
+      } finally {
+        clearTimeout(deadline);
       }
     }
 
     void refreshWidget();
     return () => {
       cancelled = true;
+      clearTimeout(deadline);
       controller.abort();
     };
-  }, [widgetQueryXml, identity, propertyUri, anchorId, setPersonalWidgets, orderLikeGroups, endpointReady, refreshRevision, retryRevision]);
+  }, [widgetQueryXml, identity, propertyUri, anchorId, href, setPersonalWidgets, endpointReady, refreshRevision, retryRevision]);
 
   return null;
 }
@@ -619,7 +597,6 @@ export function PersonalRoleWidget({
   roleNode,
   label,
   isGroupByRole,
-  groupBy,
   limit,
   onGroupValueClick,
   setRoleWidgetStatuses,
@@ -630,8 +607,6 @@ export function PersonalRoleWidget({
   roleNode: FctQueryNode;
   label: string;
   isGroupByRole: boolean;
-  /** When this role is the active Group By, run the exact query the Results group pane runs. */
-  groupBy?: { option: GroupByOption; limit: number };
   limit: number;
   onGroupValueClick: (value: FctResult) => void;
   setRoleWidgetStatuses: Dispatch<SetStateAction<Record<string, RoleWidgetStatus>>>;
@@ -645,18 +620,8 @@ export function PersonalRoleWidget({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [page, setPage] = useState(0);
-  // Counts are keyed by the full compiled query, so a new live query scope can
-  // never accidentally reuse a candidate's stale count from the prior scope.
-  const [candidateCounts, setCandidateCounts] = useState<Record<string, number | null>>({});
-
-  const roleWidgetTree = createPersonalRoleValuesQuery(tree, roleNode);
-  const widgetQueryXml = groupBy
-    ? serializeFctQuery(createGroupValuesQuery(tree, groupBy.option, { limit: groupBy.limit, offset: 0 }))
-    : serializeFctQuery(setQueryViewAttributes(
-      roleWidgetTree,
-      { ...(isGroupByRole ? { sort: "count" } : {}), limit: String(limit) },
-    ));
-  const roleOrderLikeGroups = Boolean(groupBy);
+  const widgetQueryXml = serializeFctQuery(createPersonalFacetValuesQuery(tree, uri, "reverse", { limit, offset: 0 }, roleNode.id));
+  const [executed, setExecuted] = useState<{ xml: string; sparql: string } | null>(null);
   // The Configure role filter and the view-bearing role can have the same
   // predicate but different node IDs. Their selected values describe the same
   // binding and must be reflected in the Personal role facet.
@@ -678,14 +643,14 @@ export function PersonalRoleWidget({
   // Publish this widget's own result count and request status to its header.
   // The global Roles facet list is a different query and can have a different count.
   useEffect(() => {
-    const nextStatus: RoleWidgetStatus = { count: values.length, loading, error, sampleValue: values[0] };
+    const nextStatus: RoleWidgetStatus = { count: values.length, loading, error, sampleValue: values[0], valuesQueryXml: widgetQueryXml, valuesQuerySparql: executed?.xml === widgetQueryXml ? executed.sparql : undefined };
     setRoleWidgetStatuses((current) => {
       const previous = current[roleNode.id];
-      return previous && previous.count === nextStatus.count && previous.loading === nextStatus.loading && previous.error === nextStatus.error && previous.sampleValue?.uri === nextStatus.sampleValue?.uri && previous.sampleValue?.datatype === nextStatus.sampleValue?.datatype && previous.sampleValue?.lang === nextStatus.sampleValue?.lang
+      return previous && previous.count === nextStatus.count && previous.loading === nextStatus.loading && previous.error === nextStatus.error && previous.sampleValue?.uri === nextStatus.sampleValue?.uri && previous.sampleValue?.datatype === nextStatus.sampleValue?.datatype && previous.sampleValue?.lang === nextStatus.sampleValue?.lang && previous.valuesQueryXml === nextStatus.valuesQueryXml && previous.valuesQuerySparql === nextStatus.valuesQuerySparql
         ? current
         : { ...current, [roleNode.id]: nextStatus };
     });
-  }, [roleNode.id, values, loading, error, setRoleWidgetStatuses]);
+  }, [roleNode.id, values, loading, error, widgetQueryXml, executed, setRoleWidgetStatuses]);
 
   useEffect(() => {
     if (!uri || !endpointReady) return;
@@ -708,10 +673,11 @@ export function PersonalRoleWidget({
         rememberShortforms(data?.shortforms);
         if (!response.ok) throw new Error(data.error ?? `Failed to load role values for ${uri}.`);
         if (!cancelled) setMaestroIncompleteResults(`personal-role:${uri}`, { incomplete: data.incomplete, requestId: "", message: data.warning || data.sqlMessage || "" });
-        const fetchedRaw = distinctFacetValues(Array.isArray(data.results) ? data.results as FctResult[] : []);
-        const fetched = roleOrderLikeGroups ? fetchedRaw.slice().sort(compareGroupValues) : fetchedRaw;
+        const fetchedRaw = countedFacetValues(Array.isArray(data.results) ? data.results as FctResult[] : []);
+        const fetched = fetchedRaw.slice().sort(compareGroupValues);
         if (cancelled) return;
-        setValues((current) => current.length === fetched.length && current.every((item, index) => item.uri === fetched[index]?.uri && item.datatype === fetched[index]?.datatype && item.lang === fetched[index]?.lang) ? current : fetched);
+        setExecuted({ xml: widgetQueryXml, sparql: data.sparql });
+        setValues((current) => current.length === fetched.length && current.every((item, index) => item.uri === fetched[index]?.uri && item.datatype === fetched[index]?.datatype && item.lang === fetched[index]?.lang && facetMembershipCount(item) === facetMembershipCount(fetched[index])) ? current : fetched);
         setPage((current) => Math.min(current, Math.max(0, Math.ceil(fetched.length / 10) - 1)));
       } catch (requestError) {
         if (cancelled || (requestError instanceof Error && requestError.name === "AbortError")) return;
@@ -726,16 +692,15 @@ export function PersonalRoleWidget({
   // page limit, and group-by state. Depending on the *object identity* of tree
   // additionally re-dispatches an identical request when parent UI state
   // reconstructs an equivalent tree (and can hide a ready Role list).
-  }, [uri, widgetQueryXml, roleOrderLikeGroups, endpointReady, refreshRevision, retryRevision]);
+  }, [uri, widgetQueryXml, endpointReady, refreshRevision, retryRevision]);
 
   const visibleValues = values.filter((value) => {
     const binding = groupValueBinding(value);
-    const countQuery = distinctCountQueryFor(tree, "value", value.uri, uri, value, { direction: "reverse", nodeId: roleNode.id });
-    const count = candidateCounts[countQuery];
+    const count = facetMembershipCount(value);
     const valueKey = fctTermKey(binding.text, binding.datatype, binding.lang);
     // Keep a selected value available to uncheck even if the current query has
     // become empty; hide only confirmed zero-count alternatives.
-    return !selectedKeys.includes(valueKey) && count !== 0;
+    return !selectedKeys.includes(valueKey) && count !== undefined && count > 0;
   });
   const pageCount = Math.max(1, Math.ceil(visibleValues.length / 10));
   const pageValues = visibleValues.slice(page * 10, (page + 1) * 10);
@@ -764,6 +729,7 @@ export function PersonalRoleWidget({
                   className="mt-0.5 size-4 shrink-0 accent-current" aria-label={`Remove selected role value ${value.title || value.uri}`} />
                 <FacetItemDecoration direction="reverse" iri={uri} value={facetValueKey(value)}/>
                 <span className="min-w-0 flex-1 break-words">{value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}</span>
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{facetMembershipCount(value) === undefined ? "—" : shortenCount(facetMembershipCount(value)!)}</span>
               </label>;
             })}
           </div>
@@ -773,12 +739,8 @@ export function PersonalRoleWidget({
         {pageValues.map((value, valueIndex) => {
           const binding = groupValueBinding(value);
           const valueKey = fctTermKey(binding.text, binding.datatype, binding.lang);
-          const countQuery = isGroupByRole ? "" : distinctCountQueryFor(tree, "value", value.uri, uri, value, { direction: "reverse", nodeId: roleNode.id });
-          const groupedCount = Number(value.columns?.[1]?.value);
-          const hasGroupedCount = Number.isSafeInteger(groupedCount) && groupedCount >= 0;
-          const isZeroCount = isGroupByRole
-            ? hasGroupedCount && groupedCount === 0
-            : candidateCounts[countQuery] === 0;
+          const groupedCount = facetMembershipCount(value);
+          const isZeroCount = groupedCount === 0;
           return (
             <div key={facetValueKey(value)} className={`flex w-full items-start gap-2 rounded-md px-2 py-0.5 text-sm hover:bg-accent/50 ${isGroupByRole ? "" : "cursor-pointer"}`}>
               <input id={`personal-role-value-${roleNode.id}-${valueIndex}`} type="checkbox" disabled={loading} checked={selectedKeys.includes(valueKey)} onChange={(event) => setRoleValue(uri, { text: binding.text, datatype: binding.datatype, ...(binding.lang ? { lang: binding.lang } : {}) }, event.currentTarget.checked)} className="mt-0.5 size-4 shrink-0 accent-current aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40" aria-invalid={isZeroCount ? true : undefined} aria-label={`Filter ${label} by ${value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}`} />
@@ -790,26 +752,9 @@ export function PersonalRoleWidget({
                   {value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri}
                 </label>
               )}
-              {isGroupByRole ? (
-                <span className="shrink-0 text-xs text-muted-foreground tabular-nums" aria-label="Members in group">
-                  {hasGroupedCount ? shortenCount(groupedCount) : "—"}
-                </span>
-              ) : (
-                <DistinctCount
-                  enabled={endpointReady}
-                  tree={tree}
-                  kind="value"
-                  uri={value.uri}
-                  propertyUri={uri}
-                  candidateValue={value}
-                  valueRelationship={{ direction: "reverse", nodeId: roleNode.id }}
-                  onCountChange={(query, count) =>
-                    setCandidateCounts((current) =>
-                      current[query] === count ? current : { ...current, [query]: count },
-                    )
-                  }
-                />
-              )}
+              <span className="shrink-0 text-xs text-muted-foreground tabular-nums" aria-label="Matching resources">
+                {groupedCount === undefined ? "—" : shortenCount(groupedCount)}
+              </span>
             </div>
           );
         })}

@@ -1,5 +1,6 @@
 "use client";
 
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { useCallback, useEffect, useState } from "react";
 import { DatabasePlus, Trash2, Server, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -67,11 +68,11 @@ export function GraphServerManager({ canMutate, onRegistryChange, selectedCardUr
       <strong className="text-sm">Graph server directory</strong>
       {canMutate && <>
         <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">Show
-          <select className="rounded-md border bg-background px-2 py-1" aria-label="Filter graph-server registrations" value={filter}
+          <MaestroSelect className="rounded-md border bg-background px-2 py-1" aria-label="Filter graph-server registrations" value={filter}
             onChange={event => setFilter(event.currentTarget.value as "all" | "personal")}>
             <option value="all">All registered servers</option>
             <option value="personal">Personal Servers</option>
-          </select>
+          </MaestroSelect>
         </label>
         <Button size="icon-sm" variant="outline" aria-label="Refresh graph-server registrations" onClick={() => void refresh()} disabled={busy}><RefreshCw className="size-4"/></Button>
         <Button size="icon-sm" variant="outline" aria-label="Add graph server" title="Add graph server" onClick={() => setDialog(true)} disabled={busy}><DatabasePlus className="size-4"/></Button>

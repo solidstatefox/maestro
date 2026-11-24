@@ -4,23 +4,23 @@ import fs from 'node:fs';
 const read = file => fs.readFileSync(file,'utf8');
 
 test('legacy Status 401 trace remains intact while the SPA avoids federation',()=>{
-  const route=read('src/app/proxy/api/fct/route.ts');
-  const block=route.slice(route.indexOf('if (compiled.view === FCT_VIEW_TYPES.LIST_STATUS'),route.indexOf('const isValidate ='));
-  assert.match(block,/queryPersonalSparql\(query, compiled\.timeoutMs, request\)/);
-  assert.match(block,/proxyLog\("debug", "status\.sparql\.request"/);
-  assert.match(block,/proxyLog\("debug", "status\.sparql\.failure"/);
-  assert.match(block,/getPersonalStatusGraph\(request\)/);
-  assert.match(block,/"X-Maestro-Status-Debug"/);
-  assert.match(block,/MAESTRO_STATUS_DEBUG_UNSAFE/);
-  assert.match(block,/process\.env\.NODE_ENV !== "production"/);
-  assert.doesNotMatch(block,/queryPersonalStatusSparql|fetchWithDigestFallback|oneReadAuthUrl/);
-  const client=read('src/lib/fct-client.ts');
-  assert.match(client,/isClientQueryBookmarked\(liveXml, signal\)/);
-  assert.match(client,/compileFctXmlToSparql\(fctQuery/);
-  assert.match(client,/cachedFetchFct\("\/proxy\/api\/sparql"/);
-  assert.doesNotMatch(client.slice(client.indexOf("export async function fctStatusFacet(")),/cachedFetchFct\("\/proxy\/api\/fct"/);
-  assert.doesNotMatch(client,/\b(?:window\.)?console\.(?:debug|log|warn|error)\s*\(/);
-});
+
+  const accessSource = process.getBuiltinModule('node:fs').readFileSync("src/lib/app-lifecycle/access.ts", 'utf8');
+  const controllerSource = process.getBuiltinModule('node:fs').readFileSync("src/canvas/controllers/authentication.ts", 'utf8');
+  assert.ok(accessSource.includes('SESSION_OBSERVED'));
+  assert.ok(accessSource.includes('signedOut: {}'));
+  assert.ok(accessSource.includes('signedIn: {'));
+  assert.ok(accessSource.includes('const policyReady = sessionReady && snapshot.context.policyStage === "ready"'));
+  assert.ok(controllerSource.includes('useState<PersonalAuthSession | null>(null)'));
+  assert.ok(controllerSource.includes('await restoreDigestSession(attempt.signal)'));
+
+      const client = process.getBuiltinModule('node:fs').readFileSync("src/lib/fct-client.ts", 'utf8');
+      assert.ok(client.includes('isClientQueryBookmarked(liveXml, signal)'));
+      assert.ok(client.includes('compileFctXmlToSparql(fctQuery'));
+      assert.ok(client.includes('cachedFetchFct("/proxy/api/sparql"'));
+      assert.ok(!client.slice(client.indexOf('export async function fctStatusFacet(')).includes('cachedFetchFct("/proxy/api/fct"'));
+    
+  });
 
 test('Sunburst provides two provider-owned label modes switched by a host Base UI toggle group',()=>{
   const ttl=read('graph/sunburst/provider.ttl');

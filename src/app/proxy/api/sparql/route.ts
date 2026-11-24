@@ -1,13 +1,9 @@
+import { restoredDigestRecord, restoredDigestAuthorization, initialDigestIdentity, initialDigestRecord, staleDigestRecord, digestRecordAuthorization } from "@/lib/digest-auth";
+import { digestEndpoint } from "@/lib/digest-session-record";
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
-import { createHash } from "node:crypto";
-import { getPersonalSession } from "@/lib/personal-sparql";
-import { fetchWithDigestFallback } from "@/lib/digest-auth";
 import { MAESTRO_KIND_IDS, normalizeMaestroKind } from "@/lib/maestro-kinds";
 import { buildFctKindAvailabilitySparql } from "@/lib/fct-count-sparql";
-import { getUserGraph, personalSparqlUrl, queryPersonalSparql, updatePersonalSparql } from "@/lib/personal-sparql";
 import { buildBlankNodeRecordSparql } from "@/lib/bnode";
-import { requirePersonalLogin } from "@/lib/personal-guard";
-import { verifyApprovalBookmark } from "@/lib/policy-approval-store";
 import { currentProxyClient, withProxyClient } from "@/lib/maestro-proxy-client-preferences";
 import { weightMaestroQuery, type QueryPriority } from "@/lib/graph-server-query-scheduler";
 import { withProxyQueryTelemetry } from "@/lib/proxy-query-telemetry";
@@ -18,14 +14,14 @@ import { validMaestroLanguage } from "@/lib/maestro-language";
 import { NextResponse } from "next/server";
 import { withGraphServerSlot } from "@/lib/server-query-scheduler";
 import { virtuosoRankFailure } from "@/lib/virtuoso-query-fallbacks";
-import { getQueryCache, queryCacheKey, setQueryCache, clearQueryCache } from "@/lib/query-cache";
+import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { normalizeGraphServerUri, resolveFctEndpointFromAddr, fctAddrFromXml } from "@/lib/personal-sparql";
 import { permittedGraphServerTarget, checkGraphServerDestination } from "@/lib/graph-server-target";
 import { describeUpstreamError } from "@/lib/upstream-error";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
 import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
+import { inspectPersonalUpdateGraphs, hasExplicitPersonalUpdateTemplates } from "@/lib/personal-update-graph-guard";
 import { isBoundedReadOnlySparql } from "@/lib/sparql-read-guard";
-import { inspectPersonalUpdateGraphs } from "@/lib/personal-update-graph-guard";
 
 function isSafeIri(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 &&
@@ -235,15 +231,12 @@ function unorderedIriRankFallback(query: string, error: string): string | null {
 
 async function querySparqlTransport(endpoint: string, query: string, configuredTimeoutMs?: number,
   requestSignal?: AbortSignal, priorityOverride?: QueryPriority, bypassCache = false,
-  personalRequest?: Request): Promise<SparqlQueryResult> {
+  personalRequest?: Request, authorization?: string, writing = false): Promise<SparqlQueryResult> {
   const timeoutMs = configuredTimeoutMs ?? 20000;
-  const session = getPersonalSession(personalRequest);
-  const personal = session && (endpoint === session.graphStore || endpoint === personalSparqlUrl(personalRequest).toString());
-  const sparqlUrl = personal ? personalSparqlUrl(personalRequest).toString() : endpoint;
-  const authorization = personal ? session.authHeader : undefined;
+  const sparqlUrl = endpoint;
   const key = queryCacheKey("sparql", sparqlUrl.toString(), query);
   const pendingKey = `${currentProxyClient()}:${key}:${timeoutMs}`;
-  const cached = (bypassCache || authorization) ? undefined : getQueryCache<string>(key);
+  const cached = bypassCache || authorization ? undefined : getQueryCache<string>(key);
   if (cached !== undefined) {
     return {
       responseText: cached,
@@ -257,21 +250,21 @@ async function querySparqlTransport(endpoint: string, query: string, configuredT
 
   // Coalesce identical upstream requests, but never cache here: the caller must
   // validate the operation-specific result before it becomes shared cache data.
-  const pending = (requestSignal || authorization) ? undefined : inFlightSparqlRequests.get(pendingKey);
+  const pending = requestSignal || authorization ? undefined : inFlightSparqlRequests.get(pendingKey);
   if (pending) return pending;
 
   const requestPromise = (async () => {
     await checkGraphServerDestination(sparqlUrl);
     const response = await withGraphServerSlot(
       sparqlUrl, priorityOverride ?? (/\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive"), requestSignal,
-      () => traceVirtuosoDispatch(() => (authorization ? fetchWithDigestFallback : fetch)(sparqlUrl, {
+      () => traceVirtuosoDispatch(() => fetch(sparqlUrl, {
       method: "POST",
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        Accept: "application/sparql-results+json, application/json;q=0.9",
-        ...(authorization ? {Authorization:authorization} : {}),
+        "Content-Type": writing ? "application/sparql-update" : "application/x-www-form-urlencoded; charset=UTF-8",
+        Accept: writing ? "text/plain, application/json;q=0.9" : "application/sparql-results+json, application/json;q=0.9",
+        ...(authorization ? { Authorization: authorization } : {}),
       },
-      body: new URLSearchParams({ query, ...(configuredTimeoutMs ? { timeout: String(configuredTimeoutMs) } : {}) }).toString(),
+      body: writing ? query : new URLSearchParams({ query, ...(configuredTimeoutMs ? { timeout: String(configuredTimeoutMs) } : {}) }).toString(),
       cache: "no-store",
       redirect: "manual",
       signal: requestSignal ? AbortSignal.any([requestSignal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
@@ -282,7 +275,7 @@ async function querySparqlTransport(endpoint: string, query: string, configuredT
   try {
     return await requestPromise;
   } finally {
-    if (!requestSignal && !authorization && inFlightSparqlRequests.get(pendingKey) === requestPromise) inFlightSparqlRequests.delete(pendingKey);
+    if (!requestSignal && inFlightSparqlRequests.get(pendingKey) === requestPromise) inFlightSparqlRequests.delete(pendingKey);
   }
 }
 
@@ -333,109 +326,79 @@ async function handlePost(request: Request) {
   const queryTimeoutMs = Number.isInteger(requestedMs) && requestedMs >= 1000 && requestedMs <= 120000 ? requestedMs : undefined;
   try {
     const body = await request.json().catch(() => null);
-    // All existing generic SPARQL operations preserve their call signature.
-    // Authenticated personal addresses are mapped to the remote protected
-    // endpoint only for requests carrying explicit scoped credentials.
+    // Ordinary anonymous SPARQL execution only.
     const querySparql = (endpoint:string, query:string, timeout?:number,
       signal?:AbortSignal, priority?:QueryPriority, bypass=false) =>
       querySparqlTransport(endpoint,query,timeout,signal,priority,bypass,request);
-    const privateRequest = Boolean(getPersonalSession(request)?.authHeader);
-    // Digest-based graph synchronization is separate from authentication.
-    // Recheck authoritative, identity-filtered Virtuoso graph visibility on
-    // each comparison; never trust an old proxy-side digest after server reboot.
-    if (body?.operation === "graph-list-digest") {
-      const denied = requirePersonalLogin(request);
-      if (denied) return denied;
-      const provided = typeof body.digest === "string" ? body.digest : "";
-      if (provided && !/^sha256:[a-f0-9]{64}$/.test(provided))
-        return NextResponse.json({error:"Invalid graph-list digest."},{status:400});
-      const query = "SELECT DISTINCT ?graph WHERE { GRAPH ?graph { ?s ?p ?o } } ORDER BY STR(?graph) LIMIT 2001";
-      const parsed = await queryPersonalSparql(query,queryTimeoutMs??20000,request);
-      const rows = parsed.results?.bindings ?? [];
-      if (rows.length >= 2001) return NextResponse.json({error:"Graph list exceeds the 2000-graph synchronization limit."},{status:413});
-      const graphs = [...new Set(rows.map(row=>row.graph?.value??"").filter(value=>/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(value)))].sort();
-      const digest = `sha256:${createHash("sha256").update(JSON.stringify(graphs)).digest("hex")}`;
-      return NextResponse.json(provided===digest?{unchanged:true,digest}:{unchanged:false,digest,graphs},
-        {headers:{"Cache-Control":"no-store"}});
+    // Connect's first request obtains the challenge only. The SPA sends the
+    // actual authenticated bootstrap through the ordinary personal READ path.
+    if (body?.operation === "auth-probe" && typeof body?.update !== "string") {
+      const reply=(payload:unknown,status:number)=>NextResponse.json(payload,{status,headers:{"Cache-Control":"no-store"}});
+      const identity=initialDigestIdentity(request);
+      if(!identity)return reply({error:"Invalid personal Digest credentials."},400);
+      const endpoint=digestEndpoint(identity);
+      if(!permittedGraphServerTarget(endpoint) || typeof body.query!=="string" || !isBoundedReadOnlySparql(body.query,100000))
+        return reply({error:"Expected a valid personal SELECT/ASK."},400);
+      const first=await querySparqlTransport(endpoint,body.query.trim(),queryTimeoutMs,request.signal,undefined,true,request);
+      if(first.response.status!==401)return reply({error:`Expected a Digest challenge; received HTTP ${first.response.status}.`},first.response.status>=400?first.response.status:502);
+      const record=initialDigestRecord(identity,first.response.headers.get("www-authenticate"));
+      if(!record)return reply({error:"Expected SPARQL realm, MD5 Digest and qop=auth."},401);
+      // Return challenge metadata, not credentials, only to the same-origin caller.
+      return reply({realm:record.realm,algorithm:record.algorithm,qop:record.qop,nonce:record.nonce,
+        cnonce:record.cnonce,opaque:record.opaque,nc:record.nc},401);
     }
-    // Generic SPARQL Update transport. Existing personal-auth credentials stay
-    // server-side; no feature-specific approval HTTP endpoint or JSON result.
-    // Every GRAPH target must be within this login's own Maestro graph namespace.
-    if (typeof body?.update === "string") {
-      const denied = requirePersonalLogin(request);
-      if (denied) return denied;
-      const update = body.update.trim();
-      const base = getUserGraph(request);
-      const { clean, graphs, hasImplicitGraph } = inspectPersonalUpdateGraphs(update);
-      // Ordinary SPARQL LOAD is supported only for an authenticated user's
-      // personal graph and a credential-free HTTP(S) source URL. This replaces
-      // the old /rdf-loader route without allowing arbitrary update programs.
-      const isLoad = /^LOAD\s+<([^<>]+)>\s+INTO\s+GRAPH\s+<([^<>]+)>$/i.exec(update);
-      if (/^LOAD\b/i.test(update)) {
-        if (!isLoad || hasImplicitGraph || isLoad[1].length > 4096 || isLoad[2].length > 4096 ||
-            isLoad[2] !== graphs[0] || graphs.length !== 1) {
-          return NextResponse.json({error: "Expected LOAD <HTTP(S) RDF URL> INTO GRAPH <personal graph>."}, {status:400});
+    // The same scoped Digest transport handles personal reads and writes.
+    if (typeof body?.update === "string" && body?.personalWrite !== true)
+      return NextResponse.json({error:"Authenticated personal SPARQL update required."},{status:401,headers:{"Cache-Control":"no-store"}});
+    if(body?.personalRead===true || body?.personalWrite===true){
+      const writing=body.personalWrite===true;
+      const statement=writing?body.update:body.query;
+      const address=typeof body.addr==="string"?body.addr:"";
+      const at=address.lastIndexOf("@");
+      const endpoint=at>=0?address.slice(at+1):"";
+      if(!endpoint || !permittedGraphServerTarget(endpoint) || typeof statement!=="string" ||
+        (writing ? body.query!==undefined || body.personalRead===true : body.update!==undefined || !isBoundedReadOnlySparql(statement,100000)))
+        return NextResponse.json({error:"Expected a valid personal SPARQL operation."},{status:400,headers:{"Cache-Control":"no-store"}});
+      if(writing){
+        const record=restoredDigestRecord(request);
+        if(!record || digestEndpoint(record)!==endpoint)return NextResponse.json({error:"No valid restored personal user session."},{status:401});
+        const base=`${record.graphPrefix.replace(/\/+$/, "")}/query`;
+        const graph=address.slice(0,at);
+        const within=(iri:string)=>iri===base || iri.startsWith(`${base}/`) || iri.startsWith(`${base}#`);
+        const update=statement.trim(), {graphs,hasImplicitGraph,clean,structure}=inspectPersonalUpdateGraphs(update);
+        const max=/^INSERT\s+DATA\s*\{/i.test(update)?2_000_000:100_000;
+        const load=/^LOAD\s+<([^<>]+)>\s+INTO\s+GRAPH\s+<([^<>]+)>$/i.exec(update);
+        const safeLoad=Boolean(load && graphs.length===1 && graphs[0]===load[2] && load[1].length<=4096 && permittedGraphServerTarget(load[1]));
+        const safeTemplates=hasExplicitPersonalUpdateTemplates(structure) && !/\\[uU]/.test(clean) &&
+          !/\b(?:SERVICE|LOAD|CREATE|DROP|MOVE|COPY|ADD|WITH|USING|FROM|DEFINE|BASE)\b/i.test(clean) &&
+          /^(?:INSERT|DELETE|CLEAR)\b/i.test(update) && !/\bCLEAR\s+(?:SILENT\s+)?(?:ALL|DEFAULT|NAMED)\b/i.test(clean);
+        if(!within(graph) || !update || update.length>max || hasImplicitGraph || !graphs.length || !graphs.every(within) || !(safeTemplates || safeLoad))
+          return NextResponse.json({error:"SPARQL Update requires explicit personal named graphs."},{status:400,headers:{"Cache-Control":"no-store"}});
+        if(safeLoad && load)await checkGraphServerDestination(load[1]);
+        if(graphs.includes(resolveGraph(GRAPH.STATUS,base)) && (typeof body.bookmarkQueryXml!=="string" || !body.bookmarkQueryXml))
+          return NextResponse.json({error:"Bookmark the live FCT query before modifying Status."},{status:409,headers:{"Cache-Control":"no-store"}});
+      }
+      const authorization=restoredDigestAuthorization(request,endpoint);
+      if(!authorization)return NextResponse.json({error:"No valid restored personal user session."},{status:401,headers:{"Cache-Control":"no-store"}});
+      let {response,responseText}=await querySparqlTransport(endpoint,statement.trim(),queryTimeoutMs,request.signal,undefined,true,request,authorization,writing);
+      const headers:Record<string,string>={"Cache-Control":"no-store"};
+      if(response.status===401){
+        const renewed=staleDigestRecord(request,endpoint,response.headers.get("www-authenticate"));
+        const retry=renewed&&digestRecordAuthorization(renewed,endpoint);
+        if(renewed && retry){
+          ({response,responseText}=await querySparqlTransport(endpoint,statement.trim(),queryTimeoutMs,request.signal,undefined,true,request,retry,writing));
+          if(response.ok)headers["x-maestro-digest-refresh"]=encodeURIComponent(JSON.stringify({realm:renewed.realm,algorithm:renewed.algorithm,qop:renewed.qop,nonce:renewed.nonce,cnonce:renewed.cnonce,opaque:renewed.opaque,nc:renewed.nc}));
         }
-        let url: URL;
-        try { url = new URL(isLoad[1]); } catch (error) { return NextResponse.json({error:`Invalid RDF source URL: ${describeUpstreamError(error)}`},{status:400}); }
-        if (!["http:","https:"].includes(url.protocol) || url.username || url.password ||
-            !graphs.every(uri => uri.startsWith(`${base}/`) || uri.startsWith(`${base}#`))) {
-          return NextResponse.json({error:"RDF LOAD requires a public HTTP(S) source and an authenticated personal graph."},{status:400});
-        }
-        await updatePersonalSparql(update, 600000, request);
-        clearQueryCache();
-        return new Response(null, {status:204, headers:{"Cache-Control":"no-store"}});
       }
-
-      // Only a bounded, pure INSERT DATA can exceed the standard 100 KB update
-      // limit. Large RDF archive imports must remain a single operation so that
-      // blank-node labels refer to the same resources across triples.
-      const maxUpdateLength = /^INSERT\s+DATA\s*\{/i.test(update) ? 2_000_000 : 100_000;
-      if (!update || update.length > maxUpdateLength || hasImplicitGraph || graphs.length === 0 ||
-          !graphs.every(uri => uri.startsWith(`${base}/`) || uri.startsWith(`${base}#`)) ||
-          /\b(?:SERVICE|LOAD|CREATE|DROP|MOVE|COPY|ADD|WITH|USING|FROM)\b/i.test(clean) ||
-          !/^(?:INSERT|DELETE|CLEAR)\b/i.test(update)) {
-        const reason = hasImplicitGraph ? "Variable or implicit graph targets are not permitted."
-          : graphs.some(uri => !(uri.startsWith(`${base}/`) || uri.startsWith(`${base}#`)))
-            ? "The update references a graph outside the authenticated personal namespace."
-            : "Only bounded INSERT, DELETE and CLEAR operations on explicit personal named graphs are permitted.";
-        return NextResponse.json({ error: `SPARQL Update rejected: ${reason}` }, { status: 400 });
+      if(!response.ok)return NextResponse.json({error:`Personal SPARQL HTTP ${response.status}${responseText.trim()?`: ${responseText.trim().slice(0,1000)}`:""}`},{status:response.status>=400?response.status:502,headers:{"Cache-Control":"no-store"}});
+      if(response.status===206 || isVirtuosoAnytime(response,responseText))return NextResponse.json({error:"Incomplete personal SPARQL result."},{status:502,headers:{"Cache-Control":"no-store"}});
+      if(writing)return new Response(null,{status:204,headers});
+      if(/^\s*(?:(?:PREFIX\s+[^\n]+)\s*)?ASK\b/i.test(body.query.trim())) {
+        try { const result=JSON.parse(responseText); if(typeof result.boolean==="boolean")return NextResponse.json(result,{headers}); } catch {}
       }
-      // Bookmark authorization applies to writes to the actual personal Status
-      // graph, never to declarations of the RDF vocabulary in /shacl/policies.
-      // A substring check on "...#status" also matched "...#statusTrack", and
-      // prevented normal login seeding of the RDF state-machine definitions.
-      // Protected Status writes (including CLEAR) remain bookmark-gated.
-      if (graphs.includes(`${resolveGraph(GRAPH.STATUS, base)}`) &&
-          (typeof body.bookmarkQueryXml !== "string" || !(await verifyApprovalBookmark(body.bookmarkQueryXml, request))))
-        return NextResponse.json({ error: "Bookmark the live FCT query before modifying Status." }, { status: 409 });
-      await updatePersonalSparql(update, queryTimeoutMs ?? 20000, request);
-      return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
-    }
-    // Authenticated *read* of the user's own personal store. This remains the
-    // existing /sparql endpoint and forwards the same SELECT/ASK unchanged;
-    // it does not retry, rewrite or use an authenticated write service.
-    // It is never cached across users or dispatched to an arbitrary addr.
-    if (body?.personalRead === true) {
-      const denied = requirePersonalLogin(request);
-      if (denied) return denied;
-      const address = typeof body.addr === "string" ? body.addr : "";
-      const separator = address.lastIndexOf("@");
-      const selectedUrl = separator >= 0 ? address.slice(separator + 1) : "";
-      const personalUrl = personalSparqlUrl(request).toString();
-      if (selectedUrl !== personalUrl) {
-        return NextResponse.json({error:"Personal SPARQL reads must use the logged-in personal /sparql endpoint."}, {status:403});
-      }
-      if (typeof body.query !== "string" || !isBoundedReadOnlySparql(body.query, 100000)) {
-        return NextResponse.json({error:"Expected a read-only personal SELECT/ASK query."}, {status:400});
-      }
-      // selectPersonal() sends SELECT. Avoid the generic cached server-reader,
-      // which has no credentials and may reject an unregistered personal endpoint.
-      // The existing personal helper supplies session authentication headers.
-      diagnosticOperation = "authenticated personal SPARQL SELECT";
-      diagnosticEndpoint = personalUrl;
-      const parsed = await queryPersonalSparql(body.query.trim(), queryTimeoutMs ?? 20000, request);
-      return NextResponse.json(parsed, {headers:{"Cache-Control":"no-store"}});
+      const parsed=parseSparqlResults(responseText);
+      if(!parsed)return NextResponse.json({error:"Invalid personal SPARQL results."},{status:502,headers:{"Cache-Control":"no-store"}});
+      return NextResponse.json(parsed,{headers});
     }
     // Every SPARQL request carries the address of its originating FCT query.
     const nested = body?.recordSelect ?? body?.recordBlankNodes ?? body?.recordValueLabels ?? body?.facetValueCount ?? body?.kindAvailability;
@@ -454,7 +417,7 @@ async function handlePost(request: Request) {
     // service-description metadata. No feature-specific JSON API is needed.
     if (typeof body?.query === "string") {
       const query = body.query.trim();
-      const maximumQueryLength = requirePersonalLogin(request) ? 10000 : 100000;
+      const maximumQueryLength = 100000;
       if (query.length > maximumQueryLength) {
         return NextResponse.json({ error: `Read-only SPARQL query exceeds the ${maximumQueryLength}-character gateway limit (${query.length} characters).` }, { status: 413 });
       }
@@ -491,7 +454,7 @@ async function handlePost(request: Request) {
       if (!response.ok) return NextResponse.json({ error: `SPARQL HTTP ${response.status}` }, { status: response.status });
       const parsed = parseSparqlResults(responseText);
       if (!parsed) return NextResponse.json({ error: "Invalid SPARQL results" }, { status: 502 });
-      if (response.status === 200) if (!privateRequest) setQueryCache(key, responseText);
+      if (response.status === 200) setQueryCache(key, responseText);
       return NextResponse.json(parsed, { headers: { "Cache-Control": "no-store" } });
     }
 
@@ -627,7 +590,7 @@ async function handlePost(request: Request) {
       }
       const parsed = parseSparqlResults(responseText);
       if (!parsed) return NextResponse.json({ error: "Invalid Record label SELECT results JSON." }, { status: 502, headers: upstreamDiagnosticHeaders(response) });
-      if (response.status === 200 && !incomplete) if (!privateRequest) setQueryCache(key, responseText);
+      if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
       return NextResponse.json({ ...parsed, incomplete, query }, {
         headers: { "Cache-Control": "no-store", ...sparqlResponseHeaders(response, incomplete) },
       });
@@ -712,7 +675,7 @@ async function handlePost(request: Request) {
       }
       const parsed = parseSparqlResults(responseText);
       if (!parsed) return NextResponse.json({ error: "Invalid scoped blank-node Record SELECT response." }, { status: 502, headers: upstreamDiagnosticHeaders(response) });
-      if (response.status === 200 && !incomplete) if (!privateRequest) setQueryCache(key, responseText);
+      if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
       return NextResponse.json({ ...parsed, incomplete, query }, {
         headers: { "Cache-Control": "no-store", ...sparqlResponseHeaders(response, incomplete) },
       });
@@ -798,7 +761,7 @@ async function handlePost(request: Request) {
       if (parsed && !["subject", "predicate", "object"].every((name) => parsed.head.vars.includes(name))) {
         return NextResponse.json({ error: "Record SELECT response lacks RDF triple columns." }, { status: 502, headers: upstreamDiagnosticHeaders(response) });
       }
-      if (response.status === 200 && !incomplete && parsed) if (!privateRequest) setQueryCache(key, responseText);
+      if (response.status === 200 && !incomplete && parsed) setQueryCache(key, responseText);
       return NextResponse.json({ ...(parsed ?? { head: { vars: [] }, results: { bindings: [] } }), incomplete, query }, {
         headers: { "Cache-Control": "no-store", ...sparqlResponseHeaders(response, incomplete) },
       });
@@ -853,7 +816,7 @@ async function handlePost(request: Request) {
       if (!parsed || !parsed.head.vars.includes("c1")) {
         return NextResponse.json({ error: "Virtuoso returned invalid Results SPARQL JSON (expected ?c1)." }, { status: 502, headers: upstreamDiagnosticHeaders(response) });
       }
-      if (response.status === 200 && !incomplete) if (!privateRequest) setQueryCache(key, responseText);
+      if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
       return NextResponse.json({ ...parsed, query: actualQuery, incomplete,
         orderingFallback: actualQuery !== resultsQuery }, { headers: sparqlResponseHeaders(response, incomplete) });
     }
@@ -950,7 +913,7 @@ async function handlePost(request: Request) {
         if (incomplete) return NextResponse.json({ incomplete: true, query: countQuery }, { headers: sparqlResponseHeaders(response, true) });
         return NextResponse.json({ error: "Virtuoso returned an invalid SPARQL count result." }, { status: 502, headers: upstreamDiagnosticHeaders(response) });
       }
-      if (response.status === 200 && !incomplete) if (!privateRequest) setQueryCache(key, responseText);
+      if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
       if (numericDomain || temporalDomain) {
         const row = parsed.results.bindings[0];
         const min = row?.min?.value ?? null;
@@ -1004,7 +967,7 @@ async function handlePost(request: Request) {
       const uris = [...new Set(bindings
         .map((binding) => binding[built.variable]?.value)
         .filter((value): value is string => typeof value === "string" && value.length > 0))];
-      if (response.status === 200 && !incomplete) if (!privateRequest) setQueryCache(key, responseText);
+      if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
       return NextResponse.json({ uris, incomplete }, { headers: sparqlResponseHeaders(response, incomplete) });
     }
 
@@ -1056,7 +1019,7 @@ async function handlePost(request: Request) {
     if (!parsed && !incomplete) {
       return NextResponse.json({ error: "Virtuoso returned invalid SPARQL results JSON." }, { status: 502, headers: upstreamDiagnosticHeaders(response) });
     }
-    if (response.status === 200 && !incomplete) if (!privateRequest) setQueryCache(key, responseText);
+    if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
     return NextResponse.json(parsed ? { ...parsed, incomplete } : { head: { vars: [] }, results: { bindings: [] }, incomplete: true }, {
       status: 200,
       headers: { "Cache-Control": "no-store", ...sparqlResponseHeaders(response, incomplete) },

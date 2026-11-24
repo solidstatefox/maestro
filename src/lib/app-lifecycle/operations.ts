@@ -22,6 +22,7 @@ export type NavigationEvent =
   | { type: "PROVIDERS_ENTRY_REQUESTED"; fromUrl: string }
   | { type: "RIBBON_ENTRY_FROM_BROWSE"; sourceKey: string; fromUrl: string }
   | { type: "FEATURES_ENTERED"; fromUrl: string }
+  | { type: "PERSONAL_PERSPECTIVE_ENTERED"; fromUrl: string }
   | { type: "PROVIDERS_ENTRY_CANCELLED" }
   | { type: "BROWSE_QUERY_DISPLACED"; sourceKey: string }
   | { type: "CONTEXT_RETURNED" }
@@ -172,6 +173,17 @@ const navigationMachine = setup({
         returnVisible: true,
       })),
     },
+    PERSONAL_PERSPECTIVE_ENTERED: {
+      // An explicit Bookmarks or History selection starts Return immediately,
+      // even before a provider query finishes loading (or if none matches).
+      // Re-entering a personal Perspective must never overwrite the original destination.
+      guard: ({ context, event }) => context.hydrated && !context.returnVisible && Boolean(event.fromUrl),
+      actions: assign(({ context, event }) => ({
+        returnUrl: context.returnUrl || context.pendingEntryUrl || context.browseUrl || event.fromUrl,
+        pendingEntryUrl: "",
+        returnVisible: true,
+      })),
+    },
     RIBBON_ENTRY_FROM_BROWSE: {
       // Capture a candidate Browse destination for later Features entry.
       // This does NOT start or display Return in other ribbons.
@@ -291,7 +303,7 @@ export function createMaestroOperationsController() {
         if (requests && (snapshot.requests.queued !== event.queued || snapshot.requests.active !== event.active)) requests.send(event);
       } else if (event.type === "NAVIGATION_OBSERVED") {
         if (navigation && (snapshot.navigation.key !== event.key || snapshot.navigation.lastUrl !== event.url || snapshot.navigation.hydrated !== event.hydrated || snapshot.navigation.tab !== event.tab || snapshot.navigation.viewPanel !== event.viewPanel || snapshot.navigation.isProviderQuery !== event.isProviderQuery)) navigation.send(event);
-      } else if (event.type === "RIBBON_ENTRY_FROM_BROWSE" || event.type === "FEATURES_ENTERED" || event.type === "PROVIDERS_ENTRY_REQUESTED" || event.type === "PROVIDERS_ENTRY_CANCELLED" || event.type === "BROWSE_QUERY_DISPLACED" || event.type === "CONTEXT_RETURNED" || event.type === "HISTORY_NAVIGATION_PENDING") {
+      } else if (event.type === "RIBBON_ENTRY_FROM_BROWSE" || event.type === "FEATURES_ENTERED" || event.type === "PERSONAL_PERSPECTIVE_ENTERED" || event.type === "PROVIDERS_ENTRY_REQUESTED" || event.type === "PROVIDERS_ENTRY_CANCELLED" || event.type === "BROWSE_QUERY_DISPLACED" || event.type === "CONTEXT_RETURNED" || event.type === "HISTORY_NAVIGATION_PENDING") {
         navigation?.send(event);
       } else {
         query?.send(event);

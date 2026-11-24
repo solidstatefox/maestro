@@ -42,9 +42,12 @@ test('Browse separators use centered stable hit targets and do not steal adjacen
   assert.match(resizable, /min-w-2 max-w-2/);
   assert.doesNotMatch(resizable, /after:-left-1/);
   assert.doesNotMatch(workspace, /!w-px !min-w-px !max-w-px/);
-  assert.equal((workspace.match(/<ResizableHandle withHandle/g) || []).length, 2);
-  for (const [name, order] of [["left",0],["center",1],["right",2]])
-    assert.ok(frames.includes(`id="maestro-browse-${name}" order={${order}}`));
+  assert.equal((workspace.match(/<ResizableHandle withHandle/g) || []).length, 1);
+  assert.match(workspace, /index < activePaneOrder\.length - 1 && <ResizableHandle/);
+  for (const [name, pane] of [["left","filters"],["center","results"],["right","record"]]) {
+    assert.ok(frames.includes(`useBrowsePanePosition("${pane}")`));
+    assert.ok(frames.includes(`id="maestro-browse-${name}" order={order}`));
+  }
 });
 
 test('XState observables and live Results requests deduplicate unchanged input', () => {

@@ -1,4 +1,5 @@
 "use client";
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
@@ -64,9 +65,9 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
 {workspaceTab === "analyze" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Analyze canvas">
                 {selectedAnalysisUri.includes("compare-table") && <div className="flex items-center gap-2 border-b px-3 py-2 text-sm">
                   <label htmlFor="maestro-compare-facet">Compare facet</label>
-                  <select id="maestro-compare-facet" value={effectiveCompareFacet} onChange={(event) => setCompareFacet(event.target.value)} className="min-w-0 max-w-md flex-1 rounded-md border bg-background px-2 py-1">
+                  <MaestroSelect id="maestro-compare-facet" value={effectiveCompareFacet} onChange={(event) => setCompareFacet(event.target.value)} className="min-w-0 max-w-md flex-1 rounded-md border bg-background px-2 py-1">
                     {availableCompareFacets.map((facet) => <option key={facet.key} value={facet.key}>{facet.label}</option>)}
-                  </select>
+                  </MaestroSelect>
                 </div>}
                 {<div role="toolbar" aria-label="Analyze table actions" className="flex shrink-0 items-center gap-2 border-b bg-muted/30 px-3 py-1 text-muted-foreground">
                   <button type="button" className="inline-flex items-center gap-1.5 rounded border border-border/60 bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground disabled:cursor-not-allowed" title="Export (coming soon)" aria-label="Export" disabled><Download aria-hidden="true" className="size-4"/>Export</button>
@@ -121,9 +122,9 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                 <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-3 py-2 text-xs">
                   <span className="text-muted-foreground">{formatPagePosition(resultsUiPage, effectiveResultsTotalCount === null ? null : Math.max(1, Math.ceil(effectiveResultsTotalCount / resultsPageSize)))}{effectiveResultsTotalCount !== null ? ` · ${shortenCount(effectiveResultsTotalCount)} results` : " · many results"}</span>
                   <div className="flex items-center gap-2"><label htmlFor="analyze-page-size">Per page</label>
-                    <select id="analyze-page-size" value={effectivePageSize} onChange={(event) => { const n = Number(event.target.value); maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(n)); setResultsPageSize(n);setResultsUiPage(0);}} className="rounded border bg-background px-2 py-1">
+                    <MaestroSelect id="analyze-page-size" value={effectivePageSize} onChange={(event) => { const n = Number(event.target.value); maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(n)); setResultsPageSize(n);setResultsUiPage(0);}} className="rounded border bg-background px-2 py-1">
                       {resultsPageSizeOptions.map((n) => <option key={n} value={n}>{n}</option>)}
-                    </select>
+                    </MaestroSelect>
                     <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={resultsUiPage===0 || isSearching} onClick={() => changeResultsPage(-1)}>Previous</button>
                     <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={isSearching || (effectiveResultsTotalCount === null ? (results.length <= (resultsUiPage+1)*resultsPageSize && (resultsPageComplete || resultsBatchRequestPending.current)) : resultsUiPage+1 >= Math.ceil(effectiveResultsTotalCount/resultsPageSize))} onClick={() => changeResultsPage(1)}>Next</button>
                   </div>

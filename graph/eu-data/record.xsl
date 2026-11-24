@@ -39,7 +39,7 @@
   <xsl:variable name="local" select="tokenize($iri,'[/#]')[last()]"/>
   <xsl:choose>
     <xsl:when test="$local=('hasTotalCost','totalCost')"><xsl:sequence select="'Cost'"/></xsl:when>
-    <xsl:when test="$local='isFundedBy'"><xsl:sequence select="'Funded by'"/></xsl:when>
+    <xsl:when test="$local='isFundedBy'"><xsl:sequence select="'Funding'"/></xsl:when>
     <xsl:when test="$local='hasEuroSciVocClassification'"><xsl:sequence select="'Research fields'"/></xsl:when>
     <xsl:when test="$local='ecMaxContribution'"><xsl:sequence select="'EU contribution'"/></xsl:when>
     <xsl:when test="$local='fieldOfScience'"><xsl:sequence select="'Field of science'"/></xsl:when>
@@ -77,7 +77,7 @@
   <xsl:when test="$rows[fct:column[2] = $rdfType]/fct:column[3] = 'http://data.europa.eu/s66#Organisation'"><xsl:call-template name="RecordOrganisation"/></xsl:when>
   <xsl:when test="$rows[fct:column[2] = $rdfType]/fct:column[3] = 'http://data.europa.eu/s66#Person'"><xsl:call-template name="RecordPerson"/></xsl:when>
   <xsl:when test="$rows[fct:column[2] = $rdfType]/fct:column[3] = 'http://data.europa.eu/s66#Grant'"><xsl:call-template name="RecordGrant"/></xsl:when>
-  <xsl:when test="$rows[fct:column[2] = $rdfType]/fct:column[3] = 'http://data.europa.eu/s66#Result'"><xsl:call-template name="RecordResult"/></xsl:when>
+  <xsl:when test="$rows[fct:column[2] = $rdfType]/fct:column[3] = ('http://data.europa.eu/s66#Result', 'http://data.europa.eu/s66#ProjectPublication', 'http://data.europa.eu/s66#ProjectReportSummary')"><xsl:call-template name="RecordResult"/></xsl:when>
   <xsl:when test="$rows[fct:column[2] = $rdfType]/fct:column[3] = 'http://data.europa.eu/s66#Role'"><xsl:call-template name="RecordRole"/></xsl:when>
   <xsl:when test="$rows[fct:column[2] = $rdfType]/fct:column[3] = 'http://www.w3.org/ns/dcat#Dataset'"><xsl:call-template name="RecordDataset"/></xsl:when>
   <xsl:when test="$rows[fct:column[2] = $rdfType]/fct:column[3] = 'http://www.w3.org/ns/dcat#Distribution'"><xsl:call-template name="RecordDistribution"/></xsl:when>
@@ -374,6 +374,14 @@ VALUES ?origin { </xsl:text>
       <xsl:when test="contains(lower-case($role),'partner')">
         <svg xmlns="http://www.w3.org/2000/svg" id="{$id}-role-partner-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-label="Partner" role="img"><path id="{$id}-partner-hands" d="m2 8 3-3 4 2 3-2 4 1 3 5-4 6-3-1-3-3-2 2-5-4zM9 7l3 2 4-3m-4 8 3 3M9 11l3 3"/></svg>
       </xsl:when>
+      <xsl:when test="contains(replace(lower-case($role),'[^a-z]',''),'thirdparty')">
+        <!-- Lucide users-round-collaboration: visually distinct two-way group. -->
+        <svg xmlns="http://www.w3.org/2000/svg" id="{$id}-role-thirdparty-icon" data-maestro-icon="users-round-collaboration" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-label="Third-party collaborator" role="img"><path id="{$id}-thirdparty-person-a" d="M8 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path id="{$id}-thirdparty-person-b" d="M16.7 13a4 4 0 0 0 0-8"/><path id="{$id}-thirdparty-group-a" d="M2 21v-2a6 6 0 0 1 10-4.5"/><path id="{$id}-thirdparty-group-b" d="M16 15a6 6 0 0 1 6 6"/><path id="{$id}-thirdparty-collaboration" d="m11 18 2-2 2 2m-2-2v5"/></svg>
+      </xsl:when>
+      <xsl:when test="contains(lower-case($role),'participant')">
+        <!-- Lucide users. -->
+        <svg xmlns="http://www.w3.org/2000/svg" id="{$id}-role-participant-icon" data-maestro-icon="users" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-label="Participant" role="img"><path id="{$id}-participant-group" d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle id="{$id}-participant-person" cx="9" cy="7" r="4"/><path id="{$id}-participant-other-a" d="M22 21v-2a4 4 0 0 0-3-3.87"/><path id="{$id}-participant-other-b" d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </xsl:when>
     </xsl:choose>
     <xsl:choose>
     <xsl:when test="$isUri">
@@ -515,6 +523,36 @@ VALUES ?origin { </xsl:text>
   </xsl:for-each-group>
 </xsl:template>
 
+<!-- Kept inside the last expandable narrative paragraph: when collapsed, the
+     icon is hidden along with the end of the long text. Short text shows it. -->
+<xsl:template name="project-doi-inline-icon">
+  <xsl:param name="doi" as="xs:string"/>
+  <xsl:param name="doi-row" as="element(fct:row)?"/>
+  <xsl:param name="doi-literal" as="xs:string"/>
+  <xsl:if test="$doi-row and matches($doi,'^10\.[0-9]{4,9}/\S+$')">
+    <xsl:text> </xsl:text>
+    <span id="eu-project-doi-inline" class="inline align-baseline whitespace-nowrap">
+      <a id="eu-project-doi-inline-link" data-maestro-external-link="true"
+         href="{concat('https://doi.org/',replace(encode-for-uri($doi),'%2F','/'))}"
+         target="_blank" rel="noopener noreferrer"
+         class="inline-flex size-5 items-center justify-center align-text-bottom text-primary hover:text-foreground focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-ring"
+         aria-label="Open Project DOI {$doi}" title="Open Project DOI {$doi}">
+        <svg xmlns="http://www.w3.org/2000/svg" id="eu-project-doi-inline-icon" data-maestro-icon="file-chart-column-increasing"
+          viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
+          fill="none" aria-hidden="true" class="size-[18px] shrink-0">
+          <path id="eu-project-doi-inline-file" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/>
+          <path id="eu-project-doi-inline-fold" d="M14 2v6h6"/>
+          <path id="eu-project-doi-inline-column-a" d="M8 18v-2"/>
+          <path id="eu-project-doi-inline-column-b" d="M12 18v-5"/>
+          <path id="eu-project-doi-inline-column-c" d="M16 18v-8"/>
+        </svg>
+        <span id="eu-project-doi-inline-label" class="sr-only">DOI</span>
+        <span id="eu-project-doi-inline-value" about="{$recordUri}" property="{string($doi-row/fct:column[2])}"
+              content="{$doi-literal}" class="sr-only"><xsl:value-of select="$doi"/></span>
+      </a>
+    </span>
+  </xsl:if>
+</xsl:template>
 <xsl:template name="RecordProject">
   <xsl:variable name="titleRow" select="($projectRows[fct:column[2] = concat($eu,'title')], $projectRows[fct:column[2] = 'http://www.w3.org/2000/01/rdf-schema#label'], $projectRows[fct:column[2] = 'http://purl.org/dc/terms/title'])[1]"/>
   <xsl:variable name="acronymRow" select="($projectRows[fct:column[2] = concat($eu,'hasAcronym')])[1]"/>
@@ -579,13 +617,16 @@ VALUES ?origin { </xsl:text>
        segment beyond the duration pin, even when endDate differs. -->
   <xsl:variable name="elapsedDurationPosition" select="if ($hasTermination and $validDates) then (if ($durationValid) then min(($durationPosition,$terminationPosition)) else $terminationPosition) else if ($isOngoing) then min(($durationPosition,$todayPosition)) else $durationPosition"/>
   <xsl:variable name="remainingDurationPosition" select="if ($isOngoing) then max((0,$durationPosition - $elapsedDurationPosition)) else 0"/>
+  <xsl:variable name="projectDoiRow" select="($projectRows[fct:column[2] = (concat($eu,'doi'),'http://purl.org/dc/terms/identifier')][matches(normalize-space(string(fct:column[3])),'^(?:doi:|https?://(?:dx\.)?doi\.org/)?10\.[0-9]{4,9}/\S+$','i')])[1]"/>
+  <xsl:variable name="projectDoiLiteral" select="normalize-space(string($projectDoiRow/fct:column[3]))"/>
+  <xsl:variable name="projectDoi" select="replace(replace($projectDoiLiteral,'^https?://(?:dx\.)?doi\.org/','', 'i'),'^doi:','', 'i')"/>
   <xsl:variable name="resultRows" select="$projectRows[fct:column[2] = concat($eu,'hasResult')]"/>
   <xsl:variable name="knownDetailIris" select="(concat($eu,'identifier'),concat($eu,'hasidentifier'),concat($eu,'hasIdentifier'),concat($eu,'hasTotalCost'),concat($eu,'totalCost'),concat($eu,'ecMaxContribution'),concat($eu,'isFundedBy'),concat($eu,'fieldOfScience'),concat($eu,'businessSector'),concat($eu,'hasEuroSciVocClassification'),concat($eu,'hasInvolvedParty'),concat($eu,'hasEvent'),concat($eu,'hasProjectDivision'),concat($eu,'hasRelatedProject'),concat($eu,'webLink'),concat($eu,'webResource'))"/>
   <xsl:variable name="summaryIris" select="(concat($eu,'identifier'),concat($eu,'hasidentifier'),concat($eu,'hasIdentifier'),concat($eu,'hasTotalCost'),concat($eu,'totalCost'),concat($eu,'ecMaxContribution'),concat($eu,'isFundedBy'),concat($eu,'fieldOfScience'),concat($eu,'businessSector'),concat($eu,'hasEuroSciVocClassification'))"/>
   <xsl:variable name="participantsIris" select="(concat($eu,'hasInvolvedParty'))"/>
   <xsl:variable name="linksIris" select="(concat($eu,'webLink'),concat($eu,'webResource'))"/>
   <xsl:variable name="relationshipsIris" select="(concat($eu,'hasEvent'),concat($eu,'hasProjectDivision'),concat($eu,'hasRelatedProject'))"/>
-  <xsl:variable name="usedIris" select="(string($titleRow/fct:column[2]),string($urlRow/fct:column[2]),string($terminationRow/fct:column[2]),concat($eu,'keyword'),concat($eu,'keywords'),concat($eu,'subject'),concat($eu,'abstract'),concat($eu,'description'),concat($eu,'objective'),concat($eu,'projectStatus'),concat($eu,'hasProjectStatus'),concat($eu,'status'),concat($eu,'hasAcronym'),concat($eu,'startDate'),concat($eu,'endDate'),concat($eu,'duration'),concat($eu,'hasResult'))"/>
+  <xsl:variable name="usedIris" select="(string($titleRow/fct:column[2]),string($urlRow/fct:column[2]),string($terminationRow/fct:column[2]),concat($eu,'keyword'),concat($eu,'keywords'),concat($eu,'subject'),concat($eu,'abstract'),concat($eu,'description'),concat($eu,'objective'),concat($eu,'projectStatus'),concat($eu,'hasProjectStatus'),concat($eu,'status'),concat($eu,'hasAcronym'),concat($eu,'startDate'),concat($eu,'endDate'),concat($eu,'duration'),concat($eu,'hasResult'),concat($eu,'doi'),string($projectDoiRow/fct:column[2]))"/>
   <!-- Catch long literal narrative fields even when their predicate is unknown.
        Exclude known detail/structural predicates and all RDF resource terms. -->
   <xsl:variable name="additionalLongTextRows" select="$projectRows[
@@ -765,19 +806,50 @@ VALUES ?origin { </xsl:text>
         <xsl:for-each select="$abstractRows">
           <p id="eu-project-abstract-{position()}" data-maestro-expandable="true" class="break-words whitespace-pre-line leading-relaxed">
             <xsl:call-template name="project-atom"><xsl:with-param name="row" select="."/><xsl:with-param name="id" select="concat('eu-project-abstract-value-',position())"/><xsl:with-param name="class" select="'cursor-pointer break-words text-foreground hover:text-primary'"/></xsl:call-template>
+            <xsl:if test="position() = last() and empty(($descriptionRows, $additionalLongTextRows))">
+              <xsl:call-template name="project-doi-inline-icon">
+                <xsl:with-param name="doi" select="$projectDoi"/>
+                <xsl:with-param name="doi-row" select="$projectDoiRow"/>
+                <xsl:with-param name="doi-literal" select="$projectDoiLiteral"/>
+              </xsl:call-template>
+            </xsl:if>
           </p>
         </xsl:for-each>
         <xsl:for-each select="$descriptionRows">
           <p id="eu-project-description-{position()}" data-maestro-expandable="true" class="break-words whitespace-pre-line leading-relaxed text-muted-foreground">
             <xsl:call-template name="project-atom"><xsl:with-param name="row" select="."/><xsl:with-param name="id" select="concat('eu-project-description-value-',position())"/><xsl:with-param name="class" select="'break-words text-muted-foreground'"/></xsl:call-template>
+            <xsl:if test="position() = last() and empty($additionalLongTextRows)">
+              <xsl:call-template name="project-doi-inline-icon">
+                <xsl:with-param name="doi" select="$projectDoi"/>
+                <xsl:with-param name="doi-row" select="$projectDoiRow"/>
+                <xsl:with-param name="doi-literal" select="$projectDoiLiteral"/>
+              </xsl:call-template>
+            </xsl:if>
           </p>
         </xsl:for-each>
         <xsl:for-each select="$additionalLongTextRows">
           <p id="eu-project-longtext-{position()}" data-maestro-expandable="true" class="break-words whitespace-pre-line leading-relaxed text-muted-foreground">
             <xsl:call-template name="project-atom"><xsl:with-param name="row" select="."/><xsl:with-param name="id" select="concat('eu-project-longtext-value-',position())"/><xsl:with-param name="class" select="'cursor-pointer break-words text-muted-foreground hover:text-primary'"/></xsl:call-template>
+            <xsl:if test="position() = last()">
+              <xsl:call-template name="project-doi-inline-icon">
+                <xsl:with-param name="doi" select="$projectDoi"/>
+                <xsl:with-param name="doi-row" select="$projectDoiRow"/>
+                <xsl:with-param name="doi-literal" select="$projectDoiLiteral"/>
+              </xsl:call-template>
+            </xsl:if>
           </p>
         </xsl:for-each>
       </section>
+    </xsl:if>
+
+    <!-- With no abstract/description at all there is no expandable text;
+         keep the Project DOI visible rather than silently losing the link. -->
+    <xsl:if test="empty(($abstractRows,$descriptionRows,$additionalLongTextRows))">
+      <p id="eu-project-doi-fallback" class="text-sm"><xsl:call-template name="project-doi-inline-icon">
+                <xsl:with-param name="doi" select="$projectDoi"/>
+                <xsl:with-param name="doi-row" select="$projectDoiRow"/>
+                <xsl:with-param name="doi-literal" select="$projectDoiLiteral"/>
+              </xsl:call-template></p>
     </xsl:if>
 
     <!-- Separate Results section, immediately after the narrative, like Details.
@@ -785,7 +857,7 @@ VALUES ?origin { </xsl:text>
     <xsl:if test="exists($resultRows)">
       <section id="eu-project-results-section" class="space-y-4 border-t border-border pt-5" aria-label="Project results">
         <div id="eu-project-results-heading" class="flex items-baseline justify-between gap-3">
-          <h3 id="eu-project-results-title" class="text-base font-medium tracking-tight">Findings and Results</h3>
+          <h3 id="eu-project-results-title" class="text-base font-medium tracking-tight">Deliverables</h3>
           <span id="eu-project-results-count" class="text-xs tabular-nums text-muted-foreground"><xsl:value-of select="count($resultRows)"/></span>
         </div>
         <div id="eu-project-results" class="rounded-xl border border-border p-4" role="region" aria-label="Project results table">
@@ -810,9 +882,9 @@ VALUES ?origin { </xsl:text>
               </div>
               <div id="eu-project-result-document-{$n}" class="flex min-w-0 justify-end" data-maestro-result-doi="{if ($doiRow) then 'available' else 'absent'}">
                 <xsl:if test="$doiRow and matches($doi,'^10\.[0-9]{4,9}/\S+$')">
-                  <a id="eu-project-doi-link-{$n}" data-maestro-external-link="true" href="{concat('https://doi.org/',replace(encode-for-uri($doi),'%2F','/'))}" target="_blank" rel="noopener noreferrer" aria-label="Open DOI document {$doi}" title="Open DOI document {$doi}" class="inline-flex size-7 items-center justify-center rounded-sm text-primary hover:bg-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+                  <a id="eu-project-doi-link-{$n}" data-maestro-external-link="true" href="{concat('https://doi.org/',replace(encode-for-uri($doi),'%2F','/'))}" target="_blank" rel="noopener noreferrer" aria-label="Open DOI document {$doi}" title="Open DOI document {$doi}" class="inline-flex size-8 items-center justify-center rounded-md border border-transparent text-primary hover:border-border hover:bg-accent hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
                     <!-- Lucide file-chart-column, with stable SVG element IDs for Record navigation. -->
-                    <svg xmlns="http://www.w3.org/2000/svg" id="eu-project-doi-icon-{$n}" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" aria-hidden="true" class="size-4"><path id="eu-project-doi-axis-{$n}" d="M3 3v18h18"/><path id="eu-project-doi-column-a-{$n}" d="M8 16v-3"/><path id="eu-project-doi-column-b-{$n}" d="M13 16V9"/><path id="eu-project-doi-column-c-{$n}" d="M18 16V5"/><path id="eu-project-doi-chart-outline-{$n}" d="M6 3h15v18"/></svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" id="eu-project-doi-icon-{$n}" data-maestro-icon="file-chart-column-increasing" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" fill="none" aria-hidden="true" class="size-[18px] shrink-0"><path id="eu-project-doi-file-{$n}" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path id="eu-project-doi-fold-{$n}" d="M14 2v6h6"/><path id="eu-project-doi-column-a-{$n}" d="M8 18v-2"/><path id="eu-project-doi-column-b-{$n}" d="M12 18v-5"/><path id="eu-project-doi-column-c-{$n}" d="M16 18v-8"/></svg>
                     <span id="eu-project-doi-rdfa-{$n}" about="{$resultUri}" property="{string($doiRow/fct:column[2])}" content="{$doiLiteral}" class="sr-only"><xsl:if test="$doiRow/fct:column[3]/@datatype"><xsl:attribute name="datatype" select="string($doiRow/fct:column[3]/@datatype)"/></xsl:if><xsl:value-of select="$doiLiteral"/></span>
                   </a>
                 </xsl:if>
@@ -979,37 +1051,177 @@ VALUES ?origin { </xsl:text>
  </section>
 </xsl:template>
 <xsl:template name="RecordResult">
- <section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" about="{$recordUri}" class="mx-auto flex w-full max-w-4xl flex-col gap-4 p-2 text-foreground" aria-label="Research result Record">
-   <header class="space-y-3 border-b border-border pb-4" id="record-header">
-     <div class="flex flex-wrap items-center justify-between gap-2" id="eu-recordresult-div-1"><span class="text-xs font-semibold uppercase tracking-wide text-primary" id="eu-recordresult-span-1">EU Data Explorer</span><span class="rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground" id="eu-recordresult-span-2">EURIO · Research result</span></div>
-     <xsl:variable name="headingTerm" select="($rows[fct:column[2] = 'http://data.europa.eu/s66#title']/fct:column[3], $rows[fct:column[2] = 'http://www.w3.org/2000/01/rdf-schema#label']/fct:column[3], $rows[fct:column[2] = 'http://purl.org/dc/terms/title']/fct:column[3])[1]"/><xsl:variable name="heading" select="string($headingTerm)"/>
-     <h2 id="record-title" class="break-words text-xl font-semibold tracking-tight sm:text-2xl"><xsl:if test="$headingTerm and not($headingTerm/@termType = 'uri') and not($headingTerm/@datatype = 'uri') and not(matches(string($headingTerm), '^https?://'))"><xsl:attribute name="property" select="string($headingTerm/../fct:column[2])"/><xsl:attribute name="content" select="string($headingTerm)"/><xsl:if test="$headingTerm/@datatype and not($headingTerm/@xml:lang or $headingTerm/@lang)"><xsl:attribute name="datatype" select="string($headingTerm/@datatype)"/></xsl:if><xsl:if test="$headingTerm/@xml:lang or $headingTerm/@lang"><xsl:attribute name="lang" select="string(($headingTerm/@xml:lang,$headingTerm/@lang)[1])"/></xsl:if></xsl:if><xsl:choose><xsl:when test="normalize-space($heading)"><xsl:value-of select="$heading"/></xsl:when><xsl:otherwise><xsl:value-of select="$recordUri"/></xsl:otherwise></xsl:choose></h2>
-     <p class="break-all text-xs text-muted-foreground" id="eu-recordresult-p-1">RDF resource <xsl:value-of select="$recordUri"/></p>
-   </header>
-   
-    <xsl:if test="$rows[fct:column[2] = 'http://data.europa.eu/s66#title' or fct:column[2] = 'http://data.europa.eu/s66#description' or fct:column[2] = 'http://data.europa.eu/s66#doi']">
-    <section class="overflow-hidden rounded-xl border border-border bg-card text-card-foreground" aria-label="Overview" id="eu-recordresult-section-1">
-     <header class="border-b border-border bg-muted/30 px-4 py-3" id="eu-recordresult-header-2"><h3 class="text-sm font-semibold" id="eu-recordresult-h3-1">Overview</h3><p class="mt-1 text-xs text-muted-foreground" id="eu-recordresult-p-2">Descriptive metadata from the current resource.</p></header>
-     <dl class="divide-y divide-border" id="record-fields">
-      <xsl:call-template name="property-row"><xsl:with-param name="iri" select="'http://data.europa.eu/s66#title'"/><xsl:with-param name="label" select="'Title'"/></xsl:call-template>
-      <xsl:call-template name="property-row"><xsl:with-param name="iri" select="'http://data.europa.eu/s66#description'"/><xsl:with-param name="label" select="'Description'"/></xsl:call-template>
-      <xsl:call-template name="property-row"><xsl:with-param name="iri" select="'http://data.europa.eu/s66#doi'"/><xsl:with-param name="label" select="'DOI'"/></xsl:call-template>
-     </dl>
-    </section>
+  <!-- Domain result classifications come from EURIO hasResultType, not rdf:type. -->
+  <xsl:variable name="typeRows" select="$rows[fct:column[2] = $rdfType]"/>
+  <xsl:variable name="resultTypeRows" select="$rows[fct:column[2] = concat($eu,'hasResultType')]"/>
+  <xsl:variable name="titleRow" select="($rows[fct:column[2] = concat($eu,'title')],$rows[fct:column[2] = 'http://purl.org/dc/terms/title'],$rows[fct:column[2] = 'http://www.w3.org/2000/01/rdf-schema#label'])[1]"/>
+  <xsl:variable name="authorRows" select="$rows[fct:column[2] = (concat($eu,'authorList'),concat($eu,'author'))]"/>
+  <xsl:variable name="authorNames" as="xs:string*" select="for $row in $authorRows return
+    (for $name in tokenize(replace(string($row/fct:column[3]),'\s+and\s+',';','i'),'\s*;\s*')
+      return normalize-space($name))[. != '']"/>
+  <xsl:variable name="journalRow" select="($rows[fct:column[2] = (concat($eu,'journalTitle'),concat($eu,'hasJournalTitle'))])[1]"/>
+  <xsl:variable name="publisherRow" select="($rows[fct:column[2] = (concat($eu,'publisher'),concat($eu,'hasPublisher'))])[1]"/>
+  <xsl:variable name="yearRow" select="($rows[fct:column[2] = (concat($eu,'publishedYear'),concat($eu,'hasPublishedYear'))])[1]"/>
+  <xsl:variable name="doiRow" select="($rows[fct:column[2] = concat($eu,'doi')])[1]"/>
+  <xsl:variable name="doiLiteral" select="normalize-space(string($doiRow/fct:column[3]))"/>
+  <xsl:variable name="doi" select="replace(replace($doiLiteral,'^https?://(?:dx\.)?doi\.org/','', 'i'),'^doi:','', 'i')"/>
+  <xsl:variable name="publicationMetadata" select="$rows[fct:column[2] = (
+    concat($eu,'journalNumber'),concat($eu,'hasJournalNumber'),concat($eu,'publishedPages'),concat($eu,'hasPublishedPages'),
+    concat($eu,'doi'),concat($eu,'fullText'),concat($eu,'isbn'),concat($eu,'issn'),concat($eu,'identifier'),
+    concat($eu,'publishedYear'),concat($eu,'hasPublishedYear'))] except $yearRow"/>
+  <xsl:variable name="periodMetadata" select="$rows[fct:column[2] = (concat($eu,'periodFrom'),concat($eu,'periodTo'))]"/>
+  <xsl:variable name="narrativeRows" select="$rows[fct:column[2] = (
+    concat($eu,'abstract'),concat($eu,'description'),concat($eu,'workPerformed'),concat($eu,'finalResults'),
+    concat($eu,'summary'),concat($eu,'exploitationOfResults'))]"/>
+  <xsl:variable name="relationRows" select="$rows[fct:column[2] = (
+    concat($eu,'isResultOf'),concat($eu,'hasRelatedProject'))]"/>
+  <xsl:variable name="incomingRows" select="$allDescribeRows[
+    normalize-space(string(fct:column[3])) = $recordUri and
+    normalize-space(string(fct:column[1])) != $recordUri and
+    (fct:column[3]/@datatype = 'uri' or fct:column[3]/@termType = 'uri')]"/>
+  <xsl:variable name="featuredPredicates" select="(
+    $rdfType,concat($eu,'hasResultType'),string($titleRow/fct:column[2]),concat($eu,'authorList'),concat($eu,'author'),
+    string($journalRow/fct:column[2]),string($publisherRow/fct:column[2]),string($yearRow/fct:column[2]),
+    concat($eu,'doi'),$publicationMetadata/fct:column[2]/string(),$periodMetadata/fct:column[2]/string(),
+    $narrativeRows/fct:column[2]/string(),$relationRows/fct:column[2]/string())"/>
+  <xsl:variable name="extraRows" select="$rows[not(fct:column[2] = $featuredPredicates)]"/>
+  <section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0"
+    id="maestro-record-viewer" about="{$recordUri}"
+    class="mx-auto flex w-full max-w-4xl flex-col gap-5 p-2 text-foreground" aria-label="Research result Record">
+    <header id="record-header" class="space-y-4">
+      <!-- Exactly the same banner shell as Project; black is the Result identity rail. -->
+      <div id="eu-result-banner" class="flex min-h-8 items-stretch bg-sky-50 text-[11px] uppercase tracking-wider text-sky-950 dark:bg-sky-950/25 dark:text-sky-100">
+        <div id="eu-result-status-rail" aria-hidden="true" class="w-1 shrink-0 bg-black dark:bg-black"/>
+        <div id="eu-result-banner-content" class="flex flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-1.5">
+          <span id="eu-result-banner-brand" class="shrink-0 font-semibold">CORDIS / EURIO</span>
+          <div id="eu-result-class-meta" class="flex min-w-0 flex-wrap items-center gap-1.5">
+            <span id="eu-result-banner-type">Research Result</span>
+            <xsl:if test="$journalRow"><span id="eu-result-journal-separator" aria-hidden="true">·</span><span id="eu-result-journal"><xsl:call-template name="project-atom"><xsl:with-param name="row" select="$journalRow"/><xsl:with-param name="id" select="'eu-result-journal-value'"/><xsl:with-param name="class" select="'text-[11px] normal-case tracking-normal'"/></xsl:call-template></span></xsl:if>
+            <xsl:if test="$publisherRow"><span id="eu-result-publisher-separator" aria-hidden="true">·</span><span id="eu-result-publisher"><xsl:call-template name="project-atom"><xsl:with-param name="row" select="$publisherRow"/><xsl:with-param name="id" select="'eu-result-publisher-value'"/><xsl:with-param name="class" select="'text-[11px] normal-case tracking-normal'"/></xsl:call-template></span></xsl:if>
+            <xsl:if test="$yearRow"><span id="eu-result-year-separator" aria-hidden="true">·</span><span id="eu-result-year"><xsl:call-template name="project-atom"><xsl:with-param name="row" select="$yearRow"/><xsl:with-param name="id" select="'eu-result-year-value'"/><xsl:with-param name="class" select="'text-[11px] tabular-nums normal-case tracking-normal'"/></xsl:call-template></span></xsl:if>
+          </div>
+        </div>
+      </div>
+      <div id="eu-result-title-area" class="space-y-2">
+      <h2 id="record-title" class="break-words text-2xl font-semibold leading-tight tracking-tight sm:text-3xl">
+        <xsl:choose><xsl:when test="$titleRow"><xsl:call-template name="project-value-attributes"><xsl:with-param name="row" select="$titleRow"/></xsl:call-template><xsl:value-of select="string($titleRow/fct:column[3])"/></xsl:when>
+          <xsl:otherwise><xsl:value-of select="$recordUri"/></xsl:otherwise></xsl:choose>
+      </h2>
+      <xsl:if test="exists($authorNames)">
+        <p id="eu-result-byline" class="text-sm leading-relaxed text-muted-foreground">
+          <xsl:text>by </xsl:text><xsl:value-of select="string-join($authorNames, ', ')"/>
+          <!-- Both official authorList and CORDIS-example author literals are
+               parsed for display; each original RDF predicate remains authoritative. -->
+          <xsl:for-each select="$authorRows">
+            <span id="eu-result-author-rdfa-{position()}" class="sr-only">
+              <xsl:call-template name="project-value-attributes"><xsl:with-param name="row" select="."/></xsl:call-template>
+              <xsl:value-of select="string(fct:column[3])"/>
+            </span>
+          </xsl:for-each>
+        </p>
+      </xsl:if>
+        <xsl:if test="exists($resultTypeRows)">
+          <p id="eu-result-domain-types" class="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-muted-foreground" aria-label="Result types">
+            <xsl:for-each select="$resultTypeRows">
+              <xsl:if test="position() gt 1"><span id="eu-result-domain-type-sep-{position()}" aria-hidden="true">·</span></xsl:if>
+              <xsl:call-template name="project-atom">
+                <xsl:with-param name="row" select="."/>
+                <xsl:with-param name="id" select="concat('eu-result-domain-type-',position())"/>
+                <xsl:with-param name="class" select="'text-xs text-muted-foreground'"/>
+              </xsl:call-template>
+            </xsl:for-each>
+          </p>
+        </xsl:if>
+        <xsl:for-each select="$typeRows">
+          <span id="eu-result-rdf-class-{position()}" class="sr-only">
+            <xsl:call-template name="project-value-attributes"><xsl:with-param name="row" select="."/></xsl:call-template>
+            <xsl:value-of select="string(fct:column[3])"/>
+          </span>
+        </xsl:for-each>
+      </div>
+    </header>
+    <!-- Abstract is the unheaded first paragraph, directly beneath title/classifications. -->
+    <xsl:variable name="abstractNarrativeRows" select="$narrativeRows[fct:column[2] = concat($eu,'abstract')]"/>
+    <xsl:variable name="otherNarrativeRows" select="$narrativeRows[not(fct:column[2] = concat($eu,'abstract'))]"/>
+    <xsl:if test="exists($abstractNarrativeRows)">
+      <div id="eu-result-abstract" class="space-y-3 text-sm leading-relaxed sm:text-base">
+        <xsl:for-each select="$abstractNarrativeRows">
+          <p id="eu-result-abstract-text-{position()}" class="whitespace-pre-line break-words text-foreground/90" data-maestro-expandable="true">
+            <xsl:call-template name="project-atom"><xsl:with-param name="row" select="."/><xsl:with-param name="id" select="concat('eu-result-abstract-value-',position())"/><xsl:with-param name="class" select="'break-words text-sm leading-relaxed sm:text-base'"/></xsl:call-template>
+              <xsl:if test="position() = last() and empty($otherNarrativeRows) and $doiRow and matches($doi,'^10\.[0-9]{4,9}/\S+$')">
+                <xsl:text> </xsl:text><a id="eu-result-doi-link" data-maestro-external-link="true" href="{concat('https://doi.org/',replace(encode-for-uri($doi),'%2F','/'))}" target="_blank" rel="noopener noreferrer" title="Open DOI {$doi}" aria-label="Open DOI {$doi}" class="inline-flex align-text-bottom text-primary hover:text-foreground">
+                  <svg xmlns="http://www.w3.org/2000/svg" id="eu-result-doi-icon" data-maestro-icon="file-chart-column-increasing" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" fill="none" aria-hidden="true" class="size-[18px]"><path id="eu-result-doi-file" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path id="eu-result-doi-fold" d="M14 2v6h6"/><path id="eu-result-doi-bars" d="M8 18v-2m4 2v-5m4 5v-8"/></svg>
+                </a>
+              </xsl:if>
+          </p>
+        </xsl:for-each>
+      </div>
     </xsl:if>
-   
-   
-    <xsl:if test="$rows[fct:column[2] = 'http://data.europa.eu/s66#isResultOf' or fct:column[2] = 'http://data.europa.eu/s66#hasAuthor']">
-    <section class="overflow-hidden rounded-xl border border-border bg-card text-card-foreground" aria-label="Relationships" id="eu-recordresult-section-2">
-     <header class="border-b border-border bg-muted/30 px-4 py-3" id="eu-recordresult-header-3"><h3 class="text-sm font-semibold" id="eu-recordresult-h3-2">Relationships</h3><p class="mt-1 text-xs text-muted-foreground" id="eu-recordresult-p-3">Linked resources open through standard Maestro Record navigation.</p></header>
-     <dl class="divide-y divide-border" id="eu-recordresult-dl-2">
-      <xsl:call-template name="property-row"><xsl:with-param name="iri" select="'http://data.europa.eu/s66#isResultOf'"/><xsl:with-param name="label" select="'Project'"/><xsl:with-param name="relationship" select="true()"/></xsl:call-template>
-      <xsl:call-template name="property-row"><xsl:with-param name="iri" select="'http://data.europa.eu/s66#hasAuthor'"/><xsl:with-param name="label" select="'Authors'"/><xsl:with-param name="relationship" select="true()"/></xsl:call-template>
-     </dl>
-    </section>
+    <xsl:if test="exists($otherNarrativeRows)">
+      <section id="eu-result-narrative" class="space-y-5 text-sm leading-relaxed sm:text-base" aria-label="Research narrative">
+        <xsl:for-each select="$otherNarrativeRows">
+          <xsl:variable name="predicate" select="string(fct:column[2])"/>
+          <article id="eu-result-narrative-{position()}" class="space-y-2">
+            <h3 id="eu-result-narrative-heading-{position()}" class="text-sm font-semibold text-foreground"><xsl:value-of select="fmt:property-label($predicate)"/></h3>
+            <p id="eu-result-narrative-text-{position()}" class="whitespace-pre-line break-words text-foreground/90" data-maestro-expandable="true">
+              <xsl:call-template name="project-atom"><xsl:with-param name="row" select="."/><xsl:with-param name="id" select="concat('eu-result-narrative-value-',position())"/><xsl:with-param name="class" select="'break-words text-sm leading-relaxed sm:text-base'"/></xsl:call-template>
+              <xsl:if test="position() = last() and $doiRow and matches($doi,'^10\.[0-9]{4,9}/\S+$')">
+                <xsl:text> </xsl:text><a id="eu-result-doi-link" data-maestro-external-link="true" href="{concat('https://doi.org/',replace(encode-for-uri($doi),'%2F','/'))}" target="_blank" rel="noopener noreferrer" title="Open DOI {$doi}" aria-label="Open DOI {$doi}" class="inline-flex align-text-bottom text-primary hover:text-foreground">
+                  <svg xmlns="http://www.w3.org/2000/svg" id="eu-result-doi-icon" data-maestro-icon="file-chart-column-increasing" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" fill="none" aria-hidden="true" class="size-[18px]"><path id="eu-result-doi-file" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path id="eu-result-doi-fold" d="M14 2v6h6"/><path id="eu-result-doi-bars" d="M8 18v-2m4 2v-5m4 5v-8"/></svg>
+                </a>
+              </xsl:if>
+            </p>
+          </article>
+        </xsl:for-each>
+      </section>
     </xsl:if>
-   <footer class="border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground" id="eu-recordresult-footer-1">Source: current Maestro graph server · EURIO. Validation is managed by the existing SHACL notice/report. Other predicates remain accessible through the Default Record viewer.</footer>
- </section>
+    <xsl:if test="empty($narrativeRows) and $doiRow and matches($doi,'^10\.[0-9]{4,9}/\S+$')">
+      <p id="eu-result-doi-only" class="text-sm"><a id="eu-result-doi-link" data-maestro-external-link="true" href="{concat('https://doi.org/',replace(encode-for-uri($doi),'%2F','/'))}" target="_blank" rel="noopener noreferrer" class="text-primary underline underline-offset-2">View publication DOI</a></p>
+    </xsl:if>
+    <xsl:if test="exists($periodMetadata)">
+      <section id="eu-result-reporting-period" class="space-y-3 border-t border-border pt-5" aria-label="Reporting period">
+        <h3 id="eu-result-period-heading" class="text-base font-semibold">Reporting period</h3>
+        <dl id="eu-result-period-values" class="grid gap-4 sm:grid-cols-2"><xsl:call-template name="project-detail-group"><xsl:with-param name="items" select="$periodMetadata"/><xsl:with-param name="prefix" select="'eu-result-period'"/></xsl:call-template></dl>
+      </section>
+    </xsl:if>
+    <xsl:if test="exists($publicationMetadata)">
+      <section id="eu-result-publication" class="space-y-3 border-t border-border pt-5" aria-label="Publication details">
+        <h3 id="eu-result-publication-heading" class="text-base font-semibold">Publication</h3>
+        <dl id="eu-result-publication-values" class="grid gap-4 sm:grid-cols-2"><xsl:call-template name="project-detail-group"><xsl:with-param name="items" select="$publicationMetadata"/><xsl:with-param name="prefix" select="'eu-result-publication'"/></xsl:call-template></dl>
+      </section>
+    </xsl:if>
+    <!-- Use all data actually available in the DESCRIBE, not a fixed truncated
+         field list. The RDFa-wrapped type, author, journal, publisher and year
+         values are rendered above; all other predicates appear here. -->
+    <xsl:if test="exists($relationRows)">
+      <section id="eu-result-relationships" class="space-y-3 border-t border-border pt-5" aria-label="Related resources">
+        <h3 id="eu-result-relationships-heading" class="text-base font-semibold">Related resources</h3>
+        <dl id="eu-result-relationships-values" class="grid gap-4 sm:grid-cols-2"><xsl:call-template name="project-detail-group"><xsl:with-param name="items" select="$relationRows"/><xsl:with-param name="prefix" select="'eu-result-relationship'"/></xsl:call-template></dl>
+      </section>
+    </xsl:if>
+    <xsl:if test="exists($incomingRows)">
+      <section id="eu-result-inverse" class="space-y-3 border-t border-border pt-5" aria-label="Incoming relationships">
+        <h3 id="eu-result-inverse-heading" class="text-base font-semibold">Referenced by</h3>
+        <dl id="eu-result-inverse-values" class="grid gap-4 sm:grid-cols-2">
+          <xsl:for-each select="$incomingRows">
+            <div id="eu-result-inverse-row-{position()}" class="min-w-0 space-y-1.5">
+              <dt id="eu-result-inverse-name-{position()}" class="text-xs text-muted-foreground"><xsl:value-of select="fmt:property-label(string(fct:column[2]))"/></dt>
+              <dd id="eu-result-inverse-value-{position()}" class="min-w-0 break-all text-sm">
+                <a id="eu-result-inverse-link-{position()}" href="#" about="{string(fct:column[1])}" rel="{string(fct:column[2])}" resource="{$recordUri}" data-maestro-record-uri="{string(fct:column[1])}" data-maestro-direction="property-of" data-maestro-property-value="true" data-maestro-predicate="{string(fct:column[2])}" class="text-primary hover:underline"><xsl:value-of select="string(fct:column[1])"/></a>
+              </dd>
+            </div>
+          </xsl:for-each>
+        </dl>
+      </section>
+    </xsl:if>
+    <xsl:if test="exists($extraRows)">
+      <section id="eu-result-more" class="space-y-3 border-t border-border pt-5" aria-label="Additional metadata">
+        <h3 id="eu-result-more-heading" class="text-base font-semibold">More information</h3>
+        <dl id="eu-result-more-values" class="grid gap-4 sm:grid-cols-2"><xsl:call-template name="project-detail-group"><xsl:with-param name="items" select="$extraRows"/><xsl:with-param name="prefix" select="'eu-result-more'"/></xsl:call-template></dl>
+      </section>
+    </xsl:if>
+    <footer id="eu-result-footer" class="border-t border-border pt-3 text-xs text-muted-foreground">Source: current Maestro graph server · EURIO. The displayed values retain their original RDF identities.</footer>
+  </section>
 </xsl:template>
 <xsl:template name="RecordRole">
  <section xmlns:mui="gttp://ggg.maestro.ecosys/ns/ui#" mui:framework="next@^16.4.0" id="maestro-record-viewer" about="{$recordUri}" class="mx-auto flex w-full max-w-4xl flex-col gap-4 p-2 text-foreground" aria-label="Participation role Record">

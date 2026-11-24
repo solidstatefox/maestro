@@ -1,4 +1,6 @@
 "use client";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
 import { PerspectiveCalendarHeatmap } from "@/canvas/tab/view/perspective-calendar-heatmap";
 import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import { ErrorDetails } from "@/components/ui/error-details";
@@ -20,6 +22,8 @@ import { cachedFetchFct } from "@/lib/client-query-cache";
 import { readFctResponse } from "@/canvas/utils/fct-response";
 import { deletePerspectiveEntries } from "@/lib/perspective-delete";
 import { snapshotFctQueryXml } from "@/lib/fct-query-api";
+import { parseFctQueryXml } from "@/canvas/utils/query-controller";
+import { bookmarkAtCurrentHost } from "@/lib/bookmark-host-handoff";
 
 /** Browser Fetch may report an AbortSignal cancellation as a TypeError rather
  * than DOMException AbortError (notably when AbortSignal.any is canceled without
@@ -273,7 +277,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
       if (!row?.url) continue;
       let target: URL;
       try { target = new URL(row.url); } catch { continue; }
-      if (!(["http:", "https:"].includes(target.protocol) && target.origin !== origin && target.searchParams.has("q"))) continue;
+      if (!(["http:", "https:"].includes(target.protocol) && target.origin !== origin && (target.searchParams.has("q") || Boolean(row.queryXml)))) continue;
       const hostButton = document.createElement("button");
       hostButton.type = "button";
       hostButton.dataset.perspectiveTryHost = "true";
@@ -358,18 +362,14 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
   const tryAtThisHost = useCallback((id: string) => {
     const row = collection?.rows.find(entry => entry.uri === id);
     if (!row?.url) return;
-    try {
-      const saved = new URL(row.url);
-      const current = new URL(window.location.href);
-      if (!["http:", "https:"].includes(saved.protocol) || saved.origin === current.origin || !saved.searchParams.has("q")) return;
-      // URL.origin carries the scheme, hostname and port together. All query,
-      // ribbon and history parameters are preserved from the saved bookmark.
-      const rewritten = new URL(saved.pathname + saved.search + saved.hash, current.origin);
-      if (!onOpenShareUrl(rewritten.href)) {
-        setError("The saved query cannot be restored at this host; check its FCT q and addr.");
-      }
-    } catch (error) {
-      setError(`This entry has no usable Maestro share URL: ${error instanceof Error ? error.message : String(error)}`);
+    const rewritten = bookmarkAtCurrentHost(row.url, window.location.href, row.queryXml,
+      xml => Boolean(xml.trim() && parseFctQueryXml(xml)));
+    if (!rewritten) {
+      setError("The saved Bookmark has neither a valid URL query nor valid saved FCT XML.");
+      return;
+    }
+    if (!onOpenShareUrl(rewritten)) {
+      setError("The saved query cannot be restored at this host; check the FCT addr and graph server.");
     }
   }, [collection, onOpenShareUrl]);
   if (!active) return null;
@@ -380,11 +380,10 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
       {selected.length > 0 && <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm" aria-label={`Delete ${selected.length} selected entries`} onClick={() => void remove(selected)} className="shrink-0 text-destructive hover:bg-destructive/10"><Trash2 className="size-4"/></Button>} /><TooltipContent>Delete selected ({selected.length})</TooltipContent></Tooltip>}
       <nav aria-label={`${kind} pagination`} className="ml-auto flex shrink-0 items-center gap-1 border-l pl-2">
         <label htmlFor={`${kind}-perspective-page-size`} className="whitespace-nowrap text-xs text-muted-foreground">Per page</label>
-        <select id={`${kind}-perspective-page-size`} aria-label={`${kind} entries per page`} value={pageSize}
-          onChange={event => { setPageSize(Number(event.currentTarget.value)); setPage(0); }}
-          className="rounded-md border border-input bg-background px-2 py-1 text-xs">
-          {PERSPECTIVE_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
-        </select>
+        <Select value={String(pageSize)} onValueChange={value => { setPageSize(Number(value)); setPage(0); }}>
+          <SelectTrigger id={`${kind}-perspective-page-size`} aria-label={`${kind} entries per page`} className="h-9 w-auto shrink-0 text-sm"><SelectValue /></SelectTrigger>
+          <SelectContent>{PERSPECTIVE_PAGE_SIZES.map(size => <SelectItem key={size} value={String(size)}>{size}</SelectItem>)}</SelectContent>
+        </Select>
         <Button type="button" variant="outline" size="icon-sm" aria-label="Previous page" disabled={currentPage === 0 || !scopeIsReady || loading} onClick={() => setPage(Math.max(0, currentPage - 1))}><ChevronLeft className="size-4" aria-hidden="true"/></Button>
         <span className="min-w-[5.5rem] whitespace-nowrap text-center text-xs text-muted-foreground" aria-live="polite">Page {currentPage + 1} of {totalPages}</span>
         <Button type="button" variant="outline" size="icon-sm" aria-label="Next page" disabled={currentPage >= totalPages - 1 || !scopeIsReady || loading} onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}><ChevronRight className="size-4" aria-hidden="true"/></Button>

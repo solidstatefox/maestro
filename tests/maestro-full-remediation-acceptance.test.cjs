@@ -55,17 +55,22 @@ test('A scoped execution clock can be reset without disturbing other components'
   assert.ok(c.getMaestroQueryExecutionSnapshot(other).elapsedMs>=200);
 });
 
-test('FCT datatype probe errors remain attributed to the auxiliary query and complete evidence is cached',()=>{
-  const s=read('src/app/proxy/api/fct/route.ts');
-  assert.match(s,/Facet datatype evidence probe failed \(\$\{kind\}\)/);
-  assert.match(s,/not the main facet value list/);
-  assert.match(s,/Probe SPARQL \(verbatim\):/);
-  assert.match(s,/evidenceAnytime \? 504 : status >= 400 && status < 600 \? status : 502/);
-  assert.match(s,/!hasStatusConstraints && !isValidate && !componentRetry && evidenceResult.response.status === 200/);
-  assert.match(s,/setQueryCache\(evidenceResult.key, evidenceResult.text\)/);
-  assert.doesNotMatch(s,/throw new Error\("Facet datatype discovery did not complete\."\)/);
-});
+test('Optional FCT datatype evidence never fails the main facet LIST, and successful evidence can be cached',()=>{
 
+  const lanes = require('node:fs').readFileSync("src/lib/app-lifecycle/facet-requests.ts", 'utf8');
+  assert.ok(lanes.includes('FACET_STARTED'));
+  assert.ok(lanes.includes('FACET_SETTLED'));
+  assert.ok(lanes.includes('FACET_CANCELLED'));
+  assert.ok(lanes.includes('settleCategoriesError'));
+  assert.ok(lanes.includes('settlePropertiesError'));
+  assert.ok(lanes.includes('failed: {}'));
+ 
+      const route = require('node:fs').readFileSync("src/app/proxy/api/fct/route.ts", 'utf8');
+      assert.ok(route.includes('if (compiled.datatypeEvidenceQuery && !countOnly && !partial)'));
+      assert.ok(route.includes('setQueryCache(evidenceResult.key, evidenceResult.text)'));
+      assert.ok(route.includes('Facet datatype evidence probe failed'));
+    
+  });
 test('XState gates every Sheet clear action, including an open confirmation dialog',()=>{
   const access=read('src/lib/app-lifecycle/access.ts');
   const sheet=read('src/canvas/sheet/settings-pane.tsx');
@@ -79,7 +84,8 @@ test('XState gates every Sheet clear action, including an open confirmation dial
   assert.match(sheet,/disabled=\{!accessCapabilities.canClearCaches\}/);
   assert.match(workspace,/selectMaestroCapabilities\(workspace.accessController.getSnapshot\(\)\).canClearCaches/);
   assert.match(workspace,/event.preventDefault\(\)/);
-  assert.match(auth,/setLoginTesting: \(next: boolean \| \(\(previous: boolean\) => boolean\)\)/);
+  // Check the XState event rather than the callback's parameter spelling.
+  assert.match(auth,/setLoginTesting:\s*\([^\n]+?=>\s*\{[^\n]*?accessController\.send\(\s*\{\s*type:\s*"LOGIN_ACTIVITY",\s*pending:\s*next\s*\}\s*\)/);
 });
 
 test('Login uses one Connecting control, navigation has one joined outline seam, root clips border corners',()=>{

@@ -25,7 +25,7 @@ export function DerivedFacetButton({ source }: { source: FctQueryNode }) {
       // Revalidate approvals at click time so revocations never apply stale fields.
       const currentFields = await discoverApprovedRegexDerivations(source.attributes.iri || "", next.signal);
       if (next.signal.aborted) return;
-      if (!currentFields.length) { setError("Regex derivation provider approval changed; refresh this facet."); return; }
+      if (!currentFields.length) { setError("Derived facet provider approval changed; refresh this facet."); return; }
       replaceTree(spawnRegexDerivedFacets(tree,source.id,currentFields));
     } catch (error) {
       if (!next.signal.aborted) setError(error instanceof Error ? error.message : "Derived facet creation failed.");
@@ -34,9 +34,9 @@ export function DerivedFacetButton({ source }: { source: FctQueryNode }) {
   return <div className="inline-flex items-center gap-1">
     <Tooltip><TooltipTrigger render={<button type="button" disabled={busy}
       className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
-      onClick={() => void extract()} aria-label="Extract approved regex-derived facets">
+      onClick={() => void extract()} aria-label="Extract approved derived facets">
         <Braces className="size-4" />
-      </button>} /><TooltipContent>Extract fields using an approved regex provider</TooltipContent></Tooltip>
+      </button>} /><TooltipContent>Extract fields using an approved facet provider</TooltipContent></Tooltip>
     {error && <ErrorDetails prefix="Facet provider" error={error} />}
   </div>;
 }
@@ -72,6 +72,6 @@ export function PersonalFacetButtonTray({ source, actions, approvalRevision, ses
   } : action);
   return <>
     <LeftWidgetButtonTray actions={available} />
-    {approvedForScope && approval.error && <ErrorDetails prefix="Regex provider discovery" error={approval.error} />}
+    {approvedForScope && approval.error && <ErrorDetails prefix="Derived facet provider discovery" error={approval.error} />}
   </>;
 }

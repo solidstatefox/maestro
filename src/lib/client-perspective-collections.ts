@@ -3,6 +3,7 @@ import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { readClientPolicyApprovals } from "@/lib/client-policy-approvals";
+import { PERSONAL_PERSPECTIVE_URI } from "@/lib/personal-perspective-ids";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -19,20 +20,20 @@ export type PerspectiveCollection = {provider:{uri:string;kind:"bookmarks"|"hist
 export async function loadPerspectiveCollection(kind:"bookmarks"|"history", providerUri:string, signal?:AbortSignal):Promise<PerspectiveCollection> {
   const ctx = await personalContext();
   const graph = `${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`;
-  if (providerUri && !iri(providerUri)) throw new Error("Invalid perspective provider URI.");
+  if (providerUri !== PERSONAL_PERSPECTIVE_URI[kind] || !iri(providerUri)) throw new Error("Perspective provider does not match the requested collection.");
   const definitions = await selectPersonal(`PREFIX mui: <${MUI}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
     SELECT DISTINCT ?provider ?kind ?label ?template ?stylesheet ?target WHERE {
       GRAPH <${graph}> {
         ?provider a mui:Provider ; mui:perspectiveKind ?kind ; mui:widget ?template .
         ?template a mui:PerspectiveWidget ; (mui:templateContent|rdf:value) ?stylesheet .
         OPTIONAL { ?provider rdfs:label ?label }
-        ${providerUri ? `FILTER(?provider = <${providerUri}>)` : ""}
+        FILTER(?provider = <${providerUri}>)
         FILTER(STR(?kind) = ${JSON.stringify(kind)})
       }
-    } ORDER BY ?label LIMIT 20`,ctx,signal);
+    } ORDER BY ?label LIMIT 20`,ctx,signal,"client-perspective-collections:loadPerspectiveCollection");
   const providers = definitions.flatMap(row=>{
     const uri=row.provider?.value??"", template=row.template?.value??"", stylesheet=row.stylesheet?.value??"";
-    return iri(uri)&&iri(template)&&stylesheet.length>0&&stylesheet.length<=250000 ? [{uri,kind,label:row.label?.value||kind,template,stylesheet,target:row.target?.value||""}] : [];
+    return uri===providerUri&&row.kind?.value===kind&&iri(template)&&stylesheet.length>0&&stylesheet.length<=250000 ? [{uri,kind,label:row.label?.value||kind,template,stylesheet,target:row.target?.value||""}] : [];
   });
   const statuses = await readClientPolicyApprovals(providers.map(p=>p.uri),signal);
   const approved = new Set(statuses.filter(s=>s.status==="Approved").map(s=>s.uri));
@@ -66,7 +67,7 @@ SELECT ?entry ?label ?created ?url ?queryXML ?lastResultCount ?lastNewCount WHER
   const batchSize = 500, maxResultRows = 25_000;
   let complete = false;
   for (let offset = 0; offset < maxResultRows; offset += batchSize) {
-    const result = await selectPersonal(q.replace("__PAGINATION__", `LIMIT ${batchSize} OFFSET ${offset}`),ctx,signal);
+    const result = await selectPersonal(q.replace("__PAGINATION__", `LIMIT ${batchSize} OFFSET ${offset}`),ctx,signal,"client-perspective-collections:loadPerspectiveCollection");
     for(const row of result){
       const uri=row.entry?.value??"";if(!iri(uri))continue;
       let item=byUri.get(uri);

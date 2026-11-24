@@ -13,7 +13,7 @@ export type ClientApproval = {uri:string;status:"Approved"|"Pending"|null;catego
  * A provider is Approved by a direct status assertion OR a version-matched
  * grant from any currently Approved curator. No inferred triples are written.
  * This lookup is browser-side; graph-server ACLs enforce protected writes. */
-export async function readClientPolicyApprovals(uris: string[], signal?: AbortSignal, requestSource?: string): Promise<ClientApproval[]> {
+export async function readClientPolicyApprovals(uris: string[], signal?: AbortSignal, requestSource = "ProviderApprovalLookup"): Promise<ClientApproval[]> {
   const distinct = [...new Set(uris)];
   if (distinct.some(uri => !validIri(uri)) || distinct.length > 500) throw new Error("Invalid policy identifiers.");
   if (!distinct.length) return [];

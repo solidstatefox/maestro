@@ -2,16 +2,20 @@
 
 import type { MouseEventHandler, ReactNode, Ref } from "react";
 import { ResizablePanel } from "@/components/ui/resizable";
+import { useBrowsePanePosition, useBrowsePaneDefaultSize, useBrowsePaneMinSize } from "@/canvas/browse-pane-layout";
 
 /** These are the same resizable pane frames used by live Maestro and its loading state. */
 export function LeftPaneFrame({ children, defaultSize = 25 }: { children: ReactNode; defaultSize?: number }) {
-  return <ResizablePanel id="maestro-browse-left" order={0} defaultSize={defaultSize} minSize={16} className="min-w-0 overflow-hidden">{children}</ResizablePanel>;
+  const order = useBrowsePanePosition("filters");
+  return <ResizablePanel id="maestro-browse-left" order={order} defaultSize={useBrowsePaneDefaultSize("filters", defaultSize)} minSize={useBrowsePaneMinSize("filters", 16)} className="min-w-0 overflow-hidden">{children}</ResizablePanel>;
 }
 export function CenterPaneFrame({ children, defaultSize = 45 }: { children: ReactNode; defaultSize?: number }) {
-  return <ResizablePanel id="maestro-browse-center" order={1} defaultSize={defaultSize} minSize={25} className="min-w-0 overflow-hidden">{children}</ResizablePanel>;
+  const order = useBrowsePanePosition("results");
+  return <ResizablePanel id="maestro-browse-center" order={order} defaultSize={useBrowsePaneDefaultSize("results", defaultSize)} minSize={useBrowsePaneMinSize("results", 25)} className="min-w-0 overflow-hidden">{children}</ResizablePanel>;
 }
 export function RightPaneFrame({ children, defaultSize = 30 }: { children: ReactNode; defaultSize?: number }) {
-  return <ResizablePanel id="maestro-browse-right" order={2} defaultSize={defaultSize} minSize={18} className="min-w-0 overflow-hidden">{children}</ResizablePanel>;
+  const order = useBrowsePanePosition("record");
+  return <ResizablePanel id="maestro-browse-right" order={order} defaultSize={useBrowsePaneDefaultSize("record", defaultSize)} minSize={useBrowsePaneMinSize("record", 18)} className="min-w-0 overflow-hidden">{children}</ResizablePanel>;
 }
 
 /** Use the live pane body elements, not a separate skeleton-only visual imitation. */

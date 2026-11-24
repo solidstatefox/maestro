@@ -72,9 +72,14 @@ test('guest Personal facets use public query data but session-owned providers st
   assert.match(source('src/canvas/workspace.tsx'), /endpointReadyForQuery && personalWidgets\.filter\(/);
 });
 
-test('transported facet icons remain neutral and preview colouring stays confined to labels', () => {
+test('transported facet icons match the widget and inherit the href target color without changing preview label styling', () => {
+  const tree = source('src/canvas/utils/workspace-controller.tsx');
   assert.match(source('src/canvas/left/personal-widget-cards.tsx'), /ExternalLink className="inline size-4 shrink-0 text-muted-foreground"/);
-  assert.match(source('src/canvas/utils/workspace-controller.tsx'), /nodeIconColor = node\.name === "a"\s*\? "text-muted-foreground"/);
+  // Shared ExternalLink icon, with the href target’s property/role color.
+  assert.match(tree, /node\.name === "a"\s*\? ExternalLink/);
+  assert.match(tree, /node\.name === "a"\s*\? queryTreeRelationshipIconColor\(queryTreePathIndex\.byId\.get\(node\.attributes\.href \?\? ""\)\)/);
+  assert.match(tree, /queryTreeRelationshipIconColor = [\s\S]*?child\.name === "view"[\s\S]*?"text-emerald-600 dark:text-emerald-400"[\s\S]*?"text-red-600 dark:text-red-400"/);
+  assert.match(tree, /Transported \$\{transportedDirection === "reverse" \? "role" : "property"\}/);
   assert.match(source('src/canvas/top/breadcrumb-renderers.tsx'), /transportedPreviewIds\.has\(crumb\.id\)/);
 });
 

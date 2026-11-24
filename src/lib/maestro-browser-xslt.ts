@@ -7,7 +7,10 @@
 // global scope and has caused ReferenceError: Resources is not defined.
 // The root layout loads the unmodified distribution before SPA hydration.
 // Only this Maestro-owned module knows about its JavaScript API.
+import { reportRecordPerformance } from "@/lib/record-performance";
 type MaestroSaxonRuntime = {
+  transform?: (options: { stylesheetLocation: string; sourceText: string; destination: "serialized";
+    stylesheetParams: Record<string, string> }, mode: "async") => Promise<{ principalResult?: unknown }>;
   XPath: { evaluate: (expression: string, contextItem: null, options: { params: Record<string, string> }) => unknown };
 };
 declare global {
@@ -36,6 +39,27 @@ async function getSaxon(): Promise<MaestroSaxonRuntime> {
 
 import { XMLValidator } from "fast-xml-parser";
 
+// Source validation and the static manifest are independently cached, not
+// bound to a query or a session. Both caches have bounded size and no RDF data.
+const validatedStylesheets = new Set<string>();
+let sefManifestPromise: Promise<{sourceSha256:string;asset:string}|null>|null = null;
+let sefUnavailable = false;
+async function verifiedFirstPartySef(stylesheetText: string): Promise<string | null> {
+  if (!stylesheetText.includes('<xsl:template name="RecordResult">') || sefUnavailable) return null;
+  sefManifestPromise ??= fetch("/maestro-sef/manifest.json", { cache: "force-cache" })
+    .then(async response => response.ok ? await response.json() as {format?:number;sourceSha256?:string;asset?:string} : null)
+    .then(info => info?.format === 1 && /^\/[a-z0-9/._-]+\.json$/.test(info.asset ?? "") &&
+      /^[a-f0-9]{64}$/.test(info.sourceSha256 ?? "")
+      ? {sourceSha256:info.sourceSha256!,asset:info.asset!} : null)
+    .catch(() => null);
+  const manifest = await sefManifestPromise;
+  if (!manifest) return null;
+  const bytes = new TextEncoder().encode(stylesheetText);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const actual = [...new Uint8Array(digest)].map(v=>v.toString(16).padStart(2,"0")).join("");
+  return actual === manifest.sourceSha256 ? manifest.asset : null;
+}
+
 const FORBIDDEN_FUNCTIONS = /\b(?:doc|doc-available|document|collection|uri-collection|unparsed-text(?:-lines|-available)?|json-doc|environment-variable|available-environment-variables|function-lookup|load-xquery-module|transform|resolve-uri|static-base-uri)\s*\(/i;
 const FORBIDDEN_INSTRUCTIONS = /<\s*xsl:(?:include|import|import-schema|use-package|result-document|evaluate|fork|source-document|stream|package)\b/i;
 const FORBIDDEN_OUTPUT = /<\s*(?:script|iframe|object|embed)\b/i;
@@ -47,7 +71,9 @@ export async function transformWithMaestroSaxon(
   options: { recordUri?: string; outputLimit?: number; signal?: AbortSignal; providerExecutableMarkup?: boolean; sandboxPhase?: "queries" } = {},
 ): Promise<string> {
   if (options.signal?.aborted) throw new DOMException("Transformation canceled", "AbortError");
-  if (stylesheetText.length > 250000 || XMLValidator.validate(stylesheetText) !== true ||
+  const validationStarted = performance.now();
+  if (stylesheetText.length > 250000 ||
+      (!validatedStylesheets.has(stylesheetText) && XMLValidator.validate(stylesheetText) !== true) ||
       !stylesheetText.includes("http://www.w3.org/1999/XSL/Transform") ||
       !/<(?:[\w.-]+:)?(?:stylesheet|transform)\b/.test(stylesheetText)) {
     throw new Error("Invalid or oversized Maestro XSLT stylesheet.");
@@ -55,9 +81,43 @@ export async function transformWithMaestroSaxon(
   if (FORBIDDEN_FUNCTIONS.test(stylesheetText) || FORBIDDEN_INSTRUCTIONS.test(stylesheetText) || FORBIDDEN_EXTENSIONS.test(stylesheetText) || (!options.providerExecutableMarkup && FORBIDDEN_OUTPUT.test(stylesheetText))) {
     throw new Error("External resource access and extensions are not permitted in Maestro templates.");
   }
+  if (!validatedStylesheets.has(stylesheetText)) {
+    if (validatedStylesheets.size >= 8) validatedStylesheets.delete(validatedStylesheets.values().next().value!);
+    validatedStylesheets.add(stylesheetText);
+  }
   if (XMLValidator.validate(sourceXml) !== true) throw new Error("Invalid Maestro transformation input XML.");
+  reportRecordPerformance("xslt-input-validation", validationStarted);
   const saxon = await getSaxon();
   if (options.signal?.aborted) throw new DOMException("Transformation canceled", "AbortError");
+  // A pinned first-party stylesheet can use its build-time SEF without
+  // compiling XSLT source on every warm Record. Dynamic provider stylesheets
+  // remain on the existing checked, sandboxed source-XSLT implementation.
+  if (saxon.transform && !sefUnavailable) {
+    const verified = await verifiedFirstPartySef(stylesheetText);
+    if (verified) {
+      const started = performance.now();
+      try {
+        const compiled = await saxon.transform({ stylesheetLocation: verified, sourceText: sourceXml,
+          destination: "serialized", stylesheetParams: {
+            recordUri: options.recordUri ?? "", maestroPhase: options.sandboxPhase ?? "render",
+          } }, "async");
+        if (options.signal?.aborted) throw new DOMException("Transformation canceled", "AbortError");
+        const output = compiled.principalResult;
+        if (typeof output === "string" && output.length <= (options.outputLimit ?? 24_000_000)) {
+          reportRecordPerformance("xslt-compiled-sef-render", started, options.sandboxPhase ?? "render");
+          return output;
+        }
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
+        // One incompatible SEF disables this optimization for the session.
+        // Never break the existing supported dynamic XSLT path.
+        sefUnavailable = true;
+      }
+      sefUnavailable = true;
+      reportRecordPerformance("xslt-sef-fallback", started);
+    }
+  }
+  const dynamicStarted = performance.now();
   const result = saxon.XPath.evaluate(`transform(map {
     'stylesheet-text': $stylesheet,
     'source-node': parse-xml($source),
@@ -70,6 +130,7 @@ export async function transformWithMaestroSaxon(
   if (typeof value !== "string") {
     throw new Error(`Maestro SaxonJS returned ${value === null ? "null" : typeof value} instead of serialized text.`);
   }
+  reportRecordPerformance("xslt-dynamic-transform-including-compile", dynamicStarted, options.sandboxPhase ?? "render");
   const limit = options.outputLimit ?? 24_000_000;
   if (value.length > limit) {
     throw new Error(`Maestro SaxonJS output exceeds ${Math.round(limit / 1_000_000)} MB (${Math.round(value.length / 1_000_000)} MB generated).`);

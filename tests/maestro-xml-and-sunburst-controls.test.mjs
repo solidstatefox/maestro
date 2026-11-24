@@ -32,16 +32,17 @@ test('Categories control cluster uses Record Graph styling and one connected two
   assert.match(host, /import \{ ToggleGroup, ToggleGroupItem \}/);
   assert.match(host, /import \{ DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger \}/);
   assert.match(record, /border-r bg-muted\/40 px-2 text-muted-foreground/);
-  assert.match(host, /border-r bg-muted\/40 px-2 text-muted-foreground/);
+  // The compact Provider addon retains the Record's muted-border styling.
+  assert.match(host, /border-r bg-muted\/40 px-1\.5 text-muted-foreground/);
   assert.match(host, /<InputGroupText className="text-xs">Provider<\/InputGroupText>/);
   assert.match(host, /<DropdownMenuTrigger asChild>/);
   assert.match(host, /presentation\.select\(option\.uri\)/);
-  assert.match(host, /justify-center gap-2 px-2 pt-1/);
+  assert.match(host, /justify-center gap-1\.5 px-1 pt-0\.5/);
   assert.match(host, /<InputGroup className="!w-auto !flex-nowrap[^>]+aria-label="Sunburst label layout controls">/);
   assert.match(host, /<ToggleGroup type="single" aria-label="Sunburst label layout" value=\{labelStyle\}/);
   assert.match(host, /<ToggleGroupItem unstyled value="radial"[^>]*>Radial<\/ToggleGroupItem>/);
   assert.match(host, /<ToggleGroupItem unstyled value="arc"[^>]*>Arc<\/ToggleGroupItem>/);
-  assert.match(host, /border-l border-input px-3/);
+  assert.match(host, /border-l border-input px-2/);
   assert.equal((host.match(/<ToggleGroup type="single"/g)??[]).length, 1);
   assert.equal((host.match(/<ToggleGroupItem unstyled value=/g)??[]).length, 2);
   assert.doesNotMatch(host, /<select id="maestro-category-facet-provider"|data-facet-label-toggle/);

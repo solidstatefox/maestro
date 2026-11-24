@@ -8,10 +8,11 @@ const read = f => fs.readFileSync(path.join(base, f), 'utf8');
 test('Bookmarks and History cards use the same canonical in-app share restoration as pinned bookmarks', () => {
   const perspective = read('src/canvas/tab/view/personal-perspectives.tsx');
   const page = read('src/canvas/tab/view/page.tsx');
-  assert.match(page, /<PersonalPerspectives active=/);
+  assert.match(page, /<PersonalPerspectives key=\{selectedViewUri\} active=/);
   assert.match(page, /onOpenShareUrl=\{workspace\.openPinnedShareUrl\}/);
   assert.match(perspective, /if \(onOpenShareUrl\(url\.href\)\) return/);
-  assert.match(perspective, /onOpenShareUrl\(rewritten\.href\)/);
+  assert.match(perspective, /onOpenShareUrl\(rewritten\)/);
+  assert.match(perspective, /bookmarkAtCurrentHost\(/);
   assert.doesNotMatch(perspective, /window\.location\.(?:assign|replace)\(/);
 });
 

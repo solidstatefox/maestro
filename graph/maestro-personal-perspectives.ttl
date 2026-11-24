@@ -17,7 +17,7 @@
 <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
 <xsl:output method="html" omit-xml-declaration="yes"/>
 <xsl:template match="/results">
-<section class="flex w-full flex-col gap-0.5" data-view-title="Bookmarks" data-view-icon="database">
+<section class="flex w-full flex-col gap-0.5" data-view-title="Bookmarks" data-view-icon="bookmark">
 <xsl:choose>
 <xsl:when test="not(result)"><p class="py-12 text-center text-sm text-muted-foreground">No saved entries found.</p></xsl:when>
 <xsl:otherwise><xsl:apply-templates select="result"/></xsl:otherwise>

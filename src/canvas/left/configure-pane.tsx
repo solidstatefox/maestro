@@ -1,4 +1,5 @@
 "use client";
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { MAESTRO_KIND_IDS, getMaestroKindsRevision, subscribeMaestroKinds } from "@/lib/maestro-kinds";
 import { browserLog } from "@/lib/maestro-client-logging";
 import { ErrorDetails } from "@/components/ui/error-details";
@@ -31,6 +32,7 @@ import { OrUidLabel } from "@/components/ui/or-uid-label";
 import { allocateLetterLeadingFctId } from "@/lib/fct-node-identity";
 import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
 import { maestroQueryFetch } from "@/lib/client-query-cache";
+import { proxyDebugHeaders } from "@/lib/proxy-debug";
 import { serializeFctQuery } from "@/lib/fct-query-api";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -279,7 +281,7 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
         async function run(query: string): Promise<{ results?: {bindings?: Array<{maestroKind?:{value?:string}}>};boolean?:boolean;error?:string;incomplete?:boolean }> {
           const response = await maestroQueryFetch("/proxy/api/sparql", {
             method: "POST", signal: requestSignal, cache: "no-store",
-            headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": `Configure:Kinds:${direction}`,
+            headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": `Configure:Kinds:${direction}`, ...proxyDebugHeaders("Configure:Kinds", `ConfigureKind:${direction}`),
               ...(timeoutMs ? { "X-Maestro-Query-Timeout-Ms": String(timeoutMs) } : {}) },
             body: JSON.stringify({ addr: address, query }),
           });
@@ -489,7 +491,7 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                                 <h2 className="truncate text-sm font-semibold">{group}</h2>
                               </button>
                             </div>
-                            {(group === "Properties" || group === "Roles") && checkingKinds && <span role="status" className="shrink-0 text-xs text-white/90"><ElapsedStatus label="Kinds" category="kinds" /></span>}
+                            {(group === "Properties" || group === "Roles") && checkingKinds && <span role="status" className="shrink-0 text-xs text-white/90"><ElapsedStatus label="Kinds" category="kinds" clockScope="component:kinds" /></span>}
                             {(group === "Properties" || group === "Roles") && kindState.error && !checkingKinds &&
                               <span className="inline-flex items-center gap-1 rounded border border-white/40 bg-background px-1.5 py-0.5">
                                 <ErrorDetails prefix="Kinds unavailable" error={kindState.error} />
@@ -497,7 +499,7 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                                   <RotateCw className="size-3.5" aria-hidden="true" />
                                 </button>
                               </span>}
-                            {(group === "Properties" || group === "Roles") && kindState.ready && !checkingKinds && <select
+                            {(group === "Properties" || group === "Roles") && kindState.ready && !checkingKinds && <MaestroSelect
                               aria-label={`${group} object kind`}
                               aria-busy={false}
                               value={group === "Properties" ? configurePropertyKind : configureRoleKind}
@@ -505,7 +507,7 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                               className={`max-w-32 rounded border border-white/40 bg-transparent px-1 py-1 text-xs text-white ${((group === "Properties" ? configurePropertyKind : configureRoleKind) === "all") ? "opacity-0 group-hover/header:opacity-100 focus:opacity-100" : ""}`}
                             >
                               {["all", ...availableKinds(group === "Properties" ? "property" : "role", group === "Properties" ? configurePropertyKind : configureRoleKind)].map(kind => <option key={kind} className="bg-background text-foreground" value={kind}>{kind === "all" ? "All kinds" : kind}</option>)}
-                            </select>}
+                            </MaestroSelect>}
                             {group === "Properties" && <LeftWidgetButtonTray threshold={4} actions={[{
                               id: "add-or-properties", label: orQuotaExceeded ? "Disjunction quota exceeded" : "Add OR", icon: <Split className="size-4" />,
                               when: selectedItems.length > 0 && orEditing !== "Properties", disabled: orQuotaExceeded || facetListStale,

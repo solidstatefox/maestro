@@ -20,6 +20,11 @@ const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const iri = (value: string) => `<${value.replace(/[<>"{}|^`\\\s]/g, "")}>`;
 
 let loadedSessionKey = "";
+let loadedEntries: {id:string;pattern:string}[] = [];
+export function currentSessionKinds(){return loadedEntries;}
+export function restoreSessionKinds(addr:string,base:string,entries:{id:string;pattern:string}[]):void{
+  hydrateMaestroKinds(entries);loadedEntries=entries;loadedSessionKey=`${addr}\u0000${base}`;
+}
 let generation = 0;
 const inFlight = new Map<string, Promise<void>>();
 
@@ -42,7 +47,7 @@ export async function loadMaestroKinds(signal?: AbortSignal): Promise<void> {
         OPTIONAL { ?kind ${iri(`${MUI}pattern`)} ?pattern . }
       }
     } ORDER BY ?provider ?kind ?pattern`;
-    const rows = await selectPersonal(query, ctx, signal);
+    const rows = await selectPersonal(query, ctx, signal,"client-kinds:loadMaestroKinds");
     if (signal?.aborted || currentGeneration !== generation) return;
     const entries = rows.flatMap((row) => {
       if (row.provider?.type !== "uri" || row.kind?.type !== "uri") return [];
@@ -52,8 +57,7 @@ export async function loadMaestroKinds(signal?: AbortSignal): Promise<void> {
       const kindId = kindUri.slice(Math.max(kindUri.lastIndexOf("/"), kindUri.lastIndexOf("#")) + 1);
       return [{ id: kindId, pattern }];
     });
-    hydrateMaestroKinds(entries);
-    loadedSessionKey = key;
+    restoreSessionKinds(ctx.addr,ctx.base,entries);
   })();
   inFlight.set(key, task);
   try { await task; }
@@ -63,6 +67,7 @@ export async function loadMaestroKinds(signal?: AbortSignal): Promise<void> {
 export function resetMaestroKinds(): void {
   generation++;
   loadedSessionKey = "";
+  loadedEntries=[];
   inFlight.clear();
   clearMaestroKinds();
 }

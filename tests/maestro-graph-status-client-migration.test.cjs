@@ -85,6 +85,6 @@ test('Record status transitions are browser-owned, without server RPC', () => {
 test('Client XState definitions reuse the canonical personal SPARQL transport', () => {
   const source = read('lib/status-machine-client.ts');
   assert.match(source, /personalContext\(\)/);
-  assert.match(source, /selectPersonal\(statusMachineSelect\(graph\), ctx, signal\)/);
+  assert.match(source, /selectPersonal\(statusMachineSelect\(graph\), ctx, signal,\s*"status-machine-client:loadClientStatusMachines"\)/);
   assert.doesNotMatch(source, /fetch\(\"\/proxy\/api\/sparql\"/);
 });

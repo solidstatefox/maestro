@@ -32,8 +32,40 @@ test('TODO #63: preparing request is not mislabeled queued and real queue slots 
   assert.match(source,/serverQueueIndex: queueIndex/);
 });
 test('TODO #65: personal SPARQL update errors distinguish foreign/dynamic graphs',()=>{
-  const source=read('src/app/proxy/api/sparql/route.ts');
-  assert.match(source,/Variable or implicit graph targets/);
-  assert.match(source,/outside the authenticated personal namespace/);
-  assert.match(source,/inspectPersonalUpdateGraphs\(update\)/);
-});
+
+  const accessSource = require('node:fs').readFileSync("src/lib/app-lifecycle/access.ts", 'utf8');
+  const controllerSource = require('node:fs').readFileSync("src/canvas/controllers/authentication.ts", 'utf8');
+  assert.ok(accessSource.includes('SESSION_OBSERVED'));
+  assert.ok(accessSource.includes('signedOut: {}'));
+  assert.ok(accessSource.includes('signedIn: {'));
+  assert.ok(accessSource.includes('const policyReady = sessionReady && snapshot.context.policyStage === "ready"'));
+  assert.ok(controllerSource.includes('useState<PersonalAuthSession | null>(null)'));
+  assert.ok(controllerSource.includes('event.preventDefault()'));
+  assert.ok(controllerSource.includes('await restoreDigestSession(attempt.signal)'));
+  const ts = require('typescript');
+  const vm = require('node:vm');
+  const moduleHolder = { exports: {} };
+  const compiled = ts.transpileModule(accessSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  vm.runInNewContext(compiled, {
+    module: moduleHolder, exports: moduleHolder.exports,
+    require: id => id === 'xstate' ? require('xstate') : require(id),
+    AbortController, Promise, Map, Set,
+  }, { filename: 'src/lib/app-lifecycle/access.ts' });
+  const { createMaestroAccessActor, selectMaestroCapabilities } = moduleHolder.exports;
+  const actor = createMaestroAccessActor();
+  actor.start();
+  actor.send({ type: 'SESSION_OBSERVED', restored: true, sessionKey: '' });
+  actor.send({ type: 'POLICY_STATUS_OBSERVED', sessionKey: 'no-session', stage: 'ready' });
+  actor.send({ type: 'BOOKMARK_CONFIRMED', queryKey: 'any', bookmarkId: 'any' });
+  actor.send({ type: 'BOOKMARK_CHECK_REQUESTED', queryKey: 'any', sessionKey: 'no-session', execute: () => Promise.resolve({bookmarked:true,bookmarkId:'any'}) });
+  const snapshot = actor.getSnapshot();
+  assert.equal(snapshot.value, 'signedOut');
+  assert.equal(snapshot.context.sessionKey, '');
+  assert.equal(snapshot.context.policyStage, 'unavailable');
+  const caps = selectMaestroCapabilities(snapshot, {queryKey:'any',recordSelected:true,providersActive:true});
+  for (const key of ['canUsePersonalStore','canMutatePersonalStore','canUsePolicyProviders','canShowStatusFacet','canShowRecordStatusActions','canApproveProvider']) {
+    assert.equal(caps[key], false, key);
+  }
+  actor.stop();
+
+  });

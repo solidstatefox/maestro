@@ -525,7 +525,7 @@ export function BasicAssistantChat({
       // Remove it on success, failure and cancellation (without the cancelled signal).
       if (inputGraph) {
         try {
-          await updatePersonal(`CLEAR GRAPH <${inputGraph}>`);
+          await updatePersonal(`CLEAR GRAPH <${inputGraph}>`,undefined,undefined,"basic-chat:BasicAssistantChat");
           const cleaned = messagesRef.current.map(message => message.id === menuId ? {
             ...message, otcProgress: [...(message.otcProgress ?? []), {
               step: "cleanup" as const, status: "success" as const,

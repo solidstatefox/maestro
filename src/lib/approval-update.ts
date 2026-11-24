@@ -1,6 +1,8 @@
 "use client";
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
-import { maestroQueryFetch } from "@/lib/client-query-cache";
+import { personalContext, selectPersonal, updatePersonal } from "@/lib/client-personal-sparql";
+import { updateSessionSnapshot, readSessionHydration } from "@/lib/client-digest-session";
+import { hydrateAuthBootstrap } from "@/lib/client-auth-bootstrap";
 
 import { loadPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
 import { loadClientStatusMachines } from "@/lib/status-machine-client";
@@ -54,11 +56,9 @@ export async function changeApprovals(uris: string[], status: "Approved" | "Pend
       }
       OPTIONAL { GRAPH <${graph}> { ?subject mui:status ?current } }
     } LIMIT 5000`;
-  const select=await maestroQueryFetch("/proxy/api/sparql",{method:"POST",cache:"no-store",signal,
-    headers:{"Content-Type":"application/json"},body:JSON.stringify({addr:`${shapes}@${auth.graphStore}`,query})});
-  const data=await select.json() as {error?:string;results?:{bindings?:Array<Record<string,{value:string}>>}};
-  if(!select.ok || data.error) throw new Error(data.error||`Approval verification failed (HTTP ${select.status}).`);
-  const rows=data.results?.bindings??[];
+  const ctx=await personalContext();
+  if(ctx.session!==auth)throw new Error("Personal user session changed.");
+  const rows=await selectPersonal(query,ctx,signal,"approval-update:changeApprovals");
   const updates:string[]=[];
   const escapeLiteral=(s:string)=>JSON.stringify(s);
   for(const uri of resources){
@@ -82,7 +82,7 @@ export async function changeApprovals(uris: string[], status: "Approved" | "Pend
         WHERE { OPTIONAL { GRAPH <${graph}> { ${subject} <${STATUS_MUI}approvedDigest> ?grant . ?grant ?p ?o } } }`);
       if(status==="Approved"){
         const triples=matched.filter(row=>row.provider?.value && /^sha256:[0-9a-f]{64}$/.test(row.digest?.value??""))
-          .map(row=>` ${subject} <${STATUS_MUI}approvedDigest> [ <${STATUS_MUI}forProvider> ${iri(row.provider!.value)} ; <${STATUS_MUI}implementationDigest> ${escapeLiteral(row.digest!.value)} ] .`);
+          .map(row=>` ${subject} <${STATUS_MUI}approvedDigest> [ <${STATUS_MUI}forProvider> ${iri(row.provider!.value!)} ; <${STATUS_MUI}implementationDigest> ${escapeLiteral(row.digest!.value!)} ] .`);
         if(triples.length)updates.push(`INSERT DATA { GRAPH <${graph}> { ${[...new Set(triples)].join("\n")} } }`);
       }
     }
@@ -92,12 +92,15 @@ export async function changeApprovals(uris: string[], status: "Approved" | "Pend
   // reliably. Do not concatenate DELETE/INSERT and INSERT DATA with semicolons:
   // a rejected multi-statement request otherwise prevents FSM approval entirely.
   for (const update of updates) {
-    const response=await maestroQueryFetch("/proxy/api/sparql",{method:"POST",cache:"no-store",signal,
-      headers:{"Content-Type":"application/json","Accept":"application/json"},
-      body:JSON.stringify({update,bookmarkQueryXml:bookmarkedQueryXml})});
-    if(!response.ok){
-      const body=await response.json().catch(()=>(null)) as {error?:string}|null;
-      throw new Error(body?.error||`Approval update failed (HTTP ${response.status})`);
-    }
+    if((await personalContext()).session!==auth)throw new Error("Personal user session changed.");
+    await updatePersonal(update,signal,bookmarkedQueryXml,"approval-update:changeApprovals");
+  }
+  const changed=await selectPersonal(`SELECT ?resource ?status WHERE { VALUES ?resource { ${values} } GRAPH <${graph}> { ?resource <${STATUS_MUI}status> ?status } }`,ctx,signal,"approval-update:changeApprovals");
+  const saved=await readSessionHydration(auth);
+  if(saved.snapshot){
+    await updateSessionSnapshot(auth,snapshot=>({bindings:[...snapshot.bindings.filter(row=>row.section?.value!=="status" || !resources.includes(row.resource?.value??"")),
+      ...changed.map(row=>({...row,section:{type:"literal",value:"status"}}))]}));
+    const latest=await readSessionHydration(auth);
+    if(latest.snapshot)hydrateAuthBootstrap(auth,latest.snapshot.bindings,latest.snapshot.buttons);
   }
 }

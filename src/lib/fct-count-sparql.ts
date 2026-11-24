@@ -175,6 +175,36 @@ function compileNodes(nodes: FctQueryNode[], subject: string, state: CompilerSta
       }
       case "property":
       case "property-of": {
+        if (node.attributes.derive === "split") {
+          const reference = state.references?.subjects.get(node.id);
+          if (reference) state.patterns.push(`BIND(${subject} AS ${reference})`);
+          const source=state.relationBindings.get(node.attributes.pid || "");
+          const delimiter=node.attributes.splitPattern || "";
+          if (!source || !delimiter || delimiter.length > 2000) {
+            state.errors.push("Derived split facet requires a source rid and delimiter pattern.");
+            break;
+          }
+          const sourceValuePredicate=node.attributes.sourceValuePredicate || "";
+          const predicate=sourceValuePredicate ? iriTerm(sourceValuePredicate) : null;
+          if (sourceValuePredicate && !predicate) {
+            state.errors.push("Derived split sourceValuePredicate must be a valid RDF predicate IRI.");
+            break;
+          }
+          const lexicalSource=predicate ? nextVariable(state) : source;
+          if (predicate) state.patterns.push(`${source} ${predicate} ${lexicalSource} .`);
+          state.patterns.push(`FILTER (isLiteral(${lexicalSource}))`);
+          const normalized=nextVariable(state), index=nextVariable(state), raw=nextVariable(state), related=nextVariable(state);
+          state.patterns.push(`BIND(REPLACE(STR(${lexicalSource}), "${escapeSparqlString(delimiter)}", ";", "i") AS ${normalized})`);
+          state.patterns.push(`VALUES ${index} { ${Array.from({length:64},(_,i)=>i).join(" ")} }`);
+          const tokenPattern=`CONCAT("^(?:[^;]*;){", STR(${index}), "}([^;]+)(?:;.*)?$")`;
+          state.patterns.push(`FILTER (REGEX(${normalized}, ${tokenPattern}))`);
+          state.patterns.push(`BIND(REPLACE(${normalized}, ${tokenPattern}, "$1") AS ${raw})`);
+          state.patterns.push(`BIND(REPLACE(${raw}, "^\\\\s+|\\\\s+$", "") AS ${related})`);
+          state.patterns.push(`FILTER (STRLEN(${related}) > 0)`);
+          if (node.attributes.rid) state.relationBindings.set(node.attributes.rid,related);
+          compileNodes(node.children,related,state);
+          break;
+        }
         if (node.attributes.derive === "regex") {
           const reference = state.references?.subjects.get(node.id);
           if (reference) state.patterns.push(`BIND(${subject} AS ${reference})`);

@@ -1,4 +1,5 @@
 "use client";
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { Ban, Telescope } from "lucide-react";
@@ -33,7 +34,7 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
  const [selectedGraphCardUri, setSelectedGraphCardUri] = useState("");
  useEffect(() => { setSelectedGraphCardUri(""); }, [workspace.queryXml]);
  const isGraphServerPerspective = workspace.viewPanel === "perspectives" &&
-   selectedViewUri === "gttp://ggg.maestro.ecosys/shacl/view#EntryPointView";
+   selectedViewUri === "gttp://ggg.maestro.ecosys/shacl/provider/entrypoint";
  const graphServerCardRows = useMemo(() => visibleResultsPage.map(row => {
    const endpoint = fctEndpoints.find(option => option.url === row.uri || option.id === row.uri ||
      option.label === row.title);
@@ -70,7 +71,7 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
  }, [policyBookmarkNeeded]);
  const personalKind = personalPerspectiveMatchesQuery(selectedViewUri, workspace.queryTree) ? personalPerspectiveFromUri(selectedViewUri) : null;
  const selectedRdfProvider = discoveredViews.find(provider => provider.uri === selectedViewUri);
- const providerSelected = Boolean(selectedRdfProvider?.queryStylesheet && selectedRdfProvider?.resultStylesheet && workspace.viewPanel === "perspectives");
+ const providerSelected = Boolean(!personalPerspectiveFromUri(selectedViewUri) && selectedRdfProvider?.queryStylesheet && selectedRdfProvider?.resultStylesheet && workspace.viewPanel !== "providers");
  // Include the actual Personal facet values, not just geocoded marker values.
  // Some values in a facet have no corresponding mapped resource and must still
  // receive an item decoration when that facet is selected for Color By.
@@ -130,16 +131,16 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
  })();
  const viewPagination = <div className="flex min-w-0 items-center gap-3 text-xs"><span className="text-muted-foreground">{formatPagePosition(resultsUiPage, effectiveResultsTotalCount === null ? (resultsPageComplete ? Math.max(1, Math.ceil(results.length / resultsPageSize)) : null) : Math.max(1, Math.ceil(effectiveResultsTotalCount / resultsPageSize)))}</span>
                   <div className="flex items-center gap-2"><label htmlFor="view-page-size">Per page</label>
-                    <select id="view-page-size" className="rounded border bg-background px-2 py-1" value={effectivePageSize} onChange={(event) => { const n=Number(event.currentTarget.value); setResultsPageSize(n); maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY,String(n)); setResultsUiPage(0); }}>
+                    <MaestroSelect id="view-page-size" className="rounded border bg-background px-2 py-1" value={effectivePageSize} onChange={(event) => { const n=Number(event.currentTarget.value); setResultsPageSize(n); maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY,String(n)); setResultsUiPage(0); }}>
                       {resultsPageSizeOptions.map((n) => <option value={n} key={n}>{n}</option>)}
-                    </select>
+                    </MaestroSelect>
                     <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={resultsUiPage===0 || isSearching} onClick={() => changeResultsPage(-1)}>Previous</button>
                     <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={isSearching || (effectiveResultsTotalCount === null ? (results.length <= (resultsUiPage+1)*resultsPageSize && (resultsPageComplete || resultsBatchRequestPending.current)) : resultsUiPage+1 >= Math.ceil(effectiveResultsTotalCount/resultsPageSize))} onClick={() => changeResultsPage(1)}>Next</button>
                   </div>
                 </div>;
  return <>
 {workspaceTab === "view" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Views">
-                {providerSelected && selectedRdfProvider ? <PerspectiveProviderRuntime provider={selectedRdfProvider} queryXml={workspace.queryXml} queryTree={workspace.queryTree} addr={workspace.queryTree.attributes.addr ?? ""} visibleFacetTerms={visibleFacetTerms} /> : personalKind && workspace.viewPanel === "perspectives" ? <PersonalPerspectives active={workspace.accessCapabilities.canUsePersonalStore} kind={personalKind} providerUri={selectedViewUri} queryXml={workspace.queryXml} onBrowse={() => workspace.setWorkspaceTab("browse")} onOpenShareUrl={workspace.openPinnedShareUrl}/> : <>
+                {personalKind && !viewProvider && workspace.viewPanel !== "providers" ? <PersonalPerspectives key={selectedViewUri} active={workspace.accessCapabilities.canUsePersonalStore} kind={personalKind} providerUri={selectedViewUri} queryXml={workspace.queryXml} onBrowse={() => workspace.setWorkspaceTab("browse")} onOpenShareUrl={workspace.openPinnedShareUrl}/> : providerSelected && selectedRdfProvider && !viewProvider ? <PerspectiveProviderRuntime key={selectedRdfProvider.uri} provider={selectedRdfProvider} queryXml={workspace.queryXml} queryTree={workspace.queryTree} addr={workspace.queryTree.attributes.addr ?? ""} visibleFacetTerms={visibleFacetTerms} /> : <>
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-4 py-3">
                   {viewProvider ? <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label={`Alphabet for ${viewProvider}`}>
                     <ToggleGroup type="multiple" value={parseAlphabetSelections(providerLetter).map(value => value.replace(/^!/, ""))} onValueChange={() => {}} className="flex flex-wrap items-center gap-1">{providerLetters.map(([letter, count]) => <ToggleGroupItem unstyled key={letter} value={letter} type="button" aria-label={`${letter}: ${count} ${viewProvider}; Shift-click excludes the letter`}
@@ -169,9 +170,9 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                     {isLoadingAlphabet && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Fetching alphabet" category="alphabet" clockScope="alphabet" requestWaves={26} /></span>}
                     
                   </div>}
-                  {!viewProvider && discoveredViews.length > 1 && <select aria-label="Select view" className="rounded border bg-background px-2 py-1 text-sm" value={selectedViewUri} onChange={(event) => setSelectedViewUri(event.currentTarget.value)}>
+                  {!viewProvider && discoveredViews.length > 1 && <MaestroSelect aria-label="Select view" className="rounded border bg-background px-2 py-1 text-sm" value={selectedViewUri} onChange={(event) => workspace.selectPerspective(event.currentTarget.value)}>
                     {discoveredViews.map((view) => <option key={view.uri} value={view.uri}>{view.label}</option>)}
-                  </select>}
+                  </MaestroSelect>}
                   {!viewProvider && selectedView && <span className="text-xs text-muted-foreground">{selectedView.label} · {visibleResultsPage.length} results on this page</span>}
                 </div>
                 {viewProvider && <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2 text-xs" role="toolbar" aria-label={`${viewProvider} actions`}>

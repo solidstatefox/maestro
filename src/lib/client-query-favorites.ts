@@ -88,9 +88,9 @@ async function postFavorites(request: Request, ctx: PersonalContext) {
     const historyAction = `${VFCT_NS}historyAction`;
     const historyType = `${VFCT_NS}QueryHistoryVisit`;
 
-    const queryPersonal = async (q: string) => selectResult(await selectPersonal(q, ctx, request.signal));
-    const writePersonal = (u: string) => updatePersonal(u, request.signal);
-    const askPersonal = async (q: string) => (await selectPersonal(askAsSelect(q), ctx, request.signal)).length > 0;
+    const queryPersonal = async (q: string) => selectResult(await selectPersonal(q, ctx, request.signal,request.headers.get("x-maestro-debug-source") || `HistoryBookmarks:${action || "query"}`));
+    const writePersonal = (u: string) => updatePersonal(u, request.signal,undefined,request.headers.get("x-maestro-debug-source") || `HistoryBookmarks:${action || "query"}`);
+    const askPersonal = async (q: string) => (await selectPersonal(askAsSelect(q), ctx, request.signal,request.headers.get("x-maestro-debug-source") || `HistoryBookmarks:${action || "query"}`)).length > 0;
 
     // History requests have their own validation; only actions that actually
     // carry a query require serialized FCT XML.
@@ -607,7 +607,7 @@ async function getFavorites(request: Request, ctx: PersonalContext) {
   try {
     const baseGraph = ctx.base;
     const query = `PREFIX rdf: <${RDF_NS}> PREFIX rdfs: <${RDFS_NS}> PREFIX dcterms: <${DCTERMS_NS}> PREFIX a: <${ANNOTATION_NS}> PREFIX b: <${BOOKMARK_NS}> PREFIX vfct: <${VFCT_NS}> PREFIX sioc: <${SIOC_NS}> PREFIX schema: <${SCHEMA_NS}> SELECT DISTINCT ?bookmark ?title ?description ?created ?queryXML ?shareUrl WHERE { GRAPH <${baseGraph}#bookmarks> { { ?bookmark rdf:type b:Bookmark } UNION { ?bookmark rdf:type sioc:Item } UNION { ?bookmark rdf:type vfct:QueryBookmark } OPTIONAL { ?bookmark dcterms:title ?dcTitle } OPTIONAL { ?bookmark rdfs:label ?standardTitle } OPTIONAL { ?bookmark vfct:label ?legacyTitle } BIND(COALESCE(?dcTitle, ?standardTitle, ?legacyTitle, STR(?bookmark)) AS ?title) OPTIONAL { ?bookmark dcterms:description ?description } OPTIONAL { ?bookmark a:created ?annoteaCreated } OPTIONAL { ?bookmark dcterms:created ?dctermsCreated } OPTIONAL { ?bookmark dcterms:date ?dctermsDate } OPTIONAL { ?bookmark vfct:created ?legacyCreated } BIND(COALESCE(?annoteaCreated, ?dctermsCreated, ?dctermsDate, ?legacyCreated) AS ?created) OPTIONAL { ?bookmark schema:url ?bookmarkUrl } { ?bookmark b:recalls ?query . ?query rdf:value ?queryXML . OPTIONAL { ?query schema:url ?queryUrl } } UNION { ?bookmark dcterms:references ?query . ?query rdf:value ?queryXML . OPTIONAL { ?query schema:url ?queryUrl } } UNION { ?bookmark vfct:savedQuery ?legacyQuery . ?legacyQuery vfct:queryXML ?queryXML . } BIND(COALESCE(?bookmarkUrl, ?queryUrl) AS ?shareUrl) } } ORDER BY DESC(?created) ?title`;
-    const result = selectResult(await selectPersonal(query, ctx, request.signal));
+    const result = selectResult(await selectPersonal(query, ctx, request.signal,request.headers.get("x-maestro-debug-source") || "HistoryBookmarks:List"));
     const favorites = (result.results?.bindings ?? []).map((row: Record<string, { value?: string }>) => ({
       uri: row.bookmark?.value ?? "",
       title: row.title?.value ?? row.bookmark?.value ?? "Saved query",

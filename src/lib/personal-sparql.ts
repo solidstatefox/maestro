@@ -5,7 +5,6 @@ import { permittedGraphServerTarget, checkGraphServerDestination } from "./graph
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { graphForPrefix, personalAuthenticatedEndpoint, personalWriteEndpoint } from "./personal-auth";
-import { authNote, fetchWithDigestFallback } from "./digest-auth";
 import { parseRdfDocument } from "./rdf-to-sparql";
 import { describeUpstreamError } from "@/lib/upstream-error";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
@@ -38,47 +37,12 @@ export type PersonalSession = {
   userAvatar?: string;
 };
 
-/** Thrown when personal-graph-store functionality is used without a login session. Nothing is sent over the network. */
+/** Personal authentication is deliberately not implemented. */
 export class PersonalSessionRequiredError extends Error {
-  constructor() {
-    super("Not logged in: the personal graph server is only used with a login session.");
-    this.name = "PersonalSessionRequiredError";
-  }
+  constructor() { super("Personal authentication disabled."); this.name="PersonalSessionRequiredError"; }
 }
-
-/** Guard for every personal-store entry point: with no session there is no personal graph server to talk to. */
-export function assertPersonalSession(request?: Request): PersonalSession {
-  const session = getPersonalSession(request);
-  if (!session) throw new PersonalSessionRequiredError();
-  return session;
-}
-
-/** Request-scoped transport credentials. No Maestro cookie, login ticket, or
- * proxy-issued identity. The upstream graph server authenticates each request. */
-export function getPersonalSession(request?: Request): PersonalSession | null {
-  if (!request) return null;
-  const graphStore = request.headers.get("x-personal-graph-store") ?? "";
-  const graphPrefix = request.headers.get("x-personal-graph") ?? "";
-  const authHeader = request.headers.get("x-personal-auth") ?? "";
-  const authType = request.headers.get("x-personal-auth-type") ?? "";
-  if (!graphStore || !graphPrefix || !authHeader ||
-      !["sparql-auth", "sparql-oauth", "sparql-webid"].includes(authType) ||
-      !/^(?:Basic|Bearer)\s+[^\r\n]+$/i.test(authHeader)) return null;
-  try {
-    const endpoint = new URL(graphStore);
-    const prefix = new URL(graphPrefix);
-    if (!["http:","https:"].includes(endpoint.protocol) ||
-        prefix.origin !== endpoint.origin || endpoint.username || endpoint.password ||
-        !/\/sparql\/?$/i.test(endpoint.pathname) || endpoint.hash ||
-        prefix.username || prefix.password || graphPrefix.length > 4096) return null;
-    if (authType === "sparql-auth" && !/^Basic /i.test(authHeader)) return null;
-    if (authType !== "sparql-auth" && !/^Bearer /i.test(authHeader)) return null;
-    // Bearer tokens must never cross a cleartext public network.
-    if (authType !== "sparql-auth" && endpoint.protocol !== "https:" &&
-        !["localhost", "127.0.0.1", "::1"].includes(endpoint.hostname)) return null;
-  } catch { return null; }
-  return { graphStore, graphPrefix, authHeader, authType };
-}
+export function assertPersonalSession(_request?:Request): PersonalSession { throw new PersonalSessionRequiredError(); }
+export function getPersonalSession(_request?:Request): PersonalSession | null { return null; }
 
 /** Read and validate the file-to-Graph mapping. */
 function getGraphManifest(): GraphManifest {
@@ -164,14 +128,9 @@ export function personalSparqlWriteUrl(request?: Request): URL {
   return new URL(personalWriteEndpoint(assertPersonalSession(request)));
 }
 
-/** Build authenticated request headers for the personal SPARQL endpoint. */
-export function personalSparqlHeaders(request?: Request, contentType = "application/x-www-form-urlencoded; charset=UTF-8", accept = "application/sparql-results+json, application/json;q=0.9"): Record<string, string> {
-  const headers: Record<string, string> = { "Content-Type": contentType, Accept: accept };
-  const session = getPersonalSession(request);
-  if (session?.authHeader) {
-    headers.Authorization = session.authHeader;
-  }
-  return headers;
+/** Content negotiation only; no Authorization header is generated. */
+export function personalSparqlHeaders(_request?:Request, contentType="application/x-www-form-urlencoded; charset=UTF-8", accept="application/sparql-results+json, application/json;q=0.9"): Record<string,string> {
+  return {"Content-Type":contentType,Accept:accept};
 }
 
 /** Preserve the real graph-server status and complete upstream error document. */
@@ -182,79 +141,18 @@ export class PersonalSparqlHttpError extends Error {
   }
 }
 
-/** Execute a read-only SPARQL query against the personal endpoint. */
-export async function queryPersonalSparql(query: string, timeoutMs = 20000, request?: Request): Promise<SparqlJson> {
-  assertPersonalSession(request);
-  const endpoint = personalSparqlUrl(request);
-  await checkGraphServerDestination(endpoint.toString());
-  const response = await fetchWithDigestFallback(endpoint, {
-    method: "POST",
-    headers: personalSparqlHeaders(request, "application/x-www-form-urlencoded; charset=UTF-8"),
-    body: new URLSearchParams({ query }).toString(),
-    cache: "no-store",
-    ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
-  });
-  const body = await response.text();
-  if (!response.ok) throw new PersonalSparqlHttpError(response.status, body, "query");
-  try {
-    const parsed = JSON.parse(body) as SparqlJson;
-    if (!parsed || !Array.isArray(parsed.results?.bindings)) throw new Error("missing results.bindings");
-    return parsed;
-  } catch (error) {
-    throw new Error(`Personal SPARQL endpoint returned invalid SPARQL Results JSON: ${error instanceof Error ? error.message : "invalid JSON"}`);
-  }
+/** All personal-store data operations stop before any network request. */
+export async function probePersonalSparqlAuth(_query:string,_timeoutMs=15000,_request?:Request): Promise<Response> {
+  throw new PersonalSessionRequiredError();
 }
-
-/** Execute a SPARQL ASK against the personal endpoint and return its boolean result. */
-export async function askPersonalSparql(query: string, timeoutMs = 20000, request?: Request): Promise<boolean> {
-  assertPersonalSession(request);
-  const endpoint = personalSparqlUrl(request);
-  await checkGraphServerDestination(endpoint.toString());
-  const response = await fetchWithDigestFallback(endpoint, {
-    method: "POST",
-    headers: personalSparqlHeaders(request, "application/x-www-form-urlencoded; charset=UTF-8"),
-    body: new URLSearchParams({ query }).toString(),
-    cache: "no-store",
-    ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
-  });
-  const body = await response.text();
-  if (!response.ok) throw new PersonalSparqlHttpError(response.status, body, "ASK");
-  try {
-    const parsed = JSON.parse(body) as { boolean?: unknown };
-    if (typeof parsed.boolean !== "boolean") throw new Error("missing boolean result");
-    return parsed.boolean;
-  } catch (error) {
-    throw new Error(`Personal SPARQL endpoint returned an invalid ASK result: ${error instanceof Error ? error.message : "invalid JSON"}`);
-  }
+export async function queryPersonalSparql(_query:string,_timeoutMs=20000,_request?:Request): Promise<SparqlJson> {
+  throw new PersonalSessionRequiredError();
 }
-
-/** Execute a SPARQL Update against the personal WRITE endpoint (/sparql-auth for sparql-auth logins). */
-export async function updatePersonalSparql(update: string, timeoutMs = 30000, request?: Request): Promise<string> {
-  assertPersonalSession(request);
-  const endpoint = personalSparqlWriteUrl(request);
-  await checkGraphServerDestination(endpoint.toString());
-  const response = await fetchWithDigestFallback(endpoint, {
-    method: "POST",
-    headers: personalSparqlHeaders(request, "application/sparql-update", "text/plain, application/json;q=0.9"),
-    body: update,
-    cache: "no-store",
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const rawBody = (await response.text()).slice(0, 10000);
-  // Virtuoso's protected /sparql-auth service can return its interactive HTML
-  // query console on a failed machine request. Never forward that markup to UI.
-  const plainBody = rawBody.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]*>/g, " ").replace(/&(?:nbsp|#160);/gi, " ")
-    .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
-    .replace(/&amp;/gi, "&").replace(/\s+/g, " ").trim();
-  const body = (response.headers.get("content-type") ?? "").toLowerCase().includes("text/html")
-    ? plainBody.slice(0, 650) : rawBody.slice(0, 1600);
-  if (!response.ok) throw new Error(`Personal SPARQL update returned HTTP ${response.status} (${endpoint.pathname}): ${body || response.statusText || "no response details"}${authNote(response) ? ` [${authNote(response)}]` : ""}`);
-  if (/(?:Virtuoso\s+Exception|Error\s+SR|SPARQL\s+UPDATE\s+Error|failed)/i.test(body) && !/0 errors/i.test(body)) {
-    throw new Error(`Personal SPARQL update failed: ${body}`);
-  }
-  return body;
+export async function askPersonalSparql(_query:string,_timeoutMs=20000,_request?:Request): Promise<boolean> {
+  throw new PersonalSessionRequiredError();
+}
+export async function updatePersonalSparql(_update:string,_timeoutMs=30000,_request?:Request): Promise<string> {
+  throw new PersonalSessionRequiredError();
 }
 
 function slugify(value: string): string {
@@ -272,7 +170,7 @@ let publicSeedInFlight: { digest: string; promise: Promise<PublicSeedSnapshot> }
  */
 async function courtesySeedFiles(): Promise<{ sources: { file: string; content: string }[]; digest: string }> {
   const files = Object.entries(getGraphManifest())
-    .filter(([file, dest]) => dest === "/graph" && /\.(?:ttl|n3)$/i.test(file))
+    .filter(([file, dest]) => dest === GRAPH.GRAPHS && /\.(?:ttl|n3)$/i.test(file))
     .map(([file]) => file).sort();
   if (!files.includes("dataserver-seed.ttl")) throw new Error("Missing graph-server courtesy seed list.");
   const allSources = await Promise.all(files.map(async file => ({

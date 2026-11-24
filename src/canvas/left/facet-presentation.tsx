@@ -57,7 +57,7 @@ export function useFacetPresentation({direction, predicate, enabled, approvalRev
               OPTIONAL { ?provider mui:icon ?icon }
               OPTIONAL { ?provider mui:requestsClassTree ?requestsClassTree }
             }
-          } LIMIT 50`, ctx, controller.signal);
+          } LIMIT 50`, ctx, controller.signal,"facet-presentation:useFacetPresentation");
         const candidates = rows.map(row => ({uri:row.provider?.value??"",label:row.label?.value??"Facet view",
           icon:row.icon?.value??"chart-pie",stylesheet:row.stylesheet?.value??"",
           requestsClassTree:row.requestsClassTree?.value==="true"}))
@@ -227,11 +227,11 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
   if(result.key!==key)return <p role="status" className="text-xs text-muted-foreground">Rendering facet presentation…</p>;
   if(result.error)return <ErrorDetails prefix="Facet rendering" error={result.error} />;
   return <div className="flex w-full min-w-0 flex-none flex-col gap-1">
-    <div className="flex w-full flex-wrap items-center justify-center gap-2 px-2 pt-1">
+    <div className="flex w-full flex-wrap items-center justify-center gap-1.5 px-1 pt-0.5">
       {/* Follow the Record header's Graph selector: muted leading label, a
           single outlined shell, and a plain chevron dropdown trigger. */}
       <InputGroup className="!w-auto max-w-full !flex-nowrap items-stretch overflow-hidden rounded-md border border-input bg-background text-xs shadow-none">
-        <InputGroupAddon align="inline-start" className="h-8 shrink-0 border-r bg-muted/40 px-2 text-muted-foreground">
+        <InputGroupAddon align="inline-start" className="h-7 shrink-0 border-r bg-muted/40 px-1.5 text-muted-foreground">
           <InputGroupText className="text-xs">Provider</InputGroupText>
         </InputGroupAddon>
         <DropdownMenu>
@@ -239,7 +239,7 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
             <button type="button" aria-label="Select approved Categories facet renderer"
               disabled={presentation.providers.length<=1}
               title={provider?.label??"Provider"}
-              className="inline-flex h-8 min-w-0 max-w-64 items-center gap-1 px-3 py-1.5 text-xs text-foreground hover:bg-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-70">
+              className="inline-flex h-7 min-w-0 max-w-40 items-center gap-1 px-2 py-1 text-xs text-foreground hover:bg-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-70">
               <span className="truncate">{provider?.label??"Provider"}</span>
               <ChevronDown className="size-3.5 shrink-0" aria-hidden="true"/>
             </button>
@@ -258,11 +258,11 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
         aria-label="Sunburst label layout controls">
         <ToggleGroup type="single" aria-label="Sunburst label layout" value={labelStyle}
           onValueChange={value=>{if(value==="radial" || value==="arc")setLabelStyle(value);}}
-          className="h-8 gap-0">
+          className="h-7 gap-0">
           <ToggleGroupItem unstyled value="radial" aria-label="Radial labels"
-            className="inline-flex h-8 min-w-14 items-center justify-center px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=on]:bg-accent data-[state=on]:text-foreground">Radial</ToggleGroupItem>
+            className="inline-flex h-7 min-w-10 items-center justify-center px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=on]:bg-accent data-[state=on]:text-foreground">Radial</ToggleGroupItem>
           <ToggleGroupItem unstyled value="arc" aria-label="Arc labels"
-            className="inline-flex h-8 min-w-14 items-center justify-center border-l border-input px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=on]:bg-accent data-[state=on]:text-foreground">Arc</ToggleGroupItem>
+            className="inline-flex h-7 min-w-10 items-center justify-center border-l border-input px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=on]:bg-accent data-[state=on]:text-foreground">Arc</ToggleGroupItem>
         </ToggleGroup>
       </InputGroup>
       <div className="flex min-w-[160px] flex-1 max-w-56 items-center gap-2" role="group" aria-label="Sunburst maximum radius">

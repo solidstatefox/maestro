@@ -28,7 +28,7 @@ export async function requestClientRecordPolicy(input:ClientRecordPolicyInput,si
       throw new Error("Record URI, SHACL shape, and bounded DESCRIBE triples are required.");
     const matches=await selectPersonal(`PREFIX mui: <${MUI}> SELECT DISTINCT ?policy WHERE {
       GRAPH ${shapes} { ?policy a mui:ClassPolicy ; mui:recordShape <${input.recordShape}> }
-    } LIMIT 40`,ctx,signal);
+    } LIMIT 40`,ctx,signal,"client-record-policies:requestClientRecordPolicy");
     const approvals=await readClientPolicyApprovals(matches.map(row=>row.policy?.value??"").filter(safe),signal);
     if(!approvals.some(row=>row.status==="Approved"))throw new Error("This SHACL policy has not been Approved.");
     return {report:await validateClientShaclRecord(input.recordShape,input.recordUri,input.triples,signal)};
@@ -48,7 +48,7 @@ export async function requestClientRecordPolicy(input:ClientRecordPolicyInput,si
         OPTIONAL { ?template rdfs:label ?templateLabel }
       }
     } } ORDER BY LCASE(STR(?policyLabel)) LCASE(STR(?templateLabel)) LIMIT 100`;
-  const rows=await selectPersonal(query,ctx,signal);
+  const rows=await selectPersonal(query,ctx,signal,"client-record-policies:requestClientRecordPolicy");
   const grouped=new Map<string,{uri:string;label:string;recordShape:string;matchedClasses:string[];templates:{uri:string;label:string;provider:string}[]}>();
   for(const row of rows){
     const uri=row.policy?.value??"",recordShape=row.recordShape?.value??"";

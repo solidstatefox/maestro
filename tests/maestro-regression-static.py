@@ -63,9 +63,10 @@ else:
 
 seed=read('src/lib/client-graph-seed.ts')
 check('personalContext()' in seed and 'updatePersonal(' in seed and '/maestro-seed/' in seed,
-      'browser graph seeding uses the authenticated SPARQL transport')
-check('seedPersonalGraphs(attempt.signal)' in read('src/canvas/controllers/authentication.ts'),
-      'successful login initiates personal graph seeding')
+      'graph seed module remains available but is not invoked during login')
+check('seedPersonalGraphs(' not in read('src/canvas/controllers/authentication.ts') and
+      'event.preventDefault()' in read('src/canvas/controllers/authentication.ts'),
+      'login submit remains inert and no graph seeding is invoked')
 check('SELECT DISTINCT ?provider ?kind ?pattern' in read('src/lib/client-kinds.ts'),
       'Kinds are discovered through provider RDF, not a TypeScript registry')
 check('RIBBON_ENTRY_FROM_BROWSE' in read('src/lib/app-lifecycle/operations.ts'),
@@ -77,9 +78,9 @@ check('const searchInputGroup = (' in read('src/canvas/utils/workspace-controlle
 check('bif:contains' in read('src/lib/uri-autocomplete-query.ts') and
       'ORDER BY DESC (<LONG::IRI_RANK>' in read('src/lib/uri-autocomplete-query.ts'),
       'root autocomplete uses its existing indexed ranked SPARQL query')
-check('const { clean, graphs, hasImplicitGraph } = inspectPersonalUpdateGraphs(update)' in
-      read('src/app/proxy/api/sparql/route.ts'),
-      'personal SPARQL Update graph authorization ignores embedded query literals')
+check('hasExplicitPersonalUpdateTemplates(structure)' in read('src/app/proxy/api/sparql/route.ts') and
+      'updatePersonalSparql(' not in read('src/app/proxy/api/sparql/route.ts'),
+      'personal SPARQL updates require explicit named graph templates')
 check('machine?.targetClasses instanceof Set' in read('src/lib/client-status-reads.ts'),
       'Record status projection rejects malformed machine definitions safely')
 check('state: "preparing" | "queued" | "active"' in read('src/lib/client-query-cache.ts'),

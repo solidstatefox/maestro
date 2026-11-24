@@ -21,7 +21,7 @@ test('Both perspectives have one shared search and page-navigation toolbar with 
   assert.match(source, /filtered\.slice\(currentPage \* pageSize/);
   assert.match(source, /aria-label=\{`\$\{kind\} entries per page`\}/);
   assert.match(source, /PERSPECTIVE_PAGE_SIZES\.map\(size =>/);
-  assert.match(source, /setPageSize\(Number\(event\.currentTarget\.value\)\)/);
+  assert.match(source, /setPageSize\(Number\(value\)\)/);
   assert.match(source, /aria-label=\{`\$\{kind\} search and pagination`\}/);
   assert.match(source, /aria-label="Previous page"/);
   assert.match(source, /aria-label="Next page"/);

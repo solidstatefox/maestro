@@ -106,8 +106,8 @@ test('reference validation rejects dangling IDs, self-dependencies, cycles and m
 });
 test('deleting a referenced node is blocked; deleting a self-contained subtree is allowed',()=>{
  const withDependent=tree([rel('b','urn:test:p',[value('c',{from:'d'})]),rel('d','urn:test:q')]);
- assert.equal(refs.dependentFctValueReferences(withDependent,'d').length,1);
- assert.equal(refs.dependentFctValueReferences(withDependent,'b').length,0);
+ assert.equal(refs.dependentFctNodeReferences(withDependent,'d').length,1);
+ assert.equal(refs.dependentFctNodeReferences(withDependent,'b').length,0);
 });
 test('the shared FCT query API retains stable binding IDs and rejects deleting referenced paths',()=>{
  const identity=loadTs('src/lib/fct-node-identity.ts');
@@ -141,7 +141,7 @@ test('Record XSLT numeric batch captures its document context beforehand and emb
  assert.match(block,/name="graph" select="\$runtimeGraph"/);
  const copies=[...ttl.matchAll(/mui:templateContent """([\s\S]*?)"""/g)];
  assert.equal(copies.length,3);
- for(const item of copies.slice(0,2))assert.equal(item[1].replace(/\\\\/g,'\\'),xsl);
+ for(const item of copies.slice(1,2))assert.equal(item[1].replace(/\\\\/g,'\\'),xsl);
 });
 test('Show Bookmarks cannot mount old transported facet listener or inspector against a new query',()=>{
  assert.match(read('src/canvas/workspace.tsx'),/personalWidgets\.filter\(\(widget\) =>/);
@@ -173,6 +173,77 @@ test('Query Tree offers Link only to unbound relationships, Pencil on bound valu
  const ui=read('src/canvas/utils/workspace-controller.tsx');
  assert.match(ui,/!node\.children\.some\(child=>child\.name==="value"\)/);
  assert.match(ui,/<Pencil className="size-4"\/>/);
- assert.match(ui,/dependentFctValueReferences\(queryTree,nodeId\)/);
+ assert.match(ui,/error instanceof FctNodeInUseError/);
  assert.match(read('src/lib/fct-query.ts'),/function assertFctNodeCanBeDeleted/);
+});
+
+
+test('Query Tree buttons are joined outline controls and transported anchors share the widget icon',()=>{
+ const ui=read('src/canvas/utils/workspace-controller.tsx');
+ const controls=ui.slice(ui.indexOf('<ButtonGroup className="ml-auto shrink-0 self-start" aria-label={`Query node controls'),ui.indexOf('</ButtonGroup>',ui.indexOf('<ButtonGroup className="ml-auto shrink-0 self-start" aria-label={`Query node controls')));
+ assert.equal((controls.match(/<Button\s+variant="outline" size="icon-sm"/g)||[]).length,3);
+ assert.match(controls,/<Button\s+variant="outline" size="icon-sm"[\s\S]*?−\s*<\/Button>/);
+ assert.doesNotMatch(controls,/<button\b/);
+ assert.match(ui,/node\.name === "a"\s*\? ExternalLink/);
+ assert.match(ui,/node\.name === "a"\s*\? queryTreeRelationshipIconColor\(queryTreePathIndex\.byId\.get\(node\.attributes\.href/);
+ assert.match(ui,/queryTreeRelationshipIconColor = [\s\S]*?child\.name === "view"[\s\S]*?"text-emerald-600 dark:text-emerald-400"[\s\S]*?"text-red-600 dark:text-red-400"/);
+ assert.match(read('src/canvas/left/personal-widget-cards.tsx'),/<ExternalLink className="inline size-4/);
+ assert.match(ui,/deleteNode: guardedDeleteQueryNode,/);
+ assert.match(ui,/blockedReferenceDeletion\?\.dependents\.map/);
+ assert.match(ui,/const resolved = getTransportedQueryTreePath\(ref\.anchorId, ref\.targetId\)/);
+ assert.match(ui,/resolved \? pathLabel\(resolved\.path\)/);
+ assert.match(ui,/blockedReferenceDeletion\?\.hrefLabels\[ref\.anchorId\]/);
+ assert.match(ui,/return owner \? getPath\(queryTreePathIndex, owner, href\) : null/);
+});
+
+test('EURIO transported href blocks deleting its target and each ancestor; removing the facet unlocks the path',()=>{
+ const identity=loadTs('src/lib/fct-node-identity.ts');
+ const store=loadTs('src/lib/fct-query.ts',{
+  react:{useMemo:x=>x,useSyncExternalStore:()=>({})},
+  './fct-node-identity':identity,
+  './fct-query-clone':{cloneFctQueryTree:source=>structuredClone(source)},
+  './fct-query-serialize':{serializeFctQuery:()=>'<query/>'},
+  './fct-value-references':refs,
+ });
+ const query=tree([
+  node('a3','property',{iri:'http://data.europa.eu/s66#hasEuroSciVocClassification',rid:'i'},[
+   value('a4',{datatype:'uri'},'http://data.europa.eu/8mn/euroscivoc/61bab820-648f-4f84-9f2d-71b5f80c5835'),
+   node('a6','property',{iri:'http://www.w3.org/2008/05/skos-xl#altLabel',rid:'k'},[
+    node('a8','property',{iri:'http://www.w3.org/2008/05/skos-xl#literalForm',rid:'m'},[value('aa',{'xml:lang':'en'},'linguistic')])])]),
+  node('a9','a',{href:'a8'}),node('a2','view',{type:'list',limit:'30',offset:'0'})]);
+ Object.assign(query.attributes,{ctr:'371',uctr:'a',rctr:'n',addr:'$ALL$@https://cordis.europa.eu/datalab/sparql'});
+ const before=JSON.stringify(query);
+ const api=store.fctQueryTreeApi;
+ for (const target of ['a3','a6','a8']) {
+  for (const operation of [api.deleteNode,api.removeNode]) {
+   assert.throws(()=>operation(query,target),error=>{
+    assert.ok(error instanceof refs.FctNodeInUseError);
+    assert.equal(error.nodeId,target);
+    assert.deepEqual(error.dependents,[{kind:'href',anchorId:'a9',sourceId:'a',targetId:'a8'}]);
+    assert.ok(error.message.includes('<a id="a9" href="a8"/>'));
+    return true;
+   });
+  }
+  assert.equal(JSON.stringify(query),before);
+ }
+ // Clearing only the bound value is allowed; the relationship remains.
+ assert.equal(api.deleteNode(query,'aa').children[0].children[1].children[0].id,'a8');
+ const unlinked=api.deleteNode(query,'a9');
+ assert.ok(unlinked.children.some(n=>n.id==='a3'));
+ const removed=api.deleteNode(unlinked,'a3');
+ assert.ok(!removed.children.some(n=>n.id==='a3'||n.name==='a'));
+ assert.equal(removed.children.find(n=>n.name==='view').id,'a2');
+});
+
+test('dependency results list all external href, from and fromView links, excluding internal references',()=>{
+ const sample=tree([
+  rel('b','urn:test:path',[rel('d','urn:test:target'),node('e','a',{href:'d'})]),
+  rel('f','urn:test:from',[value('g',{from:'d'})]),
+  rel('h','urn:test:fromView',[value('i',{fromView:'b'})]),
+  node('j','a',{href:'d'}),node('k','a',{href:'b'}),node('l','view',{type:'list'})]);
+ const deps=refs.dependentFctNodeReferences(sample,'b');
+ assert.deepEqual(deps.map(refs.describeDeletionReference),[
+  '<value id="g" from="d"/>','<value id="i" fromView="b"/>','<a id="j" href="d"/>','<a id="k" href="b"/>']);
+ assert.equal(refs.dependentFctNodeReferences(sample,'j').length,0);
+ assert.deepEqual(refs.dependentFctNodeReferences(tree([sample.children[0]]),'b'),[]);
 });

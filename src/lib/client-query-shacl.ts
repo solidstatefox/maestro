@@ -36,7 +36,7 @@ async function shapeRows(ctx: PersonalContext, shape: string, signal: AbortSigna
 SELECT DISTINCT ?s ?p ?o WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
  ${safe(shape)} (sh:property|sh:in|sh:or|sh:and|sh:xone|sh:not|sh:node|sh:qualifiedValueShape|sh:path|sh:alternativePath|sh:inversePath|sh:zeroOrMorePath|sh:oneOrMorePath|sh:zeroOrOnePath|rdf:first|rdf:rest)* ?s .
  ?s ?p ?o .
-} } LIMIT ${limit}`, ctx, signal);
+} } LIMIT ${limit}`, ctx, signal, "QueryContextValidation:Shapes");
   if (rows.length === limit) throw new Error("SHACL shape exceeds the safe size; validation incomplete.");
   if (!rows.length) throw new Error(`SHACL shape ${shape} is missing from the personal graph.`);
   return rows as Row[];
@@ -96,7 +96,7 @@ export async function validateCurrentHistoryQuery(historyId: string, queryXml: s
   const visits=await selectPersonal(`PREFIX vfct: <${VFCT}> PREFIX bookmark: <${BOOKMARK}>
 SELECT ?root ?xml WHERE { GRAPH ${historyGraph} {
   ${safe(historyId)} a vfct:QueryHistoryVisit ; vfct:historyQueryXML ?xml ; bookmark:recalls ?root .
-} } LIMIT 2`,ctx,signal) as Row[];
+} } LIMIT 2`,ctx,signal,"QueryContextValidation:History") as Row[];
   if(visits.length!==1 || !visits[0].root?.value || !visits[0].xml?.value)
     throw new Error("Current History visit is missing its structured query RDF; legacy XML-only visits are unsupported.");
   const root=visits[0].root.value;safe(root);
@@ -105,7 +105,7 @@ SELECT ?root ?xml WHERE { GRAPH ${historyGraph} {
   const dataRows=await selectPersonal(`PREFIX vfct: <${VFCT}> PREFIX bookmark: <${BOOKMARK}> SELECT ?s ?p ?o WHERE { GRAPH ${historyGraph} {
     ${safe(historyId)} bookmark:recalls ${safe(root)} .
     ${safe(root)} (vfct:child|vfct:attribute)* ?s . ?s ?p ?o .
-  } } LIMIT 10001`, ctx,signal) as Row[];
+  } } LIMIT 10001`, ctx,signal,"QueryContextValidation:Data") as Row[];
   if (!dataRows.length || dataRows.length >=10001) throw new Error("History query RDF is empty or incomplete.");
   const data:Triple[]=dataRows.filter(row=>row.s?.value && row.p?.value && row.o?.value!==undefined).map(row=>({
     subject:row.s.value!, predicate:row.p.value!, object:row.o.value!, type:row.o.type??"literal",datatype:row.o.datatype,lang:row.o["xml:lang"] }));
@@ -115,12 +115,14 @@ SELECT ?root ?xml WHERE { GRAPH ${historyGraph} {
 SELECT DISTINCT ?shape WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
  ?shape a sh:NodeShape .
  FILTER NOT EXISTS { ?provider mui:accepts ?shape }
- { ?shape sh:targetNode ${safe(root)} }
- UNION { ?shape sh:targetClass vfct:query }
- UNION { ?shape sh:targetSubjectsOf ?p . FILTER EXISTS { GRAPH ${historyGraph} { ${safe(root)} ?p ?o } } }
- UNION { ?shape sh:targetObjectsOf ?p . FILTER EXISTS { GRAPH ${historyGraph} { ?s ?p ${safe(root)} } } }
+ FILTER(
+   EXISTS { ?shape sh:targetNode ${safe(root)} } ||
+   EXISTS { ?shape sh:targetClass vfct:query } ||
+   EXISTS { ?shape sh:targetSubjectsOf ?p . GRAPH ${historyGraph} { ${safe(root)} ?p ?o } } ||
+   EXISTS { ?shape sh:targetObjectsOf ?p . GRAPH ${historyGraph} { ?s ?p ${safe(root)} } }
+ )
 } } ORDER BY ?shape LIMIT 101`;
-  const targets=await selectPersonal(targetQuery,ctx,signal);
+  const targets=await selectPersonal(targetQuery,ctx,signal,"QueryContextValidation:Targets");
   if(targets.length>=101) throw new Error("Too many query-context SHACL shapes; discovery incomplete.");
   if(!targets.length) throw new Error("No SHACL shape targets the current History query RDF. Seed the query-context shape.");
   const reports:ShaclValidationReport[]=[];
@@ -135,12 +137,14 @@ SELECT DISTINCT ?shape WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.b
   const providerRows=await selectPersonal(`PREFIX sh: <${SH}> PREFIX mui: <${MUI}> PREFIX vfct: <${VFCT}>
 SELECT DISTINCT ?provider ?shape WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
  ?provider a mui:Provider ; mui:accepts ?shape .
- { ?shape sh:targetClass vfct:query }
- UNION { ?shape sh:class vfct:query }
- UNION { ?shape sh:targetNode ${safe(root)} }
- UNION { ?shape sh:targetSubjectsOf ?p . FILTER EXISTS { GRAPH ${historyGraph} { ${safe(root)} ?p ?o } } }
- UNION { ?shape sh:targetObjectsOf ?p . FILTER EXISTS { GRAPH ${historyGraph} { ?s ?p ${safe(root)} } } }
-} } LIMIT 101`,ctx,signal);
+ FILTER(
+   EXISTS { ?shape sh:targetClass vfct:query } ||
+   EXISTS { ?shape sh:class vfct:query } ||
+   EXISTS { ?shape sh:targetNode ${safe(root)} } ||
+   EXISTS { ?shape sh:targetSubjectsOf ?p . GRAPH ${historyGraph} { ${safe(root)} ?p ?o } } ||
+   EXISTS { ?shape sh:targetObjectsOf ?p . GRAPH ${historyGraph} { ?s ?p ${safe(root)} } }
+ )
+} } LIMIT 101`,ctx,signal,"QueryContextValidation:Providers");
   if(providerRows.length>=101) throw new Error("More than 100 query-target providers; discovery incomplete.");
   const matches:string[]=[];
   for(const row of providerRows){if(signal.aborted)throw signal.reason;const provider=row.provider?.value??"",shape=row.shape?.value??"";

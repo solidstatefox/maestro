@@ -8,8 +8,6 @@ import type { ProviderKind } from "@/lib/provider-catalog-xslt";
 /** State owned by the view subsystem. Query-tree mutations still use the authoritative FCT store. */
 export function useViewState() {
   const [selectedViewUri, setSelectedViewUri] = useState("");
-  const [viewDiscoveryLoading, setViewDiscoveryLoading] = useState(false);
-  const [viewDiscoveryError, setViewDiscoveryError] = useState("");
   const [viewPanel, setViewPanel] = useState<"trail" | "perspectives" | "providers">("perspectives");
   const [viewProvider, setViewProvider] = useState<ProviderKind | null>(null);
   const [viewDiscoveryController] = useState(createMaestroViewDiscoveryController);
@@ -18,20 +16,14 @@ export function useViewState() {
   const [providerCatalogController] = useState(createMaestroProviderCatalogController);
   const providerCatalogSnapshot = useSyncExternalStore(providerCatalogController.subscribe, providerCatalogController.getSnapshot, providerCatalogController.getSnapshot);
   useLayoutEffect(() => { providerCatalogController.start(); return () => providerCatalogController.stop(); }, [providerCatalogController]);
-  const [viewHtml, setViewHtml] = useState("");
-  const [viewXsltMetadata, setViewXsltMetadata] = useState<{ title?: string; icon?: string }>({});
+  const [viewRenderResult, setViewRenderResult] = useState({ key: "", html: "", error: "" });
   const [viewDomainRanks, setViewDomainRanks] = useState<Record<string, string>>({});
-  const [viewRenderError, setViewRenderError] = useState("");
   const [viewServerSoftware, setViewServerSoftware] = useState<Record<string, { product: string; version: string }>>({});
   const [viewServerDescriptions, setViewServerDescriptions] = useState<Record<string, string>>({});
 
   return {
     selectedViewUri,
     setSelectedViewUri,
-    viewDiscoveryLoading,
-    setViewDiscoveryLoading,
-    viewDiscoveryError,
-    setViewDiscoveryError,
     viewPanel,
     setViewPanel,
     viewProvider,
@@ -40,14 +32,10 @@ export function useViewState() {
     viewDiscoverySnapshot,
     providerCatalogController,
     providerCatalogSnapshot,
-    viewHtml,
-    setViewHtml,
-    viewXsltMetadata,
-    setViewXsltMetadata,
+    viewRenderResult,
+    setViewRenderResult,
     viewDomainRanks,
     setViewDomainRanks,
-    viewRenderError,
-    setViewRenderError,
     viewServerSoftware,
     setViewServerSoftware,
     viewServerDescriptions,

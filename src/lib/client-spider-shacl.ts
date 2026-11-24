@@ -50,7 +50,7 @@ export async function validateSpiderCore(axes: readonly SpiderAxis[], rows: read
 SELECT ?s ?p ?o WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
   { BIND(<${shapeUri}> AS ?s) ?s ?p ?o }
   UNION { <${shapeUri}> sh:property ?s . ?s ?p ?o }
-} } LIMIT 129`, ctx, signal) as Row[];
+} } LIMIT 129`, ctx, signal,"client-spider-shacl:validateSpiderCore") as Row[];
   if (!bindings.length || bindings.length >= 129 || !bindings.some(row => row.p?.value === `${SH}property`)) {
     throw new Error("Spider's approved numeric-query SHACL shape is missing or incomplete in the personal policy graph.");
   }

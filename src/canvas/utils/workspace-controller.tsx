@@ -1,4 +1,7 @@
 "use client";
+import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
+
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
@@ -14,8 +17,11 @@ import { readUriAutocompleteSettings } from "@/lib/uri-autocomplete-settings";
 import { parseRootUri } from "@/lib/root-uri-policy";
 import { mergeBreadcrumbSummaries, reconcileBreadcrumbSummaries, reconcileBreadcrumbPendingIds } from "@/lib/breadcrumb-preview-state";
 import { createRootUriGateController, rootUriGateState } from "@/lib/app-lifecycle/root-uri-gate";
+import { createMaestroReferencePickerController } from "@/lib/app-lifecycle/value-reference-picker";
+import "driver.js/dist/driver.css";
 import { listenForMaestroCopies, readRecentlyCopiedText } from "@/lib/recent-clipboard";
 import { resetMaestroKinds } from "@/lib/client-kinds";
+import { initializeBrowserGraphAssets } from "@/lib/client-graph-seed";
 import { isAbsoluteFacetIri } from "@/lib/fct-facet-iri";
 import { NODE_ANALYTICS_ANALYSIS_URI } from "@/lib/overview-analytics-ids";
 import { OVERVIEW_PERSPECTIVE_URI } from "@/lib/overview-metrics";
@@ -36,7 +42,7 @@ import { providerItemsFromFct } from "@/lib/provider-catalog-items";
 import { readRecordGraphAuthors } from "@/lib/record-authors";
 import { discoverAnalyses, discoverViews } from "@/lib/personal-sparql-reads";
 import { providerCatalogGraph, historyGraph } from "@/lib/graph-context";
-import { PERSONAL_PERSPECTIVE_URI, personalPerspectiveMatchesQuery } from "@/lib/personal-perspective-ids";
+import { PERSONAL_PERSPECTIVE_URI, personalPerspectiveFromUri, personalPerspectiveMatchesQuery } from "@/lib/personal-perspective-ids";
 
 
 import { callOpenApiService } from "@/lib/service-client";
@@ -58,6 +64,7 @@ import { useResultsState } from "@/canvas/controllers/results";
 import { usePersonalRecordStatus } from "@/canvas/controllers/personal-record-status";
 import type { StatusFacetName } from "@/lib/personal-status-vocabulary";
 import { selectMaestroCapabilities } from "@/lib/app-lifecycle/access";
+import { classifyPersonalHttpState } from "@/lib/personal-session-hint";
 import { useMaestroAccess } from "@/canvas/diagnostics/use-maestro-access";
 import { useMaestroOperations } from "@/canvas/diagnostics/use-maestro-operations";
 import { useRecordState } from "@/canvas/controllers/record";
@@ -105,7 +112,7 @@ import { decodeFctFacetGroupRows } from "@/lib/group-projection-contract";
 import { FCT_VIEW_TYPES, type FctViewType } from "@/lib/fct-view-types";
 import { findGroupCarrier, groupKeyFromCarrier, markFctGroup, markTransportedGroup, ungroupForMembers } from "@/lib/fct-groups-carrier";
 import { snapshotFctQueryXml } from "@/lib/fct-query-api";
-import { activeTransportedFacets, resolveTransportedFacets, transportedAnchorPath, toggleTransportedAnchor } from "@/lib/fct-facet-alias";
+import { activeTransportedFacets, resolveTransportedFacets, transportedAnchorPath, toggleTransportedAnchor, sameTransportedFacetIdentity } from "@/lib/fct-facet-alias";
 import { getPath, indexFctPaths } from "@/lib/fct-get-path";
 import { propertyUsageNavigation, type PropertyUsageDirection } from "@/lib/property-usage-query";
 import type { FctValue } from "@/lib/fct-query-api";
@@ -154,13 +161,13 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarImage, AvatarFallback, AvatarBadge } from "@/components/ui/avatar";
 import { Toggle } from "@/components/ui/toggle";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Toaster, toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
-import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightLeft, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Signal, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, EqualApproximately, Regex, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info, Table2, TableProperties, ChartColumn, Server, Database, Globe, LayoutGrid, FileCode2, ArrowLeftRight, Blocks, WandSparkles, ExternalLink, Pencil } from "lucide-react";
+import { Ban, Bot, Check, ChevronDown, ChevronRight, ChevronLeft, ChevronsRightLeft, ChevronsDownUp, ChevronsUpDown, CircleSlash, Code2, Focus, List, MousePointerClick, Network, Settings, Link, SearchCode, SignalHigh, SignalLow, SignalMedium, SignalZero, Signal, Tag, Tags, Trash, Trash2, UsersRound, BetweenHorizontalStart, BetweenHorizontalEnd, ListTree, CornerDownLeft, CirclePlay, AtSign, Shapes, X, Slash, GlobeCode, LoaderCircle, ArrowDown01, ArrowDown10, ArrowDownAZ, ArrowDownZA, ArrowLeft, ArrowRight, ClockArrowRight, Equal, EqualApproximately, Regex, RotateCcw, RotateCw, RefreshCw, Bookmark, History, BadgeCheck, BadgeAlert, BadgeX, BadgeQuestionMark, SquarePlus, SquareX, SquareCheck, User, LogIn, LogOut, KeyRound, ShieldCheck, ClipboardCheck, ClipboardList, CircleFadingCheck, Download, Upload, Eye, EyeOff, Info, Table2, TableProperties, ChartColumn, Server, Database, Globe, LayoutGrid, FileCode2, ArrowLeftRight, Blocks, WandSparkles, Pencil, ExternalLink } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
-import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, buildAuthHeader, graphForPrefix, AUTH_EXPECTED_KEY } from "@/lib/personal-auth";
+import { PersonalAuthSession, AuthType, loadPersonalAuthSession, savePersonalAuthSession, clearPersonalAuthSession, buildAuthHeader, graphForPrefix } from "@/lib/personal-auth";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
 import { PERSONAL_SPARQL_HEALTH_EVENT } from "@/lib/client-personal-sparql";
 import { MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, MAESTRO_GRAPH_SERVER_TRANSPORT_FAILURE, abortPendingMaestroQueries, stopPendingMaestroQueries, resumePendingMaestroQueries, cachedFetchFct, clearClientQueryCache, maestroQueryFetch } from "@/lib/client-query-cache";
@@ -184,12 +191,13 @@ import { chooseStartupGraphServer, createBlankStartupQuery, prepareInitialFctQue
 import { Progress } from "@/components/ui/progress";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CodeBlock } from "@/components/ui/code-block";
+import { reportRecordPerformance } from "@/lib/record-performance";
 import { transformMaestroRecordXslt, transformMaestroQueryXslt } from "@/lib/maestro-xslt";
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
-import { inspectFctValueReferences, dependentFctValueReferences, type ValueReference } from "@/lib/fct-value-references";
+import { inspectFctValueReferences, FctNodeInUseError, deletionReferenceId, describeDeletionReference, type NodeDeletionReference } from "@/lib/fct-value-references";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import xmlFormat from "xml-formatter";
 import hljs from "highlight.js/lib/core";
@@ -272,6 +280,11 @@ const TEXT_SEARCH_NAME_PROPERTIES = [
 
 /** Shared workspace lifecycle and query orchestration. The FCT query API remains authoritative. */
 export function useWorkspaceController() {
+  // Browser-local RDF hydration is first and never waits for login. Remote
+  // personal-graph seeding remains an independent, authenticated operation.
+  useEffect(() => { void initializeBrowserGraphAssets().catch(error =>
+    browserLog.warn("graph.local-assets.unavailable", error)); }, []);
+
   // Each component retries its own existing cloned FCT query. The Browse URL,
   // query store and global refresh generation remain unchanged.
   const retryProperties = useMaestroComponentRetry("properties");
@@ -300,7 +313,8 @@ export function useWorkspaceController() {
   useEffect(() => { if (!authSession) resetMaestroKinds(); }, [authSession]);
   const {
     deleteHistoryDialogOpen, setDeleteHistoryDialogOpen, isDeletingHistory, setIsDeletingHistory,
-    isLoadingHistoryQuery, setIsLoadingHistoryQuery, historyHasOlder, setHistoryHasOlder,
+    isLoadingHistoryQuery, setIsLoadingHistoryQuery, historyLoadingTarget, setHistoryLoadingTarget,
+    historyHasOlder, setHistoryHasOlder,
     historyHasNewer, setHistoryHasNewer,
     historyActionItems, setHistoryActionItems, historyActionMenu, setHistoryActionMenu,
     historyHoverTimerRef, isDeletingCurrentHistory, setIsDeletingCurrentHistory, historyVisitQueryRef,
@@ -341,13 +355,55 @@ export function useWorkspaceController() {
   // Only transient pointer position is React state. A transported anchor is
   // committed atomically to the authoritative FCT query on Shift+click.
   const [hoveredTransportedTargetId, setHoveredTransportedTargetId] = useState<string | null>(null);
-  const [valueReferenceEditor, setValueReferenceEditor] = useState<{
-    parentId:string; valueId:string | null; mode:"from"|"fromView"|"constant";
-    targetId:string; text:string; datatype:string; lang:string; op:string;
-  } | null>(null);
+  const [referencePicker] = useState(createMaestroReferencePickerController);
+  const referencePickerSnapshot = useSyncExternalStore(referencePicker.subscribe, referencePicker.getSnapshot, referencePicker.getSnapshot);
+  const valueReferenceEditor = referencePickerSnapshot.context.draft;
+  const pickingReferenceTarget = referencePickerSnapshot.matches("pickingReferenceTarget");
+  useEffect(() => { referencePicker.start(); return () => referencePicker.stop(); }, [referencePicker]);
+  useEffect(() => {
+    if (!pickingReferenceTarget) return;
+    let disposed = false;
+    let spotlight: { destroy(): void } | null = null;
+    void import("driver.js").then(({ driver }) => {
+      if (disposed) return;
+      const pane = document.getElementById("central-panel-query-tree");
+      if (!pane) { referencePicker.cancelPicking(); return; }
+      const instance = driver({
+        allowClose: false,
+        overlayClickBehavior: "none",
+        disableActiveInteraction: false,
+        allowKeyboardControl: false,
+        stagePadding: 2,
+        stageRadius: 6,
+        showProgress: false,
+        focus: "element",
+        scrollIntoView: false,
+        overlayOpacity: 0.72,
+      });
+      instance.highlight({ element: pane });
+      spotlight = instance;
+    }).catch(() => { if (!disposed) referencePicker.cancelPicking(); });
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); referencePicker.cancelPicking(); }
+    };
+    const enforceTreeFocus = (event: FocusEvent) => {
+      const pane = document.getElementById("central-panel-query-tree");
+      if (pane && event.target instanceof Node && !pane.contains(event.target)) {
+        (pane.querySelector<HTMLElement>("[data-maestro-reference-cancel]") ?? pane).focus();
+      }
+    };
+    document.addEventListener("keydown", onEscape, true);
+    document.addEventListener("focusin", enforceTreeFocus, true);
+    return () => {
+      disposed = true;
+      document.removeEventListener("keydown", onEscape, true);
+      document.removeEventListener("focusin", enforceTreeFocus, true);
+      spotlight?.destroy();
+    };
+  }, [pickingReferenceTarget, referencePicker]);
   const [valueReferenceError, setValueReferenceError] = useState("");
   const [blockedReferenceDeletion, setBlockedReferenceDeletion] = useState<{
-    nodeId:string; dependents:ValueReference[];
+    nodeId:string; dependents:NodeDeletionReference[]; hrefLabels: Record<string, string>;
   } | null>(null);
   const [rootAutocompleteInspectorOpen, setRootAutocompleteInspectorOpen] = useState(false);
   const [rootAutocompleteInspection, setRootAutocompleteInspection] = useState<{
@@ -398,6 +454,16 @@ export function useWorkspaceController() {
     searchPipelineRun, setSearchPipelineRun, initialBrowseTriggered, setInitialBrowseTriggered,
   } = useResultsState();
   const { controller: accessController, snapshot: accessSnapshot, sessionKey: accessSessionKey } = useMaestroAccess(authSession, authRestoreComplete, personalPoliciesReady, personalPoliciesSeedError);
+  const previousPersonalSession = useRef(authSession);
+  useLayoutEffect(() => {
+    const previous = previousPersonalSession.current;
+    previousPersonalSession.current = authSession;
+    if (!previous || previous === authSession) return;
+    historyVisitQueryRef.current = "";
+    historyVisitIdRef.current = "";
+    pendingHistoryVisitRef.current = null;
+    setHistoryBookmarkId("");
+  }, [authSession,historyVisitQueryRef,historyVisitIdRef,pendingHistoryVisitRef,setHistoryBookmarkId]);
   const personalStoreReady = selectMaestroCapabilities(accessSnapshot).canUsePersonalStore;
   const policyProvidersReady = selectMaestroCapabilities(accessSnapshot).canUsePolicyProviders;
   const [navigationTransactions] = useState(createMaestroNavigationTransactionController);
@@ -419,12 +485,10 @@ export function useWorkspaceController() {
     setFormatterHasEnrichment, attemptedFormatterEnrichmentRef, recordLifecycle,
   } = useRecordState();
   const {
-    selectedViewUri, setSelectedViewUri, viewDiscoveryLoading, setViewDiscoveryLoading,
-    viewDiscoveryError, setViewDiscoveryError, viewPanel, setViewPanel,
+    selectedViewUri, setSelectedViewUri, viewPanel, setViewPanel,
     viewProvider, setViewProvider, providerCatalogController, providerCatalogSnapshot, viewDiscoveryController, viewDiscoverySnapshot,
-    viewHtml, setViewHtml,
-    viewXsltMetadata, setViewXsltMetadata, viewDomainRanks, setViewDomainRanks,
-    viewRenderError, setViewRenderError, viewServerSoftware, setViewServerSoftware,
+    viewRenderResult, setViewRenderResult,
+    viewDomainRanks, setViewDomainRanks, viewServerSoftware, setViewServerSoftware,
     viewServerDescriptions, setViewServerDescriptions,
   } = useViewState();
   const [providerLifecyclePhase, reportProviderLifecycle] = useState("unobserved");
@@ -804,7 +868,8 @@ useEffect(() => {
   }, [queryTreeHeightPercent, queryTreeHeightLoaded]);
 
   // Restore personal authentication session on load.
-  useAuthenticationSessionLifecycle({ authSession, setAuthSession, setAuthRestoreIssue, setLoginGraphStore, setPersonalSparqlEndpoint, setLoginGraphPrefix, setLoginTab, setLoginUsername, setLoginPassword, setLoginOauthToken, setLoginOauthProfileUrl, setLoginOauthUserName, setLoginWebIdUri, setFetchedAvatarUrl, setAuthRestoreComplete, setPersonalPoliciesReady, setPersonalPoliciesSeedError });
+  const authenticationLifecycle = { setManagedEndpoints, authSession, setAuthSession, setAuthRestoreIssue, setLoginGraphStore, setPersonalSparqlEndpoint, setLoginGraphPrefix, setLoginTab, setLoginUsername, setLoginPassword, setLoginOauthToken, setLoginOauthProfileUrl, setLoginOauthUserName, setLoginWebIdUri, setFetchedAvatarUrl, setAuthRestoreComplete, setPersonalPoliciesReady, setPersonalPoliciesSeedError, setLoginDialogOpen, setLoginError, setLoginTesting: (pending:boolean|((previous:boolean)=>boolean)) => { const next=typeof pending==="function"?pending(loginTesting):pending;setLoginTesting(next);accessController.send({type:"LOGIN_ACTIVITY",pending:next}); } };
+  useAuthenticationSessionLifecycle(authenticationLifecycle);
 
   
 
@@ -1157,40 +1222,13 @@ useEffect(() => {
   
 
   const { handleFetchProfile, handleTestConnection, handleLoginSubmit, handleRetryPersonalInitialization } = createAuthenticationActions({
-    authSession,
-    loginTab,
-    loginOauthProfileUrl,
-    loginWebIdUri,
-    setIsFetchingAvatar,
-    setFetchedAvatarUrl,
-    loginOauthUserName,
-    setLoginOauthUserName,
-    loginGraphStore,
-    loginGraphPrefix,
-    loginUsername,
-    loginPassword,
-    fetchedAvatarUrl,
-    loginOauthToken,
-    setLoginTesting: (next: boolean | ((previous: boolean) => boolean)) => {
-      // Preserve React's Dispatch<SetStateAction<boolean>> contract. Login
-      // transitions remain the authority for the Sheet cache-clear gate.
-      const pending = typeof next === "function" ? next(loginTesting) : next;
-      setLoginTesting(pending);
-      accessController.send({ type: "LOGIN_ACTIVITY", pending });
+    ...authenticationLifecycle,
+    loginTab, loginGraphStore, loginGraphPrefix, loginUsername, loginPassword,
+    onConnectChallengeSent: () => accessController.send({ type: "AUTH_CHALLENGE_SENT" }),
+    onConnectHttpStatus: status => {
+      accessController.send({ type: "AUTH_STATUS_OBSERVED", sessionKey: accessController.getSnapshot().context.sessionKey,
+        state: classifyPersonalHttpState(status), status, at: Date.now() });
     },
-    setLoginError,
-    setLoginGraphStore,
-    setLoginGraphPrefix,
-    setLoginUsername,
-    setLoginPassword,
-    setPersonalPoliciesReady,
-    setPersonalPoliciesSeedError,
-    setAuthSession,
-    setAuthRestoreIssue,
-    setPersonalSparqlEndpoint,
-    setLoginDialogOpen,
-    setEndpointReloadRevision,
-    setBookmarkCheckRevision
   });
   
   
@@ -1621,7 +1659,8 @@ useEffect(() => {
   // public courtesy aliases. Login/reseeding and Perspective mutations refresh
   // it; XState readiness gates the whole operation.
   useEffect(() => {
-    if (!personalStoreReady || !authSession) { setManagedEndpoints([]); return; }
+    if (!authSession) { setManagedEndpoints([]); return; }
+    if (!personalStoreReady) return;
     let cancelled = false;
     const refresh = () => { void (async () => {
       try {
@@ -1635,9 +1674,8 @@ useEffect(() => {
         if (!cancelled) browserLog.warn("graph-servers.personal-registry.unavailable", error);
       }
     })(); };
-    void ensureLoggedInPersonalServer().then(refresh).catch(error => {
-      if (!cancelled) browserLog.warn("graph-servers.personal-register.failed", error);
-    });
+    // Startup restoration already fetched the directory; no RDF registration/write.
+    // Subsequent explicit directory changes can refresh the existing projection.
     window.addEventListener(PERSONAL_SERVERS_CHANGED, refresh);
     return () => { cancelled = true; window.removeEventListener(PERSONAL_SERVERS_CHANGED, refresh); };
   }, [authSession, personalStoreReady, setManagedEndpoints]);
@@ -1664,25 +1702,38 @@ useEffect(() => {
         const stored = readGraphServerDirectory();
         setFctEndpoints(flattenGraphServerDirectory({ ...stored,
           groups: Object.fromEntries(Object.entries(stored.groups).filter(([group]) => group !== "Shared")) }));
-        const probe = await fetch("/proxy/api/service", { method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-menu-digest", "GraphServerCourtesyDigest") },
-          body: JSON.stringify({service:"maestroTransport",operationId:"courtesyGraphServers",
-            payload:{action:"check",digest:stored.courtesyDigest}}) });
-        if (!probe.ok) throw new Error(`Graph-server courtesy digest HTTP ${probe.status}`);
-        const version = await probe.json() as {digest?: string;changed?: boolean};
-        if (cancelled || version.changed === false) return;
-        const response = await fetch("/proxy/api/service", { method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("endpoint-menu", "GraphServerCourtesyList") },
-          body: JSON.stringify({service:"maestroTransport",operationId:"courtesyGraphServers",
-            payload:{action:"list"}}) });
-        if (!response.ok) throw new Error(`Graph-server courtesy list HTTP ${response.status}`);
-        const data = await response.json() as {digest?: string;endpoints?: EndpointOption[]};
-        if (cancelled) return;
-        if (!data.digest || data.digest !== version.digest || !Array.isArray(data.endpoints))
-          throw new Error("Graph-server courtesy-list digest changed during download.");
-        const updated = replaceCourtesyGraphServers(data.digest, data.endpoints);
+        const service = async (action:"check"|"list", digest?:string) => {
+          const response=await fetch("/proxy/api/service", {method:"POST",cache:"no-store",
+            headers:{"Content-Type":"application/json", ...proxyDebugHeaders(
+              action==="check"?"endpoint-menu-digest":"endpoint-menu",
+              action==="check"?"GraphServerCourtesyDigest":"GraphServerCourtesyList")},
+            body:JSON.stringify({service:"maestroTransport",operationId:"courtesyGraphServers",
+              payload:action==="check"?{action,digest}:{action}})});
+          if(!response.ok)throw new Error(`Graph-server courtesy ${action} HTTP ${response.status}`);
+          return response.json() as Promise<{digest?:string;changed?:boolean;endpoints?:EndpointOption[]}>;
+        };
+        const hasCourtesy=Object.entries(stored.groups).some(([group,entries])=>group!=="Shared"&&entries.length>0);
+        // A fresh browser has no digest: go directly to the complete list.
+        // If a cached handshake fails, list recovery must still work unauthenticated.
+        let version:{digest?:string;changed?:boolean}|null=null;
+        if(stored.courtesyDigest && hasCourtesy) {
+          try { version=await service("check",stored.courtesyDigest); }
+          catch(error) { browserLog.warn("graph-servers.courtesy.check-failed",error); }
+        }
+        if(cancelled || (version?.changed===false && hasCourtesy))return;
+        let data:{digest?:string;endpoints?:EndpointOption[]}|null=null;
+        for(let attempt=0;attempt<2&&!cancelled;attempt++){
+          try { data=await service("list");break; }
+          catch(error) { if(attempt===1)throw error; }
+        }
+        if(cancelled)return;
+        if(!data?.digest || !Array.isArray(data.endpoints))
+          throw new Error("Graph-server courtesy-list response is invalid.");
+        // Prefer the complete list's own digest: a failed/stale check can never
+        // prevent a fresh client from joining the courtesy catalog.
+        const updated=replaceCourtesyGraphServers(data.digest,data.endpoints);
         setFctEndpoints(flattenGraphServerDirectory({ ...updated,
-          groups: Object.fromEntries(Object.entries(updated.groups).filter(([group]) => group !== "Shared")) }));
+          groups:Object.fromEntries(Object.entries(updated.groups).filter(([group])=>group!=="Shared")) }));
         setEndpointMenuError("");
       } catch (error) {
         // A courtesy directory is never a prerequisite for public reads.
@@ -1853,11 +1904,7 @@ useEffect(() => {
           : baseLabel;
         const existing = existingByKey.get(key);
         if (existing) {
-          const sameAnchor = !anchor && !existing.anchor || Boolean(anchor && existing.anchor &&
-            anchor.id === existing.anchor.id && anchor.href === existing.anchor.href &&
-            anchor.parentId === existing.anchor.parentId &&
-            anchor.path.map(step => `${step.id}|${step.iri}|${step.direction}`).join("/") ===
-              existing.anchor.path.map(step => `${step.id}|${step.iri}|${step.direction}`).join("/"));
+          const sameAnchor = sameTransportedFacetIdentity(anchor, existing.anchor);
           return sameAnchor && existing.label === label && existing.excluded === excluded &&
             existing.selectedValues.length === boundValues.length &&
             existing.selectedValues.every(
@@ -1885,11 +1932,7 @@ useEffect(() => {
           (widget, index) =>
             (widget.key ?? widget.uri) === (current[index]?.key ?? current[index]?.uri) &&
             widget.label === current[index]?.label &&
-            (widget.anchor?.id ?? "") === (current[index]?.anchor?.id ?? "") &&
-            (widget.anchor?.href ?? "") === (current[index]?.anchor?.href ?? "") &&
-            (widget.anchor?.parentId ?? "") === (current[index]?.anchor?.parentId ?? "") &&
-            (widget.anchor?.path.map(step => `${step.id}|${step.iri}|${step.direction}`).join("/") ?? "") ===
-              (current[index]?.anchor?.path.map(step => `${step.id}|${step.iri}|${step.direction}`).join("/") ?? "") &&
+            sameTransportedFacetIdentity(widget.anchor, current[index]?.anchor) &&
             widget.excluded === current[index]?.excluded &&
             widget.selectedValues.length ===
               current[index]?.selectedValues.length &&
@@ -2025,6 +2068,14 @@ useEffect(() => {
     if (key === "roles") setRolesPage(0);
   }, []);
 
+  // classTree is authoritative UI state (shareable in q) but is NOT an FCT
+  // population constraint. Strip it only from derived execution clones, so
+  // toggling a Categories hierarchy does not restart Results/Configure/Groups.
+  const queryPopulationTree = useMemo(() => {
+    if (!("classTree" in queryTree.attributes)) return queryTree;
+    const { classTree: _categoriesLayout, ...attributes } = queryTree.attributes;
+    return { ...queryTree, attributes };
+  }, [queryTree]);
   const queryXml = serializeFctQuery(queryTree);
   // Status filters are ordinary, scope-local FCT nodes, just like <class>.
   // No separate React selection state and no bookmark-dependent Results mode.
@@ -2201,7 +2252,7 @@ useEffect(() => {
   }, [bookmarkDialogOpen]);
 
   // The main Results request must use the active view's server-side limit and offset.
-  const queryResultsXml = queryXml;
+  const queryResultsXml = serializeFctQuery(queryPopulationTree);
   const prettyQueryXml = xmlFormat(queryXml, { indentation: "  " });
 
   /**
@@ -2814,7 +2865,7 @@ useEffect(() => {
   const queryWithoutPagingXml = useCallback(
   (viewType?: FctViewType, sortByCount = false, classTree = false) =>
     serializeFctQuery(
-      setQueryViewAttributes(ungroupForMembers(queryTree), {
+      setQueryViewAttributes(ungroupForMembers(queryPopulationTree), {
         ...(viewType ? { type: viewType } : {}),
         sort: sortByCount ? "count" : "",
         kind: viewType === FCT_VIEW_TYPES.PROPERTIES ? configurePropertyKind
@@ -2829,7 +2880,7 @@ useEffect(() => {
         ...(classTree ? { tree: "yes" } : {}),
       }),
     ),
-  [queryTree, leftPanelLimit, leftWidgetLimits.categories, leftWidgetLimits.properties, leftWidgetLimits.roles, leftWidgetLimits.graphs, configurePropertyKind, configureRoleKind],
+  [queryPopulationTree, leftPanelLimit, leftWidgetLimits.categories, leftWidgetLimits.properties, leftWidgetLimits.roles, leftWidgetLimits.graphs, configurePropertyKind, configureRoleKind],
 );
   const lastEffectiveLanguageRef = useRef(preferredAlphabetLanguage);
   useEffect(() => {
@@ -2851,7 +2902,7 @@ useEffect(() => {
   const alphabetLabelUris = "http://www.w3.org/2000/01/rdf-schema#label";
   // The Alphabet system facet queries a clone of the live scope and never
   // constrains its own counts by the currently selected letter.
-  const alphabetQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
+  const alphabetQueryXml = serializeFctQuery(setQueryViewAttributes(queryPopulationTree, {
     type: FCT_VIEW_TYPES.ALPHABET, index: "", indexLabels: alphabetLabelUris, limit: "26", offset: "0",
   }));
   // Inspector shows the same single grouped alphabet request that executes.
@@ -2878,7 +2929,7 @@ useEffect(() => {
   // Ask FCT for the total independently of the current results page. The
   // count view uses the same active scope and filters, but never the page offset.
   const queryCountXml = serializeFctQuery(
-    setQueryViewAttributes(queryTree, { type: FCT_VIEW_TYPES.TEXT, limit: "1000", offset: "0" }),
+    setQueryViewAttributes(queryPopulationTree, { type: FCT_VIEW_TYPES.TEXT, limit: "1000", offset: "0" }),
   );
 
   const resultsEnrichmentCacheRef = useRef(new Map<string, ScopeValue[]>());
@@ -3314,6 +3365,7 @@ useEffect(() => {
   /** X: stop transport/queue work without refreshing or discarding loaded data. */
   function cancelMaestroPage() {
     stopPendingMaestroQueries();
+    setPersonalWidgets((current) => current.map(widget => widget.loading ? { ...widget, loading: false } : widget));
     setIsLoadingProperties(false);
     setIsLoadingRoles(false);
     setIsLoadingClasses(false);
@@ -3327,7 +3379,7 @@ useEffect(() => {
     setLoadingRecordAuthors(false);
     setIsLoadingRecordPolicy(false);
     setIsDescribing(false);
-    setViewDiscoveryLoading(false);
+    viewDiscoveryController.cancel();
     if (providerCatalogKey) providerCatalogController.send({ type: "CATALOG_CANCELLED", key: providerCatalogKey });
     setIsValidatingRecord(false);
     setConfigureQueryTransition(false);
@@ -3500,11 +3552,11 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     selectedRecordGraph, selectedRecordAuthor, recordDescriptionQueryLimit, preferredAlphabetLanguage, retryRecord].join("\u0000");
 
 
-  const resultsCountSparql = buildFctCountSparql(queryTree);
+  const resultsCountSparql = buildFctCountSparql(queryPopulationTree);
   const rootUriWithoutPath = queryTree.children.some((node) => node.name === "value" && node.attributes.datatype === "uri") &&
     !queryTree.children.some((node) => node.name === "property" || node.name === "property-of");
   const resultsQueryHasStatuses = queryTreeHasStatuses(queryTree);
-  const resultsRequestXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
+  const resultsRequestXml = serializeFctQuery(setQueryViewAttributes(queryPopulationTree, {
     type: rootUriWithoutPath ? FCT_VIEW_TYPES.LIST : FCT_VIEW_TYPES.TEXT,
     limit: String(resultsBatchSize),
     offset: String(resultsOffset),
@@ -4880,9 +4932,21 @@ setGraphFacets(graphs);
       } catch (error) {
         if (!controller.signal.aborted) {
           const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-          setRecordGraphError(timedOut
-            ? `Graph discovery timed out. Record data can still load without graph metadata: ${describeUpstreamError(error)}`
-            : describeUpstreamError(error, "Could not discover record graphs."));
+          const reason=describeUpstreamError(error, "Could not discover record graphs.");
+          const protectedDiscovery=/\bSR186\b|OAI\.DBA\.ASSISTANT_ID_TO_URI_INVERSE|permission.*denied|access.*denied/i.test(reason);
+          // Virtuoso may prohibit anonymous GRAPH ?recordGraph enumeration.
+          // This optional lookup must not discard an explicitly bound graph,
+          // or suppress the independent Record SELECT / formatter.
+          if(protectedDiscovery){
+            const scope=(queryTree.attributes.addr??"").split("@",1)[0]??"";
+            if(/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(scope) && scope!==ALL_GRAPHS)
+              setRecordGraphs([scope]);
+          }
+          setRecordGraphError(protectedDiscovery
+            ? `Named-graph discovery is restricted by Virtuoso (SR186). Record data remains available${queryTree.attributes.addr?.split("@",1)[0] ? " under its explicit graph scope" : ""}. ${reason}`
+            : timedOut
+              ? `Graph discovery timed out. Record data can still load without graph metadata: ${reason}`
+              : reason);
         }
       } finally {
         if (!controller.signal.aborted) setLoadingRecordGraphs(false);
@@ -5574,7 +5638,9 @@ setGraphFacets(graphs);
       formatStage = "Record template discovery (personal SPARQL)";
       const templatePayload = labelsOnly ? preparedTemplate!.payload : await loadClientPolicyTemplate(templateUri, controller.signal);
       if (!preview && !localRerender && isCurrentRequest()) setRecordDebug((current) => ({ ...current, templateLookup: templatePayload.debugSparql }));
-      if (!preview && !enrichLinkedResources && !localRerender && isCurrentRequest()) setFormatterHasEnrichment(Boolean(templatePayload.enrichmentXslt));
+      const hasInlineSandboxPlan = /<xsl:param\b[^>]*\bname\s*=\s*["']maestroPhase["']/.test(templatePayload.templateXslt);
+      const hasDeferredEnrichment = Boolean(templatePayload.enrichmentXslt) || hasInlineSandboxPlan;
+      if (!preview && !enrichLinkedResources && !localRerender && isCurrentRequest()) setFormatterHasEnrichment(hasDeferredEnrichment);
       if (!isCurrentRequest()) return null;
       formatStage = "Record formatting preparation";
       // Formatting never issues a second DESCRIBE. The snapshot is exactly the
@@ -5722,6 +5788,7 @@ setGraphFacets(graphs);
       const inputLabelRevision = latestRecordLabelRevisionRef.current;
       const queryXmlForFormat = prepared?.queryXml ?? serializeFctQuery(queryTree);
       formatStage = "Record formatting (Maestro SaxonJS)";
+      const renderStarted = performance.now();
       const document = await transformMaestroRecordXslt(
         templatePayload.templateXslt,
         sourceXml,
@@ -5729,7 +5796,9 @@ setGraphFacets(graphs);
         selectedUri,
         controller.signal,
         commonsImages,
+        (preview || enrichLinkedResources) ? "complete" : "initial",
       );
+      reportRecordPerformance("record-formatter-total", renderStarted, enrichLinkedResources ? "enriched" : "initial");
       if (!isCurrentRequest()) return null;
       formatStage = "Record template rendering";
       const templateRoot = document.body.firstElementChild;
@@ -5806,6 +5875,23 @@ setGraphFacets(graphs);
         warning.className = "border-t bg-muted/40 px-5 py-2 text-xs text-muted-foreground";
         warning.textContent = "This record description is incomplete. Some fields may be missing.";
         templateRoot.querySelector("#record-fields")?.insertAdjacentElement("afterend", warning);
+      }
+      if (!preview && !enrichLinkedResources && !localRerender && hasDeferredEnrichment) {
+        // Complete DESCRIBE-backed sections are already interactive. The next
+        // XState-scoped formatting pass fills the remaining optional fields.
+        const section = document.createElement("section");
+        section.id = "maestro-record-enrichment-skeleton";
+        section.className = "animate-pulse space-y-3 border-t border-border pt-5";
+        section.setAttribute("role", "status");
+        section.setAttribute("aria-label", "Loading additional record details");
+        const heading = document.createElement("div");
+        heading.id = "maestro-record-enrichment-skeleton-heading";
+        heading.className = "h-3 w-32 rounded bg-muted";
+        const first = document.createElement("div");
+        first.id = "maestro-record-enrichment-skeleton-values";
+        first.className = "h-3 w-3/4 rounded bg-muted";
+        section.append(heading, first);
+        templateRoot.appendChild(section);
       }
       const sourceIds = new Set<string>();
       for (const element of Array.from(document.body.querySelectorAll("*"))) {
@@ -6251,6 +6337,23 @@ setGraphFacets(graphs);
       }
       if (enrichLinkedResources) {
         browserLog.warn("record.stylesheet.enrichment.failed", message);
+        if (isCurrentRequest()) {
+          // The initial DESCRIBE-backed Record remains usable even when its
+          // optional enrichment fails. Replace the skeleton with a bounded
+          // notice instead of leaving an indefinite loading animation.
+          setFormattedRecordHtml(current => {
+            if (!current.includes('id="maestro-record-enrichment-skeleton"')) return current;
+            const parsed = new DOMParser().parseFromString(current, "text/html");
+            const pending = parsed.querySelector("#maestro-record-enrichment-skeleton");
+            if (!pending) return current;
+            const notice = parsed.createElement("p");
+            notice.id = "maestro-record-enrichment-unavailable";
+            notice.className = "border-t border-border pt-3 text-xs text-muted-foreground";
+            notice.textContent = "Some additional record details are unavailable.";
+            pending.replaceWith(notice);
+            return parsed.body.innerHTML;
+          });
+        }
       } else if (localRerender) {
         browserLog.warn("record.stylesheet.local-rerender.failed", { error });
       }
@@ -7162,7 +7265,10 @@ useEffect(() => {
   }, [authSession]);
 
   const pagedUnselectedClasses = unselectedClassDisplayFacets.slice(classesPage * FACET_PAGE_SIZE, (classesPage + 1) * FACET_PAGE_SIZE);
-  const categoryTreeItems = [...selectedClassDisplayFacets, ...unselectedClassDisplayFacets].filter((item, index, all) => all.findIndex(other => other.uri === item.uri) === index);
+  // These two lists are disjoint by construction. The visualization takes their
+  // direct union; do not deduplicate or re-query the selected list.
+  // The selectable checkbox page remains unselected-only.
+  const categoryTreeItems = [...selectedClassDisplayFacets, ...unselectedClassDisplayFacets];
   const categoryTreeRoots: CategoryTreeNode[] = (() => {
     // The hierarchy comes from the query itself (rdfs:subClassOf edges of the result-set classes up to the
     // root). A class with several parents is listed under each of them, with its own subtree repeated.
@@ -7394,7 +7500,7 @@ useEffect(() => {
       const pathNode = findPropertyPathNode(uri);
       if (pathNode) {
         // The API relocates the view safely if this path currently contains it.
-        guardedDeleteQueryNode(pathNode.id);
+        if (!guardedDeleteQueryNode(pathNode.id)) return;
       } else {
         removeProperty(activeLeafId, uri);
       }
@@ -7826,6 +7932,15 @@ useEffect(() => {
     setWorkspaceTab(tab);
   }
 
+  function selectPerspective(uri: string, explicit = true) {
+    const kind = personalPerspectiveFromUri(uri);
+    if (kind && explicit) {
+      if (!personalPerspectiveMatchesQuery(uri, queryTree)) { void loadHistoryQuery(kind === "bookmarks"); return; }
+      operations.controller.send({ type: "PERSONAL_PERSPECTIVE_ENTERED", fromUrl: buildCurrentShareUrl() });
+    }
+    setViewPanel("perspectives"); setSelectedViewUri(uri); setViewProvider(null);
+  }
+
   async function loadHistoryQuery(includeFavorites = false) {
     if (!personalStoreReady || isLoadingHistoryQuery) return;
     // An explicit Show action invalidates an outstanding asynchronous Provider
@@ -7835,6 +7950,7 @@ useEffect(() => {
     operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" });
     // Keep the current Browse/Return owner intact while resolving the personal
     // endpoint. A failed Show must not navigate away or clear the ribbon.
+    setHistoryLoadingTarget(includeFavorites ? "bookmarks" : "history");
     setIsLoadingHistoryQuery(true);
     try {
       // Use the server-resolved SITE_HISTORY graph rather than duplicating its
@@ -7898,6 +8014,7 @@ useEffect(() => {
         type: "RIBBON_ENTRY_FROM_BROWSE", sourceKey: queryXml,
         fromUrl: buildCurrentShareUrl(),
       });
+      operations.controller.send({ type: "PERSONAL_PERSPECTIVE_ENTERED", fromUrl: buildCurrentShareUrl() });
       if (!restoreQueryAndUiState(historyQueryXml, null)) {
         throw new Error("Could not restore the generated History query.");
       }
@@ -7925,6 +8042,7 @@ useEffect(() => {
       toast.add({ title: "Could not load query History", description: message, type: "error" });
     } finally {
       setIsLoadingHistoryQuery(false);
+      setHistoryLoadingTarget(null);
     }
   }
 
@@ -8105,7 +8223,7 @@ useEffect(() => {
     const loadCount = async () => {
       try {
         const sparql = `SELECT (COUNT(DISTINCT ?s) AS ?ct) WHERE { GRAPH <${graph}> { ?s ?p ?o } }`;
-        const response = await fetch("/proxy/api/sparql", {
+        const response = await attributedSparqlFetch("/proxy/api/sparql", {
           method: "POST", cache: "no-store",
           headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-info-count", "GraphInfo:count") },
           body: JSON.stringify({ facetValueCount: { sparql, addr: queryTree.attributes.addr } }),
@@ -8553,7 +8671,7 @@ useEffect(() => {
   // No new history or reference snapshot schema is introduced.
   function openValueReferenceEditor(parentId:string, value?:FctQueryNode) {
     setValueReferenceError("");
-    setValueReferenceEditor({parentId,valueId:value?.id ?? null,
+    referencePicker.open({parentId,valueId:value?.id ?? null,
       mode:value?.attributes.from !== undefined ? "from" :
         value?.attributes.fromView !== undefined ? "fromView" : value ? "constant" : "from",
       targetId:value?.attributes.from ?? value?.attributes.fromView ?? "",
@@ -8570,11 +8688,31 @@ useEffect(() => {
     }
   };
   collectReferenceCandidates(queryTree.children);
+  function captureReferenceTargetClick(event: React.MouseEvent<HTMLElement>) {
+    if (!pickingReferenceTarget) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rawTarget = event.target;
+    const node = rawTarget instanceof Element ? rawTarget.closest<HTMLElement>("[data-maestro-query-node]") : null;
+    const id = node?.dataset.maestroQueryNode === "query-everything"
+      ? queryTree.attributes.id ?? "" : node?.dataset.maestroQueryNode ?? "";
+    if (!valueReferenceCandidates.some(candidate => candidate.id === id)) {
+      setValueReferenceError("Choose a relationship (property or role) or the root node.");
+      return;
+    }
+    if (id === valueReferenceEditor?.parentId) {
+      setValueReferenceError("A reference cannot target its own relationship node.");
+      return;
+    }
+    setValueReferenceError("");
+    referencePicker.selectTarget(id);
+  }
   function commitValueReferenceEditor() {
     const editor=valueReferenceEditor;
     if (!editor) return;
     try {
       if (editor.mode !== "constant" && !editor.targetId) throw new Error("Select a query node to reference.");
+      if (editor.mode !== "constant" && editor.targetId === editor.parentId) throw new Error("A reference cannot target its own relationship node.");
       if (editor.mode === "constant" && !editor.text.trim()) throw new Error("Enter a value, or choose from/fromView.");
       const payload = editor.mode === "constant"
         ? {text:editor.text,datatype:editor.datatype || "string",op:editor.op,...(editor.lang ? {lang:editor.lang} : {})}
@@ -8582,7 +8720,7 @@ useEffect(() => {
       const next=workbenchQueryTreeApi.upsertValueBinding(queryTree,editor.parentId,editor.valueId,payload);
       inspectFctValueReferences(next);
       replaceQueryTree(next);
-      setValueReferenceEditor(null);
+      referencePicker.close();
       setValueReferenceError("");
     } catch(error) {setValueReferenceError(error instanceof Error ? error.message : String(error));}
   }
@@ -8590,11 +8728,18 @@ useEffect(() => {
    * path; the underlying tree API independently rejects orphaning mutations. */
   function guardedDeleteQueryNode(nodeId:string):boolean {
     try {
-      const dependents=dependentFctValueReferences(queryTree,nodeId);
-      if (dependents.length) {setBlockedReferenceDeletion({nodeId,dependents});return false;}
       deleteNode(nodeId);
       return true;
     } catch(error) {
+      if (error instanceof FctNodeInUseError) {
+        const hrefLabels = Object.fromEntries(error.dependents.flatMap(ref => {
+          if (ref.kind !== "href") return [];
+          const resolved = getTransportedQueryTreePath(ref.anchorId, ref.targetId);
+          return [[ref.anchorId, resolved ? pathLabel(resolved.path) : `Personal facet ${ref.anchorId} (target ${ref.targetId})`]];
+        }));
+        setBlockedReferenceDeletion({nodeId:error.nodeId,dependents:error.dependents,hrefLabels});
+        return false;
+      }
       toast.add({title:"Cannot delete query node",description:error instanceof Error?error.message:String(error),type:"error"});
       return false;
     }
@@ -8602,24 +8747,24 @@ useEffect(() => {
   function renderValueReferenceDialog():ReactNode {
     const editor=valueReferenceEditor;
     return <>
-      <Dialog open={Boolean(editor)} onOpenChange={open=>{if(!open) {setValueReferenceEditor(null);setValueReferenceError("");}}}>
+      <Dialog open={Boolean(editor) && !pickingReferenceTarget} onOpenChange={open=>{if(!open && !pickingReferenceTarget) {referencePicker.close();setValueReferenceError("");}}}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>{editor?.valueId ? "Edit value" : "Link a value"}</DialogTitle>
             <DialogDescription>Compare this value to another query node in the same solution, to a relocated-view population, or to a constant. Node IDs remain stable in History.</DialogDescription>
           </DialogHeader>
           {editor && <div className="space-y-3">
             <label className="block space-y-1 text-sm"><span>Value source</span>
-              <select className="w-full rounded-md border bg-background px-2 py-2" value={editor.mode}
-                onChange={event=>setValueReferenceEditor({...editor,mode:event.target.value as "from"|"fromView"|"constant"})}>
+              <MaestroSelect className="w-full rounded-md border bg-background px-2 py-2" value={editor.mode}
+                onChange={event=>referencePicker.change({mode:event.target.value as "from"|"fromView"|"constant",targetId:""})}>
                 <option value="from">from</option>
-                <option value="fromView">fromValue</option>
+                <option value="fromView">fromView</option>
                 <option value="constant">constant</option>
-              </select>
+              </MaestroSelect>
             </label>
             {editor.mode === "constant" ? <>
-              <label className="block space-y-1 text-sm"><span>Value</span><Input value={editor.text} onChange={event=>setValueReferenceEditor({...editor,text:event.target.value})}/></label>
+              <label className="block space-y-1 text-sm"><span>Value</span><Input value={editor.text} onChange={event=>referencePicker.change({text:event.target.value})}/></label>
               <label className="block space-y-1 text-sm"><span>Operator</span>
-                <Select value={editor.op} onValueChange={op=>setValueReferenceEditor({...editor,op})}>
+                <Select value={editor.op} onValueChange={op=>referencePicker.change({op})}>
                   <SelectTrigger aria-label="Value comparison operator"><SelectValue placeholder="Choose operator" /></SelectTrigger>
                   <SelectContent>
                     {([ ["=", "equals"], ["contains", "contains"], ["regex", "regular expression"],
@@ -8629,26 +8774,34 @@ useEffect(() => {
                   </SelectContent>
                 </Select>
               </label>
-              <label className="block space-y-1 text-sm"><span>Datatype</span><Input value={editor.datatype} onChange={event=>setValueReferenceEditor({...editor,datatype:event.target.value})}/></label>
-              <label className="block space-y-1 text-sm"><span>Language (optional)</span><Input value={editor.lang} onChange={event=>setValueReferenceEditor({...editor,lang:event.target.value})}/></label>
-            </> : <label className="block space-y-1 text-sm"><span>Referenced node ID</span>
-              <select className="w-full rounded-md border bg-background px-2 py-2" value={editor.targetId}
-                onChange={event=>setValueReferenceEditor({...editor,targetId:event.target.value})}>
-                <option value="">Choose a node…</option>
-                {valueReferenceCandidates.map(candidate=><option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}
-              </select></label>}
+              <label className="block space-y-1 text-sm"><span>Datatype</span><Input value={editor.datatype} onChange={event=>referencePicker.change({datatype:event.target.value})}/></label>
+              <label className="block space-y-1 text-sm"><span>Language (optional)</span><Input value={editor.lang} onChange={event=>referencePicker.change({lang:event.target.value})}/></label>
+            </> : <div className="space-y-2 text-sm">
+              <p>Referenced node: <strong className="font-mono">{editor.targetId || "Not selected"}</strong></p>
+              <p className="text-xs text-muted-foreground">{valueReferenceCandidates.find(candidate=>candidate.id === editor.targetId)?.label ?? "Pick a root, property, or role from the live Query Tree."}</p>
+              <Button type="button" variant="outline" onClick={() => { setValueReferenceError(""); referencePicker.beginPicking(); }}>
+                Choose from Query Tree
+              </Button>
+              <p className="text-xs text-muted-foreground">References currently compare for equality; non-equality and function transforms need compiler support.</p>
+            </div>}
             {valueReferenceError && <p role="alert" className="text-sm text-destructive">{valueReferenceError}</p>}
-            <div className="flex justify-end gap-2"><Button variant="outline" onClick={()=>setValueReferenceEditor(null)}>Cancel</Button>
+            <div className="flex justify-end gap-2"><Button variant="outline" onClick={()=>referencePicker.close()}>Cancel</Button>
               <Button onClick={commitValueReferenceEditor}>Apply</Button></div>
           </div>}
         </DialogContent>
       </Dialog>
       <AlertDialog open={Boolean(blockedReferenceDeletion)} onOpenChange={open=>{if(!open)setBlockedReferenceDeletion(null)}}>
-        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Cannot delete a node that is in use</AlertDialogTitle>
-          <AlertDialogDescription>Node {blockedReferenceDeletion?.nodeId} is referenced by the following query values. Remove or edit those links before deleting this node or its subtree.</AlertDialogDescription>
+        <AlertDialogContent><AlertDialogHeader>
+          <AlertDialogTitle>Cannot delete a node that is in use</AlertDialogTitle>
+          <AlertDialogDescription>Node {blockedReferenceDeletion?.nodeId} or its descendants are used by the following query references or Personal facets. Remove the dependent facets or remove or edit the value links before deleting this node or its subtree.</AlertDialogDescription>
         </AlertDialogHeader>
-        <ul className="list-disc space-y-1 pl-5 text-sm">{blockedReferenceDeletion?.dependents.map(ref=><li key={ref.valueId}>
-          <button type="button" className="break-all text-left font-mono text-xs text-primary underline underline-offset-2"
+        <ul aria-label="Dependent query nodes" className="max-h-60 space-y-2 overflow-y-auto rounded-md border p-3 text-sm">{blockedReferenceDeletion?.dependents.map(ref=><li key={deletionReferenceId(ref)}>
+          {ref.kind === "href" ? (
+            <span className="flex min-w-0 items-start gap-2" title={`Facet ${ref.anchorId} → ${ref.targetId}`}>
+              <ExternalLink className={`mt-0.5 size-4 shrink-0 ${queryTreeRelationshipIconColor(queryTreePathIndex.byId.get(ref.targetId))}`} aria-hidden="true"/>
+              <span className="min-w-0 break-words">{blockedReferenceDeletion?.hrefLabels[ref.anchorId]}</span>
+            </span>
+          ) : <button type="button" className="break-all text-left font-mono text-xs text-primary underline underline-offset-2"
             onClick={() => {
               const parent = findQueryNode(queryTree.children, ref.sourceId);
               const value = parent?.children.find(child => child.name === "value" && child.id === ref.valueId);
@@ -8656,10 +8809,10 @@ useEffect(() => {
               setBlockedReferenceDeletion(null);
               openValueReferenceEditor(parent.id, value);
             }}>
-            {`<value id="${ref.valueId}" ${ref.kind}="${ref.targetId}"/>`}
-          </button>
+            {describeDeletionReference(ref)}
+          </button>}
         </li>)}</ul>
-        <AlertDialogFooter><AlertDialogCancel onClick={()=>setBlockedReferenceDeletion(null)}>Close</AlertDialogCancel></AlertDialogFooter>
+        <AlertDialogFooter><AlertDialogCancel>Close</AlertDialogCancel></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </>;
@@ -8684,12 +8837,21 @@ useEffect(() => {
 
   // Cached once for the Query Tree. <a> labels and the left Personal facet
   // derive from the identical parent-indexed getPath resolver.
-  const queryAnchorsById = new Map(resolveTransportedFacets(queryTree).map(anchor => [anchor.id, anchor]));
   // When an anchor's old focus is no longer active, keep its Query Tree label
   // readable by resolving the full chain from the query root.
   const queryTreePathIndex = indexFctPaths<FctQueryTree | FctQueryNode>(queryTree);
   const pathLabel = (path: { iri: string; direction: "forward" | "reverse" }[]) =>
     path.map(step => `${toLabel(step.iri, step.direction === "reverse" ? "Role" : "Property")}${step.direction === "reverse" ? " of" : ""}`).join(" › ");
+  const getTransportedQueryTreePath = (anchorId: string, href: string) => {
+    const anchor = queryTreePathIndex.byId.get(anchorId);
+    const owner = anchor ? queryTreePathIndex.parents.get(anchor) : null;
+    return owner ? getPath(queryTreePathIndex, owner, href) : null;
+  };
+  const queryTreeRelationshipIconColor = (node: FctQueryTree | FctQueryNode | undefined) =>
+    node?.children.some(child => child.name === "view")
+      ? "text-emerald-600 dark:text-emerald-400"
+      : node?.name === "property" || node?.name === "property-of"
+        ? "text-red-600 dark:text-red-400" : "text-muted-foreground";
   const rootPreviewNodeId = queryTree.children.find((node) => node.name === "value" && node.attributes.datatype === "uri")?.id
     ?? queryTree.children.find((node) => node.name === "text")?.id
     ?? "query-everything";
@@ -8699,12 +8861,10 @@ useEffect(() => {
   ): ReactNode => {
     // A nested <view> is the focus marker for its parent, not a separate tree row.
     if (node.name === "view" || node.uiKey === "query-view" || node.id === "query-view") return null;
-    const transportedAnchor = node.name === "a" ? queryAnchorsById.get(node.id) : undefined;
-    const transportedAnchorLabel = transportedAnchor
-      ? pathLabel(transportedAnchor.path)
-      : node.name === "a"
-        ? pathLabel(getPath(queryTreePathIndex, queryTree, node.attributes.href ?? "")?.path ?? []) || "Transported facet"
-        : null;
+    const transportedPath = node.name === "a" ? getTransportedQueryTreePath(node.id, node.attributes.href ?? "") : null;
+    const transportedAnchorLabel = node.name === "a"
+      ? pathLabel(transportedPath?.path ?? []) || "Transported facet"
+      : null;
     const protectedNode = node.name === "text" || (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-view" || node.id === "query-view") || (node.uiKey === "query-everything" || node.id === "query-everything");
     const rootHasFocusView = queryTree.children.some((child) => child.name === "view");
     const isRoot = depth === 0;
@@ -8717,6 +8877,7 @@ useEffect(() => {
     const inTransportedPreview = transportedPreviewIds.has(node.id) || (isRoot && transportedFocusAtRoot && isRootFocusCarrier && node.id === rootClassCarrierId);
     const isRootUriValue = isRoot && node.name === "value" && node.attributes.datatype === "uri";
     const SearchModeIcon = signalOptions.find((option) => option.mode === effectiveCommittedSignal)?.Icon ?? Signal;
+    const transportedDirection = transportedPath?.path.at(-1)?.direction;
     const NodeIcon = (node.name === "text" || node.uiKey === "query-text" || node.id === "query-text")
       ? SearchModeIcon
       : (node.uiKey === "query-everything" || node.id === "query-everything")
@@ -8735,16 +8896,16 @@ useEffect(() => {
                 ? isRootUriValue ? GlobeCode : Tag
                 : null;
     const nodeIconColor = node.name === "a"
-      ? "text-muted-foreground"
+      ? queryTreeRelationshipIconColor(queryTreePathIndex.byId.get(node.attributes.href ?? ""))
       : isFocusCarrier
-      ? "text-emerald-600 dark:text-emerald-400"
-      : (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-everything" || node.id === "query-everything")
-        ? "text-black dark:text-white"
-        : node.name === "property" || node.name === "property-of"
-          ? "text-red-600 dark:text-red-400"
-          : node.name === "class"
-            ? "text-blue-600 dark:text-blue-400"
-            : "text-muted-foreground";
+        ? "text-emerald-600 dark:text-emerald-400"
+        : (node.uiKey === "query-text" || node.id === "query-text") || (node.uiKey === "query-everything" || node.id === "query-everything")
+          ? "text-black dark:text-white"
+          : node.name === "property" || node.name === "property-of"
+            ? queryTreeRelationshipIconColor(node)
+            : node.name === "class"
+              ? "text-blue-600 dark:text-blue-400"
+              : "text-muted-foreground";
     // <value> children of a property, property-of, or class are shown inline on
     // their parent's row (= value) instead of as separate rows.
     const inlinesValues = node.name === "property" || node.name === "property-of" || node.name === "class";
@@ -8777,7 +8938,7 @@ useEffect(() => {
       return next;
     });
     return (
-      <li key={node.id} className="min-w-0">
+      <li key={node.id} data-maestro-query-node={node.id} className="min-w-0">
         <div
           className={`flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5 hover:bg-accent/60 ${node.attributes.group === "true" ? GROUP_BY_FACET_HIGHLIGHT_CLASSES + " border" : ""} ${
             facetHoverPreview && ((facetHoverPreview.kind === "record" && node.id === rootPreviewNodeId) || (facetHoverPreview.kind === "facet" && node.id === facetHoverPreview.successorNodeId))
@@ -8836,7 +8997,7 @@ useEffect(() => {
                 : <span className="min-w-0 break-words">
                     {node.name === "value" && <span className="mr-1 inline-flex align-middle">{renderValueOperator(node)}</span>}
                     {transportedAnchorLabel ?? ((node.uiKey === "query-view" || node.id === "query-view") ? "Results view" : facetHoverPreview?.kind === "record" && node.id === rootPreviewNodeId ? facetHoverPreview.label : queryNodeLabel(node))}{classLabelsForQueryNode(node).length > 0 ? ` (${classLabelsForQueryNode(node).join(", ")})` : ""}
-                  </span>} /><TooltipContent>{isRoot ? "Go to this node" : node.attributes.iri ?? node.name}</TooltipContent></Tooltip>
+                  </span>} /><TooltipContent>{node.name === "a" ? `Transported ${transportedDirection === "reverse" ? "role" : "property"}: ${transportedAnchorLabel ?? node.attributes.href ?? node.id}` : isRoot ? "Go to this node" : node.attributes.iri ?? node.name}</TooltipContent></Tooltip>
             )}
             {inlineValues.map((value, index) => (
               <span key={value.id} className="ml-1 inline-flex max-w-full items-baseline gap-1 align-baseline">
@@ -8853,13 +9014,13 @@ useEffect(() => {
           </span>
           <ButtonGroup className="ml-auto shrink-0 self-start" aria-label={`Query node controls for ${queryNodeLabel(node)}`}>
             {(node.name === "property" || node.name === "property-of") && !node.children.some(child=>child.name==="value") && (
-              <Tooltip><TooltipTrigger render={<button type="button" onClick={()=>openValueReferenceEditor(node.id)}
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
-                aria-label={`Link a value to ${queryNodeLabel(node)}`}><Link className="size-4"/></button>}/>
+              <Tooltip><TooltipTrigger render={<Button variant="outline" size="icon-sm" type="button" onClick={()=>openValueReferenceEditor(node.id)}
+                className="text-muted-foreground hover:text-foreground"
+                aria-label={`Link a value to ${queryNodeLabel(node)}`}><Link className="size-4"/></Button>}/>
                 <TooltipContent>Link a value from another query node</TooltipContent></Tooltip>)}
           {showMinus && (
-          <Tooltip><TooltipTrigger render={<button
-            type="button"
+          <Tooltip><TooltipTrigger render={<Button
+            variant="outline" size="icon-sm" type="button"
             aria-label={
               lockedNode
                 ? `${queryNodeLabel(node)} is required`
@@ -8886,10 +9047,10 @@ useEffect(() => {
               }
               guardedDeleteQueryNode(topInlineValue ? topInlineValue.id : topInlineStatus ? topInlineStatus.id : topInlineClass ? topInlineClass.id : node.id);
             }}
-            className="flex size-7 shrink-0 items-center justify-center text-base leading-none text-muted-foreground hover:border-destructive hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-25"
+            className="text-base leading-none text-muted-foreground hover:border-destructive hover:bg-destructive/10 hover:text-destructive disabled:opacity-25"
           >
             −
-          </button>} /><TooltipContent>{lockedNode
+          </Button>} /><TooltipContent>{lockedNode
                 ? "Required query node"
                 : isRootCarrierRow
                   ? rootTextOrValue
@@ -8903,10 +9064,10 @@ useEffect(() => {
                       : "Remove this node and all descendants"}</TooltipContent></Tooltip>
           )}
             {(node.name === "property" || node.name === "property-of") && inlineValues.map(value=>(
-              <Tooltip key={value.id}><TooltipTrigger render={<button type="button" onClick={()=>openValueReferenceEditor(node.id,value)}
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
+              <Tooltip key={value.id}><TooltipTrigger render={<Button variant="outline" size="icon-sm" type="button" onClick={()=>openValueReferenceEditor(node.id,value)}
+                className="text-muted-foreground hover:text-foreground"
                 aria-label={`Edit value ${boundValueLabel(value)}`}>
-                <Pencil className="size-4"/></button>}/><TooltipContent>Edit value {boundValueLabel(value)}</TooltipContent></Tooltip>
+                <Pencil className="size-4"/></Button>}/><TooltipContent>Edit value {boundValueLabel(value)}</TooltipContent></Tooltip>
             ))}
           </ButtonGroup>
         </div>
@@ -9016,9 +9177,9 @@ useEffect(() => {
       if (!["http:", "https:"].includes(target.protocol) || target.username || target.password || /[<>"{}|^`\\\s]/.test(uri))
         throw new Error("A valid HTTP(S) resource URI without credentials is required.");
       const sparql = `DEFINE get:soft "soft"\nSELECT (?s AS ?c1) FROM <${uri}> WHERE { ?s ?p ?o } LIMIT 1`;
-      const response = await fetch("/proxy/api/sparql", {
+      const response = await attributedSparqlFetch("/proxy/api/sparql", {
         method: "POST", cache: "no-store",
-        headers: { "Content-Type": "application/json", "x-maestro-query-timeout-ms": String(timeoutMs) },
+        headers: {"x-maestro-debug-source":"urn:maestro:component:Root:Autocomplete","x-maestro-debug-component":"Root:Autocomplete", "Content-Type": "application/json", "x-maestro-query-timeout-ms": String(timeoutMs) },
         body: JSON.stringify({ addr: `$ALL$@${endpoint}`, resultsQuery: { sparql } }),
       });
       const payload = await response.json() as { error?: string; results?: {bindings?: unknown[]} };
@@ -9210,7 +9371,7 @@ useEffect(() => {
   const currentHistoryQueryId = historyVisitQueryRef.current === queryXml
     ? historyVisitIdRef.current : "";
   const queryContextActive = workspaceTab === "analyze" || (workspaceTab === "view" && viewPanel === "perspectives");
-  const queryContextKey = queryContextActive && personalStoreReady && currentHistoryQueryId
+  const queryContextKey = queryContextActive && personalStoreReady && personalPoliciesReady && currentHistoryQueryId
     ? JSON.stringify([currentHistoryQueryId,queryXml,authSession?.graphStore,authSession?.graphPrefix,policyApprovalRevision]) : "";
   const queryContext = selectQueryContext(queryContextSnapshot,queryContextKey);
   useEffect(()=>{queryContextController.start();return()=>queryContextController.stop();},[queryContextController]);
@@ -9224,15 +9385,15 @@ useEffect(() => {
   // The invoked View actor owns the bounded discovery and abort signal.
   // Its result is scoped to the class identity and authenticated personal store.
   const viewDiscoveryScope = JSON.stringify([workspaceTab, queryXml, queryRefreshRevision,
-    viewClassKey, accessSessionKey, viewPanel, policyApprovalRevision, queryMatchedProvidersKey]);
+    viewClassKey, accessSessionKey, viewPanel, personalPoliciesReady, policyApprovalRevision, queryContext.phase, queryMatchedProvidersKey]);
   // Discovery can re-key while class/History evidence settles *for the same
   // unchanged FCT query*. Preserve only the previously validated, explicitly
   // selected provider across that revalidation. Never inherit a provider from
   // another query, login, or policy revision; no parallel mutable provider list.
   const retainedSelectedViewRef = useRef<{ key: string; uri: string; view: DiscoveredView } | null>(null);
-  const retentionKey = JSON.stringify([queryXml, accessSessionKey, policyApprovalRevision]);
+  const retentionKey = JSON.stringify([queryXml, accessSessionKey, personalPoliciesReady, policyApprovalRevision]);
   const freshDiscoveredViews: DiscoveredView[] =
-    workspaceTab === "view" && viewDiscoverySnapshot.context.key === viewDiscoveryScope &&
+    workspaceTab === "view" && personalPoliciesReady && viewDiscoverySnapshot.context.key === viewDiscoveryScope &&
       viewDiscoverySnapshot.value === "ready"
       ? viewDiscoverySnapshot.context.items.filter(view => personalPerspectiveMatchesQuery(view.uri, queryTree)) : [];
   const freshSelectedView = freshDiscoveredViews.find(view => view.uri === selectedViewUri);
@@ -9245,20 +9406,19 @@ useEffect(() => {
   useEffect(() => {
     if (workspaceTab !== "view") { viewDiscoveryController.inactive(); return; }
     const classes = JSON.parse(viewClassKey) as string[];
-    if (!personalStoreReady) { viewDiscoveryController.inactive(); return; }
+    if (!personalStoreReady || !personalPoliciesReady) { viewDiscoveryController.inactive(); return; }
     viewDiscoveryController.discover(viewDiscoveryScope, (signal) =>
       discoverViews(classes, signal, queryContextReady ? queryContext.matchedProviders : []));
     // Clean-up cancels a pending actor but never reselects a stale View.
     return () => viewDiscoveryController.inactive();
-  }, [viewDiscoveryController, viewDiscoveryScope, viewClassKey, workspaceTab, personalStoreReady, viewPanel, queryContextReady, queryMatchedProvidersKey]);
-  useEffect(() => {
-    const matches = viewDiscoverySnapshot.context.key === viewDiscoveryScope && workspaceTab === "view";
-    const phase = matches ? viewDiscoverySnapshot.value : "inactive";
-    setViewDiscoveryLoading(phase === "loading");
-    setViewDiscoveryError(phase === "failed" ? viewDiscoverySnapshot.context.error : "");
-    // XState keeps the current ribbon contents. Discovery never rewrites
-    // an explicit or URL-restored Perspective selection.
-  }, [viewDiscoverySnapshot, viewDiscoveryScope, workspaceTab, setViewDiscoveryLoading, setViewDiscoveryError]);
+  }, [viewDiscoveryController, viewDiscoveryScope, viewClassKey, workspaceTab, personalStoreReady, personalPoliciesReady, viewPanel, queryContextReady, queryMatchedProvidersKey]);
+  const viewDiscoveryMatches = workspaceTab === "view" && viewDiscoverySnapshot.context.key === viewDiscoveryScope;
+  const viewDiscoveryLoading = workspaceTab === "view" && personalStoreReady && !personalPoliciesSeedError &&
+    (!personalPoliciesReady || !viewDiscoveryMatches || viewDiscoverySnapshot.value === "loading" ||
+      (viewPanel === "perspectives" && queryContext.loading));
+  const viewDiscoveryError = workspaceTab !== "view" ? "" : personalPoliciesSeedError ||
+    (viewDiscoveryMatches && viewDiscoverySnapshot.value === "failed" ? viewDiscoverySnapshot.context.error : "") ||
+    (viewPanel === "perspectives" ? queryContext.error || (queryContext.phase === "blocked" ? queryContext.report?.message ?? "Query context validation failed." : "") : "");
   const providerCatalogKey = viewProvider && workspaceTab === "view"
     ? JSON.stringify([viewProvider, queryXml, queryRefreshRevision, visibleResultsPage.map(item => item.uri), policyApprovalRevision, verifiedQueryBookmarked, accessSessionKey])
     : "";
@@ -9424,14 +9584,19 @@ useEffect(() => {
   };
   const kanbanMovesKey = JSON.stringify([kanbanMoves, kanbanColumnOrder]);
   const viewRenderInputKey = JSON.stringify([
+    selectedView?.uri, selectedView?.template, selectedView?.stylesheet, accessSessionKey, viewPanel, viewProvider,
     viewPageKey, queryGraphServer, resultsUiPage, effectivePageSize,
     fctEndpoints, endpointStatuses, viewDomainRanks, viewServerSoftware,
     viewServerDescriptions, checkingEndpointIds,
     kanbanGroupKey, kanbanMovesKey, verifiedQueryBookmarked, queryXml,
     visibleResultsPage.map(item => [item.uri, item.title]),
   ]);
+  const genericPerspectiveActive = workspaceTab === "view" && viewPanel !== "providers" && !viewProvider && Boolean(selectedView &&
+    !personalPerspectiveFromUri(selectedView.uri) && !(selectedView.queryStylesheet && selectedView.resultStylesheet));
+  const viewHtml = genericPerspectiveActive && viewRenderResult.key === viewRenderInputKey ? viewRenderResult.html : "";
+  const viewRenderError = genericPerspectiveActive && viewRenderResult.key === viewRenderInputKey ? viewRenderResult.error : "";
   useEffect(() => {
-    if (workspaceTab !== "view" || !selectedView) { setViewHtml(current => current === "" ? current : ""); setViewRenderError(current => current === "" ? current : ""); return; }
+    if (!genericPerspectiveActive || !selectedView) return;
     let canceled = false;
     void (async () => {
     try {
@@ -9469,7 +9634,7 @@ useEffect(() => {
           try {
             const ctx = await personalContext();
             const query = `SELECT ?resource ?status WHERE { VALUES ?resource { ${uris.map(uri => `<${uri}>`).join(" ")} } GRAPH <${resolveGraph(GRAPH.STATUS, ctx.base)}> { ?resource <gttp://ggg.maestro.ecosys/ns/ui#status> ?status } }`;
-            const assertions = await selectPersonal(query, ctx);
+            const assertions = await selectPersonal(query, ctx,undefined,"workspace-controller:useWorkspaceController");
             for (const assertion of assertions) {
               const uri = assertion.resource?.value ?? "", status = assertion.status?.value ?? "";
               if (!uris.includes(uri) || !status) continue;
@@ -9546,20 +9711,14 @@ useEffect(() => {
       if (selectedView.uri === "gttp://ggg.maestro.ui/provider/kanban" && displayRows.length > 0 && !parsed.querySelector("article")) {
         throw new Error("Kanban transformation returned no cards for the populated FCT page.");
       }
-      const meta = parsed.querySelector("section[data-view-title], section[data-view-icon]");
-      const icon = meta?.getAttribute("data-view-icon") ?? undefined;
       if (canceled) return;
-      const title = meta?.getAttribute("data-view-title") ?? undefined;
-      setViewXsltMetadata(current => current.title === title && current.icon === icon
-        ? current : { title, icon });
-      setViewHtml(current => current === html ? current : html);
-      setViewRenderError(current => current === "" ? current : "");
-    } catch (error) { if (!canceled) { setViewHtml(""); setViewRenderError(error instanceof Error ? error.message : "View translation failed."); } }
+      setViewRenderResult({ key: viewRenderInputKey, html, error: "" });
+    } catch (error) { if (!canceled) setViewRenderResult({ key: viewRenderInputKey, html: "", error: error instanceof Error ? error.message : "View translation failed." }); }
     })();
     return () => { canceled = true; };
   // The stable input key includes every value consumed above; do not depend
   // on freshly constructed endpoint maps or lists by reference.
-  }, [workspaceTab, selectedView?.uri, selectedView?.stylesheet, viewRenderInputKey]);
+  }, [genericPerspectiveActive, workspaceTab, selectedView?.uri, selectedView?.stylesheet, viewRenderInputKey]);
   const isCompareAnalysis = selectedAnalysisUri.includes("compare-table");
   const histogramColumns = isCompareAnalysis && analysisTable ? analysisTable.columns.slice(1).map((column, index) => ({
     label: /^[a-z][a-z0-9+.-]*:/i.test(column.label) ? toLabel(column.label, "OBJECT") : column.label,
@@ -9875,7 +10034,8 @@ useEffect(() => {
     buildCurrentShareUrl,
     returnShareUrl,
     returnButtonVisible,
-    queryActivityPending: isSearching || isCountingResults || isLoadingProperties || isLoadingRoles || isLoadingClasses || isLoadingCategoryTree || isLoadingGraphs || isLoadingAlphabet || groupValuesLoading || loadingRecordGraphs || loadingRecordAuthors || isLoadingRecordPolicy || isDescribing || viewDiscoveryLoading || viewProviderLoading || isValidatingRecord,
+    queryActivityPending: (urlStateInitialized && endpointReadyForQuery && !focusWidgetsSuppressed && personalWidgets.some(widget => widget.loading &&
+      (widget.anchor ? activeTransportedFacets(queryTree).some(alias => sameTransportedFacetIdentity(alias, widget.anchor)) : treeHasPropertyFilter(queryTree, widget.uri)))) || isSearching || isCountingResults || isLoadingProperties || isLoadingRoles || isLoadingClasses || isLoadingCategoryTree || isLoadingGraphs || isLoadingAlphabet || groupValuesLoading || loadingRecordGraphs || loadingRecordAuthors || isLoadingRecordPolicy || isDescribing || viewDiscoveryLoading || viewProviderLoading || isValidatingRecord,
     FACET_PAGE_SIZE,
     RECORD_DESCRIPTION_PAGE_SIZE,
     activeBlankNodeTab,
@@ -9961,7 +10121,8 @@ useEffect(() => {
     deleteBookmarks,
     deleteCurrentQueryHistory,
     deleteHistoryDialogOpen,
-    deleteNode,
+    deleteNode: guardedDeleteQueryNode,
+    guardedDeleteQueryNode,
     deleteQueryHistory,
     describedProperties,
     describedPropertyCount,
@@ -10070,6 +10231,7 @@ useEffect(() => {
     isLoadingClasses,
     isLoadingGraphs,
     isLoadingHistoryQuery,
+    historyLoadingTarget,
     isLoadingProperties,
     isLoadingRecordPolicy,
     isLoadingRoles,
@@ -10085,6 +10247,7 @@ useEffect(() => {
     setLeftWidgetLimit,
     liveQueryHasText,
     loadHistoryQuery,
+    selectPerspective,
     loadingRecordAuthors,
     loadingRecordGraphs,
     localStorageUsageBytes,
@@ -10099,6 +10262,7 @@ useEffect(() => {
     loginShowPassword,
     loginTab,
     loginTesting,
+    setLoginTesting: authenticationLifecycle.setLoginTesting,
     loginUsername,
     loginWebIdUri,
     manualRecordFormatSelectionRef,
@@ -10182,6 +10346,10 @@ useEffect(() => {
     refreshQuery,
     renderQueryNode,
     renderValueReferenceDialog,
+    pickingReferenceTarget,
+    valueReferenceError,
+    captureReferenceTargetClick,
+    cancelReferenceTargetPick: referencePicker.cancelPicking,
     resetQuery: resetHomeQuery,
     startCategoryNameSearch,
     restoreHistoryActionItem,
@@ -10405,6 +10573,7 @@ useEffect(() => {
     viewPanel,
     viewRenderError,
     visibleClassDisplayFacets,
+    unselectedClassDisplayFacets,
     visibleGroupValues,
     visibleResultsPage,
     widgetTimeouts,

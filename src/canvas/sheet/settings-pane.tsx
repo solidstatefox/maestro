@@ -1,5 +1,7 @@
 "use client";
 
+import { MaestroSelect } from "@/components/ui/maestro-select";
+import { MaestroDebugSettings } from "@/canvas/sheet/debug-settings";
 import { RESULTS_BATCH_SIZE_OPTIONS, LEFT_WIDGET_LIMIT_KEYS, LEFT_WIDGET_LIMIT_OPTIONS, LEFT_WIDGET_LIMIT_LABELS, CENTER_PANEL_LIMIT_STORAGE_KEY, CENTER_GROUP_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY, RIGHT_PANEL_PAGE_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS, RIGHT_PANEL_PAGE_LIMIT_OPTIONS } from "@/canvas/sheet/settings";
 
 import { getLocalStorageUsageBytes, formatStorageBytes } from "@/canvas/sheet/settings";
@@ -9,6 +11,7 @@ import { FACET_ADD_COUNTS_STORAGE_KEY, FACET_AUTOFILL_STORAGE_KEY, AUTO_CONFIGUR
 import maestroLanguages from "@/data/maestro-languages.json";
 
 import { ThemeToggle } from "@/components/theme-toggle";
+import { BrowsePaneOrderControl } from "@/canvas/sheet/browse-pane-order-control";
 import { type BrowserLogLevel } from "@/lib/maestro-client-logging";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -125,6 +128,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     isExportingBookmarks,
     isImportingBookmarks,
     isLoadingHistoryQuery,
+    historyLoadingTarget,
     leftPanelLimit,
     leftWidgetLimits,
     setLeftWidgetLimit,
@@ -269,17 +273,19 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
               {workspace.accessCapabilities.canUsePersonalStore && authSession && <p className="mt-1 break-all text-xs text-muted-foreground">Using personal: <span className="font-medium text-foreground">{personalSparqlEndpoint || "Not configured"}</span></p>}
             </SheetHeader>
             <div className="flex flex-col gap-4 px-4 pb-4">
+              <BrowsePaneOrderControl />
+              <MaestroDebugSettings active={controlsSheetOpen} />
 
               {workspace.accessCapabilities.canUsePersonalStore && authSession && (
               <div className="flex flex-col gap-3 rounded-md border p-3">
                 <Label>History</Label>
                 <div className="flex flex-wrap items-center gap-2">
                   <Tooltip>
-                    <TooltipTrigger render={<Button type="button" variant="outline" disabled={isLoadingHistoryQuery} onClick={() => void loadHistoryQuery()}>{isLoadingHistoryQuery ? "Loading…" : "Show"}</Button>} />
+                    <TooltipTrigger render={<Button type="button" variant="outline" disabled={isLoadingHistoryQuery} onClick={() => void loadHistoryQuery()}>{historyLoadingTarget === "history" ? "Loading…" : "Show"}</Button>} />
                     <TooltipContent className="z-[100]">History — show Query History Visit records</TooltipContent>
                   </Tooltip>
                   <Tooltip>
-                    <TooltipTrigger render={<Button type="button" variant="outline" disabled={isLoadingHistoryQuery} onClick={() => void loadHistoryQuery(true)}>{isLoadingHistoryQuery ? "Loading…" : "Show Bookmarks"}</Button>} />
+                    <TooltipTrigger render={<Button type="button" variant="outline" disabled={isLoadingHistoryQuery} onClick={() => void loadHistoryQuery(true)}>{historyLoadingTarget === "bookmarks" ? "Loading…" : "Show Bookmarks"}</Button>} />
                     <TooltipContent className="z-[100]">Bookmarks — show Bookmark records with a schema:identifier hash</TooltipContent>
                   </Tooltip>
                   <Button type="button" variant="outline" disabled={!historyBookmarkId || isDeletingCurrentHistory || isDeletingHistory} onClick={() => void deleteCurrentQueryHistory()}>{isDeletingCurrentHistory ? "Deleting…" : "Delete"}</Button>
@@ -324,13 +330,13 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <Label htmlFor="maestro-browser-log-level">Log level</Label>
-                  <select id="maestro-browser-log-level" value={browserLogLevel} disabled={!browserLogging}
+                  <MaestroSelect id="maestro-browser-log-level" value={browserLogLevel} disabled={!browserLogging}
                     className="rounded-md border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
                     onChange={(event) => setBrowserLogLevel(event.target.value as BrowserLogLevel)}>
                     {(["trace", "debug", "info", "warn", "error", "fatal"] as BrowserLogLevel[]).map((level) =>
                       <option key={level} value={level}>{level[0].toUpperCase() + level.slice(1)}</option>
                     )}
-                  </select>
+                  </MaestroSelect>
                 </div>
               </div>
               <div className="flex flex-col gap-2 rounded-md border p-3">
@@ -342,7 +348,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                   <Label htmlFor="maestro-alphabet-language">Preferred language</Label>
                   <Button type="button" size="sm" variant="outline" onClick={addLanguageToShareUrl} disabled={languageOverride !== null}>Add to Share URL</Button>
                 </div>
-                <select id="maestro-alphabet-language" className="rounded-md border bg-background px-2 py-1.5 text-sm" value={preferredAlphabetLanguage}
+                <MaestroSelect id="maestro-alphabet-language" className="rounded-md border bg-background px-2 py-1.5 text-sm" value={preferredAlphabetLanguage}
                   onChange={(event) => {
                     const next = event.target.value;
                     if (!(next === "all" || MAESTRO_ALPHABET_LANGUAGES.some((option) => option.code === next))) return;
@@ -351,12 +357,12 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                   }}>
                   <option value="all">All languages</option>
                   {MAESTRO_ALPHABET_LANGUAGES.map(({ code, name }) => <option key={code} value={code}>{name} ({code})</option>)}
-                </select>
+                </MaestroSelect>
                 <p className="text-xs text-muted-foreground">The effective language applies to FCT Results, facets, counts and Alphabet. A Share URL override takes precedence until removed; it is not saved to Sheet preferences.</p>
               </div>
               <div className="flex flex-col gap-2 rounded-md border p-3">
                 <Label htmlFor="maestro-prefix-source">Namespace prefixes (CURIEs shown for IRIs without labels)</Label>
-                <select id="maestro-prefix-source" className="rounded-md border bg-background px-2 py-1.5 text-sm" value={prefixSource}
+                <MaestroSelect id="maestro-prefix-source" className="rounded-md border bg-background px-2 py-1.5 text-sm" value={prefixSource}
                   onChange={(event) => {
                     const next = event.target.value as "prefixcc" | "zazuko" | "builtin";
                     setPrefixSource(next);
@@ -365,7 +371,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                   <option value="prefixcc">prefix.cc community list (falls back to built-in)</option>
                   <option value="zazuko">Zazuko curated list</option>
                   <option value="builtin">Built-in list only</option>
-                </select>
+                </MaestroSelect>
                 <p className="text-xs text-muted-foreground">{prefixStatus}</p>
               </div>
               <div className="flex items-center justify-between gap-3 rounded-md border p-3">
@@ -450,13 +456,13 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                 ] as const).map(([key, label, min, max]) => (
                   <div key={key} className="flex items-center justify-between gap-3">
                     <Label htmlFor={`query-concurrency-${key}`} className="text-xs">{label}</Label>
-                    <select id={`query-concurrency-${key}`} value={queryConcurrency[key]}
+                    <MaestroSelect id={`query-concurrency-${key}`} value={queryConcurrency[key]}
                       onChange={(event) => changeQueryConcurrency({ ...queryConcurrency, [key]: Number(event.currentTarget.value) })}
                       className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       {Array.from({ length: max - min + 1 }, (_, i) => i + min)
                         .filter((n) => key !== "heavyPerServer" || n <= queryConcurrency.lightPerServer)
                         .map((n) => <option key={n} value={n}>{n}</option>)}
-                    </select>
+                    </MaestroSelect>
                   </div>
                 ))}
               </div>
@@ -531,20 +537,20 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                 <CollapsibleContent className="space-y-4 border-t px-3 pb-4 pt-3">
                   <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                     <Label htmlFor="set-all-limits">Set all:</Label>
-                    <select id="set-all-limits" aria-label="Set all query LIMITs" value={masterLimit}
+                    <MaestroSelect id="set-all-limits" aria-label="Set all query LIMITs" value={masterLimit}
                       onChange={(event) => applyMasterLimit(event.currentTarget.value)}
                       className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       <option value="none">none</option>
                       {[100, 500, 1000].map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
-                    </select>
+                    </MaestroSelect>
                   </div>
                   <div className="flex items-center justify-between gap-3 border-t pt-3">
                     <Label htmlFor="maestro-uri-complete-limit" className="text-xs">Root URI autocomplete LIMIT</Label>
-                    <select id="maestro-uri-complete-limit" value={autocompleteSettings.limit}
+                    <MaestroSelect id="maestro-uri-complete-limit" value={autocompleteSettings.limit}
                       onChange={(event) => updateAutocompleteSettings("limit", Number(event.target.value))}
                       className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       {[5, 10].map(limit => <option key={limit} value={limit}>{limit} suggestions</option>)}
-                    </select>
+                    </MaestroSelect>
                   </div>
                   <section className="space-y-3">
                     <h3 className="text-xs font-semibold text-muted-foreground">Left panel</h3>
@@ -552,12 +558,12 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
               {LEFT_WIDGET_LIMIT_KEYS.map((key) => (
                 <div key={key} className="flex items-center justify-between gap-3 rounded-md border p-3">
                   <Label htmlFor={`left-limit-${key}`}>{LEFT_WIDGET_LIMIT_LABELS[key]}</Label>
-                  <select id={`left-limit-${key}`} aria-label={`${LEFT_WIDGET_LIMIT_LABELS[key]} query LIMIT`}
+                  <MaestroSelect id={`left-limit-${key}`} aria-label={`${LEFT_WIDGET_LIMIT_LABELS[key]} query LIMIT`}
                     value={leftWidgetLimits[key]}
                     onChange={(event) => setLeftWidgetLimit(key, Number(event.currentTarget.value))}
                     className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm">
                     {LEFT_WIDGET_LIMIT_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
-                  </select>
+                  </MaestroSelect>
                 </div>
               ))}
                   </section>
@@ -566,17 +572,17 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                     <p className="text-xs text-muted-foreground">Limits for the graph-provenance query on blank-node Records. Smaller values reduce peak server work but can omit some graphs or sibling nodes. They do not limit Record Properties or Roles.</p>
                     <div className="flex items-center justify-between gap-3">
                       <Label htmlFor="record-discovery-candidates">FCT-bound blank-node candidates</Label>
-                      <select id="record-discovery-candidates" className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                      <MaestroSelect id="record-discovery-candidates" className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                         value={recordDiscoveryLimits.candidates} onChange={(event) => updateRecordDiscoveryLimit("candidates", Number(event.currentTarget.value))}>
                         {RECORD_GRAPH_CANDIDATE_OPTIONS.map((n) => <option key={n} value={n}>{n.toLocaleString()}</option>)}
-                      </select>
+                      </MaestroSelect>
                     </div>
                     <div className="flex items-center justify-between gap-3">
                       <Label htmlFor="record-discovery-graphs">Distinct discovered graphs</Label>
-                      <select id="record-discovery-graphs" className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                      <MaestroSelect id="record-discovery-graphs" className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                         value={recordDiscoveryLimits.graphs} onChange={(event) => updateRecordDiscoveryLimit("graphs", Number(event.currentTarget.value))}>
                         {RECORD_GRAPH_RESULT_OPTIONS.map((n) => <option key={n} value={n}>{n.toLocaleString()}</option>)}
-                      </select>
+                      </MaestroSelect>
                     </div>
                   </section>
                   <section className="space-y-3 border-t pt-3">
@@ -584,7 +590,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
 
                   <div className="flex items-center justify-between gap-3">
                     <Label htmlFor="center-results-limit">Results batch LIMIT</Label>
-                    <select id="center-results-limit" aria-label="Center Results server batch limit" value={pendingCenterBatchLimit ?? resultsBatchSize}
+                    <MaestroSelect id="center-results-limit" aria-label="Center Results server batch limit" value={pendingCenterBatchLimit ?? resultsBatchSize}
                       onChange={(event) => {
                         const limit = Number(event.currentTarget.value);
                         if (!RESULTS_BATCH_SIZE_OPTIONS.some((size) => size === limit)) return;
@@ -592,11 +598,11 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                         setPendingCenterBatchLimit(limit);
                       }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
-                    </select>
+                    </MaestroSelect>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <Label htmlFor="center-group-limit">Groups batch LIMIT</Label>
-                    <select id="center-group-limit" aria-label="Center Groups server batch limit" value={pendingGroupsBatchLimit ?? groupBatchSize}
+                    <MaestroSelect id="center-group-limit" aria-label="Center Groups server batch limit" value={pendingGroupsBatchLimit ?? groupBatchSize}
                       onChange={(event) => {
                         const limit = Number(event.currentTarget.value);
                         if (!RESULTS_BATCH_SIZE_OPTIONS.some((size) => size === limit)) return;
@@ -604,7 +610,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                         setPendingGroupsBatchLimit(limit);
                       }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       {RESULTS_BATCH_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
-                    </select>
+                    </MaestroSelect>
                   </div>
                   <p className="text-xs text-muted-foreground">Server-side LIMITs; the Results and Groups page-size selector still controls visible pages. Saved in IndexedDB.</p>
                   </section>
@@ -613,7 +619,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
 
                   <div className="flex items-center justify-between gap-3">
                     <Label htmlFor="right-describe-limit">Record SELECT LIMIT</Label>
-                    <select id="right-describe-limit" aria-label="Right Record DESCRIBE query limit" value={pendingRecordDescriptionLimit ?? recordDescriptionQueryLimit}
+                    <MaestroSelect id="right-describe-limit" aria-label="Right Record DESCRIBE query limit" value={pendingRecordDescriptionLimit ?? recordDescriptionQueryLimit}
                       onChange={(event) => {
                         const limit = Number(event.currentTarget.value);
                         if (!RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS.some((size) => size === limit)) return;
@@ -621,11 +627,11 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                         setPendingRecordDescriptionLimit(limit);
                       }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       {RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
-                    </select>
+                    </MaestroSelect>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <Label htmlFor="right-record-page-limit">Record properties per page</Label>
-                    <select id="right-record-page-limit" aria-label="Right Record table properties per page" value={recordDescriptionPageSize}
+                    <MaestroSelect id="right-record-page-limit" aria-label="Right Record table properties per page" value={recordDescriptionPageSize}
                       onChange={(event) => {
                         const limit = Number(event.currentTarget.value);
                         if (!RIGHT_PANEL_PAGE_LIMIT_OPTIONS.some((size) => size === limit)) return;
@@ -633,7 +639,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                         setRecordDescriptionPageSize(limit); setRecordDescriptionPage(0);
                       }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
                       {RIGHT_PANEL_PAGE_LIMIT_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
-                    </select>
+                    </MaestroSelect>
                   </div>
                   <p className="text-xs text-muted-foreground">SELECT controls the shared Default/formatter snapshot and loads URI labels. Table paging is local. Saved in IndexedDB.</p>
                   </section>

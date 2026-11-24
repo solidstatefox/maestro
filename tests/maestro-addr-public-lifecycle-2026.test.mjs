@@ -35,8 +35,12 @@ test('the browser persists its own Shared group and refreshes only changed court
   assert.match(dir,/Shared: \[\]/);
   assert.match(dir,/const previous = readGraphServerDirectory\(\)/);
   assert.match(graph,/collectSharedGraphServer\(normalized\)/);
-  assert.match(w,/if \(cancelled \|\| version\.changed === false\) return/);
-  assert.match(w,/replaceCourtesyGraphServers\(data\.digest, data\.endpoints\)/);
+  // A cached, nonempty courtesy list may skip downloading on unchanged digest.
+  // A first-visit browser (no digest/list) must fetch the complete list.
+  assert.match(w,/if\(stored\.courtesyDigest && hasCourtesy\)/);
+  assert.match(w,/if\(cancelled \|\| \(version\?\.changed===false && hasCourtesy\)\)return/);
+  assert.match(w,/for\(let attempt=0;attempt<2&&!cancelled;attempt\+\+\)/);
+  assert.match(w,/replaceCourtesyGraphServers\(data\.digest,\s*data\.endpoints\)/);
   assert.doesNotMatch(w,/authRestoreComplete && fctEndpoints\.length/);
 });
 

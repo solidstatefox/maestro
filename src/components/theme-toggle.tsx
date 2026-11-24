@@ -1,5 +1,6 @@
 "use client";
 
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
 
@@ -14,7 +15,7 @@ export function ThemeToggle() {
       <label htmlFor="maestro-theme" className="whitespace-nowrap text-xs text-muted-foreground">
         Theme
       </label>
-      <select
+      <MaestroSelect
         id="maestro-theme"
         aria-label="Color theme"
         value={mounted ? (theme ?? "system") : "system"}
@@ -24,7 +25,7 @@ export function ThemeToggle() {
         <option value="light">Light</option>
         <option value="dark">Dark</option>
         <option value="system">System</option>
-      </select>
+      </MaestroSelect>
     </div>
   );
 }

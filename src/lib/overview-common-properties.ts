@@ -28,7 +28,7 @@ export function buildOverviewCommonPropertiesQueries(liveXml:string):{endpoint:s
       GROUP BY ?predicate ?value HAVING (COUNT(DISTINCT ${focus}) = ${total})`};
 }
 async function aggregate(endpoint:string,query:string,signal:AbortSignal):Promise<SparqlResponse> {
-  const res=await maestroQueryFetch("/proxy/api/sparql",{method:"POST",headers:{"Content-Type":"application/json"},signal,body:JSON.stringify({addr:`@${endpoint}`,query})});
+  const res=await maestroQueryFetch("/proxy/api/sparql",{method:"POST",headers:{"x-maestro-debug-source":"urn:maestro:component:Overview:CommonProperties","x-maestro-debug-component":"Overview:CommonProperties","Content-Type":"application/json"},signal,body:JSON.stringify({addr:`@${endpoint}`,query})});
   const json=await res.json().catch(()=>null) as SparqlResponse|null;
   if(!res.ok || json?.error)throw new Error(json?.error || `Common Record query failed HTTP ${res.status}`);
   if(!json || json.incomplete || !Array.isArray(json.results?.bindings))throw new Error("Common Record query did not complete; no partial intersections shown.");

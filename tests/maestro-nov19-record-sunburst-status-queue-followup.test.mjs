@@ -77,9 +77,12 @@ test('Status header has text and reads both ODS and remote proxy dispatch clocks
   const client = source('src/lib/fct-client.ts');
   const clocks = source('src/lib/maestro-query-execution-clock.ts');
   assert.match(header, /<ElapsedStatus label="Status" category="status" clockScope="statuses"/);
-  assert.match(personal, /await maestroQueryFetch\("\/proxy\/api\/sparql"/);
+  assert.match(personal, /await personalAuthenticatedFetch\(ctx\.session,"\/proxy\/api\/sparql",\{/);
+  assert.match(personal, /\},maestroQueryFetch\);/);
+  const transport = source('src/lib/client-personal-request.ts');
+  assert.match(transport, /await transport\(input,scoped\.init\)/);
   assert.match(client, /selectPersonal\(countQuery, ctx, signal, "status-facet-count"\)/);
-  assert.match(client, /"x-maestro-debug-source": "status-facet-remote"/);
+  assert.match(client, /"x-maestro-debug-source": "urn:maestro:component:status-facet-remote"/);
   assert.match(clocks, /label\.includes\("status-facet"\).*return "statuses"/);
 });
 

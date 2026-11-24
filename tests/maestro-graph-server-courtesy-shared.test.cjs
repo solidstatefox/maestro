@@ -69,8 +69,8 @@ test('courtesy digest handshake only downloads list on a change and is independe
   const proxy=read('src/app/proxy/api/fct/route.ts');
   const registry=read('src/lib/personal-sparql.ts');
   assert.match(host,/operationId:"courtesyGraphServers"/);
-  assert.match(host,/if \(cancelled \|\| version\.changed === false\) return/);
-  assert.match(host,/replaceCourtesyGraphServers\(data\.digest, data\.endpoints\)/);
+  assert.match(host,/version\?\.changed===false && hasCourtesy/);
+  assert.match(host,/replaceCourtesyGraphServers\(data\.digest,data\.endpoints\)/);
   const service=read('src/app/proxy/api/service/route.ts');
   assert.match(service,/getCourtesyGraphServerDigest/);
   assert.match(service,/changed:digest!==current/);
@@ -83,7 +83,7 @@ test('courtesy digest handshake only downloads list on a change and is independe
 
 test('provider seeding never clears browser-owned Shared or imports the courtesy flatfile', () => {
   const seed=read('src/lib/client-graph-seed.ts');
-  assert.match(seed,/"dataserver-seed.ttl", "eu-data\/endpoints.ttl"/);
+  assert.match(seed,/"dataserver-seed.ttl","eu-data\/endpoints.ttl"/);
   assert.doesNotMatch(seed,/entry\.file === "dataserver-seed\.ttl"/);
   assert.match(seed,/destinationSeedDigest\(/);
 });

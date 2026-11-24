@@ -44,7 +44,7 @@ check('Configure Properties and Roles inspectors expose six actual XML/SPARQL ta
   /primaryTabLabel="Roles XML"/);
 check('Configure inspectors use the existing read-only SPARQL proxy and provide Execute for SPARQL tabs',
   'src/canvas/utils/query-inspector.tsx',
-  /fetch\("\/proxy\/api\/sparql"/,
+  /attributedSparqlFetch\("\/proxy\/api\/sparql"/,
   /method: "POST"/,
   /displayedLanguage !== "sparql"/,
   /onClick=\{\(\) => void execute\(\)\}/,

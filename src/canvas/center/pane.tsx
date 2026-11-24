@@ -1,4 +1,6 @@
 "use client";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { retryMaestroComponent } from "@/lib/maestro-component-retry";
@@ -26,7 +28,7 @@ import { Toggle } from "@/components/ui/toggle";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { ChevronDown, Code2, Tag, Tags, ListTree, X } from "lucide-react";
+import { Code2, Tag, Tags, ListTree, X } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 
@@ -114,7 +116,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
   const contextValidationPending = showingContextValidation && workspace.queryContextLoading;
   const contextValidationProblem = showingContextValidation ? workspace.queryContextError : "";
   const contextValidationNode = showingContextValidation ? <div className="shrink-0 px-4 pb-2">
-    {contextValidationPending && <p role="status" className="py-2 text-xs text-muted-foreground"><ElapsedStatus label="Validating query context" category="other" /></p>}
+    {contextValidationPending && <p role="status" className="py-2 text-xs text-muted-foreground"><ElapsedStatus label="Validating query context" category="other" clockScope="component:query-context" /></p>}
     {contextValidationProblem && <ErrorDetails prefix="Query SHACL validation" error={contextValidationProblem} />}
     {contextReportKey !== dismissedQueryValidation &&
       <ValidationNotice report={contextValidation} onDismiss={() => setDismissedQueryValidation(contextReportKey)} />}
@@ -266,48 +268,26 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                   <span className="shrink-0 text-muted-foreground">
                     <IncompleteWidgetIndicator source={centralTab === "groups" ? "groups" : "results"} /> Group <strong className="font-semibold text-foreground">{effectiveResultsTotalCount !== null ? shortenCount(effectiveResultsTotalCount) : "many"}</strong> results by:
                   </span>
-                  <div className="relative flex min-w-[8rem] max-w-full flex-1 items-center">
-                  <select
-                    id="groups-property-select"
-                    aria-label="Group results by property"
-                    value={groupByPropertyUri}
-                    disabled={groupByOptions.length <= 1}
-                    onChange={(event) => {
-                      const value = event.currentTarget.value;
+                  <div className="flex min-w-[8rem] max-w-full flex-1 items-center">
+                    <Select value={groupByPropertyUri || "__maestro_none__"} disabled={groupByOptions.length <= 1} onValueChange={(key) => {
+                      const value = key === "__maestro_none__" ? "" : key;
                       setGroupByPropertyUri(value);
                       setCentralTab(value ? "groups" : "results");
-                    }}
-                    className="w-full min-w-0 appearance-none rounded-md border border-input bg-background py-2 pl-3 pr-9 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {groupByOptions.map((option) => <option key={option.key || "none"} value={option.key}>{option.label}</option>)}
-                  </select>
-                  <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 size-4 text-muted-foreground" />
+                    }}>
+                      <SelectTrigger id="groups-property-select" aria-label="Group results by property" className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                      <SelectContent>{groupByOptions.map(option => <SelectItem key={option.key || "none"} value={option.key || "__maestro_none__"}>{option.label}</SelectItem>)}</SelectContent>
+                    </Select>
                   </div>
                   <label htmlFor="results-page-size" className="shrink-0 text-muted-foreground">in pages of</label>
-                  <div className="relative inline-flex shrink-0 items-center">
-                  <select
-                    id="results-page-size"
-                    aria-label="Results page size"
-                    value={effectivePageSize}
-                    disabled={isSearching}
-                    onChange={(event) => {
-                      const nextSize = Number(event.currentTarget.value);
+                  <Select value={String(effectivePageSize)} disabled={isSearching} onValueChange={(value) => {
+                      const nextSize = Number(value);
                       if (!resultsPageSizeOptions.includes(nextSize)) return;
-                      try {
-                        maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(nextSize));
-                      } catch {
-                        // Storage can be disabled; the current selection still applies.
-                      }
-                      setResultsPageSize(nextSize);
-                      setResultsUiPage(0);
-                      setGroupUiPage(0);
-                    }}
-                    className="h-9 min-w-[4.5rem] appearance-none rounded-md border border-input bg-background py-2 pl-3 pr-8 text-sm"
-                  >
-                    {resultsPageSizeOptions.map((size) => <option key={size} value={size}>{size}</option>)}
-                  </select>
-                  <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2.5 size-3.5 text-muted-foreground" />
-                  </div>
+                      try { maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(nextSize)); } catch { /* Storage may be disabled. */ }
+                      setResultsPageSize(nextSize); setResultsUiPage(0); setGroupUiPage(0);
+                    }}>
+                    <SelectTrigger id="results-page-size" aria-label="Results page size" className="h-9 w-auto shrink-0 text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>{resultsPageSizeOptions.map(size => <SelectItem key={size} value={String(size)}>{size}</SelectItem>)}</SelectContent>
+                  </Select>
                   {selectedGroupByOption ? <><span aria-hidden="true" className="mx-1 h-6 border-l border-border" /><span className="shrink-0 text-muted-foreground">{groupValuesLoading ? "…" : `${visibleGroupValues.length} ${visibleGroupValues.length === 1 ? "group" : "groups"}`}</span></> : null}
                 </div>
               </div>

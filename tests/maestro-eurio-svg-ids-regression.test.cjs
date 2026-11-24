@@ -26,11 +26,11 @@ test('header separators and children have distinct stable ids', () => {
   for (const id of ids) assert.equal(stylesheet.split(`id="${id}"`).length - 1, 1, `${id} must appear only once in standalone stylesheet`);
 });
 
-test('both RDF-embedded EU Project stylesheets are synchronized with the standalone stylesheet', () => {
+test('RDF-embedded EU Perspective and Record stylesheets are synchronized with the standalone stylesheet', () => {
   const embedded = [...provider.matchAll(/mui:templateContent """([\s\S]*?)"""/g)];
   assert.equal(embedded.length, 3, 'expected perspective, record, and results stylesheets');
   for (const [i, match] of embedded.entries()) {
     if (i > 1) break;
-    assert.equal(match[1].replace(/\\\\/g, '\\'), stylesheet, `embedded stylesheet ${i} is stale`);
+    assert.equal(match[1].replace(/\\\\/g, '\\'), i === 0 ? fs.readFileSync(path.join(root, "graph/eu-data/perspective.xsl"), "utf8") : stylesheet, `embedded stylesheet ${i} is stale`);
   }
 });

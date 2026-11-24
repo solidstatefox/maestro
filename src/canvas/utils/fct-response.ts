@@ -447,6 +447,22 @@ export async function readFctResponse(response: Response): Promise<ParsedFctResp
  * resource can be independent results. This function belongs at the boundary
  * of each derived facet value query and is safe for both direct/role facets.
  */
+/** Authoritative membership aggregate from the count-sorted LIST response. */
+export function facetMembershipCount(value: FctResult): number | undefined {
+  const lexical = value.columns?.find(column => column.attributes?.var === "ct")?.value;
+  if (lexical === undefined || !/^\d+$/.test(lexical.trim())) return undefined;
+  const count = Number(lexical);
+  return Number.isSafeInteger(count) && count >= 0 ? count : undefined;
+}
+
+/** Missing aggregates are an invalid response, not a zero count. Exclude
+ * confirmed zero rows before they enter widget state or pagination. */
+export function countedFacetValues(values: readonly FctResult[]): FctResult[] {
+  if (values.some(value => facetMembershipCount(value) === undefined))
+    throw new Error("Personal facet response is missing a valid membership count (?ct).");
+  return distinctFacetValues(values.filter(value => facetMembershipCount(value)! > 0));
+}
+
 export function distinctFacetValues(values: readonly FctResult[]): FctResult[] {
   const byTerm = new Map<string, FctResult>();
   for (const value of values) {

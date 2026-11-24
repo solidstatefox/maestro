@@ -17,7 +17,8 @@ test('actual mui:RecordViewerWidget stylesheet is identical to the tested standa
   const stylesheet=read('graph/eu-data/record.xsl');
   const templates=[...ttl.matchAll(/mui:templateContent """([\s\S]*?)"""/g)];
   assert.equal(templates.length,3);
-  for (const index of [0,1]) {
+  assert.equal(templates[0][1],read('graph/eu-data/perspective.xsl'));
+  for (const index of [1]) {
     // Turtle long-string escapes one additional slash per XSLT regex escape.
     assert.equal(templates[index][1].replace(/\\\\/g,'\\'),stylesheet,`embedded stylesheet ${index} differs`);
   }

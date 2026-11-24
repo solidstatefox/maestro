@@ -32,7 +32,7 @@ test('one common validation notice used for Record, query context and Spider',()
 test('Kind discovery and Analyze discovery have XState request actors',()=>{
   const configure=read('src/canvas/left/configure-pane.tsx');
   assert.match(configure,/selectKinds\(kindSnapshot, kindKey\)/);
-  assert.match(configure,/kindState\.ready && !checkingKinds && <select/);
+  assert.match(configure,/kindState\.ready && !checkingKinds && <MaestroSelect/);
   assert.match(configure,/setKindRetry\(value => value \+ 1\)/);
   assert.match(read('src/lib/app-lifecycle/analyze-discovery.ts'),/fromPromise/);
   assert.match(read('src/canvas/utils/workspace-controller.tsx'),/analyzeDiscoveryController\.discover/);

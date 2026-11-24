@@ -27,7 +27,7 @@ test('three separate named filterable fields are registered and use pickaxe', ()
     assert.match(ttl, new RegExp(`<gttp://ggg\\.maestro\\.ecosys/eu-data/derived/involved-party-${slug}> a mui:DerivedFacet ;[\\s\\S]*?rdfs:label "hasInvolvedParty: ${label}"@en ;[\\s\\S]*?mui:icon "pickaxe" ;[\\s\\S]*?mui:resultPredicate <gttp://ggg\\.maestro\\.ecosys/eu-data/derived/involved-party#${slug}> ;[\\s\\S]*?mui:capture "${index}" \\.`));
   }
   const pane = read('src/canvas/left/personal-widget-cards.tsx');
-  assert.match(pane, /boundNode\?\.attributes\.derive === "regex" && <Pickaxe/);
+  assert.match(pane, /boundNode\?\.attributes\.derive === "regex" \|\| boundNode\?\.attributes\.derive === "split"/);
   assert.match(pane, /boundNode\?\.attributes\.label \|\| facetPropertyLabel\(widget\.uri\)/);
   const discover = read('src/lib/client-derived-facet-providers.ts');
   assert.match(discover, /\?shape sh:property\/sh:path <\$\{property\}>/);

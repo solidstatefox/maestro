@@ -1,7 +1,7 @@
 "use client";
-import { currentBootstrapButtons } from "@/lib/client-auth-bootstrap";
+import { MaestroSelect } from "@/components/ui/maestro-select";
+import { currentBootstrapButtons, emptyBootstrapButtons, subscribeBootstrapButtons } from "@/lib/client-auth-bootstrap";
 import { clientQueryFavorites } from "@/lib/client-query-favorites";
-import { manageAppbarButtons } from "@/lib/client-appbar-buttons";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
@@ -35,7 +35,7 @@ import { Label } from "@/components/ui/label";
 import { Check, ChevronDown, Network, Link, CirclePlay, AtSign, X, LoaderCircle, ArrowLeft, ArrowRight, ClockArrowRight, Clock1, Clock2, Clock3, Clock4, Clock5, Clock6, Clock7, Clock8, Clock9, Clock10, Clock11, Clock12, Home, CornerDownLeft, RotateCw, RefreshCw, Bookmark, User, LogOut, KeyRound, Eye, EyeOff, Info, WandSparkles } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
-import { AuthType, clearPersonalAuthSession, disconnectPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
+import { AuthType, clearPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
 import { cancelPersonalInitialization } from "@/lib/personal-initialization";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
@@ -190,7 +190,8 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
   }, [graphAddressEditing]);
   const [pendingQueryCount, setPendingQueryCount] = useState(0);
   const [pendingQueryDetails, setPendingQueryDetails] = useState<PendingMaestroQuery[]>([]);
-  const [appbarButtons, setAppbarButtons] = useState<{uri:string;action:string;icon:string;tooltip:string;url:string}[]>([]);
+  const bootstrapButtons = useSyncExternalStore(subscribeBootstrapButtons,currentBootstrapButtons,emptyBootstrapButtons);
+  const appbarButtons = !workspace.authSession || !workspace.accessCapabilities.canUsePersonalStore ? emptyBootstrapButtons() : bootstrapButtons;
   // Use the bookmark's authoritative FCT query, not the full URL: UI state,
   // History cursor and parameter order can differ for the same saved query.
   const matchedAppbarButton = (workspace.isQueryBookmarked && workspace.matchingBookmarkId
@@ -201,24 +202,6 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
       return bookmarkedQuery !== null && canonicalQueryIdentityXml(bookmarkedQuery) === canonicalQueryIdentityXml(workspace.queryXml);
     } catch { return false; }
   }));
-  useEffect(() => {
-    if (!workspace.authSession || !workspace.accessCapabilities.canUsePersonalStore) { setAppbarButtons([]); return; }
-    let mounted = true;
-    const update = () => { if (mounted) setAppbarButtons(currentBootstrapButtons()); };
-    const refresh = async () => {
-      try {
-        const payload = await manageAppbarButtons({action:"list"});
-        if (mounted) setAppbarButtons(payload.buttons ?? []);
-      } catch (error) {
-        if (mounted) toast.add({title:"Could not refresh appbar",description:error instanceof Error?error.message:String(error),type:"error"});
-      }
-    };
-    update();
-    window.addEventListener("maestro:auth-bootstrap-updated",update);
-    window.addEventListener("maestro:appbar-buttons-updated",refresh);
-    return () => { mounted=false;window.removeEventListener("maestro:auth-bootstrap-updated",update);
-      window.removeEventListener("maestro:appbar-buttons-updated",refresh); };
-  }, [workspace.authSession, workspace.accessCapabilities.canUsePersonalStore]);
   const openPinnedBookmark = (url: string) => {
     try {
       const destination = new URL(url, window.location.origin);
@@ -340,6 +323,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     loginShowPassword,
     loginTab,
     loginTesting,
+    setLoginTesting,
     loginUsername,
     loginWebIdUri,
     matchingBookmarkId,
@@ -462,11 +446,12 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     });
   }, [graphProbe.identity, graphProbe.state, graphProbe.error, graphProbeIdentity, graphAlreadySelected, graphAutoFill]);
 
-  // When a session has been published but the XState actor has not yet
-  // observed it, show amber rather than flashing an incorrect green Ready.
-  const graphInitializationPending = Boolean(authSession) &&
-    !workspace.accessCapabilities.canUsePersonalStore &&
-    workspace.accessCapabilities.policyStage !== "failed";
+  // The existing XState user-session actor owns the signal as well as readiness.
+  const personalAuthStatus = workspace.accessCapabilities.authResponseStatus;
+  const personalChallengePending = workspace.accessCapabilities.challengeResponsePending;
+  const personalAuthBadgeClass = {red:"bg-destructive",amber:"bg-amber-500",green:"bg-emerald-500",
+    pulsingAmber:"bg-amber-500 animate-pulse motion-reduce:animate-none"}[workspace.accessCapabilities.userSignal];
+  const personalAuthBadgeLabel = workspace.accessCapabilities.userSignalLabel;
   const showCancel = pendingQueryCount > 0 || queryActivityPending;
   const liveServer = (queryTree.attributes.addr ?? "").split("@").slice(1).join("@");
   const activeGraphServer = fctEndpoints.find(endpoint => liveServer &&
@@ -610,7 +595,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                         id="fct-endpoint"
                         title="Choose which FCT endpoint receives queries"
                         type="button"
-                        disabled={fctEndpoints.length === 0}
+                        disabled={fctEndpoints.length === 0 && !endpointMenuError}
                         aria-label="Choose graph server"
                         className="flex w-full min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap rounded-none bg-transparent px-2 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50"
                       >
@@ -619,6 +604,11 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                       </button></DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="z-50 w-max min-w-max max-w-[calc(100vw-2rem)]">
+                        {endpointMenuError && <div role="alert" className="max-w-sm border-b border-destructive/30 px-2 py-2 text-xs text-destructive">
+                          <p className="mb-1 break-words">Courtesy graph-server discovery failed: {endpointMenuError}</p>
+                          <DropdownMenuItem onSelect={() => setEndpointReloadRevision(revision => revision + 1)} className="font-medium">Retry courtesy discovery</DropdownMenuItem>
+                          <p className="text-muted-foreground">Saved Shared servers remain usable.</p>
+                        </div>}
                         {fctEndpoints.length === 0 ? <DropdownMenuLabel>{isCheckingEndpoints ? "Loading endpoints…" : "No endpoints configured"}</DropdownMenuLabel> : [...new Set(fctEndpoints.map((endpoint) => endpoint.group || "Endpoints"))].map((group) => (
                           <Fragment key={group}>
                             <DropdownMenuLabel>{group}</DropdownMenuLabel>
@@ -861,11 +851,11 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="maestro-bookmark-tag-vocabulary">Tag vocabulary</Label>
-                  <select id="maestro-bookmark-tag-vocabulary" value={bookmarkTagVocabulary} onChange={(event) => setBookmarkTagVocabulary(event.target.value as "skos" | "dcterms" | "scot")} className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <MaestroSelect id="maestro-bookmark-tag-vocabulary" value={bookmarkTagVocabulary} onChange={(event) => setBookmarkTagVocabulary(event.target.value as "skos" | "dcterms" | "scot")} className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     <option value="skos">SKOS concept — skos:Concept / skos:prefLabel</option>
                     <option value="dcterms">Dublin Core subject — dcterms:subject literal</option>
                     <option value="scot">SCOT tag — scot:Tag / scot:has_tag</option>
-                  </select>
+                  </MaestroSelect>
                 </div>
                 <div className="flex justify-end gap-2 pt-1">
                   <Button type="button" variant="outline" disabled={bookmarkSaving} onClick={() => setBookmarkDialogOpen(false)}>Cancel</Button>
@@ -915,12 +905,12 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                       <AvatarFallback className="bg-primary text-primary-foreground font-semibold text-xs uppercase">
                         {(authSession.userName || "U")[0]}
                       </AvatarFallback>
-                      <AvatarBadge className={`${graphInitializationPending ? "bg-amber-500 animate-pulse motion-reduce:animate-none" : workspace.accessCapabilities.policyStage === "failed" ? "bg-destructive" : "bg-emerald-500"} ring-2 ring-background`}>
-                        <span className="sr-only">{graphInitializationPending ? "Graph loading in progress" : workspace.accessCapabilities.policyStage === "failed" ? "Personal initialization failed" : "Logged in"}</span>
+                      <AvatarBadge className={`${personalAuthBadgeClass} ring-2 ring-background`}>
+                        <span className="sr-only">{personalAuthBadgeLabel}</span>
                       </AvatarBadge>
                     </Avatar>
                   </span>} />
-                  <TooltipContent>{graphInitializationPending ? "Graph loading in progress" : workspace.accessCapabilities.policyStage === "failed" ? `Personal initialization failed: ${workspace.accessCapabilities.policyError || "Verification unavailable"}` : "Connected"}</TooltipContent>
+                  <TooltipContent>{personalAuthBadgeLabel}</TooltipContent>
                 </Tooltip>
               </button>
             </DropdownMenuTrigger>
@@ -935,16 +925,16 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                       <AvatarFallback className="bg-primary text-primary-foreground font-semibold text-xs uppercase">
                         {(authSession.userName || "U")[0]}
                       </AvatarFallback>
-                      <AvatarBadge className={`${graphInitializationPending ? "bg-amber-500 animate-pulse motion-reduce:animate-none" : workspace.accessCapabilities.policyStage === "failed" ? "bg-destructive" : "bg-emerald-500"} ring-2 ring-background`}>
-                        <span className="sr-only">{workspace.accessCapabilities.policyStage === "ready" ? "Connected" : "Graph loading in progress"}</span>
+                      <AvatarBadge className={`${personalAuthBadgeClass} ring-2 ring-background`}>
+                        <span className="sr-only">{personalAuthBadgeLabel}</span>
                       </AvatarBadge>
                     </Avatar>
                     <div className="flex flex-col min-w-0">
                       <p className="text-sm font-medium leading-tight truncate">{authSession.userName || "Personal Account"}</p>
                       <div className="flex items-center gap-1.5 pt-0.5">
-                        <span className={`size-1.5 rounded-full ${graphInitializationPending ? "bg-amber-500 animate-pulse motion-reduce:animate-none" : workspace.accessCapabilities.policyStage === "failed" ? "bg-destructive" : "bg-emerald-500"}`} />
+                        <span className={`size-1.5 rounded-full ${personalAuthBadgeClass}`} />
                         <span className="text-[10px] text-muted-foreground uppercase font-mono font-medium tracking-wide">
-                          {workspace.accessCapabilities.policyStage === "ready" ? "Connected" : workspace.accessCapabilities.policyStage === "failed" ? `Initialization failed: ${workspace.accessCapabilities.policyError || "Unknown reason"}` : "Graph loading in progress"}
+                          {personalAuthBadgeLabel}
                         </span>
                       </div>
                     </div>
@@ -973,9 +963,9 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               <DropdownMenuItem
                 onClick={async () => {
                   cancelPersonalInitialization();
-                  disconnectPersonalAuthSession();
+                  setLoginTesting(false);
                   setAuthSession(null);
-                  setPersonalPoliciesReady(true);
+                  setPersonalPoliciesReady(false);
                   setPersonalPoliciesSeedError("");
                   setAuthRestoreIssue(false);
                   // Logout withdraws personal write capabilities; public reads and
@@ -984,9 +974,12 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   historyVisitIdRef.current = "";
                   pendingHistoryVisitRef.current = null;
                   setHistoryBookmarkId("");
-                  toast.add({
+                  let erased=false;
+                  try { await clearPersonalAuthSession(); erased=true; }
+                  catch { toast.add({title:"Could not erase personal session",description:"The saved IndexedDB record may still exist.",type:"error"}); }
+                  if(erased)toast.add({
                     title: "Disconnected",
-                    description: "Personal access paused. Remembered credentials are kept for automatic reconnection.",
+                    description: "The saved personal user session was erased from this browser.",
                     type: "info",
                   });
                   setBookmarkCheckRevision((r) => r + 1);
@@ -999,13 +992,15 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               <DropdownMenuItem
                 onClick={async () => {
                   cancelPersonalInitialization();
-                  clearPersonalAuthSession();
+                  setLoginTesting(false);
                   setAuthSession(null);
-                  setPersonalPoliciesReady(true);
+                  setPersonalPoliciesReady(false);
                   setPersonalPoliciesSeedError("");
                   setAuthRestoreIssue(false);
                   setHistoryBookmarkId("");
                   setBookmarkCheckRevision(r => r + 1);
+                  try { await clearPersonalAuthSession(); }
+                  catch { toast.add({title:"Could not erase personal session",description:"The saved IndexedDB record may still exist.",type:"error"}); return; }
                   toast.add({ title: "Account forgotten", description: "Remembered personal credentials were erased from this browser.", type: "info" });
                 }}
                 className="cursor-pointer text-destructive focus:text-destructive gap-2"
@@ -1028,11 +1023,15 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   <AvatarFallback className="bg-muted text-muted-foreground hover:text-foreground">
                     <User className="size-4" aria-hidden="true" />
                   </AvatarFallback>
-                  {authRestoreIssue && <AvatarBadge className="bg-destructive text-destructive-foreground ring-2 ring-background"><span className="text-xs font-bold">!</span></AvatarBadge>}
+                  {(personalAuthStatus !== null || loginTesting) ? (
+                    <AvatarBadge className={`${personalAuthBadgeClass} ring-2 ring-background`}>
+                      <span className="sr-only">{personalAuthBadgeLabel}</span>
+                    </AvatarBadge>
+                  ) : authRestoreIssue && <AvatarBadge className="bg-destructive text-destructive-foreground ring-2 ring-background"><span className="text-xs font-bold">!</span></AvatarBadge>}
                 </Avatar>
               </button>
             } />
-            <TooltipContent>{authRestoreIssue ? "Your previous personal graph server login could not be restored. Please log in again." : "Log in to personal graph server"}</TooltipContent>
+            <TooltipContent>{personalAuthStatus !== null || loginTesting ? personalAuthBadgeLabel : authRestoreIssue ? "Your previous personal graph server login could not be restored. Please log in again." : "Log in to personal graph server"}</TooltipContent>
           </Tooltip>
         )}
 
@@ -1249,8 +1248,9 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
 
               <p className="pt-1 text-xs text-muted-foreground">Maestro keeps you signed in across browser and server restarts until you log out, subject to your graph server's credential validity.</p>
 
+              {personalChallengePending && <p role="status" className="text-xs text-muted-foreground">{personalAuthBadgeLabel}</p>}
               {loginError && (
-                <ErrorDetails prefix="Login" error={loginError} />
+                <ErrorDetails prefix="Login" error={loginError} verbatim />
               )}
 
               <div className="flex justify-between items-center pt-2">

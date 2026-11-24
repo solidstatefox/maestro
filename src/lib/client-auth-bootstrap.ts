@@ -4,8 +4,9 @@
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 import { graphForPrefix, type PersonalAuthSession } from "@/lib/personal-auth";
 import { personalWriteEndpoint } from "@/lib/personal-endpoints";
-import { personalRequestHeaders } from "@/lib/client-personal-request";
-import { compileStatusMachines, statusMachineRows } from "@/lib/status-machine-runtime";
+import { updateSessionSnapshot } from "@/lib/client-digest-session";
+import { personalAuthenticatedFetch } from "@/lib/client-personal-request";
+import { compileStatusMachines, statusMachineRows, machineForTarget } from "@/lib/status-machine-runtime";
 import { invalidateClientStatusMachines, primeClientStatusMachines } from "@/lib/status-machine-client";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
@@ -21,12 +22,25 @@ export function clearAuthBootstrap():void { revision++; latest = null; invalidat
   if (typeof window!=="undefined") window.dispatchEvent(new Event("maestro:auth-bootstrap-updated")); }
 if (typeof window!=="undefined") window.addEventListener("maestro:personal-session-cleared",clearAuthBootstrap);
 export function bootstrapHasMachines(): boolean { return Boolean(latest?.machineCount); }
-export function currentBootstrapButtons(): BootstrapButton[] { return latest?.buttons ?? []; }
+const EMPTY_BUTTONS: BootstrapButton[] = [];
+export function currentBootstrapButtons(): BootstrapButton[] { return latest?.buttons ?? EMPTY_BUTTONS; }
+export function emptyBootstrapButtons(): BootstrapButton[] { return EMPTY_BUTTONS; }
+export function subscribeBootstrapButtons(listener:()=>void):()=>void {
+  window.addEventListener("maestro:auth-bootstrap-updated",listener);
+  return ()=>window.removeEventListener("maestro:auth-bootstrap-updated",listener);
+}
+export async function replaceBootstrapButtons(session:PersonalAuthSession,buttons:BootstrapButton[]):Promise<void> {
+  if(!latest || latest.identity!==identityOf(session))return;
+  await updateSessionSnapshot(session,{buttons});
+  if(!latest || latest.identity!==identityOf(session))return;
+  latest={...latest,buttons};
+  window.dispatchEvent(new Event("maestro:auth-bootstrap-updated"));
+}
 export function currentBootstrapStatuses(): BootstrapStatus[] { return latest?.statuses ?? []; }
 
 /** A base row guarantees that a genuine authenticated SELECT succeeds even
  * before the user's first /graph seed or provider bookmarks are created. */
-export function authBootstrapSelect(session: PersonalAuthSession): string {
+export function authBootstrapSelect(session: Pick<PersonalAuthSession,"graphPrefix">): string {
   const base = graphForPrefix(session.graphPrefix);
   const machine = resolveGraph(GRAPH.STATE_MACHINES,base), status = resolveGraph(GRAPH.STATUS,base);
   const appbar = resolveGraph(GRAPH.APPBAR,base), bookmarks = resolveGraph(GRAPH.BOOKMARKS,base);
@@ -57,10 +71,11 @@ SELECT ?section ?machine ?target ?dimension ?initial ?from ?trigger ?to ?digest 
 }
 /** Parse and prime only after the entire authenticated response is valid.
  * XState's existing policy gate still verifies the required machine targets. */
-export function hydrateAuthBootstrap(session:PersonalAuthSession, bindings:BootstrapBinding[]):void {
+export function hydrateAuthBootstrap(session:PersonalAuthSession, bindings:BootstrapBinding[], savedButtons?:BootstrapButton[]):void {
   const id=identityOf(session);
   const machineRows = bindings.filter(row=>row.section?.value==="machine");
   const machines = compileStatusMachines(statusMachineRows(machineRows));
+  for(const target of ["http://www.w3.org/2000/01/rdf-schema#Resource",`${MUI}Provider`,`${MUI}ClassPolicy`,`${MUI}CurationProvider`]) machineForTarget(machines,target);
   const buttons = new Map<string,BootstrapButton>();
   const statuses:BootstrapStatus[]=[];
   for (const row of bindings) {
@@ -74,22 +89,28 @@ export function hydrateAuthBootstrap(session:PersonalAuthSession, bindings:Boots
   }
   primeClientStatusMachines(`${graphForPrefix(session.graphPrefix)}@${personalWriteEndpoint(session)}`,
     graphForPrefix(session.graphPrefix),machines);
-  latest={identity:id,buttons:[...buttons.values()],statuses,machineCount:machines.length};
+  latest={identity:id,buttons:savedButtons??[...buttons.values()],statuses,machineCount:machines.length};
   revision++;
   if (typeof window!=="undefined") window.dispatchEvent(new CustomEvent("maestro:auth-bootstrap-updated",{detail:{identity:id,revision}}));
 }
 
-export async function refreshAuthBootstrap(session:PersonalAuthSession, signal?:AbortSignal):Promise<void> {
+export async function refreshAuthBootstrap(session:PersonalAuthSession, signal?:AbortSignal):Promise<BootstrapBinding[]> {
   const expected=revision;
-  const response=await fetch("/proxy/api/sparql",{
-    method:"POST",cache:"no-store",signal,headers:{"Content-Type":"application/json",...personalRequestHeaders(session)},
+  // Bootstrap can be expensive on first login and must never consume the
+  // 15-second Digest authentication deadline. Failure preserves credentials.
+  const deadline=AbortSignal.timeout(60_000);
+  const requestSignal=signal?AbortSignal.any([signal,deadline]):deadline;
+  const response=await personalAuthenticatedFetch(session,"/proxy/api/sparql",{
+    method:"POST",cache:"no-store",signal:requestSignal,headers:{"x-maestro-debug-source":"urn:maestro:component:AuthBootstrap","x-maestro-debug-component":"AuthBootstrap","Content-Type":"application/json"},
     body:JSON.stringify({personalRead:true,
       addr:`${graphForPrefix(session.graphPrefix)}@${personalWriteEndpoint(session)}`,
       query:authBootstrapSelect(session)}),
   });
   if (!response.ok) throw new Error(`Personal authentication bootstrap failed (HTTP ${response.status}).`);
   const parsed=await response.json() as {results?:{bindings?:BootstrapBinding[]}};
-  if (!Array.isArray(parsed.results?.bindings)) throw new Error("Authentication bootstrap returned invalid SPARQL Results JSON.");
-  if (signal?.aborted || revision!==expected) return;
+  if (!Array.isArray(parsed.results?.bindings) || parsed.results.bindings.length >= 3000 || !parsed.results.bindings.some(row=>row.section?.value==="probe")) throw new Error("Authentication bootstrap returned invalid SPARQL Results JSON.");
+  requestSignal.throwIfAborted();
+  if (revision!==expected) throw new Error("Personal bootstrap was superseded.");
   hydrateAuthBootstrap(session,parsed.results.bindings);
+  return parsed.results.bindings;
 }

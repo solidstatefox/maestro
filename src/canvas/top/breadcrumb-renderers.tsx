@@ -77,6 +77,10 @@ const facets = {
 /** Single inter-item gap used by all left-pane facet lists, including tree branches. */
 const FACET_ITEM_GAP_CLASS = "space-y-0.5";
 const PROPERTY_ROLE_ITEM_GAP_CLASS = "space-y-0";
+// Trial breadcrumb spacing: preserve the class/status superscript's top clearance.
+// const BREADCRUMB_NODE_BOTTOM_PADDING = "pb-1"; // previous value
+const BREADCRUMB_NODE_BOTTOM_PADDING = "pb-0";
+
 /** Row window for the Categories tree query (type="classes" tree="yes"): one row per class/parent edge. */
 const CATEGORY_TREE_QUERY_LIMIT = 500;
 const RDFS_LABEL_URI = "http://www.w3.org/2000/01/rdf-schema#label";
@@ -356,7 +360,7 @@ function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath
                     if (!toggleTransportedAnchorAt(crumb.id, event.shiftKey)) handleBreadcrumbClick(crumb.id);
                   }}
                   style={presentationStyle}
-                  className={`relative h-full min-h-0 min-w-0 cursor-pointer break-words rounded-none px-2.5 text-left text-sm hover:bg-accent ${transportedPreviewIds.has(crumb.id) ? "!bg-emerald-100/80 !text-emerald-900 dark:!bg-emerald-950/50 dark:!text-emerald-100" : ""} ${breadcrumbClasses.length ? "pb-1 pt-3" : "py-0"} ${
+                  className={`relative h-full min-h-0 min-w-0 cursor-pointer break-words rounded-none px-2.5 text-left text-sm hover:bg-accent ${transportedPreviewIds.has(crumb.id) ? "!bg-emerald-100/80 !text-emerald-900 dark:!bg-emerald-950/50 dark:!text-emerald-100" : ""} ${breadcrumbClasses.length ? `${BREADCRUMB_NODE_BOTTOM_PADDING} pt-3` : "py-0"} ${
   tutorialBreadcrumbTargetId === crumb.id
     ? "!bg-purple-100/80 font-semibold text-purple-800 dark:!bg-purple-950/60 dark:text-purple-200"
     : index === activeBreadcrumbIndex

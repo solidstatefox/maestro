@@ -1,4 +1,5 @@
 "use client";
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { cachedFetchFct } from "@/lib/client-query-cache";
@@ -155,11 +156,11 @@ export function BookmarkCharts({ queryXml, providerUri, stylesheet, onBrowse }: 
   const tags = useMemo(() => rows.filter(r=>r.label).sort((a,b)=>b.count-a.count).slice(0,100).map(r=>({label:r.label,count:r.count})),[rows]);
   const aliasChoice = aliases.length > 0 ? <div className="flex items-center gap-2 text-xs">
     <label htmlFor="bookmark-analysis-transported-axis">Analysis dimension</label>
-    <select id="bookmark-analysis-transported-axis" className="max-w-full rounded border bg-background px-2 py-1"
+    <MaestroSelect id="bookmark-analysis-transported-axis" className="max-w-full rounded border bg-background px-2 py-1"
       value={selectedAlias} onChange={event => setSelectedAlias(event.target.value)}>
       <option value="">{kind === "activity" ? "Bookmark activity" : "Bookmark tags"}</option>
       {aliases.map(alias => <option key={alias.id} value={alias.id}>{alias.label}</option>)}
-    </select>
+    </MaestroSelect>
   </div> : null;
   if (selectedAlias) return <section className="flex min-h-0 w-full flex-col gap-3 p-4" aria-label="Bookmark transported facet analysis">
     {aliasChoice}

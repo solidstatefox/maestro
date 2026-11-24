@@ -7,18 +7,15 @@ import { serializeFctQuery } from "@/lib/fct-query-api";
 import { createCooccurringPropertyWidgetQuery } from "@/lib/fct-query-derived";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { toLabel } from "@/lib/uri-labels";
-import { facetValueKey, groupValueBinding, distinctFacetValues, type FctResult } from "@/canvas/utils/fct-response";
-import { DistinctCount, distinctCountQueryFor } from "@/canvas/left/filter";
+import { facetValueKey, groupValueBinding, distinctFacetValues, countedFacetValues, facetMembershipCount, type FctResult } from "@/canvas/utils/fct-response";
 import { fctTermKey } from "@/canvas/utils/fct-response";
 import type { FctQueryTree, FctQueryNode } from "@/lib/fct-query-api";
 
-/** A four-size, data-driven cloud. Counts are materialized through the existing
- * FCT facet-count queries, never invented from page position or label length. */
-export function PersonalTagCloud({ property, values, tree, selected, counts, enabled, busy,
-  onCount, onChange }: {
+/** A four-size, data-driven cloud. Counts are returned by the shared
+ * count-sorted FCT value-list query, never invented from page position or label length. */
+export function PersonalTagCloud({ property, values, tree, selected, enabled, busy, onChange }: {
   property: string; values: FctResult[]; tree: FctQueryTree; selected?: FctQueryNode;
-  counts: Record<string, number | null>; enabled: boolean; busy: boolean;
-  onCount: (query: string, count: number | null) => void;
+  enabled: boolean; busy: boolean;
   onChange: (value: ReturnType<typeof groupValueBinding>, enabled: boolean) => void;
 }) {
   const projectionXml = useMemo(() => selected?.children.some(node => node.name === "value")
@@ -42,7 +39,7 @@ export function PersonalTagCloud({ property, values, tree, selected, counts, ena
           body: projectionXml, signal: controller.signal });
         const data = await readFctResponse(response);
         if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-        if (!controller.signal.aborted) setCooccurrence({ key: cooccurrenceKey, values: data.results ?? [], error: "" });
+        if (!controller.signal.aborted) setCooccurrence({ key: cooccurrenceKey, values: countedFacetValues(data.results ?? []), error: "" });
       } catch (error) {
         if (!controller.signal.aborted) setCooccurrence(current => current.key === cooccurrenceKey
           ? { ...current, error: error instanceof Error ? error.message : "Co-occurring tags request failed" }
@@ -66,9 +63,8 @@ export function PersonalTagCloud({ property, values, tree, selected, counts, ena
   const selectedKeys = new Set((selected?.children ?? []).filter(node => node.name === "value" && Boolean(node.text))
     .map(node => fctTermKey(node.text ?? "", node.attributes.datatype ?? (node.attributes["xml:lang"] ? undefined : "string"), node.attributes["xml:lang"])));
   const items = shownValues.map(value => {
-    const query = distinctCountQueryFor(tree, "value", value.uri, property, value, { direction: "forward" });
-    return { value, query, count: counts[query], selected: selectedKeys.has(facetValueKey(value)) };
-  });
+    return { value, count: facetMembershipCount(value), selected: selectedKeys.has(facetValueKey(value)) };
+  }).filter(item => item.selected || (item.count ?? 0) > 0);
   const known = items.map(item => item.count).filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
   const smallest = known.length ? Math.min(...known) : 1;
   const largest = known.length ? Math.max(...known) : 1;
@@ -78,22 +74,18 @@ export function PersonalTagCloud({ property, values, tree, selected, counts, ena
     {items.length === 0 && <span className="text-xs text-muted-foreground" role="status">
       {busy ? "Loading tags…" : "No tag values in the current facet scope"}
     </span>}
-    {items.map(({ value, query, count, selected: checked }) => {
+    {items.map(({ value, count, selected: checked }) => {
       const label = value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.title || value.uri;
       const rank = typeof count === "number" && count > 0 && largest > smallest
         ? Math.min(3, Math.floor(3 * Math.log(count / smallest + 1) / Math.log(largest / smallest + 1))) : 1;
       return <Tooltip key={facetValueKey(value)}>
         <TooltipTrigger render={<button type="button" aria-pressed={checked} disabled={busy}
-          aria-label={`${label}: ${typeof count !== "number" ? "count loading" : count.toLocaleString()} matches${checked ? ", selected" : ""}`}
+          aria-label={`${label}: ${typeof count !== "number" ? "count unavailable" : count.toLocaleString()} matches${checked ? ", selected" : ""}`}
           onClick={() => onChange(groupValueBinding(value), !checked)}
           className={`${classes[rank]} cursor-pointer rounded px-1.5 py-0.5 leading-snug font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${checked ? "bg-accent text-accent-foreground ring-1 ring-ring" : "text-foreground"}`}>
           {label}
         </button>} />
-        <TooltipContent>{label} · {typeof count === "number" ? `${count.toLocaleString()} matches` : "Counting…"}</TooltipContent>
-        {/* Invisible query driver updates the normal facet-count cache for sizing. */}
-        <span className="sr-only" aria-hidden="true"><DistinctCount enabled={enabled} tree={tree}
-          kind="value" uri={value.uri} propertyUri={property} candidateValue={value}
-          valueRelationship={{ direction: "forward" }} onCountChange={onCount}/></span>
+        <TooltipContent>{label} · {typeof count === "number" ? `${count.toLocaleString()} matches` : "Count unavailable"}</TooltipContent>
       </Tooltip>;
     })}
   </div>;

@@ -10,8 +10,12 @@ function harness(){
     compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}
   }).outputText;
   const holds=[];
+  const attribution={exports:{}};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,"../src/lib/sparql-request-attribution.ts"),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:attribution.exports,Headers,Request,URL});
   const mock={
+    "@/lib/sparql-request-attribution":attribution.exports,
     '@/lib/client-personal-request': { withPersonalProxyCredentials: async (_url,init)=>({init,authenticated:false}) },
+    '@/lib/personal-session-hint': { observePersonalAuthResponse: response => response },
     './maestro-language': {maestroLanguageHeader: ()=>'en'},
     './maestro-concurrency': {readMaestroConcurrency: () =>({proxyConnections:1})},
     './maestro-query-execution-clock': {maestroQueryClockScope:()=>null},
@@ -36,7 +40,7 @@ test('browser queue indexes remain unique in priority order and reindex immediat
   let pending=[];
   cache.subscribePendingMaestroQueryDetails(items=>{pending=items.map(x=>({...x}))});
   const req=(label)=>cache.maestroQueryFetch('/proxy/api/sparql', {
-    method:'POST',body:'ASK {}',headers:{'X-Maestro-Debug-Source':label}
+    method:'POST',body:'ASK {}',headers:{'X-Maestro-Debug-Source':`urn:maestro:component:${label}`,'X-Maestro-Debug-Component':label}
   });
   const a=req('interactive-a');
   const b=req('count-b');

@@ -39,6 +39,18 @@
   mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#ResultRecord> ;
   mui:widget mui:RecordViewerWidget .
 
+<gttp://ggg.maestro.ecosys/eu-data/policy#ProjectPublication> a mui:ClassPolicy ;
+  rdfs:label "EU Data · ProjectPublication Record policy"@en ;
+  mui:forClass eurio:ProjectPublication ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#ProjectPublicationRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
+<gttp://ggg.maestro.ecosys/eu-data/policy#ProjectReportSummary> a mui:ClassPolicy ;
+  rdfs:label "EU Data · ProjectReportSummary Record policy"@en ;
+  mui:forClass eurio:ProjectReportSummary ;
+  mui:recordShape <gttp://ggg.maestro.ecosys/eu-data/shape#ProjectReportSummaryRecord> ;
+  mui:widget mui:RecordViewerWidget .
+
 <gttp://ggg.maestro.ecosys/eu-data/policy#Role> a mui:ClassPolicy ;
   rdfs:label "EU Data · Participation role Record policy"@en ;
   mui:forClass <http://data.europa.eu/s66#Role> ;

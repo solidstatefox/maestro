@@ -15,6 +15,11 @@
     "asset": "98658a15bc3bb4d8ba31a71003a39bfa5680d6d600b51c3baf7f319bc2aaac23.json"
   },
   {
+    "file": "eu-data/author-derived.ttl",
+    "destination": "shacl-policies",
+    "asset": "7cd05df94cfbfe7546c3aca1442717b71138f1212fab21a4f4365a8299f25c89.json"
+  },
+  {
     "file": "eu-data/dcat-ap-3-0-0/range.ttl",
     "destination": "shacl-policies",
     "asset": "3a35e9164219c035cdb31cc3c414cd99f74633d06855183d2f8744f3be2c3a4d.json"

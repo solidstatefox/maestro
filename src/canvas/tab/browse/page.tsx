@@ -124,11 +124,19 @@ export function BrowseQueryTreeCanvas({ workspace }: { workspace: WorkspaceContr
               >
                 <div className="h-full overflow-auto p-3">
                   <div className="mb-3 flex items-center justify-between gap-3">
-                    <p className="text-xs text-muted-foreground">
+                    {workspace.pickingReferenceTarget ? <>
+                      <p className="text-xs font-medium">Select a root, property, or role node for the value reference. Press Escape to cancel.</p>
+                      <button type="button" data-maestro-reference-cancel onClick={workspace.cancelReferenceTargetPick}
+                        className="rounded border px-2 py-1 text-xs" aria-label="Cancel reference target selection">Cancel</button>
+                    </> : <p className="text-xs text-muted-foreground">
                       Live query structure. Hold Shift over a successor to preview its green path; Shift+click to toggle a transported facet.
-                    </p>
+                    </p>}
                   </div>
-                  <ul className="space-y-1" aria-label="Root FCT query">
+                  {workspace.pickingReferenceTarget && workspace.valueReferenceError ? <p role="alert" className="mb-2 text-xs text-destructive">{workspace.valueReferenceError}</p> : null}
+                  <ul className="space-y-1" aria-label="Root FCT query" onClickCapture={workspace.captureReferenceTargetClick}>
+                    {workspace.pickingReferenceTarget && <li data-maestro-query-node="query-everything" className="px-2 py-1">
+                      <button type="button" className="rounded px-1 text-sm hover:bg-accent">Root (whole query)</button>
+                    </li>}
                     {!search.trim() && !searchNode && !uriNode?.text?.trim() && renderQueryNode({
                       id: "query-everything",
                       name: "everything",

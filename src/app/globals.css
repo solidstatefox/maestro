@@ -187,6 +187,9 @@ html, body { height: 100%; overflow: hidden; }
 
 /* Only Lucide's default 2px icons: stronger per-icon strokes stay intact. */
 svg.lucide[stroke-width="2"] { stroke-width: var(--maestro-icon-stroke-width); }
+/* XSLT-authored Lucide SVGs are not React components. They share the same
+   central default rather than shipping a separate hardcoded 2px stroke. */
+svg[data-maestro-icon] { stroke-width: var(--maestro-icon-stroke-width); }
 
 /* Browse Record literals/blank nodes are navigable only with Shift.
    Never turn a DESCRIBE literal into a root URI query. */

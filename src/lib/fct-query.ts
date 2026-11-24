@@ -3,7 +3,8 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { parseFctIdCounter, serializeFctIdCounter, ensureFctQueryIds } from "./fct-node-identity";
 import { cloneFctQueryTree } from "./fct-query-clone";
-import { dependentFctValueReferences } from "./fct-value-references";
+import { dependentFctNodeReferences, FctNodeInUseError } from "./fct-value-references";
+import { serializeFctQuery } from "./fct-query-serialize";
 export { serializeFctQuery } from "./fct-query-serialize";
 
 export type FctNodeName = string;
@@ -213,10 +214,11 @@ function isValidQueryTree(tree: unknown): tree is FctQueryTree {
 }
 
 function assertFctNodeCanBeDeleted(tree: FctQueryTree, nodeId: string): void {
-  const dependents = dependentFctValueReferences(tree, nodeId);
-  if (!dependents.length) return;
-  throw new Error(`Cannot delete node ${nodeId}: its path is in use by ${dependents.map(ref =>
-    `<value id="${ref.valueId}" ${ref.kind}="${ref.targetId}">`).join(", ")}. Remove those references first.`);
+  const xml = typeof DOMParser === "undefined" ? undefined
+    : new DOMParser().parseFromString(serializeFctQuery(tree), "application/xml");
+  if (xml?.documentElement.localName === "parsererror") throw new Error("Cannot inspect query dependencies: invalid FCT XML.");
+  const dependents = dependentFctNodeReferences(tree, nodeId, xml);
+  if (dependents.length) throw new FctNodeInUseError(nodeId, dependents);
 }
 
 function createQueryStore(initialTree?: FctQueryTree) {
@@ -476,7 +478,7 @@ function createQueryStore(initialTree?: FctQueryTree) {
   function removeQueryNode(nodeId: string) {
     updateTree((tree) => {
       const target = findNodeInTree(tree, nodeId);
-      if (target) assertFctNodeCanBeDeleted(tree, nodeId);
+      if (target) assertFctNodeCanBeDeleted(tree, target.id);
       if (!target || target.uiKey === "query-view" || target.uiKey === "query-text" ||
           nodeId === "query-view" || nodeId === "query-text") return tree;
       // Never let a generic structural edit orphan the active view. If the
@@ -732,12 +734,12 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     });
   }
 
-  function setPropertyValue(parentId: string | null, uri: string, value: FctValueInput, checked: boolean) {
+  function setPropertyValue(parentId: string | null, uri: string, value: FctValueInput, checked: boolean, nodeId?: string) {
     const normalizedUri = uri.trim();
     const normalizedValue = normalizeFctValue(value);
     if (!normalizedUri || !normalizedValue.text.trim()) return;
-    const property = findScopedProperty(state.tree, parentId, normalizedUri);
-    if (!property) return;
+    const property = nodeId ? findNodeInTree(state.tree, nodeId) : findScopedProperty(state.tree, parentId, normalizedUri);
+    if (!property || (property.name !== "property" && property.name !== "property-of") || property.attributes.iri !== normalizedUri) return;
 
     const values: FctValueInput[] = property.children
       .filter((node) => node.name === "value" && Boolean(node.text))
@@ -1207,7 +1209,7 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     updateTree((tree) => {
       const target = findNodeInTree(tree, nodeId);
       if (!target || nodeId === "query-view" || nodeId === "query-text") return tree;
-      assertFctNodeCanBeDeleted(tree, nodeId);
+      assertFctNodeCanBeDeleted(tree, target.id);
 
       // Delete exactly the selected node. Removing a <value> clears only that
       // binding; its parent <property> filter remains in the authoritative tree.
@@ -1351,8 +1353,8 @@ export const fctQueryTreeApi = {
   setPropertyValues(tree: FctQueryTree | undefined, parentId: string | null, uri: string, values: FctValueInput[]): FctQueryTree {
     return applyTreeOperation(tree, (store) => store.setPropertyValues(parentId, uri, values));
   },
-  setPropertyValue(tree: FctQueryTree | undefined, parentId: string | null, uri: string, value: FctValueInput, checked: boolean): FctQueryTree {
-    return applyTreeOperation(tree, (store) => store.setPropertyValue(parentId, uri, value, checked));
+  setPropertyValue(tree: FctQueryTree | undefined, parentId: string | null, uri: string, value: FctValueInput, checked: boolean, nodeId?: string): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.setPropertyValue(parentId, uri, value, checked, nodeId));
   },
   setRoleValue(tree: FctQueryTree | undefined, uri: string, value: FctValueInput, checked: boolean): FctQueryTree {
     return applyTreeOperation(tree, (store) => store.setRoleValue(uri, value, checked));

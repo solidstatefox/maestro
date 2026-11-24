@@ -23,12 +23,14 @@ test('the root has exactly one persistent shadcn InputGroup and preserves inheri
   assert.match(render,/variant="input"[\s\S]*?popBreadcrumbOrBinding\(crumb\)/);
 });
 
-test('ordinary breadcrumb height and original example badge anchoring are preserved',()=>{
+test('ordinary breadcrumb height and example badge anchoring survive the bottom-padding trial',()=>{
   const render=read('src/canvas/top/breadcrumb-renderers.tsx');
   const path=render.slice(render.indexOf('function renderPathBreadcrumb('));
   assert.match(path,/<InputGroup aria-label=\{`Controls for \${breadcrumbLabel}`\}/);
   assert.match(path,/h-10 w-max max-w-full flex-nowrap overflow-hidden/);
-  assert.match(path,/breadcrumbClasses\.length \? "pb-1 pt-3" : "py-0"/);
+  assert.match(render,/^\/\/ const BREADCRUMB_NODE_BOTTOM_PADDING = "pb-1"; \/\/ previous value$/m);
+  assert.match(render,/^const BREADCRUMB_NODE_BOTTOM_PADDING = "pb-0";$/m);
+  assert.match(path,/breadcrumbClasses\.length \? `\$\{BREADCRUMB_NODE_BOTTOM_PADDING\} pt-3` : "py-0"/);
   assert.match(path,/<InputGroupAddon align="inline-start"[\s\S]*?<OrUidIcon/);
   assert.match(path,/absolute left-\[calc\(100%\+15px\)\] top-full -translate-x-1\/2 pt-1/);
   assert.doesNotMatch(path,/className="ml-5 inline-flex max-w-full pt-1"/);

@@ -1,3 +1,5 @@
+
+import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
 /** A separately bounded FCT projection of the ACTIVE <view> focus, never the
  * currently displayed results page. All filters, path bindings and graph
  * address are retained by changing only the view's projection/pagination. */
@@ -86,8 +88,8 @@ export function buildOverviewLabelCoverageQueries(
 }
 
 async function readOverviewAggregate(endpoint: string, query: string, signal: AbortSignal): Promise<SparqlResult> {
-  const response = await fetch("/proxy/api/sparql", {
-    method: "POST", headers: {"Content-Type":"application/json"},
+  const response = await attributedSparqlFetch("/proxy/api/sparql", {
+    method: "POST", headers: {"x-maestro-debug-source":"urn:maestro:component:Overview:Population","x-maestro-debug-component":"Overview:Population","Content-Type":"application/json"},
     body: JSON.stringify({ addr:`@${endpoint}`, query }), signal,
   });
   if (!response.ok) throw new Error(`SPARQL label coverage failed (HTTP ${response.status}).`);

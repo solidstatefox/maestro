@@ -108,12 +108,16 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
   const refreshing = !domainIsCurrent || loading;
   // Never display one graph server's numeric domain as another server's domain.
   if (!domain || !canRetainDomain) return error ? <ErrorDetails prefix="Numeric facet" error={error} /> :
-    <div data-provider-phase={widgetPhase} className="flex h-56 w-[104px] shrink-0 flex-col items-center gap-3 border-r pr-2" aria-label="Loading numeric facet domain">
-      <ElapsedStatus label="Updating range…" category="counts" clockScope={`component:numeric:${property}`} />
+    <div data-provider-phase={widgetPhase} className="flex h-56 w-[104px] shrink-0 flex-col items-center gap-3 overflow-hidden border-r pr-2 text-[10px] leading-tight" aria-label="Loading numeric facet domain">
+      <span className="block w-full min-w-0 text-center text-[10px] leading-tight [&>span]:flex [&>span]:flex-wrap [&>span]:justify-center [&>span]:gap-0.5 [&>span]:whitespace-normal"><ElapsedStatus label="Updating range…" category="counts" clockScope={`component:numeric:${property}`} /></span>
       <div className="mx-auto h-full w-1.5 animate-pulse rounded bg-muted" />
     </div>;
   const [min,max] = domain;
-  if (min === max) return <div className="flex h-56 w-[104px] shrink-0 items-center justify-center border-r pr-2 text-xs text-muted-foreground" aria-label="Constant numeric domain">{display(min)}</div>;
+  if (min === max) return <div data-provider-phase={widgetPhase} aria-busy={refreshing} className="flex h-56 w-[104px] shrink-0 flex-col items-center justify-center gap-2 border-r pr-2 text-xs text-muted-foreground" aria-label="Constant numeric domain">
+    {(refreshing || error) && <span className="w-full min-w-0 break-words text-center text-[10px] leading-tight">{error ? "Domain unavailable" : "Updating range…"}</span>}
+    {display(min)}
+    <button type="button" disabled={refreshing || Boolean(error)} className="rounded px-1 underline hover:text-foreground" onClick={() => {setDraft(null);onRangeChange(property,"","");}}>Reset</button>
+  </div>;
   const lower = Math.max(min, Math.min(max, numeric(start) ?? min));
   const upper = Math.max(lower, Math.min(max, numeric(end) ?? max));
   const current = draft ?? [lower, upper];
@@ -138,7 +142,7 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
   // The first value is the lower bound (bottom thumb), the second is the
   // upper bound (top thumb). Keep those labels in the same visual order.
   return <div data-provider-phase={widgetPhase} aria-busy={refreshing} className={`flex h-56 w-[104px] shrink-0 flex-col items-center gap-1 border-r pr-2 text-[10px] tabular-nums ${refreshing ? "opacity-50" : ""}`} data-numeric-facet-provider={provider.uri}>
-    {(refreshing || error) && <span role="status" className="w-full text-center text-muted-foreground">{error ? "Domain unavailable" : <ElapsedStatus label="Updating range…" category="counts" clockScope={`component:numeric:${property}`} />}</span>}
+    {(refreshing || error) && <div role="status" className="w-full min-w-0 text-center text-[10px] leading-tight text-muted-foreground">{error ? "Domain unavailable" : <span className="block w-full min-w-0 text-center text-[10px] leading-tight [&>span]:flex [&>span]:flex-wrap [&>span]:justify-center [&>span]:gap-0.5 [&>span]:whitespace-normal"><ElapsedStatus label="Updating range…" category="counts" clockScope={`component:numeric:${property}`} /></span>}</div>}
     <div className="w-full text-center leading-tight" aria-label={`Domain maximum ${format(max)}; selected upper bound ${format(current[1])}`}>
       <div className="text-muted-foreground">Max {display(max)}</div>
       {editingBound === "upper" ? <input ref={editingRef} aria-label="Edit selected upper bound" inputMode="decimal" type="text"
@@ -165,6 +169,6 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
           aria-label={`Edit selected lower bound ${format(current[0])}`}>From {display(current[0])}</button>}
       <div className="text-muted-foreground">Min {display(min)}</div>
     </div>
-    <button type="button" disabled={refreshing || Boolean(error)} className="rounded px-1 text-muted-foreground underline hover:text-foreground" onClick={() => {setDraft(null);onRangeChange(property,"","");}}>Clear</button>
+    <button type="button" disabled={refreshing || Boolean(error)} className="rounded px-1 text-muted-foreground underline hover:text-foreground" onClick={() => {setDraft(null);onRangeChange(property,"","");}}>Reset</button>
   </div>;
 }

@@ -45,7 +45,9 @@ test('no class and no contextual match does not dispatch a query',async()=>{
 test('personal perspective buttons are scoped to exact FCT, visit and SHACL matches',()=>{
   const ui=source('src/canvas/tab/view/ribbon.tsx');
   assert.match(ui,/discoveryKey = \[queryXml, triggerUri, historyUri/);
-  assert.match(ui,/personalDiscovery\.key === discoveryKey \? personalDiscovery\.providers : \[\]/);
+  assert.match(ui,/const visibleViews = \[\.\.\.new Map\(discoveredViews\.map\(view => \[view\.uri, view\]\)\)\.values\(\)\]/);
+  assert.match(ui,/const personalToRender = visibleViews\.flatMap/);
+  assert.doesNotMatch(ui,/setPersonalDiscovery\(/);
   assert.doesNotMatch(ui,/window\.setTimeout/);
   assert.match(source('src/canvas/workspace.tsx'),/queryMatchedProviders=\{workspace\.queryMatchedProviders\}/);
 });

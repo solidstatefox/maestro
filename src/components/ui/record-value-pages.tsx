@@ -1,5 +1,6 @@
 "use client";
 
+import { MaestroSelect } from "@/components/ui/maestro-select";
 import * as React from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -105,11 +106,11 @@ export function RecordValuePages({
           <div className="ml-auto flex shrink-0 items-center gap-1">
             {pageSizeSelect && <>
               <label htmlFor={`${id ?? "record"}-page-size`} className="whitespace-nowrap text-xs text-muted-foreground">Per page</label>
-              <select id={`${id ?? "record"}-page-size`} aria-label="Results per page" value={size}
+              <MaestroSelect id={`${id ?? "record"}-page-size`} aria-label="Results per page" value={size}
                 onChange={(event) => setSelectedSize(Number(event.currentTarget.value))}
                 className="rounded-md border border-input bg-background px-2 py-1 text-xs">
                 {choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
-              </select>
+              </MaestroSelect>
             </>}
             <Button type="button" variant="outline" size="icon-sm"
               aria-label={isResultList ? "Previous results" : "Previous property values"}

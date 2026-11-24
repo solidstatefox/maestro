@@ -71,7 +71,7 @@ test('Session-owned personal work is closed while signed out and native XSLT but
  assert.match(read('src/canvas/left/derived-facet-button.tsx'),/!sessionActive \|\| !sessionKey/);
  assert.doesNotMatch(read('src/canvas/left/personal-widget-cards.tsx'),/if \(!workspace\.accessCapabilities\.canUsePersonalStore\) return null/);
  assert.match(read('src/canvas/left/personal-widget-cards.tsx'),/sessionActive=\{workspace\.accessCapabilities\.canUsePersonalStore\}/);
- assert.match(read('src/canvas/tab/view/page.tsx'),/PersonalPerspectives active=\{workspace\.accessCapabilities\.canUsePersonalStore\}/);
+ assert.match(read('src/canvas/tab/view/page.tsx'),/PersonalPerspectives key=\{selectedViewUri\} active=\{workspace\.accessCapabilities\.canUsePersonalStore\}/);
  assert.match(read('src/components/maestro-xslt-components.tsx'),/node\.localName\.toLowerCase\(\) === "button"/);
 });
 test('Page stays in viewport with thin scoped scrollbars',()=>{

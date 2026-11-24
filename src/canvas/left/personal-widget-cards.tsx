@@ -14,8 +14,8 @@ import { TemporalFacetContent, type TemporalFacetProvider, type NumericFacetProv
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
-import { fctTermKey, facetValueKey, groupValueBinding, distinctFacetValues, type FctResult } from "@/canvas/utils/fct-response";
-import { DistinctCount, distinctCountQueryFor, personalFacetInspectorQueries } from "@/canvas/left/filter";
+import { fctTermKey, facetValueKey, groupValueBinding, distinctFacetValues, facetMembershipCount, type FctResult } from "@/canvas/utils/fct-response";
+import { personalFacetInspectorQueries } from "@/canvas/left/filter";
 import { GROUP_BY_FACET_HIGHLIGHT_CLASSES } from "@/canvas/utils/query-controller";
 
 import maestroLanguages from "@/data/maestro-languages.json";
@@ -34,8 +34,8 @@ import { Bot, CircleSlash, Trash2, UsersRound, Code2, Palette, Regex, Braces, Pi
 import hljs from "highlight.js/lib/core";
 import xmlLanguage from "highlight.js/lib/languages/xml";
 import sqlLanguage from "highlight.js/lib/languages/sql";
-import { serializeFctQuery, createPropertyWidgetQuery, fctQueryTreeApi } from "@/lib/fct-query-api";
-import { createTransportedFacetQuery, activeTransportedFacets } from "@/lib/fct-facet-alias";
+import { serializeFctQuery, createPersonalFacetValuesQuery } from "@/lib/fct-query-api";
+import { activeTransportedFacets, sameTransportedFacetIdentity } from "@/lib/fct-facet-alias";
 import type { FctQueryNode } from "@/lib/fct-query-api";
 
 hljs.registerLanguage("xml", xmlLanguage);
@@ -117,7 +117,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
   // Personal means configured by the person, not stored in their personal RDF
   // graph. Public FCT facets work when signed out; only mui:Providers and
   // personal-store actions are gated by the XState access capability.
-  const { FACET_PAGE_SIZE, activeLeafId, activePropertyFilters, autoConfiguredFacetKeys, beginFacetHoverPreview, clearTutorialPreview, deleteNode, endpointReadyForQuery, facetCandidateCounts, facetHoverPreview, findPropertyPathNode, groupByOptions, groupedPersonalFacetUri, navigateIntoRelationship, navigateToPropertyPath, personalWidgetCardRefs, personalWidgets, queryTree, removeProperty, scrollToGroupForFacetValue, setCentralTab, setFacetCandidateCounts, setGroupByPropertyUri, setPersonalWidgets, setPropertyValue, replaceQueryTree, workspaceTab } = workspace;
+  const { FACET_PAGE_SIZE, activeLeafId, activePropertyFilters, autoConfiguredFacetKeys, beginFacetHoverPreview, clearTutorialPreview, guardedDeleteQueryNode, endpointReadyForQuery, facetHoverPreview, groupByOptions, navigateIntoRelationship, navigateToPropertyPath, personalWidgetCardRefs, personalWidgets, queryTree, scrollToGroupForFacetValue, setCentralTab, setGroupByPropertyUri, setPropertyValue, workspaceTab } = workspace;
     return (
       <div
         className={
@@ -133,10 +133,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
           .flatMap(widget => {
             if (!widget.anchor) return [widget];
             const current = activeTransportedFacets(queryTree).find(alias =>
-              alias.id === widget.anchor?.id && alias.href === widget.anchor.href &&
-              alias.parentId === widget.anchor.parentId &&
-              alias.path.map(hop => `${hop.id}|${hop.iri}|${hop.direction}`).join("/") ===
-                widget.anchor.path.map(hop => `${hop.id}|${hop.iri}|${hop.direction}`).join("/"));
+              sameTransportedFacetIdentity(alias, widget.anchor));
             return current ? [{...widget, anchor: current}] : [];
           }).map((widget) => {
           // A rendered facet in the FCT scope is addressable by the same ID
@@ -145,19 +142,13 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
           const widgetKey = widget.key ?? widget.uri;
           const alias = widget.anchor;
           const boundNode = alias?.target ?? activePropertyFilters.find(node => node.name === "property" && node.attributes.iri === widget.uri);
-          // The Personal facet factory owns both ordinary and transported
-          // value writes. An alias binds its exact descendant FCT node instead
-          // of manufacturing a local sibling with the same predicate IRI.
-          const changeFacetValue = (binding: {text:string; datatype?:string; lang?:string}, checked: boolean) => {
-            if (!alias) { setPropertyValue(activeLeafId, widget.uri, binding, checked); return; }
-            const node = boundNode;
-            if (!node) return;
-            const all = node.children.filter(child => child.name === "value" && Boolean(child.text) && child.attributes.op !== "regex")
-              .map(child => ({text: child.text ?? "", datatype: child.attributes.datatype, lang: child.attributes["xml:lang"]}));
-            const key = (item: {text:string;datatype?:string;lang?:string}) => JSON.stringify([item.text,item.datatype ?? "",item.lang ?? ""]);
-            const next = checked ? [...all.filter(item => key(item) !== key(binding)), binding] : all.filter(item => key(item) !== key(binding));
-            replaceQueryTree(fctQueryTreeApi.setValue(queryTree, node.id, next, {replaceExisting:true}));
+          const valueRelationship = {
+            direction: boundNode?.name === "property-of" ? "reverse" as const : "forward" as const,
+            nodeId: boundNode?.id,
+            href: alias?.href,
           };
+          const changeFacetValue = (binding: {text:string; datatype?:string; lang?:string}, checked: boolean) =>
+            setPropertyValue(activeLeafId, widget.uri, binding, checked, boundNode?.id);
           const componentId = alias ? dynamicUiComponentUrn("property", alias.id)
             : boundNode ? dynamicUiComponentUrn("property", boundNode.id) : undefined;
           const isStringFacet = (boundNode?.children ?? []).some(node => node.name === "value" && node.attributes.op === "regex") ||
@@ -166,10 +157,8 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
           const groupOptionKey = alias ? `alias:${alias.id}` : `forward:${widget.uri}`;
           const isGroupByFacet = workspaceTab === "browse" && workspace.groupByPropertyUri === groupOptionKey;
           const canGroupByFacet = workspaceTab === "browse" && groupByOptions.some((option) => option.key === groupOptionKey);
-          const inspectorXml = isGroupByFacet
-            ? serializeFctQuery(queryTree)
-            : serializeFctQuery(alias ? createTransportedFacetQuery(queryTree, alias)
-              : createPropertyWidgetQuery(queryTree, widget.uri, "forward", undefined, true));
+          const inspectorXml = widget.valuesQueryXml ?? serializeFctQuery(createPersonalFacetValuesQuery(queryTree, widget.uri, valueRelationship.direction,
+            { limit: workspace.leftWidgetLimits.personalFacets, offset: 0 }, undefined, valueRelationship.href));
           return (
           <article
             id={componentId}
@@ -183,7 +172,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
             <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByFacet ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""} ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "border-purple-500/80" : ""}`}>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <IncompleteWidgetIndicator source={`personal:${widget.uri}`} />
+                  <IncompleteWidgetIndicator source={`personal:${widgetKey}`} />
                   <Tooltip><TooltipTrigger render={<button
                     type="button"
                     className={`inline-flex items-center gap-1 break-words text-left text-sm font-semibold underline-offset-2 hover:underline cursor-pointer ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "text-purple-700 dark:text-purple-300" : "text-inherit"}`}
@@ -194,15 +183,14 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                       // Navigate the exact relationship occurrence beside the active <view>.
                       // Looking up an IRI globally can accidentally select an ancestor
                       // when nested facets repeat the same predicate (skos:broader).
-                      if (alias) navigateToPropertyPath(alias.href);
-                      else if (boundNode) navigateToPropertyPath(boundNode.id);
+                      if (boundNode) navigateToPropertyPath(boundNode.id);
                       else navigateIntoRelationship(widget.uri, "forward");
                     }}
                   >
                     {alias && <ExternalLink className="inline size-4 shrink-0 text-muted-foreground" aria-label="Transported facet" />}
                     {isGroupByFacet && <UsersRound className="inline size-4 shrink-0" aria-label="Group by" />}
                     {widget.excluded && <CircleSlash className="inline size-3.5 shrink-0" aria-label="Excluded" />}
-                    {boundNode?.attributes.derive === "regex" && <Pickaxe className="inline size-3.5 shrink-0" aria-label="Derived facet" />}
+                    {(boundNode?.attributes.derive === "regex" || boundNode?.attributes.derive === "split") && <Pickaxe className="inline size-3.5 shrink-0" aria-label="Derived facet" />}
                     {alias ? widget.label : <OrUidLabel uid={boundNode?.attributes.uid}>{boundNode?.attributes.label || facetPropertyLabel(widget.uri)}</OrUidLabel>}
                   </button>} /><TooltipContent>{`Navigate to ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} scope`}</TooltipContent></Tooltip>
                   {autoConfiguredFacetKeys.has(`property::${widget.uri}`) && (
@@ -214,15 +202,9 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     { id: "inspector", label: "Inspect facet query", icon: <Code2 className="size-4"/>, render: <QueryInspectorButton
                       query={inspectorXml}
                       filename={`facet-${facetPropertyLabel(widget.uri).replace(/[^a-z0-9_-]+/gi, "-")}.xml`}
+                      language="xml"
                       primaryTabLabel="XML"
-                      extraQueries={personalFacetInspectorQueries(
-                        queryTree,
-                        inspectorXml,
-                        widget.uri,
-                        widget.values[0],
-                        { direction: "forward" },
-                        isGroupByFacet,
-                      )}
+                      extraQueries={personalFacetInspectorQueries(inspectorXml, widget.valuesQuerySparql)}
                     /> },
                     { id: "group", label: isGroupByFacet ? "Stop grouping" : "Group results", icon: <UsersRound className="size-4"/>,
                       when: workspaceTab === "browse" && !widget.excluded, disabled: !canGroupByFacet, render: <Tooltip><TooltipTrigger render={<button
@@ -251,13 +233,13 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     { id: "remove", label: `Remove ${facetPropertyLabel(widget.uri)} facet`, icon: <Trash2 className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
                       type="button"
                       onClick={() => {
-                        if (alias) deleteNode(alias.id);
-                        else {
-                          const pathNode = findPropertyPathNode(widget.uri);
-                          if (pathNode) deleteNode(pathNode.id);
-                          else removeProperty(activeLeafId, widget.uri);
-                        }
-                        setPersonalWidgets((current) => current.filter((item) => (item.key ?? item.uri) !== widgetKey));
+                        // IDs are normalized at share-URL/query-store ingress. Use
+                        // the exact node that generated this widget, not a URI
+                        // search or a legacy property-filter-* UI-key prefix.
+                        // Never mutate widget state: the authoritative query
+                        // notification reconciles all Personal facet instances.
+                        const nodeId = alias?.id ?? boundNode?.id;
+                        if (nodeId) guardedDeleteQueryNode(nodeId);
                       }}
                       className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
                       aria-label={`Remove ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} widget`}
@@ -279,10 +261,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
             <div className="min-h-0 flex-1 overflow-auto p-2">
               {temporal?.tagCloudProviders?.has(widget.uri) ? (
                 <PersonalTagCloud property={widget.uri} values={widget.values} tree={queryTree}
-                  selected={boundNode}
-                  counts={facetCandidateCounts} busy={widget.loading} enabled={endpointReadyForQuery}
-                  onCount={(query, count) => setFacetCandidateCounts(current =>
-                    current[query] === count ? current : { ...current, [query]: count })}
+                  selected={boundNode} busy={widget.loading} enabled={endpointReadyForQuery}
                   onChange={changeFacetValue} />
               ) : temporal?.providers.get(widget.uri) ? (
                 <>
@@ -310,7 +289,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                   // this property's <value> children from the active view scope
                   // before ordering/paging endpoint results; selectedValues is a
                   // reconciled UI cache and can lag a render behind query changes.
-                  const queryFilter = boundNode && !alias ? boundNode : alias?.target;
+                  const queryFilter = boundNode;
                   const checkedValueNodes = (queryFilter?.children ?? [])
                     .filter((child) => child.name === "value" && child.attributes.op !== "regex" && Boolean(child.text));
                   const queryValueKey = (node: FctQueryNode) => {
@@ -321,7 +300,6 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                   };
                   const checkedValueKeys = new Set(checkedValueNodes.map(queryValueKey));
                   const normalizedValues = distinctFacetValues(widget.values);
-                  const endpointValueKeys = new Set(normalizedValues.map(facetValueKey));
                   // Place query-selected values first in query order. Do not sort
                   // endpoint results: all unchecked values retain proxy order.
                   const endpointValuesByKey = new Map(
@@ -348,10 +326,9 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     ...normalizedValues.filter((value) => !checkedValueKeys.has(facetValueKey(value))),
                   ]).filter((value) => {
                     // Keep explicitly selected values; hide non-selected values
-                    // only after their count is confirmed to be zero.
+                    // only when the server supplied a positive count.
                     if (checkedValueKeys.has(facetValueKey(value))) return true;
-                    const countQuery = distinctCountQueryFor(queryTree, "value", value.uri, widget.uri, value, { direction: "forward" });
-                    return Boolean(alias) || facetCandidateCounts[countQuery] !== 0;
+                    return (facetMembershipCount(value) ?? 0) > 0;
                   });
                   const pageCount = Math.max(
                     1,
@@ -391,7 +368,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                             type="button"
                             className="rounded px-2 py-1 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
                             onClick={() =>
-                              setPersonalWidgets((current) =>
+                              workspace.setPersonalWidgets((current) =>
                                 current.map((item) =>
                                   (item.key ?? item.uri) === widgetKey
                                     ? { ...item, page: Math.max(0, page - 1) }
@@ -416,7 +393,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                                 ".overflow-y-auto",
                               ) as HTMLElement | null;
                               const scrollTop = scrollContainer?.scrollTop ?? 0;
-                              setPersonalWidgets((current) =>
+                              workspace.setPersonalWidgets((current) =>
                                 current.map((item) =>
                                   (item.key ?? item.uri) === widgetKey
                                     ? {
@@ -447,16 +424,8 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                         )}
                         <div className={`${FACET_ITEM_GAP_CLASS} min-w-0 flex-1`}>
                         {pageValues.map((value, valueIndex) => {
-                          const countQuery = isGroupByFacet || alias ? "" : distinctCountQueryFor(queryTree, "value", value.uri, widget.uri, value, { direction: "forward" });
-                          // The grouped facet and the center groups use the SAME
-                          // count-sorted FCT value-list query. Never run a separate
-                          // per-value count request for grouped rows: it can race
-                          // and produce red error badges for otherwise valid groups.
-                          const groupedCount = Number(value.columns?.[1]?.value);
-                          const hasGroupedCount = Number.isSafeInteger(groupedCount) && groupedCount >= 0;
-                          const isZeroCount = isGroupByFacet || alias
-                            ? hasGroupedCount && groupedCount === 0
-                            : facetCandidateCounts[countQuery] === 0;
+                          const groupedCount = facetMembershipCount(value);
+                          const isZeroCount = groupedCount === 0;
                           const valueInputId = `personal-facet-value-${personalWidgets.indexOf(widget)}-${valueIndex}`;
                           const valueLabel = numericLabelByLexical.get(value.uri) || value.title || (value.termType === "uri" ? toLabel(value.uri, "OBJECT") : value.uri);
                           const numericFormatted = numericLabelByLexical.has(value.uri) && valueLabel !== value.uri;
@@ -505,26 +474,9 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                                 </label>
                               )
                             )}
-                            {isGroupByFacet ? (
-                              <span className="shrink-0 text-xs text-muted-foreground tabular-nums" aria-label="Members in group">
-                                {hasGroupedCount ? shortenCount(groupedCount) : "—"}
-                              </span>
-                            ) : (
-                              <DistinctCount
-                                enabled={endpointReadyForQuery}
-                                tree={queryTree}
-                                kind="value"
-                                uri={value.uri}
-                                propertyUri={widget.uri}
-                                candidateValue={value}
-                                valueRelationship={{ direction: alias?.target.name === "property-of" ? "reverse" : "forward", ...(alias ? {nodeId: alias.target.id} : {}) }}
-                                onCountChange={(query, count) =>
-                                  setFacetCandidateCounts((current) =>
-                                    current[query] === count ? current : { ...current, [query]: count },
-                                  )
-                                }
-                              />
-                            )}
+                            <span className="shrink-0 text-xs text-muted-foreground tabular-nums" aria-label="Matching resources">
+                              {groupedCount === undefined ? "—" : shortenCount(groupedCount)}
+                            </span>
                           </div>
                           );
                         })}

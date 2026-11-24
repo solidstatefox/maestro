@@ -8,6 +8,7 @@ import { browserLog } from "@/lib/maestro-client-logging";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { FormattedRecordSkeleton } from "@/canvas/right/formatted-record-skeleton";
+import { RecordPerformanceDebug } from "@/canvas/right/record-performance-debug";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 import { classifyRecordValue, RECORD_VALUE_KINDS, type RecordValueKind } from "@/lib/record-explorer-query";
 import { normalizeMaestroKind } from "@/lib/maestro-kinds";
@@ -271,6 +272,9 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     validateSelectedRecord,
     workspaceTab,
   } = workspace;
+  const recordHeaderLabel = [selectedResult?.title, selectedGroupRecord?.title,
+    recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr ?? ""}\u0000${selectedUri}`)]
+    .find(label => label?.trim() && label !== selectedUri) || toLabel(selectedUri);
   // Fullscreen is a Browse presentation, not a durable global navigation mode.
   // Leaving Browse or clearing session zero closes it without committing a Wand.
   useEffect(() => {
@@ -513,14 +517,14 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                     <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_title_icon }} />
                   )}
                   {recordDescribeIncomplete && <Tooltip><TooltipTrigger render={<button type="button" onClick={() => retryMaestroComponent("record")} aria-label="Retry only this Record DESCRIBE" title="Retry only this Record DESCRIBE" className="inline-flex shrink-0 items-center rounded-sm hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"><ClockFading className="size-4" /></button>} /><TooltipContent>Virtuoso returned an incomplete DESCRIBE. Click to retry this Record without refreshing Browse.</TooltipContent></Tooltip>}
-                  {selectedUri && (fullscreenPane || sessionIndex > 0) ? <span title={selectedUri} className="truncate">{selectedUri}</span> : selectedUri ? (
+                  {selectedUri && (fullscreenPane || sessionIndex > 0) ? <span title={selectedUri} className="truncate">{recordHeaderLabel}</span> : selectedUri ? (
                     <Tooltip><TooltipTrigger render={<button
                       type="button"
                       className={`cursor-pointer text-left underline-offset-2 hover:underline ${facetHoverPreview?.kind === "record" && facetHoverPreview.uri === selectedUri ? "text-purple-700 dark:text-purple-300" : ""}`}
                       onClick={() => { if (selectedRecordTermType !== "bnode") { clearTutorialPreview(); applyRecordAsRootValue(selectedUri); } }}
                       onMouseEnter={() => beginRecordHoverPreview(selectedUri, selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri)))}
                       onMouseLeave={clearTutorialPreview}
-                    >{selectedUri}</button>} /><TooltipContent>{`Set ${selectedUri} as the root record value`}</TooltipContent></Tooltip>
+                    >{recordHeaderLabel}</button>} /><TooltipContent>{`Set ${selectedUri} as the root record value`}</TooltipContent></Tooltip>
                   ) : recordSelectionCleared ? "Common values across the result set" : "Record"}
                   </h2>
                   </div>
@@ -575,7 +579,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                     </DialogContent>
                   </Dialog>
                   </div>
-                  {recordControlsOpen && selectedUri && <p className="min-w-0 w-full break-all text-xs leading-tight text-muted-foreground">{selectedUri}</p>}
+                  {selectedUri && <p className="min-w-0 w-full break-all text-xs leading-tight text-muted-foreground">{selectedUri}</p>}
                 </div>
                 <CollapsibleContent className="px-4 pb-2">
                 {selectedUri && <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -716,12 +720,13 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                 />
               ) : selectedRecordTermType !== "bnode" && recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && !recordDescriptionError && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && (!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || (!currentFormattedRecordHtml && !recordFormatError)))) ? (
                 <FormattedRecordSkeleton
-                  label={recordPolicy && selectedRecordTemplateUri ? "Loading record (formatted)" : "Loading record"}
+                  label={recordPolicy && selectedRecordTemplateUri ? ("Loading record (formatted)") : "Loading record"}
                   clockScope={recordPolicy && selectedRecordTemplateUri ? "policies" : isDescribing ? "record" : "policies"}
                   state="loading"
                 />
               ) : selectedRecordTermType !== "bnode" && currentFormattedRecordHtml ? (
                 <>
+                  <RecordPerformanceDebug />
                   <div ref={formattedRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
                   {xsltPortals}
                   {recordServiceDom && recordServices.length > 0 && createPortal(recordServices.map((service) => (

@@ -1,3 +1,4 @@
+import { reportRecordPerformance } from "@/lib/record-performance";
 import { annotateMaestroRecordRdfa } from "@/lib/maestro-record-rdfa";
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 import { snapshotFctQueryXml } from "@/lib/fct-query-api";
@@ -70,6 +71,7 @@ export async function transformMaestroRecordXslt(
   recordUri: string,
   signal?: AbortSignal,
   commonsImages: Array<{ url: string; credit?: string; license?: string; source?: string; title?: string }> = [],
+  renderStage: "initial" | "complete" = "complete",
 ): Promise<Document> {
   if (stylesheetText.length > 250000) throw new Error("Record stylesheet is too large.");
   const stylesheet = checkedXml(stylesheetText, "Record XSLT stylesheet");
@@ -114,10 +116,14 @@ export async function transformMaestroRecordXslt(
   // are hardcoded into the generic Record service.
   const phaseParam = Array.from(stylesheet.getElementsByTagNameNS("http://www.w3.org/1999/XSL/Transform", "param"))
     .some(node => node.getAttribute("name") === "maestroPhase");
-  if (phaseParam) {
+  if (phaseParam && renderStage === "complete") {
+    const planningStarted = performance.now();
     const planned = await transformWithMaestroSaxon(stylesheetText, new XMLSerializer().serializeToString(envelope),
       { recordUri, sandboxPhase: "queries", signal, outputLimit: 160_000 });
+    reportRecordPerformance("xslt-query-plan", planningStarted);
+    const enrichmentStarted = performance.now();
     const enrichment = await executeRecordXsltSandboxQueries(planned, queryDocument, describedRecord, signal);
+    reportRecordPerformance("record-sandbox-enrichment", enrichmentStarted);
     if (enrichment) envelope.documentElement.appendChild(envelope.importNode(enrichment, true));
   }
   // Cache only after enrichment: newly changed RDF labels must not reuse
@@ -126,10 +132,17 @@ export async function transformMaestroRecordXslt(
   const cacheKey = `${recordUri.length}:${recordUri}${stylesheetText.length}:${stylesheetText}${sourceXml}`;
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
   const previous = fromRecordFormatCache(cacheKey);
-  if (previous !== undefined) return new DOMParser().parseFromString(previous, "text/html");
+  if (previous !== undefined) {
+    reportRecordPerformance("record-formatted-html", performance.now(), "cache-hit");
+    return new DOMParser().parseFromString(previous, "text/html");
+  }
+  const renderStarted = performance.now();
   const html = await transformWithMaestroSaxon(stylesheetText, sourceXml, { recordUri, signal });
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  reportRecordPerformance("xslt-record-render", renderStarted, renderStage);
+  const rdfaStarted = performance.now();
   const withRdfa = annotateMaestroRecordRdfa(new DOMParser().parseFromString(html, "text/html"), describedRecord, recordUri);
+  reportRecordPerformance("record-rdfa-decoration", rdfaStarted);
   cacheRecordFormat(cacheKey, withRdfa.documentElement.outerHTML);
   return withRdfa;
 }

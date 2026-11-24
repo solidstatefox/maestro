@@ -46,7 +46,7 @@ test('Graph server CRUD uses authenticated personal SPARQL and declares its RDF 
 test('Graph Server Perspective gates only editors through the existing XState mutation capability', () => {
   const view = read('src/canvas/tab/view/page.tsx');
   const manager = read('src/canvas/tab/view/graph-server-manager.tsx');
-  assert.match(view, /selectedViewUri === "gttp:\/\/ggg\.maestro\.ecosys\/shacl\/view#EntryPointView"/);
+  assert.match(view, /selectedViewUri === "gttp:\/\/ggg\.maestro\.ecosys\/shacl\/provider\/entrypoint"/);
   assert.match(view, /canMutate=\{workspace\.accessCapabilities\.canMutatePersonalStore\}/);
   assert.match(manager, /DatabasePlus/);
   assert.match(manager, /Trash2/);
@@ -56,7 +56,7 @@ test('Graph Server Perspective gates only editors through the existing XState mu
 
 test('Login and Show Bookmarks explicitly register the current authenticated graph server', () => {
   const controller = read('src/canvas/utils/workspace-controller.tsx');
-  assert.match(controller, /void ensureLoggedInPersonalServer\(\)\.then\(refresh\)/);
+  assert.doesNotMatch(controller, /void ensureLoggedInPersonalServer\(\)\.then\(refresh\)/);
   assert.match(controller, /await ensureLoggedInPersonalServer\(\)/);
   assert.match(controller, /const synced = await listPersonalGraphServers\(\)/);
   assert.match(controller, /setManagedEndpoints\(synced\.map\(asEndpointOption\)\)/);
@@ -72,8 +72,8 @@ test('Both saved-entry perspectives show a calendar above unpaginated activity r
   assert.match(view, /row\.created\.slice\(0,10\) === calendarDay/);
 });
 
-test('Outer Browse Record chrome shows selected URI without changing provider-formatted title', () => {
+test('Outer Browse Record chrome shows selected label without changing provider-formatted title', () => {
   const record = read('src/canvas/right/pane.tsx');
-  assert.match(record, />\{selectedUri\}<\/button>/);
+  assert.match(record, />\{recordHeaderLabel\}<\/button>/);
   assert.match(record, /<RecordExplorer/);
 });

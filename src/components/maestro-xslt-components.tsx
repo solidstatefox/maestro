@@ -38,7 +38,7 @@ const portalChildBlueprints = new WeakMap<Element, readonly ReactNode[]>();
 const PROP_ALIASES: Record<string,string> = {
   class: "className", classname: "className", pagesize: "pageSize",
   maxpagesize: "maxPageSize", pagesizeselect: "pageSizeSelect",
-  listtag: "listTag", listclassname: "listClassName", tabindex: "tabIndex", for: "htmlFor",
+  filterlabel: "filterLabel", listtag: "listTag", listclassname: "listClassName", tabindex: "tabIndex", for: "htmlFor",
   showzoom: "showZoom", showcompass: "showCompass", showfullscreen: "showFullscreen",
   closebutton: "closeButton", defaultopen: "defaultOpen", defaultchecked: "defaultChecked",
   readonly: "readOnly", autofocus: "autoFocus", aschild: "asChild",

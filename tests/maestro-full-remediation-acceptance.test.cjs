@@ -24,7 +24,7 @@ test('Numeric FCT count projection carries Sheet provenance and its own dispatch
 test('Personal facet requests and headers map to their own execution clock, not the global personal category',()=>{
   const filter = read('src/canvas/left/filter.tsx');
   const cards = read('src/canvas/left/personal-widget-cards.tsx');
-  assert.match(filter,/resetMaestroQueryExecutionScope\(`component:personal:\$\{identity\}`\)/);
+  assert.match(filter,/const clockScope = `component:personal:\$\{identity\}` as const;\s*resetMaestroQueryExecutionScope\(clockScope\)/);
   assert.match(filter,/"X-Maestro-Clock-Component": `component:personal:\$\{identity\}`/);
   assert.match(cards,/clockScope=\{`component:personal:\$\{widgetKey\}`\}/);
   assert.match(filter,/"X-Maestro-Clock-Component": `component:personal-role:\$\{uri\}`/);

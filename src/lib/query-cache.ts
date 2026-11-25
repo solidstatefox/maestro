@@ -62,7 +62,7 @@ function removeExpiredEntries(cache: Map<string, CacheEntry>, now = Date.now()):
 /** Hash endpoint plus exact query/response-affecting options; results never cross endpoints. */
 export function queryCacheKey(kind: string, endpoint: string, query: string): string {
   return createHash("sha256")
-    .update(`maestro-cache-v3\\u0000${kind}\\u0000${endpoint}\\u0000${query}`)
+    .update(`maestro-cache-v4\\u0000${kind}\\u0000${endpoint}\\u0000${query}`)
     .digest("hex");
 }
 

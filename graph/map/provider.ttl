@@ -74,15 +74,6 @@
   <div class="flex min-h-[300px] min-w-0 flex-1 overflow-hidden">
     <div data-map-canvas="true" class="relative min-h-[300px] min-w-0 flex-1"/>
   </div>
-  <!-- Map has an independent bounded, read-only page of the live FCT scope.
-       The toolbar is owned by this provider, not by Browse Results paging. -->
-  <div class="flex shrink-0 items-center justify-end gap-2 border-t px-3 py-2 text-xs" role="navigation" aria-label="Map results pagination">
-    <span data-map-page-count="true" class="mr-auto tabular-nums text-muted-foreground">Page 1</span>
-    <button type="button" data-map-previous="true" disabled="disabled"
-      class="rounded border border-input px-3 py-1.5 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
-    <button type="button" data-map-next="true" disabled="disabled"
-      class="rounded border border-input px-3 py-1.5 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40">Next</button>
-  </div>
   <div hidden="hidden">
     <textarea data-provider-field="queryXml"><xsl:value-of select="mctx:query-text"/></textarea>
     <xsl:for-each select="mctx:metadata/mctx:entry">
@@ -113,28 +104,12 @@
   const field = name => root.querySelector('[data-provider-field="' + name + '"]')?.value || '';
   const providerUri = root.dataset.providerUri;
   const queryXml = field('queryXml');
-  const shapeUri = field('shapeUri');
-  const queryStylesheet = field('queryStylesheet');
-  const resultStylesheet = field('resultStylesheet');
   const paletteStylesheet = field('paletteStylesheet');
   const facetStylesheet = field('facetStylesheet');
-  const addr = new DOMParser().parseFromString(queryXml, 'application/xml').documentElement.getAttribute('addr') || '';
   const select = root.querySelector('[data-map-colorby]');
   const status = root.querySelector('[data-map-status]');
   const error = root.querySelector('[data-map-error]');
   const canvas = root.querySelector('[data-map-canvas]');
-  const previousPageButton = root.querySelector('[data-map-previous]');
-  const nextPageButton = root.querySelector('[data-map-next]');
-  const pageCount = root.querySelector('[data-map-page-count]');
-  const mapPageSize = 100;
-  let currentPage = 0;
-  let hasNextPage = false;
-  let pageRequest;
-  const updatePageControls = (busy = false) => {
-    previousPageButton.disabled = busy || currentPage === 0;
-    nextPageButton.disabled = busy || !hasNextPage;
-    pageCount.textContent = 'Page ' + (currentPage + 1) + ' · ' + points.length + ' mapped';
-  };
   const facetOptions = Array.from(select.options).filter(option => option.value);
   const facetDefinitions = [...new Map(facetOptions.map(option => [option.value, {
     key: option.value, iri: option.dataset.iri, direction: option.dataset.direction,
@@ -214,7 +189,6 @@
   let maplibre;
   signal.addEventListener('abort', () => {
     activeColorRequest?.abort();
-    pageRequest?.abort();
     resizeObserver?.disconnect();
     themeObserver?.disconnect();
     markers.forEach(marker => marker.remove());
@@ -300,7 +274,7 @@
     const clone = parseXml(queryXml);
     const projectionView = Array.from(clone.getElementsByTagName('*')).find(node => node.localName === 'view');
     if (!projectionView) throw new Error('Live FCT query has no view');
-    projectionView.setAttribute('type', 'list-values');
+    // projectValues builds the bound merge-values clone.
     projectionView.removeAttribute('badges');
     const projectionXml = new XMLSerializer().serializeToString(clone);
     const projected = new Map();
@@ -356,68 +330,6 @@
   select.addEventListener('change', () => { void recolor(); });
   const restored = new URLSearchParams(window.location.search).get('colorBy') || '';
   if (restored && facetDefinitions.some(facet => facet.key === restored)) select.value = restored;
-  const loadMapPage = async page => {
-    if (signal.aborted || !Number.isSafeInteger(page) || page < 0) return;
-    pageRequest?.abort();
-    activeColorRequest?.abort();
-    pageRequest = new AbortController();
-    const requestSignal = AbortSignal.any([signal, pageRequest.signal]);
-    updatePageControls(true);
-    statusText('Locating map resources…');
-    showingError('');
-    try {
-      // The provider clones the current FCT XML and changes ONLY its own
-      // derived Map page. No change to Browse's authoritative live <view>.
-      const derived = parseXml(queryXml);
-      const derivedView = Array.from(derived.getElementsByTagName('*')).find(node => node.localName === 'view');
-      if (!derivedView) throw new Error('Live FCT query has no view');
-      derivedView.setAttribute('limit', String(mapPageSize + 1));
-      derivedView.setAttribute('offset', String(page * mapPageSize));
-      const pageXml = new XMLSerializer().serializeToString(derived);
-      const compiled = await api.compileQuery(pageXml, shapeUri, queryStylesheet, requestSignal);
-      const resultXml = await api.executeQuery({ kind: 'sparql', addr, sparql: compiled.sparql }, requestSignal);
-      const pointsXml = await api.transformXml(resultStylesheet, resultXml, requestSignal);
-      if (requestSignal.aborted) return;
-      const pageRows = Array.from(parseXml(pointsXml).documentElement.children).filter(node => node.localName === 'point');
-      // The extra result is a sentinel. Do not invent a total or run a heavy
-      // COUNT over the full geographic FCT query.
-      // A malformed or unplottable coordinate still consumes a SELECT row.
-      // Base Next availability on the raw SPARQL page, not only valid pins.
-      const resultRows = Array.from(parseXml(resultXml).getElementsByTagName('*')).filter(node => node.localName === 'result');
-      const more = resultRows.length > mapPageSize;
-      const seen = new Set();
-      const nextPoints = pageRows.slice(0, mapPageSize).flatMap(node => {
-        const uri = node.getAttribute('uri');
-        const lat = Number(node.getAttribute('lat'));
-        const lng = Number(node.getAttribute('lng'));
-        if (!uri || seen.has(uri) || !Number.isFinite(lat) || !Number.isFinite(lng) ||
-            Math.abs(lat) > 90 || Math.abs(lng) > 180) return [];
-        seen.add(uri);
-        return [{ uri, lat, lng, title: node.getAttribute('title') || uri, colorTermKey: '', colorValue: '' }];
-      });
-      if (requestSignal.aborted) return;
-      points = nextPoints;
-      currentPage = page;
-      hasNextPage = more;
-      updatePageControls();
-      statusText(points.length + ' mapped resources on page ' + (page + 1));
-      if (points.length) {
-        const bounds = new maplibre.LngLatBounds();
-        points.forEach(point => bounds.extend([point.lng, point.lat]));
-        map.resize();
-        map.fitBounds(bounds, { padding: 48, maxZoom: 12, duration: 0 });
-      }
-      await recolor();
-    } catch (reason) {
-      if (!requestSignal.aborted) {
-        statusText('Map query failed');
-        showingError(reason?.message || String(reason));
-        updatePageControls();
-      }
-    }
-  };
-  previousPageButton.addEventListener('click', () => { if (!previousPageButton.disabled) void loadMapPage(currentPage - 1); });
-  nextPageButton.addEventListener('click', () => { if (!nextPageButton.disabled) void loadMapPage(currentPage + 1); });
   try {
     statusText('Locating map resources…');
     maplibre = await api.loadLibrary('maplibre-gl');
@@ -438,7 +350,49 @@
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     resizeObserver = new ResizeObserver(() => { if (!signal.aborted) map.resize(); });
     resizeObserver.observe(canvas);
-    await loadMapPage(0);
+    const pageRows = JSON.parse(field('pageRows') || '[]');
+    const labels = new Map(pageRows.map(row => [row.uri,row.title]));
+    const GEO = 'http://www.w3.org/2003/01/geo/wgs84_pos#';
+    const GSP = 'http://www.opengis.net/ont/geosparql#';
+    const coordinatePairs = [[GEO+'lat',GEO+'long'],['https://schema.org/latitude','https://schema.org/longitude'],['http://schema.org/latitude','http://schema.org/longitude']];
+    const pointPredicates = ['http://www.georss.org/georss/point',GEO+'lat_long'];
+    const wkt = GSP+'asWKT';
+    const geometry = GSP+'hasGeometry';
+    const columns = [...coordinatePairs.flat(), ...pointPredicates,wkt].map(property => ({property,direction:'forward'}));
+    columns.push({property:wkt,direction:'forward',path:[geometry,wkt]});
+    const records = await api.projectPage(queryXml,pageRows.map(row => row.uri),columns,signal);
+    if (signal.aborted) return;
+    // Normalize only enriched resources on this page. Never mix latitude and
+    // longitude from different RDF vocabularies or invent missing coordinates.
+    const coordinate = (a,b) => a != null && b != null && String(a).trim() && String(b).trim() && Number.isFinite(Number(a)) && Number.isFinite(Number(b)) && Math.abs(Number(a)) <= 90 && Math.abs(Number(b)) <= 180 ? [Number(a),Number(b)] : null;
+    points = records.flatMap(record => {
+      if (!labels.has(record.uri)) return [];
+      const first = predicate => record.properties.get(predicate)?.[0]?.value;
+      let pair = coordinatePairs.map(([lat,lng]) => coordinate(first(lat),first(lng))).find(Boolean);
+      if (!pair) for (const predicate of pointPredicates) {
+        const parts = (first(predicate) || '').trim().replaceAll(',', ' ').split(/ +/);
+        if (parts.length === 2) pair = coordinate(parts[0],parts[1]);
+        if (pair) break;
+      }
+      if (!pair) for (const value of [...(record.properties.get(wkt) || []),...(record.properties.get('forward|'+geometry+'/'+wkt) || [])]) {
+        const text = value.value.trim();
+        const start = text.toUpperCase().lastIndexOf('POINT');
+        const inside = start < 0 ? '' : text.slice(start+5).trim();
+        if (!inside.startsWith('(') || !inside.endsWith(')')) continue;
+        const parts = inside.slice(1,-1).trim().split(/ +/);
+        if (parts.length === 2) pair = coordinate(parts[1],parts[0]);
+        if (pair) break;
+      }
+      return pair ? [{uri:record.uri,lat:pair[0],lng:pair[1],title:labels.get(record.uri)||record.uri,colorTermKey:'',colorValue:''}] : [];
+    });
+    statusText(points.length + ' mapped resources on current Results page');
+    if (points.length) {
+      const bounds = new maplibre.LngLatBounds();
+      points.forEach(point => bounds.extend([point.lng,point.lat]));
+      map.resize();
+      map.fitBounds(bounds,{padding:48,maxZoom:12,duration:0});
+    }
+    await recolor();
   } catch (reason) {
     if (!signal.aborted) { statusText('Map query failed'); showingError(reason?.message || String(reason)); }
   }

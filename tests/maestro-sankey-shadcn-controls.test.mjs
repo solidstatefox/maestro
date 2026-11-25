@@ -19,7 +19,10 @@ test('Sankey 3 uses shadcn form controls without redesigning the existing toolba
     'Chart width','Chart height','Labels','Zoom out','Zoom in','Reset zoom and pan'];
   let position=-1;
   for(const item of ordered){const next=markup.indexOf(item,position+1);assert.ok(next>position,`${item}: order changed`);position=next;}
-  assert.match(markup,/multicolorColumns && selectedNode!==null && <Button/);
+  assert.match(markup,/selectedNode!==null && <Button/);
+  assert.doesNotMatch(markup,/multicolorColumns && selectedNode/);
+  assert.match(d3,/const streamFocus=useMemo\(\(\)=>selectedNode!==null/);
+  assert.match(d3,/\[graph\.links,selectedNode\]/);
   for(const expr of [
     'min={4} max={40} step={2} value={nodeWidth}',
     'min={0} max={40} step={2} value={nodePadding}',

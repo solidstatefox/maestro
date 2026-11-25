@@ -1,8 +1,10 @@
+import { observeProxyFetch, stopProxyQueryGeneration, resumeProxyQueryGeneration } from "@/lib/proxy-transport-observation";
 import { requireSparqlAttribution } from "@/lib/sparql-request-attribution";
 import { maestroLanguageHeader } from "./maestro-language";
 import { readMaestroConcurrency } from "./maestro-concurrency";
 import { maestroQueryClockScope } from "./maestro-query-execution-clock";
 import { subscribeMaestroQueryEvents } from "./client-query-events";
+import { QUERY_OPERATION_WATCHDOG_MS } from "./virtuoso-anytime";
 import { setMaestroIncompleteResults } from "./maestro-incomplete-results";
 import { applyFctQueryTimeout, configuredTimeoutMs } from "./maestro-query-timeouts";
 /**
@@ -26,6 +28,7 @@ interface CachedResponseRecord {
 const memoryCache = new Map<string, CachedResponseRecord>();
 // IndexedDB is the persistent cache. This Map is only a bounded hot-response tier.
 const MEMORY_CACHE_MAX_ENTRIES = 256;
+const CLIENT_CACHE_TTL_MS = 5 * 60_000;
 const MEMORY_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 let memoryCacheBytes = 0;
 function memoryRecordBytes(record: CachedResponseRecord): number {
@@ -123,6 +126,7 @@ function lookupCachedResponseWithDeadline(key: string, signal?: AbortSignal | nu
 
 export function computeClientCacheKey(url: string, init?: RequestInit): string | null {
   const method = (init?.method ?? "GET").toUpperCase();
+  if (new Headers(init?.headers).has("authorization")) return null;
   if (method === "GET") {
     // FCT endpoint lists depend on the user's Personal login and graph server
     // configuration. Never restore them from an old browser IndexedDB entry.
@@ -132,21 +136,25 @@ export function computeClientCacheKey(url: string, init?: RequestInit): string |
   }
   if (method === "POST") {
     const bodyStr = typeof init?.body === "string" ? init.body : "";
+    const headers = new Headers(init?.headers);
+    // Never put credentials or authenticated personal responses into the
+    // generic public response cache. Personal snapshots have their own scope.
+    if (headers.has("authorization") || /"personal(?:Read|Write)"\s*:\s*true/i.test(bodyStr) || /\/ods\/home\//i.test(bodyStr) || /"update"\s*:/i.test(bodyStr)) return null;
     // Endpoint selection mutation should not be cached
     if ((bodyStr.includes('"selectEndpointId"') || bodyStr.includes('"selectEndpointUrl"'))) return null;
     const language = new Headers(init?.headers).get("x-maestro-language") ?? "";
     // The FCT route now emits authoritative page labels for text and list
     // results. A new cache namespace avoids replaying pre-fix URI-only cards
     // from IndexedDB after logout/login (without clearing unrelated user data).
-    const responseRevision = url.includes("/proxy/api/fct") ? "fct-labels-v2::" : "";
-    return `POST::${responseRevision}${url}::lang=${language}::${bodyStr}`;
+    const responseRevision = url.includes("/proxy/api/fct") ? "fct-labels-v4::" : "public-v4::";
+    return `POST::${responseRevision}${url}::lang=${language}::timeout=${headers.get("x-maestro-query-timeout-ms") ?? ""}::${bodyStr}`;
   }
   return null;
 }
 
 export async function getClientCachedResponse(key: string): Promise<Response | null> {
   const mem = memoryCache.get(key);
-  if (mem) {
+  if (mem && Date.now() - mem.timestamp <= CLIENT_CACHE_TTL_MS) {
     memoryCache.delete(key);
     memoryCache.set(key, mem);
     return new Response(mem.body, {
@@ -166,7 +174,7 @@ export async function getClientCachedResponse(key: string): Promise<Response | n
       req.onsuccess = () => resolve(req.result as CachedResponseRecord | undefined);
       req.onerror = () => reject(req.error);
     });
-    if (record) {
+    if (record && Date.now() - record.timestamp <= CLIENT_CACHE_TTL_MS) {
       rememberMemoryResponse(key, record);
       return new Response(record.body, {
         status: record.status,
@@ -323,11 +331,13 @@ export function abortPendingMaestroQueries(): void {
 /** Cancel without altering loaded results; do not allow delayed effect timers to restart queries. */
 export function stopPendingMaestroQueries(): void {
   queryPipelineStopped = true;
+  stopProxyQueryGeneration();
   abortPendingMaestroQueries();
 }
 /** Called at the beginning of a genuinely new query pipeline. */
 export function resumePendingMaestroQueries(): void {
   queryPipelineStopped = false;
+  resumeProxyQueryGeneration();
 }
 async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
   operation: (signal: AbortSignal) => Promise<T>, label = "Query"): Promise<T> {
@@ -431,9 +441,16 @@ function dispatchScheduledRequests(): void {
   }
 }
 function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  if ((init?.method ?? "GET").toUpperCase() !== "POST") return fetch(input, init);
+  if ((init?.method ?? "GET").toUpperCase() !== "POST") return observeProxyFetch(input, init);
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-  if (!/\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) return fetch(input, init);
+  if (!/\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) return observeProxyFetch(input, init);
+  // This is a local liveness watchdog, not the Sheet execution budget.
+  // It bounds a lost queue/telemetry/HTTP response without charging queue time
+  // to Virtuoso. Its abort is not upstream failure evidence.
+  const originalOwner = init?.signal ? pendingQueryOwnerBySignal.get(init.signal) : undefined;
+  const watchdog = AbortSignal.timeout(QUERY_OPERATION_WATCHDOG_MS);
+  init = { ...init, signal: init?.signal ? AbortSignal.any([init.signal, watchdog]) : watchdog };
+  if (originalOwner && init.signal) pendingQueryOwnerBySignal.set(init.signal, originalOwner);
   const background = isBackgroundQuery(init);
   return new Promise<Response>((resolve, reject) => {
     let started = false;
@@ -444,7 +461,7 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
       const index = requestQueue.indexOf(job);
       if (index >= 0) requestQueue.splice(index, 1);
       refreshPendingQueueIndexes();
-      reject(new DOMException("Query canceled", "AbortError"));
+      reject(watchdog.aborted ? new Error("Maestro local request watchdog expired while queued.") : new DOMException("Query canceled", "AbortError"));
       dispatchScheduledRequests();
     };
     const clockScope = maestroQueryClockScope(init?.headers ? new Headers(init.headers) : undefined);
@@ -454,6 +471,7 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
     const owner = init?.signal ? pendingQueryOwnerBySignal.get(init.signal) : undefined;
     const job: ScheduledRequest = { background, owner, signal: init?.signal, run: () => {
       started = true;
+      init?.signal?.removeEventListener("abort", abort);
       const owner = init?.signal ? pendingQueryOwnerBySignal.get(init.signal) : undefined;
       const tracked = owner ? pendingQueryDetails.get(owner) : undefined;
       if (tracked && tracked.state !== "active") {
@@ -486,11 +504,12 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
         try {
           // The response remains ordinary FCT XML or SPARQL JSON/RDF; never
           // consume it as a telemetry stream and never wrap it in JSON.
-          return await fetch(input, { ...init, headers });
+          return await observeProxyFetch(input, { ...init, headers });
         } finally {
           // Release only this request's clocks/listener, not the shared
           // browser-tab telemetry connection used by concurrent FCT requests.
           channel?.close();
+          if (init?.signal) pendingQueryOwnerBySignal.delete(init.signal);
         }
       })();
     }, resolve, reject, abort };
@@ -518,39 +537,73 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
  * and optional status projections are deliberately excluded. */
 export const MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS = "maestro:graph-server-request-success";
 export const MAESTRO_GRAPH_SERVER_TRANSPORT_FAILURE = "maestro:graph-server-transport-failure";
+export const MAESTRO_GRAPH_SERVER_QUERY_OUTCOME = "maestro:graph-server-query-outcome";
+let graphQuerySequence=0;
+let graphQueryScope=0;
+let graphQueryIdentity="";
+export function setGraphQueryHealthScope(identity:string){if(identity!==graphQueryIdentity){graphQueryIdentity=identity;graphQueryScope++;}}
 const CONNECTIVITY_ERROR = /\b(?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_HAS_EXPIRED|ERR_TLS_[A-Z_]+)\b|connect(?:ion)? (?:timed? ?out|refused)|unable to get local issuer certificate/i;
 async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const body = typeof init?.body === "string" ? init.body : "";
   let fctXml = body;
+  let directAddr="";
+  let directOperation="";
   if (body.trimStart().startsWith("{")) {
     try {
-      const parsed = JSON.parse(body) as { queryXml?: unknown };
-      fctXml = typeof parsed.queryXml === "string" ? parsed.queryXml : "";
+      const parsed = JSON.parse(body);
+      const nested=parsed.recordSelect??parsed.recordBlankNodes??parsed.recordValueLabels??parsed.facetValueCount;
+      fctXml = typeof (nested?.queryXml??parsed.queryXml) === "string" ? nested?.queryXml??parsed.queryXml : "";
+      if(!parsed.personalRead && !parsed.personalWrite && !parsed.update && parsed.operation!=="auth-probe"){
+        directAddr=typeof (nested?.addr??parsed.addr)==="string" ? nested?.addr??parsed.addr : "";
+        directOperation=typeof parsed.query==="string" ? "query" : Object.keys(parsed).find(key=>["recordSelect","recordBlankNodes","recordValueLabels","facetValueCount","resultsQuery","facetIntersection"].includes(key))??"";
+      }
     } catch { fctXml = ""; }
   }
   const isFctQuery = /\/proxy\/api\/fct(?:[/?]|$)/.test(url) &&
     (init?.method ?? "GET").toUpperCase() === "POST" &&
     /<(?:(?:[A-Za-z][\w.-]*):)?query(?:\s|>)/.test(fctXml);
   const isStatusProjection = /<view\b[^>]*\btype\s*=\s*["']list-status["']/i.test(fctXml);
-  const address = isFctQuery && !isStatusProjection ? fctXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "" : "";
-  const endpointUrl = address.includes("@") ? address.slice(address.indexOf("@") + 1).replace(/&amp;/g, "&") : "";
+  const isDirectQuery=/\/proxy\/api\/sparql(?:[/?]|$)/.test(url) && Boolean(directOperation);
+  const address = (isFctQuery && !isStatusProjection || isDirectQuery) ? directAddr || fctXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] || "" : "";
+  const headers=new Headers(init?.headers);
+  const source=headers.get("x-maestro-debug-source")??"";
+  const component=(headers.get("x-maestro-debug-component")??"").replace(/:[0-9a-f]{8,}(?::\d+)?$/i,"");
+  const view=fctXml.match(/<view\b[^>]*\btype\s*=\s*["']([^"']+)/i)?.[1]??"";
+  const operation=JSON.stringify([source,component,view,directOperation]);
+  const sequence=++graphQuerySequence;
+  const scope=graphQueryScope;
+  const endpointUrl = (address.includes("@") ? address.slice(address.indexOf("@") + 1) : /^https?:\/\//i.test(address) ? address : "").replace(/&amp;/g, "&");
   let response: Response;
   try { response = await scheduledGraphFetch(input, init); }
   catch (error) {
     throw error;
   }
-  if (!init?.signal?.aborted && typeof window !== "undefined" && endpointUrl &&
+  if (scope===graphQueryScope && !init?.signal?.aborted && typeof window !== "undefined" && endpointUrl &&
       response.headers.get("X-Maestro-Cache") !== "HIT" &&
-      response.headers.get("X-Maestro-Client-Cache") !== "HIT") {
-    if (response.status === 200) {
+      response.headers.get("X-Maestro-Client-Cache") !== "HIT" &&
+      response.headers.get("X-Maestro-Upstream-Source") !== "cache" && response.headers.get("X-Maestro-Upstream-Source") !== "federated") {
+    const origin=response.headers.get("X-Maestro-Failure-Origin");
+    const directNetwork=isDirectQuery && response.headers.get("X-Maestro-Upstream-Source")==="network";
+    const upstreamStatus = response.headers.get("X-Maestro-Upstream-Status");
+    const actual=upstreamStatus ? Number(upstreamStatus) : response.status;
+    const partial = response.headers.get("X-Maestro-Incomplete") === "true";
+    const timeout = origin === "upstream-transport" && response.status === 504 && !partial;
+    const network = response.headers.get("X-Maestro-Upstream-Source") === "network";
+    // A valid Anytime partial result is a supported execution outcome. It is
+    // neither a hard transport failure nor proof that all requested values exist.
+    const successful = response.ok && network && actual === 200 && !partial && ((isFctQuery && !isStatusProjection) || directNetwork);
+    if (successful || ((origin === "upstream-http" || directNetwork) && actual >= 400 && !partial) || timeout) {
+      if (!init?.signal?.aborted) window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_QUERY_OUTCOME,{detail:{endpointUrl,operation,sequence,scope,status:successful ? 200 : timeout && actual===504 ? null : actual,timeout,diagnostic:timeout?"Upstream query transport timeout":successful?undefined:`Upstream query HTTP ${actual}`}}));
+    }
+    if (response.status === 200 && isFctQuery && !isStatusProjection && !timeout && !partial && response.headers.get("X-Maestro-Upstream-Source")==="network") {
       window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_REQUEST_SUCCESS, { detail: { endpointUrl } }));
-    } else if (response.status >= 500) {
+    } else if (response.status >= 500 && !partial) {
       // Only read the unsuccessful response's clone. It must remain available
       // in full to the FCT XML/error renderer. No success-body processing.
       const failureBody = await response.clone().text().catch(() => "");
       const diagnostic = failureBody.slice(0, 3072);
-      if (CONNECTIVITY_ERROR.test(diagnostic)) {
+      if (scope===graphQueryScope && !init?.signal?.aborted && response.headers.get("X-Maestro-Failure-Origin") === "upstream-transport" && CONNECTIVITY_ERROR.test(diagnostic)) {
         window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_TRANSPORT_FAILURE, {
           detail: { endpointUrl, status: response.status, diagnostic: diagnostic.slice(0, 1024), at: Date.now() },
         }));
@@ -567,7 +620,7 @@ async function maestroQueryFetchImpl(input: RequestInfo | URL, init?: RequestIni
   const source = [headers.get("x-maestro-debug-source") || "", headers.get("x-maestro-debug-component") || ""].join(" ");
   const timeoutMs = configuredTimeoutMs(source);
   if (!timeoutMs) return monitoredProxyFetch(input, { ...init, headers });
-  headers.set("x-maestro-query-timeout-ms", String(timeoutMs));
+  if (!headers.has("x-maestro-query-timeout-ms")) headers.set("x-maestro-query-timeout-ms", String(timeoutMs));
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const method = (init?.method ?? "GET").toUpperCase();
   if (method === "POST" && /\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) {
@@ -652,15 +705,17 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
 
   const cached = requestHeaders.get("x-maestro-component-retry") === "1" ? null
     : await lookupCachedResponseWithDeadline(key, init?.signal);
+  init?.signal?.throwIfAborted();
   if (cached) {
     return track(cached);
   }
 
   const response = await monitoredProxyFetch(input, init);
-  if (response.ok && response.headers.get("x-maestro-incomplete") !== "true") {
+  if (response.status === 200 && response.headers.get("x-maestro-incomplete") !== "true") {
     try {
       const clone = response.clone();
       const bodyText = await clone.text();
+      init?.signal?.throwIfAborted();
       const contentType = response.headers.get("Content-Type") || "application/xml; charset=utf-8";
       void setClientCachedResponse(key, bodyText, contentType, response.status);
     } catch {

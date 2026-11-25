@@ -1,3 +1,4 @@
+import { observeProxyFetch } from "./proxy-transport-observation";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
 
 const uriToShortform = new Map<string, string>();
@@ -77,7 +78,7 @@ async function flushUriObservations(useBeacon = false) {
       const sent = navigator.sendBeacon("/proxy/api/service", new Blob([payload], { type: "application/json" }));
       if (!sent) for (const item of batch) observationQueue.set(item.uri, item);
     } else {
-      const response = await fetch("/proxy/api/service", {
+      const response = await observeProxyFetch("/proxy/api/service", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...debug },
         body: payload,

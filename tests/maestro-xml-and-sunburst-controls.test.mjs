@@ -65,7 +65,8 @@ test('sunbursts keep hover highlight without scaling, hand cursor or native SVG 
 
 test('sunbursts retain 2.5x depth geometry but cap the surrounding host to reduce whitespace', () => {
   const host = read('src/canvas/left/facet-presentation.tsx');
-  assert.match(host, /max-w-\[420px\]/);
+  assert.match(host, /svg\.getBBox\(\)/);
+  assert.match(host, /max-w-full/);
   assert.doesNotMatch(host, /max-w-\[800px\]/);
   assert.match(host, /flex-none flex-col gap-1/);
   assert.match(host, /child\.localName\.toLowerCase\(\)===\"g\" && attr\.value===\"scale\(2\.5\)\"/);

@@ -71,7 +71,6 @@ export function usePreferencesState() {
   const [queryTreeHeightPercent, setQueryTreeHeightPercent] = useState(40);
   const [queryTreeHeightLoaded, setQueryTreeHeightLoaded] = useState(false);
   const [recordFormatEnabled, setRecordFormatEnabled] = useState(false);
-  const [recordFormatPreferenceLoaded, setRecordFormatPreferenceLoaded] = useState(false);
   const queryTreeHeightDbRef = useRef<IDBDatabase | null>(null);
   const [showResultBadges, setShowResultBadges] = useState(false);
   const [orderResults, setOrderResults] = useState(false);
@@ -110,8 +109,6 @@ export function usePreferencesState() {
     setQueryTreeHeightLoaded,
     recordFormatEnabled,
     setRecordFormatEnabled,
-    recordFormatPreferenceLoaded,
-    setRecordFormatPreferenceLoaded,
     queryTreeHeightDbRef,
     showResultBadges,
     setShowResultBadges,

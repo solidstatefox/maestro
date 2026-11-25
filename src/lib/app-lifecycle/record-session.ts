@@ -107,6 +107,13 @@ export function createMaestroRecordSessionController() {
       if ((event.type === "SELECT_RECORD" && event.key !== snapshot.context.key) || event.type === "CLOSE") abortAll();
       actor?.send(event);
     },
+    cancelPending() {
+      abortAll();
+      const { key, phases, requestIds } = snapshot.context;
+      for (const operation of Object.keys(phases) as RecordOperation[]) {
+        if (phases[operation] === "loading") actor?.send({ type: "OP_CANCELLED", key, operation, requestId: requestIds[operation] });
+      }
+    },
     getSnapshot: () => snapshot,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     selectRecord(key: string) {

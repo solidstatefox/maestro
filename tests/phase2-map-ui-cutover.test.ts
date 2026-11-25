@@ -11,7 +11,7 @@ const script = provider.match(/<script type="text\/javascript"><!\[CDATA\[([\s\S
 test("MapLibre UI, Color By projection, markers and facet decorations are provider-authored", () => {
   assert.ok(script.length > 5000, "Provider stylesheet must own the full Map script");
   assert.doesNotThrow(() => new Script(script));
-  for (const token of ["loadLibrary('maplibre-gl')", "compileQuery(", "executeQuery(", "projectValues(", "transformXml(", "decorateFacets(", "fitBounds("]) {
+  for (const token of ["loadLibrary('maplibre-gl')", "projectPage(", "projectValues(", "transformXml(", "decorateFacets(", "fitBounds("]) {
     assert.ok(provider.includes(token), `Missing provider-owned Map responsibility: ${token}`);
   }
   assert.doesNotMatch(provider, /data-map-legend/, "Color legend should not occupy the right-side pane");

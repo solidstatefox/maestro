@@ -4,16 +4,17 @@ import { assign, createActor, fromPromise, setup } from "xstate";
  * The live FCT tree owns membership; the catalog actor owns only request/render state.
  * Keys include the exact query, page, provider kind and approval projection. */
 export type ProviderCatalogPhase = "inactive" | "waitingForResults" | "resolving" | "rendering" | "ready" | "empty" | "failed" | "cancelled";
-export type ProviderCatalogResult = { html: string; count: number };
+import type { GraphServerRow } from "../client-endpoint-discovery";
+export type ProviderCatalogResult = { html: string; count: number; graphRows?: GraphServerRow[] };
 export type ProviderCatalogExecutor = (signal: AbortSignal) => Promise<ProviderCatalogResult>;
-type CatalogContext = { key: string; html: string; count: number; error: string; inFlight: boolean; executor: ProviderCatalogExecutor | null };
+type CatalogContext = { graphRows: GraphServerRow[]; key: string; html: string; count: number; error: string; inFlight: boolean; executor: ProviderCatalogExecutor | null };
 export type ProviderCatalogEvent =
   | { type: "CATALOG_INACTIVE" }
   | { type: "CATALOG_EXECUTE"; key: string; execute: ProviderCatalogExecutor }
   | { type: "CATALOG_WAITING" | "CATALOG_STARTED" | "CATALOG_RENDERING" | "CATALOG_CANCELLED"; key: string }
   | { type: "CATALOG_RESOLVED"; key: string; html: string; count: number }
   | { type: "CATALOG_FAILED"; key: string; error: string };
-const empty: CatalogContext = { key: "", html: "", count: 0, error: "", inFlight: false, executor: null };
+const empty: CatalogContext = { graphRows: [], key: "", html: "", count: 0, error: "", inFlight: false, executor: null };
 export const maestroProviderCatalogMachine = setup({
   types: { context: {} as CatalogContext, events: {} as ProviderCatalogEvent },
   actors: { resolveCatalog: fromPromise(async ({ input, signal }: {
@@ -23,10 +24,10 @@ export const maestroProviderCatalogMachine = setup({
   id: "maestro-provider-catalog", initial: "inactive", context: empty,
   on: {
     CATALOG_INACTIVE: { target: ".inactive", actions: assign(() => ({ ...empty })) },
-    CATALOG_WAITING: { target: ".waitingForResults", actions: assign(({ event }) => ({ ...empty, key: event.key })) },
-    CATALOG_STARTED: { target: ".resolving", actions: assign(({ event }) => ({ ...empty, key: event.key, inFlight: true })) },
+    CATALOG_WAITING: { guard: ({ context, event }) => context.key !== event.key, target: ".waitingForResults", actions: assign(({ event }) => ({ ...empty, key: event.key })) },
+    CATALOG_STARTED: { guard: ({ context, event }) => context.key !== event.key, target: ".resolving", actions: assign(({ event }) => ({ ...empty, key: event.key, inFlight: true })) },
     // Actor exit automatically aborts the exact scoped job on provider/query change.
-    CATALOG_EXECUTE: { target: ".executing", actions: assign(({ event }) => ({
+    CATALOG_EXECUTE: { guard: ({ context, event }) => context.key !== event.key, target: ".executing", reenter: true, actions: assign(({ event }) => ({
       ...empty, key: event.key, inFlight: true, executor: event.execute,
     })) },
     CATALOG_RENDERING: { guard: ({ context, event }) => context.key === event.key && context.inFlight,
@@ -43,15 +44,15 @@ export const maestroProviderCatalogMachine = setup({
       target: ".cancelled", actions: assign({ html: "", count: 0, error: "", inFlight: false }) },
   },
   states: {
-    inactive: {}, waitingForResults: {}, resolving: {}, rendering: {}, ready: {}, empty: {}, failed: {}, cancelled: {},
+    inactive: {}, waitingForResults: { on: { CATALOG_STARTED: { target: "resolving", actions: assign(({ event }) => ({ ...empty, key: event.key, inFlight: true })) }, CATALOG_CANCELLED: { guard: ({context,event}) => context.key === event.key, target: "cancelled" }, CATALOG_EXECUTE: { target: "executing", actions: assign(({ event }) => ({ ...empty, key: event.key, inFlight: true, executor: event.execute })) } } }, resolving: {}, rendering: {}, ready: {}, empty: {}, failed: {}, cancelled: {},
     executing: {
       invoke: {
         src: "resolveCatalog",
         input: ({ context }) => ({ key: context.key, execute: context.executor! }),
         onDone: [
           { guard: ({ context, event }) => context.key === event.output.key && event.output.count > 0,
-            target: "ready", actions: assign(({ event }) => ({ html: event.output.html, count: event.output.count, error: "", inFlight: false, executor: null })) },
-          { target: "empty", actions: assign(({ event }) => ({ html: event.output.html, count: 0, error: "", inFlight: false, executor: null })) },
+            target: "ready", actions: assign(({ event }) => ({ html: event.output.html, graphRows: event.output.graphRows ?? [], count: event.output.count, error: "", inFlight: false, executor: null })) },
+          { target: "empty", actions: assign(({ event }) => ({ html: event.output.html, graphRows: event.output.graphRows ?? [], count: 0, error: "", inFlight: false, executor: null })) },
         ],
         onError: { target: "failed", actions: assign(({ event }) => ({
           html: "", count: 0, inFlight: false, executor: null,
@@ -96,6 +97,7 @@ export function selectProviderCatalog(snapshot: ReturnType<MaestroProviderCatalo
     phase,
     loading: phase === "waitingForResults" || phase === "resolving" || phase === "rendering",
     html: matching && (phase === "ready" || phase === "empty") ? snapshot.context.html : "",
+    graphRows: matching && phase === "ready" ? snapshot.context.graphRows : [],
     count: matching && (phase === "ready" || phase === "empty") ? snapshot.context.count : 0,
     error: matching && phase === "failed" ? snapshot.context.error : "",
   };

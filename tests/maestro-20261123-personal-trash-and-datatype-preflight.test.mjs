@@ -13,7 +13,7 @@ test('Personal facet Trash resolves a normalized query node ID and lets the quer
   const controller = read('src/canvas/utils/workspace-controller.tsx');
   assert.match(controller, /function guardedDeleteQueryNode\(nodeId:string\):boolean/);
   assert.match(controller, /error instanceof FctNodeInUseError/);
-  assert.match(controller, /setBlockedReferenceDeletion\(\{nodeId:error.nodeId,dependents:error.dependents,hrefLabels\}\)/);
+  assert.match(controller, /setBlockedReferenceDeletion\(\{nodeId:error.nodeId,dependents:error.dependents,hrefLabels,expectedQueryXml:queryXml\}\)/);
   assert.match(controller, /const resolved = getTransportedQueryTreePath\(ref\.anchorId, ref\.targetId\)/);
   assert.match(controller, /blockedReferenceDeletion\?\.hrefLabels\[ref\.anchorId\]/);
   assert.match(controller, /deleteNode\(nodeId\)/);

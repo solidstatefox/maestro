@@ -28,6 +28,7 @@ import { readRootHoverDelayMs, writeRootHoverDelayMs } from "@/lib/root-breadcru
 
 import { initializeMaestroStorage, maestroStorageSet } from "@/lib/maestro-storage";
 import { readIteraComputeKey, writeIteraComputeKey } from "@/lib/iteracompute-credential";
+import { RIBBON_DISCOVERY_OPTIONS } from "@/lib/ribbon-discovery-limits";
 import { readRecordGraphDiscoveryLimits, writeRecordGraphDiscoveryLimits, RECORD_GRAPH_CANDIDATE_OPTIONS, RECORD_GRAPH_RESULT_OPTIONS } from "@/lib/record-graph-limits";
 
 import { Slider } from "@/components/ui/slider";
@@ -150,6 +151,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     recordDescriptionPageSize,
     recordDescriptionQueryLimit,
     resultsBatchSize,
+    ribbonDiscoveryLimits,setRibbonDiscoveryLimit,
     setAutoConfiguredFacetKeys,
     setBrowserLogLevel,
     setBrowserLogging,
@@ -243,6 +245,8 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     const limit = Number(value);
     if (![100, 500, 1000].includes(limit)) return;
     for (const key of LEFT_WIDGET_LIMIT_KEYS) setLeftWidgetLimit(key, limit);
+    setRibbonDiscoveryLimit("perspectives",limit);
+    setRibbonDiscoveryLimit("analysis",limit);
     maestroStorageSet(CENTER_PANEL_LIMIT_STORAGE_KEY, String(limit));
     setPendingCenterBatchLimit(limit);
     maestroStorageSet(CENTER_GROUP_LIMIT_STORAGE_KEY, String(limit));
@@ -566,6 +570,16 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                   </MaestroSelect>
                 </div>
               ))}
+                  </section>
+                  <section className="space-y-3 border-t pt-3">
+                    <h3 className="text-xs font-semibold text-muted-foreground">Ribbon discovery query limits</h3>
+                    <p className="text-xs text-muted-foreground">Candidate rows per discovery SELECT. View &gt; Providers catalogs use the Center Results batch limit below.</p>
+                    {(["perspectives","analysis"] as const).map(key=><div key={key} className="flex items-center justify-between gap-3">
+                      <Label htmlFor={`ribbon-limit-${key}`}>{key==="perspectives"?"View > Perspectives":"Analyze > Analysis"}</Label>
+                      <MaestroSelect id={`ribbon-limit-${key}`} value={ribbonDiscoveryLimits[key]} onChange={event=>setRibbonDiscoveryLimit(key,Number(event.currentTarget.value))} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+                        {RIBBON_DISCOVERY_OPTIONS.map(n=><option key={n} value={n}>{n.toLocaleString()}</option>)}
+                      </MaestroSelect>
+                    </div>)}
                   </section>
                   <section className="space-y-3 border-t pt-3">
                     <h3 className="text-xs font-semibold text-muted-foreground">Record graph discovery</h3>

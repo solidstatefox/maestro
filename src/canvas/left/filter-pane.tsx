@@ -1,4 +1,5 @@
 "use client";
+import { facetButtonFactory, completeFacetButton } from "@/components/ui/facet-button-factory";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { retryMaestroComponent } from "@/lib/maestro-component-retry";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
@@ -10,12 +11,12 @@ import { PropertyUsageWidget } from "@/canvas/left/property-usage-widget";
 import { propertyUsageScope } from "@/lib/property-usage-query";
 import { usePersonalFacetProviders } from "@/canvas/left/personal-date-facet";
 import { FACET_ITEM_GAP_CLASS } from "@/canvas/left/facet-layout";
-import { FacetDecorationControl, FacetItemDecoration } from "@/lib/facet-decoration-contract";
+import { FacetDecorationControl, FacetItemDecoration, useFacetDecorationAction } from "@/lib/facet-decoration-contract";
 import { fctTermKey } from "@/canvas/utils/fct-response";
 
 import { IncompleteWidgetIndicator } from "@/canvas/utils/incomplete-widget";
 import { QueryInspectorButton } from "@/canvas/utils/query-inspector";
-import { LeftWidgetButtonTray } from "@/components/ui/left-widget-button-tray";
+import { LeftWidgetButtonTray, facetTrayActions, type LeftWidgetTrayAction } from "@/components/ui/left-widget-button-tray";
 import { OrUidLabel } from "@/components/ui/or-uid-label";
 
 import { personalFacetInspectorQueries, PersonalRoleWidget } from "@/canvas/left/filter";
@@ -211,11 +212,29 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
   const graphParentKeys = useMemo(() => graphTreeParentKeys(graphTreeNodes), [graphTreeNodes]);
   const graphTreeAllCollapsed = graphParentKeys.length > 0 && graphParentKeys.every((key) => !expandedGraphNodes.has(key));
   const activeGraphPageCount = graphTreeMode ? Math.max(1, Math.ceil(graphTreeNodes.length / FACET_PAGE_SIZE)) : graphPageCount;
+  const [categoryInspectorOpen,setCategoryInspectorOpen]=useState(false);
+  const categoryDecorationAction=useFacetDecorationAction("class",RDF_TYPE_URI);
+  const toggleCategoryTree=()=>{if(categoriesTreeMode)manualTreeOverride.current.add(classTreeScope);
+    else manualTreeOverride.current.delete(classTreeScope);
+    setQueryAttribute("classTree",categoriesTreeMode?"false":"true");setExpandedCategoryNodes(new Set());setClassesPage(0);};
+  const toggleCategoryExpansion=()=>{if(categoryTreeParentKeys.length)setExpandedCategoryNodes(categoryTreeAllCollapsed?new Set(categoryTreeParentKeys):new Set());};
+  const toggleCategoryGroup=()=>{if(isGroupByCategory){setGroupByPropertyUri("");setCentralTab("results");}
+    else {setGroupByPropertyUri(`forward:${RDF_TYPE_URI}`);setCentralTab("groups");}};
+  const categoryActions: LeftWidgetTrayAction[] = [
+                            { id: "search", onSelect: startCategoryNameSearch, label: "Search categories by name", icon: <Search className="size-4"/>, render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(<Search className="size-4" aria-hidden="true" />), {"type":"button", "onClick":(startCategoryNameSearch), "aria-label":"Search for categories by name", "className":"inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"})} /><TooltipContent>Start a new search for resources by Category name</TooltipContent></Tooltip> },
+                            { id: "inspector", onSelect:()=>setCategoryInspectorOpen(true), label: "Inspect Categories query", icon: <Code2 className="size-4"/>, render: <QueryInspectorButton controlledOpen={categoryInspectorOpen} onControlledOpenChange={setCategoryInspectorOpen} query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.CLASSES)) : undefined} countFilename="categories-first-item-count.sparql" primaryTabLabel="XML" extraQueries={facetQueryInspectorTabs(queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false), "categories")} /> },
+                            { id: "facet-presentation", onSelect:classPresentation.toggle, label: "Facet provider presentation", when: Boolean(classPresentation.provider), icon: <Network className="size-4"/>, render: <FacetPresentationButton presentation={classPresentation}/> },
+                            { id: "tree", onSelect:toggleCategoryTree, label: "Toggle category tree", icon: <Network className="size-4"/>, render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(categoriesTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />), {"type":"button", "aria-pressed":(categoriesTreeMode), "onClick":(toggleCategoryTree), "className":(`inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${categoriesTreeMode ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`), "aria-label":(categoriesTreeMode ? "Show categories as a flat list" : "Show categories as a superclass tree")})} /><TooltipContent>{categoriesTreeMode ? "Show flat category list" : "Show category tree (superclass path of each category, up to the root)"}</TooltipContent></Tooltip> },
+                            { id: "expand", onSelect:toggleCategoryExpansion, disabled:categoryTreeParentKeys.length===0, label: "Expand or collapse categories", icon: <ChevronsUpDown className="size-4"/>, when: categoriesTreeMode, render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(categoryTreeAllCollapsed ? <ChevronsUpDown className="size-4" aria-hidden="true" /> : <ChevronsDownUp className="size-4" aria-hidden="true" />), {"type":"button", "disabled":(categoryTreeParentKeys.length === 0), "onClick":(toggleCategoryExpansion), "className":"inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 group-hover/header:disabled:opacity-40", "aria-label":(categoryTreeAllCollapsed ? "Open all categories" : "Collapse all categories")})} /><TooltipContent>{categoryTreeAllCollapsed ? "Open all" : "Collapse all"}</TooltipContent></Tooltip> },
+                            { id: "group", onSelect:toggleCategoryGroup, label: isGroupByCategory ? "Stop grouping" : "Group by Category", icon: <UsersRound className="size-4"/>, render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(<UsersRound className="size-4" aria-hidden="true" />), {"type":"button", "aria-pressed":(isGroupByCategory), "onClick":(toggleCategoryGroup), "className":(`inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${isGroupByCategory ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`), "aria-label":(isGroupByCategory ? "Stop grouping by Category" : "Group results by Category")})} /><TooltipContent>{isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}</TooltipContent></Tooltip> },
+                            { id: "decor", onSelect:categoryDecorationAction, when:Boolean(categoryDecorationAction), label: "Provider decoration", icon: <Palette className="size-4"/>, render: <FacetDecorationControl direction="class" iri={RDF_TYPE_URI}/> },
+                          ];
+  const categoryTray=facetTrayActions(categoryActions);
   return <>
 {defaultLeftTab === "personal" && (
                   <div className="space-y-3">
                     {workspace.accessCapabilities.canShowStatusFacet && <LiveQueryStatusWidget tree={queryTree}
-                      toggle={workspace.toggleLiveStatusFilter} revision={workspace.policyApprovalRevision}
+                      toggle={workspace.toggleLiveStatusFilter} revision={`${workspace.policyApprovalRevision}:${workspace.recordStatus.revision}:${workspace.queryRefreshRevision}`}
                       onNavigate={() => workspace.navigateFacetHeaderToProperty("gttp://ggg.maestro.ecosys/ns/ui#status")}
                       queryXml={workspace.queryXml} />}
                     {propertyUsageScope(queryTree) && <>
@@ -227,43 +246,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       className={`flex min-w-0 flex-col ${!isLoadingClasses && !isLoadingCategoryTree && !classFacetError && !categoriesIncomplete && visibleClassDisplayFacets.length === 0 && selectedClassDisplayFacets.length === 0 ? "!hidden" : ""} ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
                       <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
                         <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><button type="button" className="cursor-pointer text-sm font-semibold hover:underline underline-offset-2" onClick={() => workspace.navigateFacetHeaderToProperty(RDF_TYPE_URI)} title="Navigate to rdf:type of the current focus">Categories</button>
-                          <LeftWidgetButtonTray threshold={4} actions={[
-                            { id: "search", label: "Search categories by name", icon: <Search className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button type="button" onClick={startCategoryNameSearch} aria-label="Search for categories by name" className="inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Search className="size-4" aria-hidden="true" /></button>} /><TooltipContent>Start a new search for resources by Category name</TooltipContent></Tooltip> },
-                            { id: "inspector", label: "Inspect Categories query", icon: <Code2 className="size-4"/>, render: <QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false)}\n<!-- FCT API option: view=classes; tree relationships are loaded separately -->`} filename="categories-fct-query.xml" countQuery={visibleClassDisplayFacets[0]?.uri ? buildFctCountSparql(createDistinctCountQuery(queryTree, "class", visibleClassDisplayFacets[0].uri, undefined, undefined, FCT_VIEW_TYPES.CLASSES)) : undefined} countFilename="categories-first-item-count.sparql" primaryTabLabel="XML" extraQueries={facetQueryInspectorTabs(queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, false), "categories")} /> },
-                            { id: "facet-presentation", label: "Facet provider presentation", when: Boolean(classPresentation.provider), icon: <Network className="size-4"/>, render: <FacetPresentationButton presentation={classPresentation}/> },
-                            { id: "tree", label: "Toggle category tree", icon: <Network className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
-                          type="button"
-                          aria-pressed={categoriesTreeMode}
-                          onClick={() => { if (categoriesTreeMode) manualTreeOverride.current.add(classTreeScope);
-                            else manualTreeOverride.current.delete(classTreeScope);
-                            setQueryAttribute("classTree", categoriesTreeMode ? "false" : "true"); setExpandedCategoryNodes(new Set()); setClassesPage(0); }}
-                          className={`inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${categoriesTreeMode ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`}
-                          aria-label={categoriesTreeMode ? "Show categories as a flat list" : "Show categories as a superclass tree"}
-                        >{categoriesTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{categoriesTreeMode ? "Show flat category list" : "Show category tree (superclass path of each category, up to the root)"}</TooltipContent></Tooltip> },
-                            { id: "expand", label: "Expand or collapse categories", icon: <ChevronsUpDown className="size-4"/>, when: categoriesTreeMode, render: <Tooltip><TooltipTrigger render={<button
-                          type="button"
-                          disabled={categoryTreeParentKeys.length === 0}
-                          onClick={() => setExpandedCategoryNodes(categoryTreeAllCollapsed ? new Set(categoryTreeParentKeys) : new Set())}
-                          className="inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 group-hover/header:disabled:opacity-40"
-                          aria-label={categoryTreeAllCollapsed ? "Open all categories" : "Collapse all categories"}
-                        >{categoryTreeAllCollapsed ? <ChevronsUpDown className="size-4" aria-hidden="true" /> : <ChevronsDownUp className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{categoryTreeAllCollapsed ? "Open all" : "Collapse all"}</TooltipContent></Tooltip> },
-                            { id: "group", label: isGroupByCategory ? "Stop grouping" : "Group by Category", icon: <UsersRound className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
-                          type="button"
-                          aria-pressed={isGroupByCategory}
-                          onClick={() => {
-                            if (isGroupByCategory) {
-                              setGroupByPropertyUri("");
-                              setCentralTab("results");
-                            } else {
-                              setGroupByPropertyUri(`forward:${RDF_TYPE_URI}`);
-                              setCentralTab("groups");
-                            }
-                          }}
-                          className={`inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${isGroupByCategory ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
-                          aria-label={isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}
-                        ><UsersRound className="size-4" aria-hidden="true" /></button>} /><TooltipContent>{isGroupByCategory ? "Stop grouping by Category" : "Group results by Category"}</TooltipContent></Tooltip> },
-                            { id: "decor", label: "Provider decoration", icon: <Palette className="size-4"/>, render: <FacetDecorationControl direction="class" iri={RDF_TYPE_URI}/> },
-                          ]}/></div>
+                          <LeftWidgetButtonTray threshold={4} actions={categoryActions}/></div>
                         <Tooltip><TooltipTrigger render={<span
                           className={`text-xs font-normal tabular-nums ${classFacetError ? "text-destructive" : "text-muted-foreground"}`}
                           aria-live="polite"
@@ -351,7 +334,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                           )}
                           <div className={FACET_ITEM_GAP_CLASS}>
                             {classPresentation.active ? (
-                              <FacetPresentationSurface presentation={classPresentation}
+                              <FacetPresentationSurface presentation={classPresentation} storageScope={JSON.stringify([workspace.authSession?.graphStore,workspace.authSession?.graphPrefix,workspace.authSession?.username??workspace.authSession?.userName])} actions={categoryTray}
                                 tree={categoryTreeRoots}
                                 items={[...selectedClassDisplayFacets, ...unselectedClassDisplayFacets]
                                   .map(item => ({ uri: item.uri, count: item.count, label: toLabel(item.uri, "Class"), selected: selectedClasses.has(item.uri) }))}
@@ -453,10 +436,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                     extraQueries={personalFacetInspectorQueries(roleInspectorXml, roleWidgetStatuses[roleNode.id]?.valuesQueryXml === roleInspectorXml ? roleWidgetStatuses[roleNode.id]?.valuesQuerySparql : undefined)}
                                   /> },
                                   { id: "group", label: isGroupByRole ? "Stop grouping" : "Group results", icon: <UsersRound className="size-4"/>,
-                                    when: workspaceTab === "browse" && !excluded, render: <Tooltip><TooltipTrigger render={<button
-                                      type="button"
-                                      aria-pressed={isGroupByRole}
-                                      onClick={() => {
+                                    when: workspaceTab === "browse" && !excluded, render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(<UsersRound className="size-4" aria-hidden="true" />), {"type":"button", "aria-pressed":(isGroupByRole), "onClick":(() => {
                                         if (isGroupByRole) {
                                           setGroupByPropertyUri("");
                                           setCentralTab("results");
@@ -464,21 +444,9 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                                           setGroupByPropertyUri(`reverse:${uri}`);
                                           setCentralTab("groups");
                                         }
-                                      }}
-                                      className={`inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${isGroupByRole ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
-                                      aria-label={isGroupByRole ? `Stop grouping by ${roleLabel}` : `Group results by ${roleLabel}`}
-                                    >
-                                      <UsersRound className="size-4" aria-hidden="true" />
-                                    </button>} /><TooltipContent>{isGroupByRole ? `Stop grouping by ${roleLabel}` : `Group results by ${roleLabel}`}</TooltipContent></Tooltip> },
+                                      }), "className":(`inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${isGroupByRole ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`), "aria-label":(isGroupByRole ? `Stop grouping by ${roleLabel}` : `Group results by ${roleLabel}`)})} /><TooltipContent>{isGroupByRole ? `Stop grouping by ${roleLabel}` : `Group results by ${roleLabel}`}</TooltipContent></Tooltip> },
                                   { id: "decoration", label: "Provider decoration", icon: <Palette className="size-4"/>, render: <FacetDecorationControl direction="reverse" iri={uri}/> },
-                                  { id: "remove", label: `Remove role filter ${roleLabel}`, icon: <Trash2 className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
-                                    type="button"
-                                    className="inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
-                                    onClick={() => deleteNode(roleNode.id)}
-                                    aria-label={`Remove role filter ${label}`}
-                                  >
-                                    <Trash2 className="size-4" aria-hidden="true" />
-                                  </button>} /><TooltipContent>{`Remove role filter ${roleLabel}`}</TooltipContent></Tooltip> },
+                                  { id: "remove", label: `Remove role filter ${roleLabel}`, icon: <Trash2 className="size-4"/>, render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(<Trash2 className="size-4" aria-hidden="true" />), {"type":"button", "className":"inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100", "onClick":(() => deleteNode(roleNode.id)), "aria-label":(`Remove role filter ${label}`)})} /><TooltipContent>{`Remove role filter ${roleLabel}`}</TooltipContent></Tooltip> },
                                 ]}/>
                               </div>
                               <Tooltip><TooltipTrigger render={<p className="mt-1 break-all text-xs text-muted-foreground">{uri}</p>} /><TooltipContent>{uri}</TooltipContent></Tooltip>
@@ -513,24 +481,9 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                           <IncompleteWidgetIndicator source="graphs" /><h2 className="text-sm font-semibold">Graphs</h2>
                           <LeftWidgetButtonTray threshold={4} actions={[
                             { id: "inspector", label: "Inspect Graphs query", icon: <Code2 className="size-4"/>, render: <QueryInspectorButton query={`${queryWithoutPagingXml(FCT_VIEW_TYPES.GRAPHS)}\n<!-- FCT API option: graphOnly=true -->`} filename="graphs-fct-query.xml" primaryTabLabel="XML" extraQueries={[...facetQueryInspectorTabs(queryWithoutPagingXml(FCT_VIEW_TYPES.GRAPHS), "graphs"), { id: "graph-list-sparql", label: "Executed graph-list SPARQL", query: graphListSparql || "# Graph list SPARQL will appear after the endpoint returns a query.", filename: "graph-list.sparql", language: "sparql" as const }]} /> },
-                            { id: "tree", label: graphTreeMode ? "Flat graph list" : "Graph URI tree", icon: <Network className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
-                            type="button" aria-pressed={graphTreeMode}
-                            onClick={() => { setGraphTreeMode((mode) => !mode); setGraphsPage(0); setExpandedGraphNodes(new Set()); }}
-                            className={`inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${graphTreeMode ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`}
-                            aria-label={graphTreeMode ? "Show graphs as a flat list" : "Show graphs as a URI-prefix tree"}
-                          >{graphTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{graphTreeMode ? "Show flat graph list" : "Show graph tree"}</TooltipContent></Tooltip> },
-                            { id: "expand", label: "Expand or collapse graphs", icon: <ChevronsUpDown className="size-4"/>, when: graphTreeMode, render: <Tooltip><TooltipTrigger render={<button
-                            type="button" disabled={graphParentKeys.length === 0}
-                            onClick={() => setExpandedGraphNodes(graphTreeAllCollapsed ? new Set(graphParentKeys) : new Set())}
-                            className="inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 group-hover/header:disabled:opacity-40"
-                            aria-label={graphTreeAllCollapsed ? "Open all graphs" : "Collapse all graphs"}
-                          >{graphTreeAllCollapsed ? <ChevronsUpDown className="size-4" aria-hidden="true" /> : <ChevronsDownUp className="size-4" aria-hidden="true" />}</button>} /><TooltipContent>{graphTreeAllCollapsed ? "Open all" : "Collapse all"}</TooltipContent></Tooltip> },
-                            { id: "clear", label: "Clear graph selection", icon: <X className="size-4"/>, when: Boolean(queryTree.attributes.graph), render: <Tooltip><TooltipTrigger render={<button
-                              type="button"
-                              onClick={clearGraph}
-                              className="inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
-                              aria-label="Clear graph selection"
-                            ><X className="size-4" aria-hidden="true" /></button>} /><TooltipContent>{"Clear graph selection and Graph field"}</TooltipContent></Tooltip> },
+                            { id: "tree", label: graphTreeMode ? "Flat graph list" : "Graph URI tree", icon: <Network className="size-4"/>, render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(graphTreeMode ? <List className="size-4" aria-hidden="true" /> : <Network className="size-4" aria-hidden="true" />), {"type":"button", "aria-pressed":(graphTreeMode), "onClick":(() => { setGraphTreeMode((mode) => !mode); setGraphsPage(0); setExpandedGraphNodes(new Set()); }), "className":(`inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${graphTreeMode ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`), "aria-label":(graphTreeMode ? "Show graphs as a flat list" : "Show graphs as a URI-prefix tree")})} /><TooltipContent>{graphTreeMode ? "Show flat graph list" : "Show graph tree"}</TooltipContent></Tooltip> },
+                            { id: "expand", label: "Expand or collapse graphs", icon: <ChevronsUpDown className="size-4"/>, when: graphTreeMode, render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(graphTreeAllCollapsed ? <ChevronsUpDown className="size-4" aria-hidden="true" /> : <ChevronsDownUp className="size-4" aria-hidden="true" />), {"type":"button", "disabled":(graphParentKeys.length === 0), "onClick":(() => setExpandedGraphNodes(graphTreeAllCollapsed ? new Set(graphParentKeys) : new Set())), "className":"inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 group-hover/header:disabled:opacity-40", "aria-label":(graphTreeAllCollapsed ? "Open all graphs" : "Collapse all graphs")})} /><TooltipContent>{graphTreeAllCollapsed ? "Open all" : "Collapse all"}</TooltipContent></Tooltip> },
+                            { id: "clear", label: "Clear graph selection", icon: <X className="size-4"/>, when: Boolean(queryTree.attributes.graph), render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(<X className="size-4" aria-hidden="true" />), {"type":"button", "onClick":(clearGraph), "className":"inline-flex size-6 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100", "aria-label":"Clear graph selection"})} /><TooltipContent>{"Clear graph selection and Graph field"}</TooltipContent></Tooltip> },
                             { id: "sort-graph-asc", label: "Sort graphs A to Z", icon: <ArrowDownAZ className="size-4" />,
                               onSelect: () => { setGraphsPage(0); setGraphSort("label-asc"); } },
                             { id: "sort-graph-desc", label: "Sort graphs Z to A", icon: <ArrowDownZA className="size-4" />,
@@ -554,9 +507,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                         </div>
                       )}
                       {graphFacets.length === 0 ? (
-                        <p className="px-2 text-xs text-muted-foreground">
-                          {isLoadingGraphs ? <ElapsedStatus label="Loading graphs" category="graphs" clockScope="graphs" /> : "No graph rows returned. Check the incomplete indicator for timeout details."}
-                        </p>
+                        isLoadingGraphs ? null : <p className="px-2 text-xs text-muted-foreground">No graph rows returned. Check the incomplete indicator for timeout details.</p>
                       ) : (
                         <>
                           {(activeGraphPageCount > 1) && (

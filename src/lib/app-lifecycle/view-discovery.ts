@@ -3,19 +3,19 @@ import type { DiscoveredViewProvider } from "@/lib/personal-sparql-reads";
 
 /** The scope owns the invocation. Leaving View, changing classes, or a new
  * session aborts a pending discovery; a late result cannot replace a new one. */
-type Executor = (signal: AbortSignal) => Promise<DiscoveredViewProvider[]>;
-type Context = { key: string; items: DiscoveredViewProvider[]; error: string; execute: Executor | null };
-type Event = { type: "DISCOVER"; key: string; execute: Executor } | { type: "INACTIVE" } | { type: "CANCEL" };
-const blank = (): Context => ({ key: "", items: [], error: "", execute: null });
-export const maestroViewDiscoveryMachine = setup({
-  types: { context: {} as Context, events: {} as Event },
-  actors: { load: fromPromise(async ({ input, signal }: { input: { key: string; execute: Executor }; signal: AbortSignal }) =>
+type Executor<T> = (signal: AbortSignal) => Promise<T[]>;
+type Context<T> = { key: string; items: T[]; error: string; execute: Executor<T> | null };
+type Event<T> = { type: "DISCOVER"; key: string; execute: Executor<T> } | { type: "INACTIVE" } | { type: "CANCEL" };
+const blank = <T>(): Context<T> => ({ key: "", items: [], error: "", execute: null });
+function makeViewDiscoveryMachine<T>() { return setup({
+  types: { context: {} as Context<T>, events: {} as Event<T> },
+  actors: { load: fromPromise(async ({ input, signal }: { input: { key: string; execute: Executor<T> }; signal: AbortSignal }) =>
     ({ key: input.key, items: await input.execute(signal) })) },
 }).createMachine({
-  id: "maestro-view-discovery", initial: "inactive", context: blank,
+  id: "maestro-view-discovery", initial: "inactive", context: () => blank<T>(),
   on: {
-    DISCOVER: { target: ".loading", actions: assign(({ event }) => ({ key: event.key, execute: event.execute, items: [], error: "" })) },
-    INACTIVE: { target: ".inactive", actions: assign(() => blank()) },
+    DISCOVER: { guard: ({ context, event }) => context.key !== event.key, target: ".loading", reenter: true, actions: assign(({ event }) => ({ key: event.key, execute: event.execute, items: [], error: "" })) },
+    INACTIVE: { target: ".inactive", actions: assign(() => blank<T>()) },
   },
   states: {
     inactive: {},
@@ -26,9 +26,11 @@ export const maestroViewDiscoveryMachine = setup({
     } },
     ready: {}, failed: {}, cancelled: {},
   },
-});
-export function createMaestroViewDiscoveryController() {
-  const create = () => createActor(maestroViewDiscoveryMachine);
+}); }
+export const maestroViewDiscoveryMachine = makeViewDiscoveryMachine<DiscoveredViewProvider>();
+export function createMaestroViewDiscoveryController<T = DiscoveredViewProvider>() {
+  const machine = makeViewDiscoveryMachine<T>();
+  const create = () => createActor(machine);
   let actor: ReturnType<typeof create> | null = null;
   let snapshot = create().getSnapshot();
   let subscription: { unsubscribe(): void } | null = null;
@@ -37,7 +39,7 @@ export function createMaestroViewDiscoveryController() {
   return {
     start() { if (actor) return; actor = create(); subscription = actor.subscribe(next => { snapshot = next; publish(); }); actor.start(); },
     stop() { subscription?.unsubscribe(); subscription = null; actor?.stop(); actor = null; snapshot = create().getSnapshot(); publish(); },
-    discover(key: string, execute: Executor) { actor?.send({ type: "DISCOVER", key, execute }); },
+    discover(key: string, execute: Executor<T>) { actor?.send({ type: "DISCOVER", key, execute }); },
     cancel() { actor?.send({ type: "CANCEL" }); },
     inactive() { actor?.send({ type: "INACTIVE" }); },
     getSnapshot: () => snapshot,

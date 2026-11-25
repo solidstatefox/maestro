@@ -25,12 +25,13 @@ export async function fctRead(xml: string, signal?: AbortSignal) {
 
 /** Read the selected page with a self-contained FCT XML merge-values query. */
 export async function fctProjectPage(liveXml: string, resources: string[], columns: Projection[], signal?: AbortSignal, _isBookmarked = false): Promise<ProjectedRecord[]> {
-  const unique = [...new Set(resources.filter(validIri))].slice(0, 500);
+  const unique = [...new Set(resources.filter(validIri))];
   if (!unique.length) return [];
   const records = new Map<string, ProjectedRecord>();
   for (let index = 0; index < unique.length; index += 100) {
     const batch = unique.slice(index, index + 100);
-    const queryXml = mergeValuesQueryClone(liveXml, columns, batch.map(value => ({ type: "uri", value })));
+    const projectionIds: string[] = [];
+    const queryXml = mergeValuesQueryClone(liveXml, columns, batch.map(value => ({ type: "uri", value })), projectionIds);
     const response = await cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal,
       headers: { "Content-Type": "text/xml; charset=utf-8" }, body: queryXml });
     const xml = await response.text();
@@ -38,6 +39,7 @@ export async function fctProjectPage(liveXml: string, resources: string[], colum
       const parsed = parseFctResponse(xml);
       throw new Error(parsed.error || `FCT merge-values returned HTTP ${response.status}`);
     }
+    signal?.throwIfAborted();
     const scopes = parseListValuesXml(xml);
     const parsed = parseFctResponse(xml);
     if (parsed.error || parsed.incomplete) throw new Error(parsed.error || "FCT merge-values enrichment was incomplete.");
@@ -50,7 +52,7 @@ export async function fctProjectPage(liveXml: string, resources: string[], colum
       const cells = scopes.get(uri) ?? [];
       const properties = new Map<string, EnrichedTerm[]>();
       columns.forEach((column, position) => {
-        const cell = cells[position];
+        const cell = cells.find(cell => cell.id === projectionIds[position]);
         const values = cell?.values.filter(value => value.value !== "-") ?? [];
         properties.set(`${column.direction}|${(column.path ?? [column.property]).join("/")}`, values);
         if (!properties.has(column.property)) properties.set(column.property, values);

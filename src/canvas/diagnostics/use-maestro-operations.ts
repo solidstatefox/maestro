@@ -41,7 +41,7 @@ export function useMaestroOperations(facts: {
     controller.send({ type: "NAVIGATION_OBSERVED", key: facts.navigationKey, url: facts.navigationUrl,
       tab: facts.navigationTab, viewPanel: facts.navigationViewPanel, hydrated: facts.queryHydrated, isProviderQuery: facts.navigationIsProvider,
       restoringHistory: facts.restoringHistory });
-  }, [controller, facts.graphKey, facts.graphRegistryReady, facts.graphSelected, facts.graphReady,
+  }, [controller, snapshot.query.globallyCancelled, facts.graphKey, facts.graphRegistryReady, facts.graphSelected, facts.graphReady,
     facts.querySourceReady, facts.graphFailed, facts.queryKey, facts.queryHydrated, facts.queryRestoreError, facts.navigationKey, facts.navigationUrl,
     facts.navigationTab, facts.navigationViewPanel, facts.navigationIsProvider, facts.restoringHistory]);
   useEffect(() => subscribePendingMaestroQueryDetails((items) => {

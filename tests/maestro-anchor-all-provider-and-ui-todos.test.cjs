@@ -50,11 +50,11 @@ test('Map color-by decorations are alias-id keyed and mixed path direction safe 
 });
 
 test('Spider, Sankey, Table, Compare, Kanban preserve alias ID instead of leaf predicate IRI',()=>{
- const spider=read('src/canvas/tab/analyze/spider.tsx');
+ const spider=read('src/canvas/tab/analyze/page-provider.tsx');
  const sankey=read('src/lib/sankey-coverage.ts');
  const view=read('src/canvas/utils/workspace-controller.tsx');
  const compare=read('graph/maestro-analyze.ttl');
- assert.match(spider,/anchorId/);
+ assert.match(spider,/"anchor-id":node.name==="a"\?node.id/);
  assert.match(sankey,/predicateKey\(.*anchorId/);
  assert.match(view,/analyzeTableHeaderNodes/);
  assert.match(view,/option\.anchorId \? activeTransportedFacets/);

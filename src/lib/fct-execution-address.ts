@@ -36,7 +36,7 @@ export function sparqlEditorUrl(executionAddr: string | undefined, query: string
   const parsed = parseFctExecutionAddress(executionAddr);
   if (!parsed) return null;
   const url = new URL(parsed.endpoint);
-  if (!/\/sparql\/?$/i.test(url.pathname)) return null;
+  if (!/\/sparql(?:-auth)?\/?$/i.test(url.pathname)) return null;
   url.search = "";
   url.hash = "";
   url.searchParams.set("qtxt", query);

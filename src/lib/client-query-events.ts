@@ -1,3 +1,4 @@
+import { observeProxyFetch } from "./proxy-transport-observation";
 import { beginMaestroQueryExecution, type MaestroQueryClockScope } from "./maestro-query-execution-clock";
 
 export type MaestroQueryEventsSubscription = { close: () => void };
@@ -115,7 +116,7 @@ function openSharedStream(id: string): SharedStream {
   void (async () => {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
-      const response = await fetch("/proxy/api/service", {
+      const response = await observeProxyFetch("/proxy/api/service", {
         method: "POST", cache: "no-store", signal: stream.controller.signal,
         credentials: "same-origin",
         headers: { Accept: "text/event-stream", "Content-Type": "application/json" },

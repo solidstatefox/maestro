@@ -80,3 +80,12 @@ test('Status uses read-only ODS+remote operations while preserving provenance an
   assert.match(client,/fctListStatusClone\(liveXml, sourceAddr\)/);
   assert.match(client,/addr: sourceAddr/);
 });
+
+
+test('personal discovery Code Blocks open the authenticated query editor', () => {
+  const query = 'SELECT * WHERE { GRAPH <urn:policies> { ?s ?p ?o } }';
+  const url = new URL(sparqlEditorUrl('urn:policies@https://personal.example/sparql-auth',query));
+  assert.equal(url.pathname,'/sparql-auth');
+  assert.equal(url.searchParams.get('qtxt'),query);
+  assert.equal(url.searchParams.get('default-graph-uri'),'urn:policies');
+});

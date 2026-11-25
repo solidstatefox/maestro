@@ -22,6 +22,7 @@ function resolverWithMock(response) {
       return { response: { ok: true, status: 200 }, text: JSON.stringify(module.exports.response), key: 'fixture' };
     };
     const setQueryCache = () => {};
+    const isVirtuosoAnytime = () => false;
     ${route.slice(start, end)}
     module.exports.resolve = resolveFctLabels;
   `;
@@ -72,5 +73,5 @@ test('FCT text result parser and Browse card both honor the resolved c1 label at
 test('new FCT response version invalidates server cache and browser IndexedDB without deleting user data', () => {
   assert.match(route, /fct-response-page-labels-v2/);
   assert.match(cache, /responseRevision = url\.includes\("\/proxy\/api\/fct"\)/);
-  assert.match(cache, /fct-labels-v2/);
+  assert.match(cache, /fct-labels-v4/);
 });

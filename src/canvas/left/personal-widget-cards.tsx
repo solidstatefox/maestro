@@ -1,4 +1,5 @@
 "use client";
+import { facetButtonFactory, completeFacetButton } from "@/components/ui/facet-button-factory";
 import { FacetDecorationControl, FacetItemDecoration } from "@/lib/facet-decoration-contract";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { ErrorDetails } from "@/components/ui/error-details";
@@ -169,9 +170,9 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
               ? { boxShadow: "inset 0 0 0 1px rgb(168 85 247 / 0.85)", borderRadius: "0.375rem", ...(isGroupByFacet ? { borderColor: "rgb(168 85 247 / 0.9)" } : {}) }
               : undefined}
           >
-            <header className={`group/header flex items-start justify-between gap-2 border-b px-3 py-2 ${isGroupByFacet ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""} ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "border-purple-500/80" : ""}`}>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <header className={`group/header flex flex-col border-b px-3 py-2 ${isGroupByFacet ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""} ${facetHoverPreview?.kind === "facet" && facetHoverPreview.uri === widget.uri && facetHoverPreview.direction === "forward" ? "border-purple-500/80" : ""}`}>
+              <div className="flex w-full min-w-0 items-start justify-between gap-2">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
                   <IncompleteWidgetIndicator source={`personal:${widgetKey}`} />
                   <Tooltip><TooltipTrigger render={<button
                     type="button"
@@ -207,11 +208,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                       extraQueries={personalFacetInspectorQueries(inspectorXml, widget.valuesQuerySparql)}
                     /> },
                     { id: "group", label: isGroupByFacet ? "Stop grouping" : "Group results", icon: <UsersRound className="size-4"/>,
-                      when: workspaceTab === "browse" && !widget.excluded, disabled: !canGroupByFacet, render: <Tooltip><TooltipTrigger render={<button
-                        type="button"
-                        disabled={!canGroupByFacet}
-                        aria-pressed={isGroupByFacet}
-                        onClick={() => {
+                      when: workspaceTab === "browse" && !widget.excluded, disabled: !canGroupByFacet, render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(<UsersRound className="size-4" aria-hidden="true" />), {"type":"button", "disabled":(!canGroupByFacet), "aria-pressed":(isGroupByFacet), "onClick":(() => {
                           if (isGroupByFacet) {
                             setGroupByPropertyUri("");
                             setCentralTab("results");
@@ -219,20 +216,13 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                             setGroupByPropertyUri(groupOptionKey);
                             setCentralTab("groups");
                           }
-                        }}
-                        className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:pointer-events-none disabled:opacity-30 ${isGroupByFacet ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}
-                        aria-label={isGroupByFacet ? `Stop grouping by ${facetPropertyLabel(widget.uri)}` : `Group results by ${facetPropertyLabel(widget.uri)}`}
-                      >
-                        <UsersRound className="size-4" aria-hidden="true" />
-                      </button>} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${facetPropertyLabel(widget.uri)}` : canGroupByFacet ? `Group results by ${facetPropertyLabel(widget.uri)}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip> },
+                        }), "className":(`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:pointer-events-none disabled:opacity-30 ${isGroupByFacet ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`), "aria-label":(isGroupByFacet ? `Stop grouping by ${facetPropertyLabel(widget.uri)}` : `Group results by ${facetPropertyLabel(widget.uri)}`)})} /><TooltipContent>{isGroupByFacet ? `Stop grouping by ${facetPropertyLabel(widget.uri)}` : canGroupByFacet ? `Group results by ${facetPropertyLabel(widget.uri)}` : "Select this property in the active query before grouping by it"}</TooltipContent></Tooltip> },
                     { id: "regex", label: "Create named regex filter", icon: <Regex className="size-4"/>, when: isStringFacet,
                       render: <NamedRegexCreateButton relationship={boundNode} propertyUri={widget.uri} /> },
                     { id: "derived", label: "Extract approved derived facets", icon: <Braces className="size-4"/>, when: Boolean(boundNode),
                       render: null },
                     { id: "decoration", label: "Provider decoration", icon: <Palette className="size-4"/>, render: <FacetDecorationControl direction={alias?.target.name === "property-of" ? "reverse" : "forward"} iri={widget.uri} anchorId={alias?.id}/> },
-                    { id: "remove", label: `Remove ${facetPropertyLabel(widget.uri)} facet`, icon: <Trash2 className="size-4"/>, render: <Tooltip><TooltipTrigger render={<button
-                      type="button"
-                      onClick={() => {
+                    { id: "remove", label: `Remove ${facetPropertyLabel(widget.uri)} facet`, icon: <Trash2 className="size-4"/>, render: <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(<Trash2 className="size-4" aria-hidden="true" />), {"type":"button", "onClick":(() => {
                         // IDs are normalized at share-URL/query-store ingress. Use
                         // the exact node that generated this widget, not a URI
                         // search or a legacy property-filter-* UI-key prefix.
@@ -240,23 +230,18 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                         // notification reconciles all Personal facet instances.
                         const nodeId = alias?.id ?? boundNode?.id;
                         if (nodeId) guardedDeleteQueryNode(nodeId);
-                      }}
-                      className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"
-                      aria-label={`Remove ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} widget`}
-                    >
-                      <Trash2 className="size-4" aria-hidden="true" />
-                    </button>} /><TooltipContent>{`Remove ${facetPropertyLabel(widget.uri)} facet`}</TooltipContent></Tooltip> },
+                      }), "className":"inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100", "aria-label":(`Remove ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} widget`)})} /><TooltipContent>{`Remove ${facetPropertyLabel(widget.uri)} facet`}</TooltipContent></Tooltip> },
                   ]}/>
                 </div>
-                <Tooltip><TooltipTrigger render={<p className="mt-1 break-all text-xs text-muted-foreground">{widget.uri}</p>} /><TooltipContent>{widget.uri}</TooltipContent></Tooltip>
+                {widget.error ? <span className="inline-flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1 text-xs text-destructive" aria-live="polite">
+                  Update failed
+                  <ErrorDetails prefix={`Personal facet ${facetPropertyLabel(widget.uri)}`} error={widget.error}
+                    onRetry={() => retryMaestroComponent(`personal:${widgetKey}`)} />
+                </span> : <span className="shrink-0 text-xs font-normal tabular-nums text-muted-foreground" aria-live="polite">
+                  {widget.loading ? <ElapsedStatus label="Updating…" category="personal" clockScope={`component:personal:${widgetKey}`} /> : shortenCount(widget.values.length)}
+                </span>}
               </div>
-              {widget.error ? <span className="inline-flex min-w-0 shrink-0 items-center gap-1 text-xs text-destructive" aria-live="polite">
-                Update failed
-                <ErrorDetails prefix={`Personal facet ${facetPropertyLabel(widget.uri)}`} error={widget.error}
-                  onRetry={() => retryMaestroComponent(`personal:${widgetKey}`)} />
-              </span> : <span className="shrink-0 text-xs text-muted-foreground" aria-live="polite">
-                {widget.loading ? <ElapsedStatus label="Updating…" category="personal" clockScope={`component:personal:${widgetKey}`} /> : widget.values.length}
-              </span>}
+              <Tooltip><TooltipTrigger render={<p className="mt-1 w-full truncate text-xs text-muted-foreground">{widget.uri}</p>} /><TooltipContent>{widget.uri}</TooltipContent></Tooltip>
             </header>
             <div className="min-h-0 flex-1 overflow-auto p-2">
               {temporal?.tagCloudProviders?.has(widget.uri) ? (

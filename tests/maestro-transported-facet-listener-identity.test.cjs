@@ -57,6 +57,6 @@ test("widget preparation and parsing contribute to navigation activity, and Abor
   const controller = read("src/canvas/utils/workspace-controller.tsx");
   const listener = read("src/canvas/left/filter.tsx");
   assert.match(controller, /queryActivityPending: \(urlStateInitialized && endpointReadyForQuery && !focusWidgetsSuppressed && personalWidgets\.some\(widget => widget\.loading/);
-  assert.match(controller, /function cancelMaestroPage\(\) \{\s*stopPendingMaestroQueries\(\);\s*setPersonalWidgets\(/);
-  assert.match(listener, /if \(cancelled\) return;\s*if \(!timedOut && error instanceof Error && error\.name === "AbortError"\) \{[\s\S]*?loading: false/);
+  assert.match(controller, /function cancelMaestroPage\(\) \{[\s\S]*?GLOBAL_CANCEL[\s\S]*?stopPendingMaestroQueries\(\);\s*setPersonalWidgets\(/);
+  assert.match(listener, /if \(cancelled\) return;\s*if \(!timeoutReason && error instanceof Error && error\.name === "AbortError"\) \{[\s\S]*?loading: false/);
 });

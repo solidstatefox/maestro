@@ -125,6 +125,7 @@ export async function validateClientShaclRecord(
 /** Pure validation step; also used by tests without a personal SPARQL server. */
 export async function validateClientShaclRows(
   shapeUri: string, focusUri: string, rows: BindingRow[], triples: ShaclDataTriple[],
+  focusUris: readonly string[] = [focusUri],
 ): Promise<StandardShaclResult> {
   if (!goodIri(shapeUri) || !goodIri(focusUri)) throw new Error("A valid shape and focus-node IRI are required.");
   if (!Array.isArray(triples) || triples.length > 10000) throw new Error("A bounded DESCRIBE triple list is required.");
@@ -141,7 +142,8 @@ export async function validateClientShaclRows(
   // Use SHACL's standard sh:targetNode mechanism to validate the supplied
   // Record rather than accidentally passing with no targeted focus nodes.
   shapes.add(rdf.quad(shapeNode, rdf.namedNode(`${RDF}type`), rdf.namedNode(`${SH}NodeShape`)));
-  shapes.add(rdf.quad(shapeNode, rdf.namedNode(`${SH}targetNode`), rdf.namedNode(focusUri)));
+  if (!focusUris.length || focusUris.length > 5000 || focusUris.some(uri => !goodIri(uri))) throw new Error("A bounded list of valid SHACL focus IRIs is required.");
+  for (const uri of focusUris) shapes.add(rdf.quad(shapeNode, rdf.namedNode(`${SH}targetNode`), rdf.namedNode(uri)));
   // SHACL-SPARQL isn't supported by the chosen Core processor. Fail closed.
   if ([...shapes].some(q => q.predicate.value === `${SH}sparql`)) {
     throw new Error(`Shape ${shapeUri} uses sh:sparql; the SHACL Core validator cannot evaluate SHACL-SPARQL constraints.`);

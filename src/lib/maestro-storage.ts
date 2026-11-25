@@ -186,3 +186,36 @@ export async function getMaestroStorageUsageBytes(): Promise<number> {
 export function isMaestroStorageInitialized(): boolean {
   return initialized;
 }
+
+/** A host-created capability; provider markup never supplies the namespace. */
+export function providerStorage(providerIri: string, accountScope: string) {
+  if (!providerIri || !accountScope) throw new Error("Provider storage requires a provider and account scope.");
+  const prefix = `provider:${encodeURIComponent(accountScope)}:${encodeURIComponent(providerIri)}:`;
+  const fullKey = (key: string) => prefix + encodeURIComponent(key);
+  return Object.freeze({
+    async get(key: string): Promise<string | null> {
+      await initializeMaestroStorage();
+      if(indexedDbAvailable){
+        const db=await openDatabase();
+        const value=await requestResult(db.transaction(STORE_NAME,"readonly").objectStore(STORE_NAME).get(fullKey(key)));
+        if(typeof value==="string"){memory.set(fullKey(key),value);return value;}
+        memory.delete(fullKey(key));return null;
+      }
+      return memory.get(fullKey(key)) ?? null;
+    },
+    async set(key: string, value: string): Promise<void> {
+      await initializeMaestroStorage();
+      await persistValue(fullKey(key), value);
+      memory.set(fullKey(key), value);
+    },
+    async remove(key: string): Promise<void> {
+      await initializeMaestroStorage();
+      await persistValue(fullKey(key), undefined);
+      memory.delete(fullKey(key));
+    },
+    async keys(): Promise<string[]> {
+      await initializeMaestroStorage();
+      return [...memory.keys()].filter(key => key.startsWith(prefix)).map(key => decodeURIComponent(key.slice(prefix.length)));
+    },
+  });
+}

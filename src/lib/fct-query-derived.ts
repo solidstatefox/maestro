@@ -728,15 +728,20 @@ function updateQueryNode(
 /** Return an isolated query variant with only the active view attributes changed. */
 export function setQueryViewAttributes(
   sourceTree: FctQueryTree,
-  attributes: Record<string, string>,
+  attributes: Record<string, string | null>,
 ): FctQueryTree {
   const tree = fctQueryTreeApi.getDataTree(sourceTree);
   return {
     ...tree,
     children: (function updateViews(nodes: FctQueryNode[]): FctQueryNode[] {
-      return nodes.map(node => node.name === "view"
-        ? {...node, attributes: {...node.attributes,...attributes}}
-        : {...node, children:updateViews(node.children)});
+      return nodes.map(node => {
+        if(node.name!=="view")return {...node, children:updateViews(node.children)};
+        const next={...node.attributes};
+        for(const [name,value] of Object.entries(attributes)){
+          if(value===null)delete next[name];else next[name]=value;
+        }
+        return {...node,attributes:next};
+      });
     })(tree.children),
   };
 }

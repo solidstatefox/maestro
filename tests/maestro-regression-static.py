@@ -63,10 +63,10 @@ else:
 
 seed=read('src/lib/client-graph-seed.ts')
 check('personalContext()' in seed and 'updatePersonal(' in seed and '/maestro-seed/' in seed,
-      'graph seed module remains available but is not invoked during login')
-check('seedPersonalGraphs(' not in read('src/canvas/controllers/authentication.ts') and
+      'graph seed module uses authenticated SPARQL transport')
+check('await seedPersonalGraphs(' in read('src/canvas/controllers/authentication.ts') and
       'event.preventDefault()' in read('src/canvas/controllers/authentication.ts'),
-      'login submit remains inert and no graph seeding is invoked')
+      'login invokes graph seeding before personal readiness')
 check('SELECT DISTINCT ?provider ?kind ?pattern' in read('src/lib/client-kinds.ts'),
       'Kinds are discovered through provider RDF, not a TypeScript registry')
 check('RIBBON_ENTRY_FROM_BROWSE' in read('src/lib/app-lifecycle/operations.ts'),

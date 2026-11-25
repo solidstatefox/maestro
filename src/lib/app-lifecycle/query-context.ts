@@ -13,7 +13,7 @@ export const maestroQueryContextMachine=setup({
     validateCurrentHistoryQuery(input.historyId,input.queryXml,signal))},
 }).createMachine({
   id:"maestro-query-context",initial:"idle",context:empty,
-  on:{CLEAR:{target:".idle",actions:assign(empty)},VALIDATE:{target:".validating",actions:assign(({event})=>
+  on:{CLEAR:{target:".idle",actions:assign(empty)},VALIDATE:{guard:({context,event})=>context.key!==event.key,target:".validating",reenter:true,actions:assign(({event})=>
     ({...empty(),key:event.key,historyId:event.historyId,queryXml:event.queryXml}))}},
   states:{
     idle:{},validating:{invoke:{src:"check",input:({context})=>({historyId:context.historyId,queryXml:context.queryXml}),

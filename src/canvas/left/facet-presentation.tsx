@@ -1,14 +1,17 @@
 "use client";
+import { facetButtonFactory, completeFacetButton } from "@/components/ui/facet-button-factory";
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 /** A neutral host for approved, SHACL-applicable facet presentation providers.
  * Provider XSLT owns shapes, ordering, palette, labels, controls and geometry.
  * The host permits one safe interaction: delegating an RDF-term checkbox toggle.
  */
-import { useEffect, useId, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { readClientPolicyApprovals } from "@/lib/client-policy-approvals";
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
+import type { FacetTrayActions } from "@/components/ui/left-widget-button-tray";
+import { providerStorage } from "@/lib/maestro-storage";
 import { browserLog } from "@/lib/maestro-client-logging";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -16,7 +19,6 @@ import { InputGroup, InputGroupAddon, InputGroupText } from "@/components/ui/inp
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ChevronDown } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Slider } from "@/components/ui/slider";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
@@ -86,20 +88,15 @@ export function useFacetPresentation({direction, predicate, enabled, approvalRev
 export function FacetPresentationButton({presentation}: {presentation:FacetPresentation}) {
   const provider = presentation.provider;
   if (!provider) return null;
-  return <Tooltip><TooltipTrigger render={<button type="button" aria-pressed={presentation.active}
-    onClick={presentation.toggle} title={provider.label}
-    className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${presentation.active ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`}
-    aria-label={presentation.active ? `Show facet checkboxes instead of ${provider.label}` : `Show ${provider.label}`}>
-    <DynamicIcon name={(icons.has(provider.icon) ? provider.icon : "chart-pie") as IconName} className="size-4" aria-hidden="true"/>
-  </button>} /><TooltipContent>{presentation.active ? "Show checkboxes" : provider.label}</TooltipContent></Tooltip>;
+  return <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(<DynamicIcon name={(icons.has(provider.icon) ? provider.icon : "chart-pie") as IconName} className="size-4" aria-hidden="true"/>), {"type":"button", "aria-pressed":(presentation.active), "onClick":(presentation.toggle), "title":(provider.label), "className":(`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${presentation.active ? "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100" : ""}`), "aria-label":(presentation.active ? `Show facet checkboxes instead of ${provider.label}` : `Show ${provider.label}`)})} /><TooltipContent>{presentation.active ? "Show checkboxes" : provider.label}</TooltipContent></Tooltip>;
 }
 
 type Item = {uri:string;label:string;count:number;selected:boolean};
 /** Generic nested facet values; presentation XSLT determines their visualization. */
 type FacetNode = {item:{uri:string;count:number;label?:string};children:FacetNode[]};
 const escapeXml = (value:string) => value.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;");
-const ALLOWED = new Set(["div","span","p","svg","g","path","circle","text","textpath","defs","title"]);
-const ATTRS = new Set(["class","role","aria-label","aria-checked","tabindex","viewbox","width","height","d","cx","cy","r","fill","stroke","stroke-width","x","y","font-size","font-weight","text-anchor","pointer-events","data-facet-value","id","href","startoffset","data-facet-label-style","data-facet-lineage","transform","display","overflow","type"]);
+const ALLOWED = new Set(["div","span","p","button","svg","g","path","circle","text","textpath","defs","title"]);
+const ATTRS = new Set(["class","role","aria-label","aria-checked","tabindex","viewbox","width","height","d","cx","cy","r","fill","stroke","stroke-width","x","y","font-size","font-weight","text-anchor","pointer-events","data-facet-value","id","href","startoffset","data-facet-label-style","data-facet-lineage","transform","display","overflow","type","data-facet-action"]);
 /** Only inert, allowlisted SVG/HTML survives provider output. Event handlers and URL attributes do not. */
 function sanitizeMarkup(raw:string):string {
   const doc = new DOMParser().parseFromString(raw,"text/html");
@@ -119,7 +116,8 @@ function sanitizeMarkup(raw:string):string {
           (name==="data-facet-lineage" && !/^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$/.test(attr.value)) ||
           (name==="display" && (child.localName.toLowerCase()!=="g" || attr.value!=="none")) ||
           (name==="overflow" && (child.localName.toLowerCase()!=="svg" || attr.value!=="visible")) ||
-          (name==="type") ||
+          (name==="type" && (child.localName!=="button" || attr.value!=="button")) ||
+          (name==="data-facet-action" && (child.localName!=="button" || !/^[a-z][a-z0-9-]{0,63}$/.test(attr.value))) ||
           (name==="id" && (child.localName.toLowerCase()!=="path" || !/^maestro-sunburst-label-(?:pct-)?[a-zA-Z0-9_-]+$/.test(attr.value))) ||
           (name==="href" && (child.localName.toLowerCase()!=="textpath" || !/^#maestro-sunburst-label-(?:pct-)?[a-zA-Z0-9_-]+$/.test(attr.value))) ||
           (name==="startoffset" && (child.localName.toLowerCase()!=="textpath" || attr.value!=="50%")) ||
@@ -127,29 +125,99 @@ function sanitizeMarkup(raw:string):string {
           (name==="d" && !/^[MmLlHhVvCcSsQqTtAaZz0-9.,+\-\sEe]+$/.test(attr.value)) ||
           (["fill","stroke"].includes(name) && !/^(?:none|currentColor|var\(--background\)|hsl\([0-9.]+ [0-9.]+% [0-9.]+%\))$/.test(attr.value))) child.removeAttribute(attr.name);
       }
+      if(child.localName==="button")child.setAttribute("type","button");
       traverse(child);
     }
   };
   traverse(doc.body);
   return doc.body.innerHTML;
 }
-export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
-  presentation:FacetPresentation;items:Item[];tree?:FacetNode[];onToggle:(uri:string,checked:boolean)=>void;
+export function FacetPresentationSurface({presentation,items,tree,onToggle,storageScope,actions}: {
+  presentation:FacetPresentation;storageScope:string;actions?:FacetTrayActions;items:Item[];tree?:FacetNode[];onToggle:(uri:string,checked:boolean)=>void;
 }) {
   const [result,setResult]=useState<{key:string;html:string;error:string}>({key:"",html:"",error:""});
   const [labelStyle,setLabelStyle]=useState<"arc"|"radial">("arc");
-  const [maxRadius,setMaxRadius]=useState(200);
-  const radiusControlId = useId();
+  const [resizeActive,setResizeActive]=useState(false);
+  const [resizeWidth,setResizeWidth]=useState<number|null>(null);
+  const [dimensionStorageReady,setDimensionStorageReady]=useState<ReturnType<typeof providerStorage> | null>(null);
+  const resizeWidthRef=useRef<number|null>(null);
+  const storage=useMemo(()=>presentation.provider && storageScope ? providerStorage(presentation.provider.uri,storageScope) : null,[presentation.provider?.uri,storageScope]);
+  useEffect(()=>{
+    let current=true;
+    resizeWidthRef.current=null; setResizeWidth(null); setResizeActive(false);
+    if(!storage){setDimensionStorageReady(null);return;}
+    void storage.get("dimensions").then(raw=>{
+      if(!current || resizeWidthRef.current!==null || !raw)return;
+      const saved=JSON.parse(raw) as {width?:number};
+      if(typeof saved.width==="number" && Number.isFinite(saved.width) && saved.width>=100 && saved.width<=10000){
+        resizeWidthRef.current=saved.width;setResizeWidth(saved.width);
+      }
+    }).catch(error=>browserLog.warn("facet-presentation.storage.read",error)).finally(()=>{if(current)setDimensionStorageReady(storage);});
+    return ()=>{current=false;};
+  },[storage]);
+  const changeWidth=(width:number,persist=false)=>{
+    resizeWidthRef.current=width;setResizeWidth(width);
+    if(persist)void storage?.set("dimensions",JSON.stringify({width})).catch(error=>browserLog.warn("facet-presentation.storage.write",error));
+  };
+  const [naturalWidth,setNaturalWidth]=useState(420);
+  const frameRef=useRef<HTMLDivElement>(null);
+  const originalViews=useRef(new WeakMap<SVGSVGElement,{x:number;y:number;width:number;height:number}>());
+  const resizeDrag=useRef<{x:number;y:number;width:number;height:number}|null>(null);
   const [hoverDescription,setHoverDescription]=useState("");
   const surfaceRef=useRef<HTMLDivElement>(null);
   const tooltipRef=useRef<HTMLDivElement>(null);
-  useEffect(()=>{
+  useLayoutEffect(()=>{
     const root=surfaceRef.current;
     if(!root || result.error)return;
     root.querySelectorAll<SVGGElement>("[data-facet-label-style]").forEach(group=>{
       group.style.display=group.getAttribute("data-facet-label-style")===labelStyle ? "inline" : "none";
     });
-  },[result.html,result.error,labelStyle]);
+    const svg=root.querySelector<SVGSVGElement>("svg");
+    if(!svg)return;
+    // SVG geometry, not the outermost radius, determines occupied space.
+    const native=svg.viewBox.baseVal;
+    const original=originalViews.current.get(svg)??{x:native.x,y:native.y,width:native.width,height:native.height};
+    originalViews.current.set(svg,original);
+    try {
+      const fallback=svg.getBBox();
+      const inverse=svg.getScreenCTM()?.inverse();
+      const points: DOMPoint[]=[];
+      if(inverse) for(const element of svg.querySelectorAll<SVGGraphicsElement>("path[data-facet-value], circle, text")) {
+        const styleGroup=element.closest("[data-facet-label-style]");
+        if(element.closest("defs") || (styleGroup && styleGroup.getAttribute("data-facet-label-style")!==labelStyle)) continue;
+        const matrix=element.getScreenCTM();
+        if(!matrix || getComputedStyle(element).display==="none" || getComputedStyle(element).visibility==="hidden") continue;
+        const bounds=element.getBBox();
+        if(bounds.width<=0 || bounds.height<=0) continue;
+        const local=inverse.multiply(matrix);
+        for(const px of [bounds.x,bounds.x+bounds.width]) for(const py of [bounds.y,bounds.y+bounds.height])
+          points.push(new DOMPoint(px,py).matrixTransform(local));
+      }
+      const x=points.length?Math.min(...points.map(p=>p.x)):fallback.x;
+      const y=points.length?Math.min(...points.map(p=>p.y)):fallback.y;
+      const width=points.length?Math.max(...points.map(p=>p.x))-x:fallback.width;
+      const height=points.length?Math.max(...points.map(p=>p.y))-y:fallback.height;
+      if(width>0 && height>0 && original.width>0 && [x,y,width,height].every(Number.isFinite)) {
+        const pad=8;
+        const cx=original.x+original.width/2, cy=original.y+original.height/2;
+        const radius=Math.max(Math.abs(x-cx),Math.abs(x+width-cx),Math.abs(y-cy),Math.abs(y+height-cy))+pad;
+        svg.setAttribute("viewBox",`${cx-radius} ${cy-radius} ${2*radius} ${2*radius}`);
+        svg.removeAttribute("width"); svg.removeAttribute("height");
+        svg.setAttribute("preserveAspectRatio","xMidYMid meet");
+        svg.style.width="100%"; svg.style.height="auto"; svg.style.aspectRatio="1 / 1";
+        setNaturalWidth(420*(2*radius)/original.width);
+      }
+    } catch { /* Non-SVG or unmeasurable provider output retains its native size. */ }
+  },[result.key,result.html,result.error,labelStyle,dimensionStorageReady]);
+  useEffect(()=>{
+    if(!resizeActive)return;
+    const outside=(event:globalThis.PointerEvent)=>{
+      if(!frameRef.current?.contains(event.target as Node))setResizeActive(false);
+    };
+    const escape=(event:globalThis.KeyboardEvent)=>{if(event.key==="Escape")setResizeActive(false);};
+    document.addEventListener("pointerdown",outside);document.addEventListener("keydown",escape);
+    return()=>{document.removeEventListener("pointerdown",outside);document.removeEventListener("keydown",escape);};
+  },[resizeActive]);
   // Generic interaction for provider-authored hierarchical SVG: the XSLT
   // supplies ancestry tokens, while the host only applies presentation opacity.
   // No RDF query, category names, or chart geometry are implemented in React.
@@ -203,7 +271,8 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
   };
   const hierarchy = tree?.length ? tree.map(node=>serializeNode(node,0)).join("")
     : items.filter(item=>validIri(item.uri)).map(item=>serializeNode({item,children:[]},0)).join("");
-  const source = `<facet>${input}<hierarchy>${hierarchy}</hierarchy></facet>`;
+  const tray=actions?.list().map(action=>`<action id="${escapeXml(action.id)}" label="${escapeXml(action.label)}" disabled="${action.disabled}"/>`).join("")??"";
+  const source = `<facet>${input}<hierarchy>${hierarchy}</hierarchy><actions>${tray}</actions></facet>`;
   const key=provider ? `${provider.uri}|${provider.stylesheet}|${source}` : "";
   useEffect(()=>{setHoverDescription("");},[key]);
   useEffect(()=>{
@@ -224,7 +293,7 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
     onToggle(uri,!item.selected);
     return true;
   };
-  if(result.key!==key)return <p role="status" className="text-xs text-muted-foreground">Rendering facet presentation…</p>;
+  if(result.key!==key || (storage && dimensionStorageReady!==storage))return <p role="status" className="text-xs text-muted-foreground">Rendering facet presentation…</p>;
   if(result.error)return <ErrorDetails prefix="Facet rendering" error={result.error} />;
   return <div className="flex w-full min-w-0 flex-none flex-col gap-1">
     <div className="flex w-full flex-wrap items-center justify-center gap-1.5 px-1 pt-0.5">
@@ -265,16 +334,11 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
             className="inline-flex h-7 min-w-10 items-center justify-center border-l border-input px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=on]:bg-accent data-[state=on]:text-foreground">Arc</ToggleGroupItem>
         </ToggleGroup>
       </InputGroup>
-      <div className="flex min-w-[160px] flex-1 max-w-56 items-center gap-2" role="group" aria-label="Sunburst maximum radius">
-        <label htmlFor={radiusControlId} className="whitespace-nowrap text-xs text-muted-foreground">Max radius</label>
-        <Slider id={radiusControlId} aria-label="Maximum sunburst radius" min={90} max={200} step={2}
-          value={[maxRadius]} onValueChange={values=>setMaxRadius(values[0]??200)} className="min-w-16 flex-1" />
-        <output htmlFor={radiusControlId} className="min-w-11 text-right text-xs tabular-nums text-muted-foreground">{maxRadius}px</output>
-      </div>
     </div>
+    <div ref={frameRef} className={`relative mx-auto min-w-0 max-w-full flex-none ${resizeActive ? "outline outline-1 outline-ring" : ""}`}
+      style={{width:`${resizeWidth??naturalWidth}px`}}>
     <div ref={surfaceRef}
-      className="mx-auto w-full max-w-[420px] min-w-0 flex-none [&_svg]:mx-auto [&_svg]:block [&_svg]:h-auto [&_svg]:max-w-full [&_svg]:overflow-visible"
-      style={{maxWidth:`${maxRadius*2+20}px`}}
+      className="flex w-full min-w-0 items-center justify-center [&>div]:w-full [&>div]:!p-0 [&_svg]:mx-auto [&_svg]:block [&_svg]:h-auto [&_svg]:w-full [&_svg]:overflow-visible"
       data-facet-provider={provider?.uri}
       onPointerOver={(event:PointerEvent<HTMLDivElement>)=>{hoverBranch(event.target);
         if((event.target as Element).closest?.("[data-facet-value]"))positionTooltip(event.clientX,event.clientY);}}
@@ -285,9 +349,25 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle}: {
       onBlurCapture={(event:FocusEvent<HTMLDivElement>)=>{
         if(!event.currentTarget.contains(event.relatedTarget as Node | null)){highlightLineage(null);setHoverDescription("");}
       }}
-      onClick={(event:MouseEvent<HTMLDivElement>)=>select(event.target)}
+      onClick={(event:MouseEvent<HTMLDivElement>)=>{
+        const command=(event.target as Element).closest?.("button[data-facet-action]");
+        if(command){if(presentation.active)actions?.press(command.getAttribute("data-facet-action")??"");return;}
+        if(!select(event.target))setResizeActive(true);}}
       onKeyDown={(event:KeyboardEvent<HTMLDivElement>)=>{if(select(event.target,true,event.key))event.preventDefault();}}
       dangerouslySetInnerHTML={{__html:result.html}}/>
+    {resizeActive && <button type="button" aria-label="Resize Sunburst" title="Drag to resize; arrow keys resize; Escape closes"
+      className="absolute bottom-0 right-0 z-10 size-5 cursor-nwse-resize touch-none appearance-none border-0 bg-transparent shadow-none outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      onPointerDown={event=>{event.stopPropagation();event.currentTarget.setPointerCapture(event.pointerId);
+        const bounds=frameRef.current?.getBoundingClientRect();if(bounds)resizeDrag.current={x:event.clientX,y:event.clientY,width:bounds.width,height:bounds.height};}}
+      onPointerMove={event=>{const drag=resizeDrag.current;if(!drag)return;
+        const dx=(event.clientX-drag.x)/Math.max(1,drag.width), dy=(event.clientY-drag.y)/Math.max(1,drag.height);
+        const scale=1+(Math.abs(dx)>=Math.abs(dy)?dx:dy);
+        changeWidth(Math.max(100,Math.min(10000,drag.width*scale)));}}
+      onPointerUp={()=>{if(resizeDrag.current && resizeWidthRef.current!==null)changeWidth(resizeWidthRef.current,true);resizeDrag.current=null;}} onLostPointerCapture={()=>{resizeDrag.current=null;}}
+      onKeyDown={event=>{if(!["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(event.key))return;
+        event.preventDefault();const width=frameRef.current?.clientWidth??naturalWidth;
+        changeWidth(Math.max(100,Math.min(10000,width+(["ArrowRight","ArrowDown"].includes(event.key)?12:-12))),true);}}/>}
+    </div>
     <div ref={tooltipRef} role="tooltip" hidden={!hoverDescription}
       className="pointer-events-none fixed z-50 max-w-[min(340px,calc(100vw-24px))] rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs leading-snug text-popover-foreground shadow-md"
       style={{left:12,top:12}}>{hoverDescription}</div>

@@ -64,7 +64,7 @@ export function PersonalStatusWidget({ statuses }: { statuses: PersonalStatusPag
  * determines the matching records, and their personal mui:status triples
  * determine the displayed choices. No provider- or tab-specific switch. */
 export function LiveQueryStatusWidget({ tree, toggle, revision, queryXml, onNavigate }: {
-  tree: FctQueryTree; toggle: (uri: string) => void; revision: number; queryXml: string; onNavigate?: () => void;
+  tree: FctQueryTree; toggle: (uri: string) => void; revision: string | number; queryXml: string; onNavigate?: () => void;
 }) {
   const [entries, setEntries] = useState<Array<{uri: string; count: number}>>([]);
   // A previous bookmark/query's Status counts must not be presented as the

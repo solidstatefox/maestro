@@ -18,7 +18,7 @@ test('Record XSLT policy supplies IDs for DBpedia Person literal and URI values'
 });
 
 test('Spider uses fixed domain without visible axis and anchors tooltip to top right', () => {
-  const spider = source('src/canvas/tab/analyze/spider.tsx');
+  const spider = source('src/canvas/tab/analyze/page-provider.tsx');
   assert.match(spider, /<PolarRadiusAxis domain=\{\[0, 100\]\} tick=\{false\}/);
   assert.match(spider, /<Tooltip position=\{\{ x: Math\.max\(8, chartWidth - 272\), y: 12 \}\}/);
   assert.match(spider, /new ResizeObserver/);
@@ -58,7 +58,10 @@ test('XState observables and live Results requests deduplicate unchanged input',
   assert.match(discovery, /!snapshot\.matches\("inactive"\)/);
   assert.match(discovery, /snapshot\.context\.key === key/);
   assert.match(workspace, /const viewRenderInputKey = JSON\.stringify/);
-  assert.match(workspace, /selectedView\?\.stylesheet, viewRenderInputKey\]/);
+  assert.match(workspace, /selectedView\?\.stylesheet, viewRenderInputKey, isSearching, operations\.execution\.queryPhase, perspectiveActive, viewDiscoveryLoading, committedResultsOperation,operationQueryKey,operations\.snapshot\.query\.globallyCancelled\]/);
+  assert.match(workspace, /useEffect\(\(\) => \{\s*if \(operations\.controller\.getSnapshot\(\)\.query\.globallyCancelled\) return;\s*if \(!genericPerspectiveActive \|\| !selectedView\)/);
   assert.match(workspace, /resultsRequestXml, resultsQueryHasStatuses/);
+  assert.match(workspace, /before\.phase !== "readyToExecute"/);
+  assert.match(source("src/lib/app-lifecycle/provider-catalog.ts"), /CATALOG_EXECUTE: \{ guard: \(\{ context, event \}\) => context\.key !== event\.key/);
   assert.match(workspace, /setAnalysisDefinitions\(previous => previous\.length \? \[\] : previous\)/);
 });

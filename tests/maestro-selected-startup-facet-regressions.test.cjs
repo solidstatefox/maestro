@@ -16,6 +16,7 @@ function instantiateBrowserSeed(fetchImpl, personalContext = async () => { throw
     '@/lib/status-machine-client': {invalidateClientStatusMachines:()=>{}},
     '@/lib/bnode': {createBlankNodeLabelAllocator:()=>()=> 'x'},
     '@/lib/personal-status-vocabulary': {MUI_NS:'urn:maestro:ui#'},
+    '@/lib/personal-auth': {graphForPrefix:()=>{throw Error('graphForPrefix must not be used during anonymous asset loading');}},
     '@/lib/graph-seed-content-digest': {destinationSeedDigest:async()=>''},
   };
   vm.runInNewContext(code, { module, exports:module.exports, TextEncoder, AbortSignal, Promise, Set, Map,
@@ -109,7 +110,7 @@ test('[14-16] selected categories are excluded from available lists; counts and 
 test('[33] reference editing validates the complete candidate query before committing and guards dependent deletion',()=>{
   assert.match(work,/inspectFctValueReferences\(next\);\s*replaceQueryTree\(next\)/);
   assert.match(work,/error instanceof FctNodeInUseError/);
-  assert.match(work,/setBlockedReferenceDeletion\(\{nodeId:error.nodeId,dependents:error.dependents,hrefLabels\}\)/);
+  assert.match(work,/setBlockedReferenceDeletion\(\{nodeId:error.nodeId,dependents:error.dependents,hrefLabels,expectedQueryXml:queryXml\}\)/);
   assert.match(work, /const resolved = getTransportedQueryTreePath\(ref\.anchorId, ref\.targetId\)/);
   assert.match(work, /blockedReferenceDeletion\?\.hrefLabels\[ref\.anchorId\]/);
 });
@@ -143,11 +144,12 @@ test('[18] History and Bookmarks page size uses the center Results page-size con
       const machine = require('node:fs').readFileSync("src/lib/app-lifecycle/perspective-selection.ts", 'utf8');
       assert.ok(machine.includes('maestroPerspectiveSelectionMachine'));
       assert.ok(machine.includes('QUERY_CHANGED'));
-      assert.ok(source.includes('pageSize'));
-      assert.ok(source.includes('setPageSize'));
-      assert.ok(source.includes('setPage(0)'));
-      assert.ok(source.includes('entries per page'));
-    
+      const page = require('node:fs').readFileSync('src/canvas/tab/view/page.tsx','utf8');
+      assert.ok(page.includes('viewPagination'));
+      assert.ok(page.includes('perspectivePageReady'));
+      assert.ok(source.includes('pageRows'));
+      assert.ok(!source.includes('setPageSize'));
+
   });
 
 test('[42] transported <a> anchors share the facet ExternalLink icon and inherit the href target color',()=>{

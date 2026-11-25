@@ -1,4 +1,3 @@
-import { maestroKindSparql, normalizeMaestroKind } from "./maestro-kinds";
 import { FCT_VIEW_TYPES, isFctViewType, type FctViewType } from "./fct-view-types";
 import { isBlankNodeTerm, bnodeDescribeBounds, RDF_REST_IRI } from "./bnode";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
@@ -138,16 +137,73 @@ const literalTerm = (value: string, language?: string, datatype?: SparqlTerm): S
 const termExpr = (term: SparqlTerm): SparqlExpression => ({ kind: "term", term });
 const binary = (operator: string, left: SparqlExpression, right: SparqlExpression): SparqlExpression => ({ kind: "binary", operator, left, right });
 
-/** FCT <view kind="…"> constrains RDF triple OBJECT terms, never predicate labels.
- * Construct a SPARQL expression from the validated FCT attribute before
- * serialization; consumers never inspect the resulting SPARQL text. */
-function recordObjectKindFilter(raw: string | undefined, term: SparqlTerm): SparqlPattern[] {
-  const rawKind=(raw || "").trim();
-  if(!rawKind || rawKind==="all")return [];
-  const kind=normalizeMaestroKind(rawKind);
-  if(!kind)throw new Error(`Malformed FCT Query: unsupported view kind "${rawKind}".`);
-  const filter=maestroKindSparql(kind,serializeTerm(term));
-  return filter ? [{kind:"filter",expression:termExpr({kind:"raw-term",value:filter})}] : [];
+/** Parse the bounded, read-only expression fragment carried by kindFilter.
+ * This grammar is generic: no Kind identifiers, registry or runtime state.
+ * Only the reserved operand is substituted; literals and IRIs remain intact.
+ * Reject anything outside the expression grammar before serialization. */
+export function bindFctFilterExpression(raw:string, operand:string):string {
+  const fail=():never=>{throw new Error("Malformed FCT Query: invalid kindFilter expression.");};
+  if(raw.length>32768 || !raw.trim())return fail();
+  const lexer=/\s*(\?value\b|&&|\|\||!=|!|[(),]|"(?:[^"\\\x00-\x1f]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"|<[A-Za-z][A-Za-z0-9+.-]*:[^<>"{}|^`\\\s]*>|[A-Za-z][A-Za-z0-9_:]*)/gy;
+  const tokens:string[]=[];
+  for(let pos=0;pos<raw.length;) {
+    if(!raw.slice(pos).trim())break;
+    lexer.lastIndex=pos;
+    const match=lexer.exec(raw);
+    if(!match || tokens.length>=2048)return fail();
+    tokens.push(match[1]);pos=lexer.lastIndex;
+  }
+  let cursor=0, depth=0;
+  const take=(expected?:string):string=>{
+    const token=tokens[cursor++];
+    if(token===undefined || (expected!==undefined && token!==expected))return fail();
+    return token;
+  };
+  const peek=()=>tokens[cursor];
+  const functions:Readonly<Record<string,number>>={isIRI:1,isLiteral:1,isBlank:1,isNumeric:1,"bif:isstring":1,STR:1,DATATYPE:1,REGEX:3};
+  function primary():string {
+    if(++depth>64)return fail();
+    const token=take();let result:string;
+    if(token==="("){result=`(${expression()})`;take(")");}
+    else if(token==="?value")result=operand;
+    else if(token.startsWith('"')){
+      const value=JSON.parse(token) as string;
+      // Canonicalize escapes, so e.g. a Unicode escape cannot introduce
+      // syntax when the endpoint parses the generated SPARQL.
+      if(/[\x00-\x07\x0b\x0e-\x1f]/.test(value))return fail();
+      result=JSON.stringify(value);
+    }
+    else if(token.startsWith("<"))result=token;
+    else if(Object.prototype.hasOwnProperty.call(functions,token)) {
+      take("(");const args:string[]=[];
+      for(let i=0;i<functions[token];i++){if(i)take(",");args.push(expression());}
+      take(")");result=`${token}(${args.join(", ")})`;
+    }else return fail();
+    --depth;return result;
+  }
+  function unary():string {
+    if(peek()==="!"){take("!");if(++depth>64)return fail();const child=unary();--depth;return `!${child}`;}
+    let value=primary();
+    if(peek()==="!="){take("!=");value+=` != ${primary()}`;}
+    if(peek()==="IN"){
+      take("IN");take("(");const items:string[]=[];
+      do {const iri=take();if(!iri.startsWith("<"))return fail();items.push(iri);if(peek()!==",")break;take(",");}while(true);
+      take(")");value+=` IN (${items.join(", ")})`;
+    }
+    return value;
+  }
+  function conjunction():string {let value=unary();while(peek()==="&&"){take();value+=` && ${unary()}`;}return value;}
+  function expression():string {let value=conjunction();while(peek()==="||"){take();value+=` || ${conjunction()}`;}return value;}
+  const result=expression();if(cursor!==tokens.length || !tokens.includes("?value"))return fail();
+  return result;
+}
+function viewValueFilter(attributes:Record<string,string>|undefined, term:SparqlTerm):SparqlPattern[] {
+  const raw=attributes?.kindFilter?.trim();
+  if(!raw){
+    if(attributes?.kind && attributes.kind!=="all")throw new Error("Malformed FCT Query: selected view kind requires kindFilter.");
+    return [];
+  }
+  return [{kind:"filter",expression:termExpr({kind:"raw-term",value:`(${bindFctFilterExpression(raw,serializeTerm(term))})`})}];
 }
 
 function serializeTerm(term: SparqlTerm): string {
@@ -990,7 +1046,7 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     node.attributes.datatype !== "uri" && !isBlankNodeTerm(node.attributes.datatype));
   const describeBounds = view === FCT_VIEW_TYPES.DESCRIBE ? bnodeDescribeBounds(viewNode?.attributes ?? {}) : null;
   const viewObjectKind = viewNode?.attributes.kind?.trim();
-  const kindFilteredDescribe = view === FCT_VIEW_TYPES.DESCRIBE && Boolean(viewObjectKind && viewObjectKind !== "all");
+  const kindFilteredDescribe = view === FCT_VIEW_TYPES.DESCRIBE && Boolean(viewNode?.attributes.kindFilter || (viewObjectKind && viewObjectKind !== "all"));
   const describeExpanded = describeBounds !== null || kindFilteredDescribe;
   const describeLiteral = view === FCT_VIEW_TYPES.DESCRIBE && Boolean(rootLiteralNode) &&
     !root.children.some((node) => node.name === "property" || node.name === "property-of");
@@ -1455,14 +1511,14 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
       countWhere = scopeWith([{ kind: "triple", subject: target, predicate: variable("p"), object: variable("o") },
         { kind: "filter", expression: binary("!=", termExpr(variable("p")), termExpr(iriTerm(RDF_TYPE))) },
         ...preferredValueLanguageFilter(variable("o"), viewNode, viewParent, preferredLanguage),
-        ...recordObjectKindFilter(viewNode?.attributes.kind, variable("o"))]);
+        ...viewValueFilter(viewNode?.attributes, variable("o"))]);
     } else if (view === FCT_VIEW_TYPES.CLASSES) {
       counted = variable("c");
       countWhere = scopeWith([{ kind: "triple", subject: target, predicate: iriTerm(RDF_TYPE), object: variable("c") }]);
     } else if (view === FCT_VIEW_TYPES.PROPERTIES_IN) {
       counted = variable("p");
       countWhere = scopeWith([{ kind: "triple", subject: variable("related"), predicate: variable("p"), object: target },
-        ...recordObjectKindFilter(viewNode?.attributes.kind, target)]);
+        ...viewValueFilter(viewNode?.attributes, variable("related"))]);
     } else {
       counted = target;
       countWhere = view === FCT_VIEW_TYPES.COUNT_DISTINCT && viewNode?.attributes.index
@@ -1504,9 +1560,9 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
             ...(view === FCT_VIEW_TYPES.PROPERTIES ? [
               { kind: "filter", expression: binary("!=", termExpr(facet), termExpr(iriTerm(RDF_TYPE))) } satisfies SparqlPattern,
               ...preferredValueLanguageFilter(variable("o"), viewNode, viewParent, preferredLanguage),
-              ...recordObjectKindFilter(viewNode?.attributes.kind, variable("o")),
+              ...viewValueFilter(viewNode?.attributes, variable("o")),
             ] : []),
-            ...(view === FCT_VIEW_TYPES.PROPERTIES_IN ? recordObjectKindFilter(viewNode?.attributes.kind, target) : []),
+            ...(view === FCT_VIEW_TYPES.PROPERTIES_IN ? viewValueFilter(viewNode?.attributes, variable("related")) : []),
           ]),
         ];
     const projections: SparqlProjection[] = [
@@ -1643,7 +1699,7 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
         [{kind:"triple",subject:seed,predicate:p,object:o},{kind:"bind",expression:termExpr(seed),as:s}],
         [{kind:"triple",subject:s,predicate:p,object:seed},{kind:"bind",expression:termExpr(seed),as:o}],
       ]}];
-      const typed = [...triples,...recordObjectKindFilter(viewObjectKind,o)];
+      const typed = [...triples,...viewValueFilter(viewNode?.attributes,o)];
       query = buildStatusSelect({directives,distinct:true,
         projections:[{expression:termExpr(s)},{expression:termExpr(p)},{expression:termExpr(o)}],
         where:[{kind:"subquery",query:selected},...(graphTerm ? [{kind:"graph" as const,graph:graphTerm,patterns:typed}] : typed)],limit,offset});

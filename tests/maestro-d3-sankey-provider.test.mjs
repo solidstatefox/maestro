@@ -36,10 +36,11 @@ test('Sunburst XSLT owns wedge labels and percentages and host caps chart width 
   assert.match(sun,/text-anchor="middle"/);
   assert.doesNotMatch(sun,/max-w-\[360px\]/);
   const host=text('src/canvas/left/facet-presentation.tsx');
-  assert.match(host,/max-w-\[420px\]/);
+  assert.match(host,/svg\.getBBox\(\)/);
+  assert.match(host,/max-w-full/);
   assert.match(host,/flex-none flex-col gap-1/);
   assert.doesNotMatch(host,/max-w-\[800px\]/);
-  assert.doesNotMatch(text('src/canvas/tab/analyze/spider.tsx'),/max-w-6xl space-y-4/);
+  assert.doesNotMatch(text('src/canvas/tab/analyze/page-provider.tsx'),/max-w-6xl space-y-4/);
   assert.doesNotMatch(sankey,/max-w-7xl space-y-4/);
 });
 

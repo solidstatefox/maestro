@@ -3,7 +3,7 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { parseFctIdCounter, serializeFctIdCounter, ensureFctQueryIds } from "./fct-node-identity";
 import { cloneFctQueryTree } from "./fct-query-clone";
-import { dependentFctNodeReferences, FctNodeInUseError } from "./fct-value-references";
+import { dependentFctNodeReferences, deletionReferenceId, FctNodeInUseError } from "./fct-value-references";
 import { serializeFctQuery } from "./fct-query-serialize";
 export { serializeFctQuery } from "./fct-query-serialize";
 
@@ -1205,36 +1205,50 @@ function findNode(node: FctQueryNode, nodeId: string): FctQueryNode | null {
     });
   }
 
-  function deleteNode(nodeId: string) {
+  function deleteNode(nodeId: string, confirmation?: { removeDependents: true; expectedQueryXml: string }) {
     updateTree((tree) => {
-      const target = findNodeInTree(tree, nodeId);
-      if (!target || nodeId === "query-view" || nodeId === "query-text") return tree;
-      assertFctNodeCanBeDeleted(tree, target.id);
-
-      // Delete exactly the selected node. Removing a <value> clears only that
-      // binding; its parent <property> filter remains in the authoritative tree.
-      const removalId = nodeId;
-      const removalTarget = findNodeInTree(tree, removalId);
-      if (!removalTarget) return tree;
-      const containsView = Boolean(findNode(removalTarget, "query-view"));
-      const preservedView = containsView ? findNode(removalTarget, "query-view") : null;
-      let insertedView = false;
-
-      function removeAndRelocate(nodes: FctQueryNode[]): FctQueryNode[] {
-        const output: FctQueryNode[] = [];
-        for (const node of nodes) {
-          if (node.id === removalId) {
-            if (preservedView && !insertedView) {
-              output.push(preservedView);
-              insertedView = true;
-            }
-            continue;
-          }
-          output.push({ ...node, children: removeAndRelocate(node.children) });
+      if (confirmation && serializeFctQuery(tree) !== confirmation.expectedQueryXml)
+        throw new Error("The query changed. Review its current dependencies before removing nodes.");
+      const visiting = new Set<string>();
+      const remove = (tree: FctQueryTree, nodeId: string): FctQueryTree => {
+        const target = findNodeInTree(tree, nodeId);
+        if (!target || nodeId === "query-view" || nodeId === "query-text") return tree;
+        try { assertFctNodeCanBeDeleted(tree, target.id); }
+        catch (error) {
+          if (!confirmation?.removeDependents || !(error instanceof FctNodeInUseError)) throw error;
+          if (visiting.has(target.id)) throw new Error("Cyclic query deletion dependencies.");
+          visiting.add(target.id);
+          for (const dependent of error.dependents) tree = remove(tree, deletionReferenceId(dependent));
+          visiting.delete(target.id);
+          assertFctNodeCanBeDeleted(tree, target.id);
         }
-        return output;
-      }
-      return { ...tree, children: removeAndRelocate(tree.children) };
+
+        // Delete exactly the selected node. Removing a <value> clears only that
+        // binding; its parent <property> filter remains in the authoritative tree.
+        const removalId = nodeId;
+        const removalTarget = findNodeInTree(tree, removalId);
+        if (!removalTarget) return tree;
+        const containsView = Boolean(findNode(removalTarget, "query-view"));
+        const preservedView = containsView ? findNode(removalTarget, "query-view") : null;
+        let insertedView = false;
+
+        function removeAndRelocate(nodes: FctQueryNode[]): FctQueryNode[] {
+          const output: FctQueryNode[] = [];
+          for (const node of nodes) {
+            if (node.id === removalId) {
+              if (preservedView && !insertedView) {
+                output.push(preservedView);
+                insertedView = true;
+              }
+              continue;
+            }
+            output.push({ ...node, children: removeAndRelocate(node.children) });
+          }
+          return output;
+        }
+        return { ...tree, children: removeAndRelocate(tree.children) };
+      };
+      return remove(tree, nodeId);
     });
   }
 
@@ -1380,8 +1394,8 @@ export const fctQueryTreeApi = {
   showClassResults(tree: FctQueryTree | undefined, uri: string, parentId: string | null = null): FctQueryTree {
     return applyTreeOperation(tree, (store) => store.showClassResults(uri, parentId));
   },
-  deleteNode(tree: FctQueryTree | undefined, nodeId: string): FctQueryTree {
-    return applyTreeOperation(tree, (store) => store.deleteNode(nodeId));
+  deleteNode(tree: FctQueryTree | undefined, nodeId: string, confirmation?: { removeDependents: true; expectedQueryXml: string }): FctQueryTree {
+    return applyTreeOperation(tree, (store) => store.deleteNode(nodeId, confirmation));
   },
   upsertValueBinding(tree: FctQueryTree | undefined, parentId: string, valueId: string | null, value: FctValueInput): FctQueryTree {
     return applyTreeOperation(tree, store => store.upsertValueBinding(parentId, valueId, value));

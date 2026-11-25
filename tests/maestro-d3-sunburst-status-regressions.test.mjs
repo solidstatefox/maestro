@@ -44,7 +44,7 @@ test('Status uses original read-only FCT execution without added personal authen
 
 test('Dynamic provider, analysis and record errors use copyable ErrorDetails', () => {
   const files=['src/canvas/left/facet-presentation.tsx', 'src/canvas/tab/analyze/d3-sankey.tsx',
-    'src/canvas/tab/analyze/sankey.tsx','src/canvas/tab/analyze/spider.tsx',
+    'src/canvas/tab/analyze/sankey.tsx','src/canvas/tab/analyze/page-provider.tsx',
     'src/canvas/right/record-explorer.tsx','src/canvas/utils/query-inspector.tsx'];
   for(const file of files)assert.match(read(file),/<ErrorDetails/,file);
 });

@@ -3,7 +3,9 @@ import { requireSparqlAttribution } from "./sparql-request-attribution";
 import { graphForPrefix, loadPersonalAuthSession, type PersonalAuthSession } from "./personal-auth";
 import { personalWriteEndpoint } from "./personal-endpoints";
 import { reserveDigestRequest, withDigestSessionLock, commitRefreshedDigest, digestSessionSignal, rememberDigestHttpOutcome } from "./client-digest-session";
-import { observePersonalAuthResponse, observePersonalAuthTransportError } from "./personal-session-hint";
+import { observePersonalAuthResponse } from "./personal-session-hint";
+import { signalPersonalHealth } from "./personal-sparql-health";
+import { observedUpstreamStatus, observeProxyFetch, proxyQuerySignal } from "./proxy-transport-observation";
 import { DIGEST_SESSION_HEADER, DIGEST_SESSION_SCHEME, type DigestSessionRecord } from "./digest-session-record";
 /** The HA1 carrier is sent only to Maestro's same-origin proxy, never to Virtuoso. */
 export async function personalRequestHeaders(session:PersonalAuthSession):Promise<Record<string,string>> {
@@ -33,21 +35,30 @@ export async function withPersonalProxyCredentials(url:string,init?:RequestInit,
   return {init:{...init,headers,cache:"no-store",body:JSON.stringify({...body,addr:`${graph}@${protectedEndpoint}`})},authenticated:true,session};
 }
 export function personalAuthenticatedAddr(session:PersonalAuthSession):string{return `${graphForPrefix(session.graphPrefix)}@${personalWriteEndpoint(session)}`;}
-export async function personalAuthenticatedFetch(session:PersonalAuthSession,input:RequestInfo|URL,init:RequestInit, transport:(input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>=fetch):Promise<Response>{
+export async function personalAuthenticatedFetch(session:PersonalAuthSession,input:RequestInfo|URL,init:RequestInit, transport:(input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>=observeProxyFetch):Promise<Response>{
   requireSparqlAttribution(input, init);
   if(input!=="/proxy/api/sparql")throw new Error("Invalid personal request destination.");
-  const signal=digestSessionSignal(session,init.signal);
+  const signal=digestSessionSignal(session,proxyQuerySignal(init.signal));
   return withDigestSessionLock(signal,async()=>{
     const record=await reserveDigestRequest(session);
     const scoped=await withPersonalProxyCredentials(input,{...init,signal},record);
     if(!scoped.authenticated || scoped.session!==session)throw new Error("No restored personal user session.");
-    try{
+    {
       const response=await transport(input,scoped.init);
       signal.throwIfAborted();
       await commitRefreshedDigest(session,record,response);
-      await rememberDigestHttpOutcome(session,response.status,Date.now());
-      if(!signal.aborted)observePersonalAuthResponse(response,session);
+      const upstreamStatus=observedUpstreamStatus(response);
+      if(upstreamStatus!==null) {
+        await rememberDigestHttpOutcome(session,upstreamStatus,Date.now());
+        if(!signal.aborted) {
+          observePersonalAuthResponse(response,session);
+          const source = new Headers(init.headers).get("x-maestro-debug-source") ?? "";
+          // Reading/writing the health ledger itself is not an independent
+          // health probe and must not cause a status-history feedback loop.
+          if (!source.includes("graph-server-status-history")) signalPersonalHealth(session.graphStore, upstreamStatus);
+        }
+      }
       return response;
-    }catch(error){observePersonalAuthTransportError(session,signal);throw error;}
+    }
   });
 }

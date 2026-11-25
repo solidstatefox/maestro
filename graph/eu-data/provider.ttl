@@ -252,8 +252,37 @@
     )"/>
     <!-- Capture graph scope while the context item is still the input document.
          The batch loop below has xs:integer context items, not XML nodes. -->
-    <xsl:variable name="runtimeGraph" as="xs:string" select="normalize-space(string(/mctx:context/mctx:query/*[local-name()='query']/@graph))"/>
-    <xsl:for-each select="1 to xs:integer(ceiling(count($linkedUris) div 35))">
+    <xsl:variable name="runtimeQuery" select="/mctx:context/mctx:query/*[local-name()='query']"/>
+    <xsl:variable name="runtimeAddr" select="string($runtimeQuery/@addr)"/>
+    <xsl:variable name="runtimeGraph" as="xs:string" select="if (contains($runtimeAddr,'@')) then replace($runtimeAddr,'@[^@]*$','') else normalize-space(string($runtimeQuery/@graph))"/>
+    <xsl:variable name="isProject" select="$rows[fct:column[2]=$rdfType]/fct:column[3]='http://data.europa.eu/s66#Project' and matches($recordUri, '^[a-z][a-z0-9+.-]*:[^&lt;&gt;\\s&quot;{}|^`\\\\]+$')"/>
+    <xsl:if test="$isProject">
+      <mctx:request id="eurio-project-deliverable-types">
+        <xsl:text>PREFIX eurio: &lt;http://data.europa.eu/s66#&gt;
+PREFIX rdfs: &lt;http://www.w3.org/2000/01/rdf-schema#&gt;
+SELECT DISTINCT ?subject ?predicate ?object </xsl:text>
+        <xsl:if test="$runtimeGraph != '' and matches($runtimeGraph, '^[a-z][a-z0-9+.-]*:[^&lt;&gt;\\s&quot;{}|^`\\\\]+$')"><xsl:text>FROM &lt;</xsl:text><xsl:value-of select="$runtimeGraph"/><xsl:text>&gt; </xsl:text></xsl:if>
+        <xsl:text>WHERE {
+{ VALUES ?subject { &lt;</xsl:text><xsl:value-of select="$recordUri"/><xsl:text>&gt; } ?subject eurio:hasResult ?object . BIND(eurio:hasResult AS ?predicate) }
+UNION { &lt;</xsl:text><xsl:value-of select="$recordUri"/><xsl:text>&gt; eurio:hasResult ?subject . ?subject ?predicate ?object . FILTER(?predicate IN (&lt;http://www.w3.org/1999/02/22-rdf-syntax-ns#type&gt;, eurio:title, eurio:doi, rdfs:label, &lt;http://purl.org/dc/terms/title&gt;)) }
+UNION { &lt;</xsl:text><xsl:value-of select="$recordUri"/><xsl:text>&gt; eurio:hasResult ?result . ?result a ?subject . ?subject rdfs:label ?object . BIND(rdfs:label AS ?predicate) FILTER(LANG(?object) = "" || LANGMATCHES(LANG(?object),"en")) }
+UNION { { SELECT ?subject (COUNT(DISTINCT ?result) AS ?object) WHERE { &lt;</xsl:text><xsl:value-of select="$recordUri"/><xsl:text>&gt; eurio:hasResult ?result . ?result a ?subject } GROUP BY ?subject } BIND(&lt;urn:maestro:eurio:deliverable-type-count&gt; AS ?predicate) }
+} LIMIT 2400</xsl:text>
+      </mctx:request>
+      <mctx:request id="eurio-project-funding">
+        <xsl:text>PREFIX eurio: &lt;http://data.europa.eu/s66#&gt;
+PREFIX rdfs: &lt;http://www.w3.org/2000/01/rdf-schema#&gt;
+SELECT DISTINCT ?subject ?predicate ?object </xsl:text>
+        <xsl:if test="$runtimeGraph != '' and matches($runtimeGraph, '^[a-z][a-z0-9+.-]*:[^&lt;&gt;\\s&quot;{}|^`\\\\]+$')"><xsl:text>FROM &lt;</xsl:text><xsl:value-of select="$runtimeGraph"/><xsl:text>&gt; </xsl:text></xsl:if>
+        <xsl:text>WHERE {
+VALUES ?project { &lt;</xsl:text><xsl:value-of select="$recordUri"/><xsl:text>&gt; }
+{ ?subject eurio:funds ?project ; ?predicate ?object . FILTER(?predicate IN (eurio:funds,eurio:isDisbursedBy,eurio:hasFundingAmount)) }
+UNION { ?grant eurio:funds ?project ; eurio:isDisbursedBy ?subject . ?subject ?predicate ?object . FILTER(?predicate IN (rdfs:label,eurio:legalName,eurio:name)) }
+UNION { { ?grant eurio:funds ?project ; eurio:hasFundingAmount ?subject } UNION { ?project eurio:hasTotalCost ?subject } ?subject ?predicate ?object . FILTER(?predicate IN (rdfs:label,eurio:value,eurio:currency,eurio:hasCurrency)) }
+} LIMIT 2400</xsl:text>
+      </mctx:request>
+    </xsl:if>
+    <xsl:for-each select="1 to xs:integer(min((if ($isProject) then 6 else 8, ceiling(count($linkedUris) div 35))))">
       <xsl:variable name="start" as="xs:integer" select="(. - 1) * 35 + 1"/>
       <mctx:request id="eurio-deep-labels-{.}">
         <xsl:text>PREFIX eurio: &lt;http://data.europa.eu/s66#&gt;
@@ -602,8 +631,9 @@ VALUES ?origin { </xsl:text>
   <xsl:param name="id" as="xs:string"/>
   <xsl:variable name="term" select="$row/fct:column[3]"/>
   <xsl:variable name="raw" select="normalize-space(if (normalize-space(string($term/@label)) != '') then string($term/@label) else string($term))"/>
-  <xsl:variable name="currency" select="if (matches($raw,'^[A-Z]{3}\\s')) then tokenize($raw,'\\s+')[1] else ''"/>
-  <xsl:variable name="amount" select="normalize-space(if ($currency != '') then substring-after($raw,$currency) else '')"/>
+  <xsl:variable name="pair" select="fmt:money-pair(string($term),$raw)"/>
+  <xsl:variable name="currency" select="if (exists($pair)) then $pair[1] else if (matches($raw,'^[A-Z]{3}\\s')) then tokenize($raw,'\\s+')[1] else ''"/>
+  <xsl:variable name="amount" select="if (exists($pair)) then $pair[2] else normalize-space(if ($currency != '') then substring-after($raw,$currency) else '')"/>
   <xsl:variable name="isAmount" select="$currency != '' and matches($amount,'^-?[0-9]+([.][0-9]+)?$')"/>
   <a id="{$id}" href="#" data-maestro-preserve-formatted-label="true" class="inline-flex min-w-0 flex-wrap items-center gap-1 text-sm text-primary hover:underline">
     <xsl:call-template name="project-value-attributes"><xsl:with-param name="row" select="$row"/></xsl:call-template>
@@ -625,6 +655,84 @@ VALUES ?origin { </xsl:text>
   </a>
 </xsl:template>
 
+<xsl:function name="fmt:money-pair" as="xs:string*">
+  <xsl:param name="uri" as="xs:string"/><xsl:param name="label" as="xs:string"/>
+  <xsl:variable name="metadata" select="$allDescribeRows[fct:column[1]=$uri]"/>
+  <xsl:variable name="numbers" select="distinct-values($metadata[fct:column[2]=concat($eu,'value')]/fct:column[3])"/>
+  <xsl:variable name="currencies" select="distinct-values(for $c in $metadata[fct:column[2]=(concat($eu,'currency'),concat($eu,'hasCurrency'))]/fct:column[3] return tokenize(string($c),'[/#]')[last()])"/>
+  <xsl:variable name="raw" select="normalize-space(string(($metadata[fct:column[2]='http://www.w3.org/2000/01/rdf-schema#label']/fct:column[3],$label)[1]))"/>
+  <xsl:choose>
+    <xsl:when test="count($numbers)=1 and count($currencies)=1 and $numbers[1] castable as xs:decimal and matches($currencies[1],'^[A-Z]{3}$')"><xsl:sequence select="($currencies[1],$numbers[1])"/></xsl:when>
+    <xsl:when test="matches($raw,'^[A-Z]{3}\\s+[0-9]+([.][0-9]+)?$') and (empty($numbers) or (count($numbers)=1 and $numbers[1] castable as xs:decimal and $numbers[1]=tokenize($raw,'\\s+')[2])) and (empty($currencies) or (count($currencies)=1 and $currencies[1]=tokenize($raw,'\\s+')[1]))"><xsl:sequence select="(tokenize($raw,'\\s+')[1],tokenize($raw,'\\s+')[2])"/></xsl:when>
+    <xsl:otherwise><xsl:sequence select="()"/></xsl:otherwise>
+  </xsl:choose>
+</xsl:function>
+<xsl:template name="project-funding-bar">
+  <xsl:param name="row" as="element(fct:row)"/><xsl:param name="id" as="xs:string"/>
+  <xsl:variable name="term" select="$row/fct:column[3]"/>
+  <xsl:variable name="totalPair" select="fmt:money-pair(string($term),string(($term/@label,$term)[1]))"/>
+  <xsl:variable name="currency" select="$totalPair[1]"/>
+  <xsl:variable name="total" select="if ($totalPair[2] castable as xs:decimal) then xs:decimal($totalPair[2]) else 0"/>
+  <xsl:variable name="grants" select="distinct-values($allDescribeRows[fct:column[2]=concat($eu,'funds') and fct:column[3]=$recordUri]/fct:column[1])"/>
+  <xsl:variable name="contributions" as="element(contribution)*">
+    <xsl:for-each select="$grants">
+      <xsl:variable name="grant" select="."/>
+      <xsl:variable name="g" select="$allDescribeRows[fct:column[1]=$grant]"/>
+      <xsl:variable name="projects" select="distinct-values($g[fct:column[2]=concat($eu,'funds')]/fct:column[3])"/>
+      <xsl:variable name="funders" select="distinct-values($g[fct:column[2]=concat($eu,'isDisbursedBy')]/fct:column[3])"/>
+      <xsl:variable name="amounts" select="distinct-values($g[fct:column[2]=concat($eu,'hasFundingAmount')]/fct:column[3])"/>
+      <xsl:variable name="pair" select="if(count($amounts)=1) then fmt:money-pair($amounts[1],$amounts[1]) else ()"/>
+      <xsl:if test="count($projects)=1 and count($funders)=1 and $pair[1]=$currency and (if ($pair[2] castable as xs:decimal) then xs:decimal($pair[2]) gt 0 else false())">
+        <contribution uri="{$funders[1]}" amount="{$pair[2]}"/>
+      </xsl:if>
+    </xsl:for-each>
+  </xsl:variable>
+  <xsl:variable name="known" select="sum($contributions/@amount ! xs:decimal(.))"/>
+  <xsl:variable name="segments" as="element(segment)*">
+    <xsl:for-each-group select="$contributions" group-by="@uri">
+      <segment uri="{current-grouping-key()}" amount="{sum(current-group()/@amount ! xs:decimal(.))}"/>
+    </xsl:for-each-group>
+    <xsl:if test="$total gt $known"><segment uri="" amount="{$total - $known}"/></xsl:if>
+  </xsl:variable>
+  <xsl:variable name="colors" select="('var(--chart-1)','var(--chart-2)','var(--chart-3)','var(--chart-4)','var(--chart-5)')"/>
+  <xsl:choose>
+    <xsl:when test="$total gt 0 and $known gt 0 and $known le $total">
+      <div id="{$id}-funding" class="w-full min-w-0 space-y-2">
+        <div id="{$id}-funding-line" class="flex w-full min-w-0 items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" id="{$id}-funding-bar" viewBox="0 0 1000 40" class="min-w-0 flex-1" role="img" aria-label="Funding contributions to total project cost">
+            <xsl:for-each select="$segments">
+              <xsl:variable name="n" select="position()"/>
+              <!-- Temporary nodes are separate roots, so compute the prefix from the sequence. -->
+              <xsl:variable name="start" select="1000*sum(subsequence($segments,1,$n - 1)/@amount ! xs:decimal(.)) div $total"/>
+              <xsl:variable name="width" select="1000*xs:decimal(@amount) div $total"/>
+              <rect id="{$id}-segment-{$n}" x="{$start}" y="0" width="{$width}" height="40" fill="{if (@uri='') then '#9ca3af' else $colors[(($n - 1) mod count($colors))+1]}"/>
+              <xsl:variable name="amountText" select="format-number(xs:decimal(@amount),'#.##0,##','eu')"/>
+              <xsl:variable name="font" select="min((24, ($width - 8) div (max((1,string-length($amountText))) * 0.65)))"/>
+              <xsl:if test="$font ge 13"><text id="{$id}-segment-text-{$n}" x="{$start+$width div 2}" y="25" text-anchor="middle" font-size="{$font}" fill="currentColor"><xsl:value-of select="$amountText"/></text></xsl:if>
+            </xsl:for-each>
+          </svg>
+          <xsl:call-template name="project-monetary"><xsl:with-param name="row" select="$row"/><xsl:with-param name="id" select="$id"/></xsl:call-template>
+        </div>
+        <ul id="{$id}-funding-legend" class="flex flex-col gap-1 text-xs">
+          <xsl:for-each select="$segments">
+            <xsl:variable name="n" select="position()"/><xsl:variable name="uri" select="string(@uri)"/>
+            <li id="{$id}-legend-{$n}" class="flex min-w-0 items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" id="{$id}-legend-color-{$n}" width="10" height="10" viewBox="0 0 10 10"><rect id="{$id}-legend-swatch-{$n}" width="10" height="10" fill="{if ($uri='') then '#9ca3af' else $colors[(($n - 1) mod count($colors))+1]}"/></svg>
+              <span id="{$id}-legend-label-{$n}" class="min-w-0 flex-1 break-words"><xsl:choose><xsl:when test="$uri!=''"><a href="#" data-maestro-record-uri="{$uri}" resource="{$uri}" class="text-primary hover:underline"><xsl:value-of select="string(($allDescribeRows[fct:column[1]=$uri and fct:column[2]=('http://www.w3.org/2000/01/rdf-schema#label',concat($eu,'legalName'),concat($eu,'name'))]/fct:column[3],$uri)[1])"/></a></xsl:when><xsl:otherwise>Unallocated / unknown</xsl:otherwise></xsl:choose></span>
+              <span id="{$id}-legend-amount-{$n}" class="tabular-nums"><xsl:value-of select="concat(format-number(xs:decimal(@amount),'#.##0,##','eu'),' ',$currency,' · ',format-number(100*xs:decimal(@amount) div $total,'0,0','eu'),'%')"/></span>
+            </li>
+          </xsl:for-each>
+        </ul>
+        <xsl:if test="count($contributions) lt count($grants)"><p class="text-xs text-muted-foreground">Some grants have unknown, shared, or incompatible funding amounts.</p></xsl:if>
+      </div>
+    </xsl:when>
+    <xsl:otherwise>
+      <xsl:call-template name="project-monetary"><xsl:with-param name="row" select="$row"/><xsl:with-param name="id" select="$id"/></xsl:call-template>
+      <xsl:if test="exists($grants)"><p class="text-xs text-muted-foreground">Funding shares cannot be determined from the available compatible amounts.</p></xsl:if>
+    </xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+
 <xsl:template name="project-detail-group">
   <xsl:param name="items" as="element(fct:row)*"/>
   <xsl:param name="prefix" as="xs:string"/>
@@ -634,7 +742,7 @@ VALUES ?origin { </xsl:text>
     <xsl:variable name="iri" select="current-grouping-key()"/>
     <xsl:variable name="label" select="fmt:property-label($iri)"/>
     <xsl:variable name="n" select="position()"/>
-    <div id="{$prefix}-field-{$n}" class="{if ($singleLine) then 'w-full min-w-0' else 'min-w-0 space-y-1.5'}" data-maestro-property-row="true">
+    <div id="{$prefix}-field-{$n}" class="{if ($iri=(concat($eu,'hasTotalCost'),concat($eu,'totalCost'))) then 'min-w-0 space-y-1.5 sm:col-span-2' else if ($singleLine) then 'w-full min-w-0' else 'min-w-0 space-y-1.5'}" data-maestro-property-row="true">
       <xsl:if test="$showLabel">
         <dt id="{$prefix}-name-{$n}" about="{$iri}" data-maestro-predicate="{$iri}" data-maestro-direction="property" data-maestro-property-label="true" class="text-xs text-muted-foreground">
           <xsl:value-of select="$label"/>
@@ -649,7 +757,7 @@ VALUES ?origin { </xsl:text>
               </xsl:call-template>
             </xsl:when>
             <xsl:when test="$iri = (concat($eu,'hasTotalCost'),concat($eu,'totalCost'))">
-              <xsl:call-template name="project-monetary"><xsl:with-param name="row" select="."/>
+              <xsl:call-template name="project-funding-bar"><xsl:with-param name="row" select="."/>
                 <xsl:with-param name="id" select="concat($prefix, '-value-', $n, '-', position())"/>
               </xsl:call-template>
             </xsl:when>
@@ -703,7 +811,7 @@ VALUES ?origin { </xsl:text>
        the DESCRIBE column's @label, not the URI lexical value. -->
   <xsl:variable name="acronymTerm" select="$acronymRow/fct:column[3]"/>
   <xsl:variable name="acronymRaw" select="normalize-space(if (normalize-space(string($acronymTerm/@label)) != '') then string($acronymTerm/@label) else if ($acronymTerm/@datatype = 'uri' or $acronymTerm/@termType = 'uri') then '' else string($acronymTerm))"/>
-  <xsl:variable name="acronym" select="normalize-space(if (matches($acronymRaw, '^Acronym:\\s*', 'i')) then substring-after($acronymRaw, ':') else if (matches($acronymRaw, '^\\S+:\\s')) then substring-before($acronymRaw, ':') else $acronymRaw)"/>
+  <xsl:variable name="acronym" select="normalize-space(if (matches($acronymRaw, '^Acronym:\\s*', 'i')) then substring-after($acronymRaw, ':') else if (matches($acronymRaw, '^[^:]+:\\s+')) then substring-before($acronymRaw, ':') else $acronymRaw)"/>
   <xsl:variable name="keywordRows" select="$projectRows[fct:column[2] = (concat($eu,'keyword'),concat($eu,'keywords'))]"/>
   <xsl:variable name="subjectRows" select="$projectRows[fct:column[2] = concat($eu,'subject')]"/>
   <xsl:variable name="abstractRows" select="$projectRows[matches(normalize-space(string(fct:column[2])),'[/#](abstract|projectAbstract)$','i')]"/>
@@ -763,7 +871,9 @@ VALUES ?origin { </xsl:text>
   <xsl:variable name="projectDoiRow" select="($projectRows[fct:column[2] = (concat($eu,'doi'),'http://purl.org/dc/terms/identifier')][matches(normalize-space(string(fct:column[3])),'^(?:doi:|https?://(?:dx\\.)?doi\\.org/)?10\\.[0-9]{4,9}/\\S+$','i')])[1]"/>
   <xsl:variable name="projectDoiLiteral" select="normalize-space(string($projectDoiRow/fct:column[3]))"/>
   <xsl:variable name="projectDoi" select="replace(replace($projectDoiLiteral,'^https?://(?:dx\\.)?doi\\.org/','', 'i'),'^doi:','', 'i')"/>
-  <xsl:variable name="resultRows" select="$projectRows[fct:column[2] = concat($eu,'hasResult')]"/>
+  <xsl:variable name="resultCandidates" select="$allDescribeRows[fct:column[1]=$recordUri and fct:column[2]=concat($eu,'hasResult')]"/>
+  <xsl:variable name="resultRows" select="for $uri in distinct-values($resultCandidates/fct:column[3]) return ($resultCandidates[fct:column[3]=$uri])[1]"/>
+  <xsl:variable name="resultTypes" select="distinct-values($allDescribeRows[fct:column[1]=$resultRows/fct:column[3] and fct:column[2]=$rdfType]/fct:column[3])"/>
   <xsl:variable name="knownDetailIris" select="(concat($eu,'identifier'),concat($eu,'hasidentifier'),concat($eu,'hasIdentifier'),concat($eu,'hasTotalCost'),concat($eu,'totalCost'),concat($eu,'ecMaxContribution'),concat($eu,'isFundedBy'),concat($eu,'fieldOfScience'),concat($eu,'businessSector'),concat($eu,'hasEuroSciVocClassification'),concat($eu,'hasInvolvedParty'),concat($eu,'hasEvent'),concat($eu,'hasProjectDivision'),concat($eu,'hasRelatedProject'),concat($eu,'webLink'),concat($eu,'webResource'))"/>
   <xsl:variable name="summaryIris" select="(concat($eu,'identifier'),concat($eu,'hasidentifier'),concat($eu,'hasIdentifier'),concat($eu,'hasTotalCost'),concat($eu,'totalCost'),concat($eu,'ecMaxContribution'),concat($eu,'isFundedBy'),concat($eu,'fieldOfScience'),concat($eu,'businessSector'),concat($eu,'hasEuroSciVocClassification'))"/>
   <xsl:variable name="participantsIris" select="(concat($eu,'hasInvolvedParty'))"/>
@@ -999,14 +1109,21 @@ VALUES ?origin { </xsl:text>
          Pagination and individual Result RDFa remain unchanged. -->
     <xsl:if test="exists($resultRows)">
       <section id="eu-project-results-section" class="space-y-4 border-t border-border pt-5" aria-label="Project results">
-        <div id="eu-project-results-heading" class="flex items-baseline justify-between gap-3">
-          <h3 id="eu-project-results-title" class="text-base font-medium tracking-tight">Deliverables</h3>
+        <div id="eu-project-results-heading" class="sr-only">
+          <h3 id="eu-project-results-title" class="sr-only">Deliverables</h3>
           <span id="eu-project-results-count" class="text-xs tabular-nums text-muted-foreground"><xsl:value-of select="count($resultRows)"/></span>
         </div>
         <div id="eu-project-results" class="rounded-xl border border-border p-4" role="region" aria-label="Project results table">
         <!-- The native RecordValuePages host keeps RDFa and Record navigation
              while presenting 5/10/20 results per page, never more than 20. -->
-        <RecordValuePages id="eu-project-results-list" pageSize="5" maxPageSize="20" pageSizeSelect="true" listTag="ol" listClassName="min-w-0 divide-y divide-border" layout="groups">
+        <RecordValuePages id="eu-project-results-list" pageSize="5" maxPageSize="20" pageSizeSelect="true" listTag="ol" listClassName="min-w-0 divide-y divide-border" layout="groups" filterLabel="Deliverables">
+          <xsl:for-each select="$resultTypes">
+            <xsl:variable name="type" select="."/>
+            <xsl:variable name="typeRows" select="$allDescribeRows[fct:column[1]=$type]"/>
+            <xsl:variable name="label" select="($typeRows[fct:column[2]='http://www.w3.org/2000/01/rdf-schema#label']/fct:column[3])[1]"/>
+            <xsl:variable name="count" select="($typeRows[fct:column[2]='urn:maestro:eurio:deliverable-type-count']/fct:column[3])[1]"/>
+            <span id="eu-project-result-type-{position()}" data-maestro-filter-option="{$type}" data-maestro-filter-count="{$count}"><xsl:value-of select="if ($label) then string($label) else fmt:property-label($type)"/></span>
+          </xsl:for-each>
           <xsl:for-each select="$resultRows">
             <xsl:variable name="n" select="position()"/>
             <xsl:variable name="resultUri" select="string(fct:column[3])"/>
@@ -1016,7 +1133,7 @@ VALUES ?origin { </xsl:text>
             <xsl:variable name="doiRow" select="($metadata[fct:column[2] = concat($eu,'doi')])[1]"/>
             <xsl:variable name="doiLiteral" select="normalize-space(string($doiRow/fct:column[3]))"/>
             <xsl:variable name="doi" select="replace(replace($doiLiteral,'^https?://(?:dx\\.)?doi\\.org/',''),'^doi:','', 'i')"/>
-            <li id="eu-project-result-{$n}" class="grid min-w-0 grid-cols-[1.75rem_minmax(0,1fr)_1.75rem] items-start gap-3 py-3 first:pt-1 last:pb-1" data-maestro-statement="true">
+            <li id="eu-project-result-{$n}" data-maestro-filter-types="{string-join(distinct-values($metadata[fct:column[2]=$rdfType]/fct:column[3]),' ')}" class="grid min-w-0 grid-cols-[1.75rem_minmax(0,1fr)_1.75rem] items-start gap-3 py-3 first:pt-1 last:pb-1" data-maestro-statement="true">
               <span id="eu-project-result-number-{$n}" class="pt-0.5 text-xs tabular-nums text-muted-foreground"><xsl:value-of select="format-number($n,'00')"/></span>
               <div id="eu-project-result-details-{$n}" class="min-w-0">
                 <a id="eu-project-result-link-{$n}" href="#" class="block break-words text-sm font-medium text-foreground underline-offset-2 hover:text-primary hover:underline" rel="{$resultPredicate}" resource="{$resultUri}" data-maestro-record-uri="{$resultUri}" data-maestro-predicate="{$resultPredicate}" data-maestro-direction="property" data-maestro-property-value="true" data-maestro-preserve-formatted-label="true">

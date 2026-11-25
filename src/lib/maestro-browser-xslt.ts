@@ -46,7 +46,7 @@ let sefManifestPromise: Promise<{sourceSha256:string;asset:string}|null>|null = 
 let sefUnavailable = false;
 async function verifiedFirstPartySef(stylesheetText: string): Promise<string | null> {
   if (!stylesheetText.includes('<xsl:template name="RecordResult">') || sefUnavailable) return null;
-  sefManifestPromise ??= fetch("/maestro-sef/manifest.json", { cache: "force-cache" })
+  sefManifestPromise ??= fetch("/maestro-sef/manifest.json", { cache: "no-cache" })
     .then(async response => response.ok ? await response.json() as {format?:number;sourceSha256?:string;asset?:string} : null)
     .then(info => info?.format === 1 && /^\/[a-z0-9/._-]+\.json$/.test(info.asset ?? "") &&
       /^[a-f0-9]{64}$/.test(info.sourceSha256 ?? "")

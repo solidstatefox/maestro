@@ -197,7 +197,7 @@ function renderRootBreadcrumb(tableHeader = false, presentationStyle?: CSSProper
               aria-label={`Return to the top-level query view: ${rootLabel}`}
               aria-current={activeBreadcrumbIndex < 0 ? "location" : undefined}>
               <span className={`truncate ${rootClassLabels.length ? "pt-2" : ""}`}>{rootLabel}</span>
-            </button>} /><TooltipContent>{`Return to the top-level query view${textSearchMode === "uri" && rootSearchText ? ` · ${rootSearchText}` : ""}${rootClassLabels.length ? ` · Classes: ${rootClassLabels.join(", ")}` : ""}`}</TooltipContent></Tooltip>
+            </button>} /><TooltipContent positionerClassName="z-[150]">{`Return to the top-level query view${textSearchMode === "uri" && rootSearchText ? ` · ${rootSearchText}` : ""}${rootClassLabels.length ? ` · Classes: ${rootClassLabels.join(", ")}` : ""}`}</TooltipContent></Tooltip>
           )}
         </span>
         {/* Inherited breadcrumb stack-pop action: position and semantics are fixed.
@@ -388,7 +388,7 @@ function renderPathBreadcrumb(crumb: WorkspaceController["tutorialBreadcrumbPath
                     </span>
                   ))}
                   {breadcrumbHasSuccessor && !breadcrumbIsRole ? "’s" : ""}
-                </InputGroupButton>} /><TooltipContent>{`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""} · Shift+click to toggle transported facet when this node precedes the focus`}</TooltipContent></Tooltip>
+                </InputGroupButton>} /><TooltipContent positionerClassName="z-[150]">{`Navigate to ${crumb.uri}${breadcrumbClasses.length ? ` · Classes: ${breadcrumbClasses.join(", ")}` : ""} · Shift+click to toggle transported facet when this node precedes the focus`}</TooltipContent></Tooltip>
                 <BreadcrumbNodeMinus variant="input"
                   ariaLabel={topBoundValue
                     ? `Remove value ${boundValueLabel(topBoundValue)} bound to ${breadcrumbLabel}`

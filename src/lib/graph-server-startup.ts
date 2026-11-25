@@ -13,7 +13,7 @@ export const DEFAULT_PUBLIC_GRAPH_SERVER = "https://dbpedia.org/sparql";
 const PERSONAL_DIRECTORY_PREFIX = "maestro-personal-graph-servers-v1:";
 
 function isPersonal(entry: EndpointOption): boolean {
-  return entry.id === "personal-sparql" || /personal/i.test(entry.group ?? "");
+  return entry.isPersonal ?? (entry.id === "personal-sparql" || /personal/i.test(entry.group ?? ""));
 }
 
 /** Cached personal endpoints are scoped to the restored login identity, never
@@ -34,7 +34,7 @@ export function readCachedPersonalGraphServers(graphStore: string, userName: str
       const url = typeof row.url === "string" ? validGraphServerUrl(row.url) : null;
       if (!url) return [];
       return [{ id: typeof row.id === "string" && row.id ? row.id : `cached-personal-${index}`,
-        url, label: typeof row.label === "string" && row.label ? row.label : url, group: "Personal" }];
+        url, label: typeof row.label === "string" && row.label ? row.label : url, isPersonal: row.isPersonal, group: typeof row.group === "string" && row.group ? row.group : "Personal" }];
     });
   } catch { return []; }
 }
@@ -43,7 +43,7 @@ export function rememberPersonalGraphServers(graphStore: string, userName: strin
   if (!graphStore.trim()) return;
   const rows = entries.slice(0, 100).flatMap((row): EndpointOption[] => {
     const url = validGraphServerUrl(row.url);
-    return url ? [{ id: row.id, url, label: row.label, group: "Personal" }] : [];
+    return url ? [{ id: row.id, url, label: row.label, isPersonal: row.isPersonal, group: row.group || "Personal" }] : [];
   });
   // An empty transient RDF read must not erase the last usable personal list.
   if (rows.length) maestroStorageSet(personalDirectoryKey(graphStore, userName), JSON.stringify(rows));

@@ -24,7 +24,7 @@ export function endpointHealthDetails(status?: EndpointStatus): string {
       a.durationMs === undefined ? "" : `${a.durationMs} ms`].filter(Boolean).join(" · "))].filter(Boolean).join("\n");
 }
 
-export type EndpointOption = { id: string; label: string; url: string; group: string; schemeInferred?: boolean };
+export type EndpointOption = { id: string; label: string; url: string; group: string; isPersonal?: boolean; schemeInferred?: boolean };
 
 export function EndpointStatusIcon({ status }: { status?: EndpointStatus }) {
   // Distinguish "not yet polled" from a completed probe without an HTTP response.

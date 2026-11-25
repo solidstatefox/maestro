@@ -36,10 +36,16 @@ test('the request effects settle their own spinners on denied gate or abort', ()
   const results = controller.slice(resultsStart, resultsEnd);
   assert.match(results, /if \(!urlStateInitialized \|\| !endpointReady\) \{\s*\/\/[\s\S]*?setIsSearching\(false\);\s*return;/);
   assert.match(results, /setIsSearching\(true\)/);
-  assert.match(results, /setIsSearching\(false\);\s*operations\.controller\.send\(\{ type: "RESULTS_CANCELLED"/);
+  // Cleanup settles the spinner even before dispatch, but only the effect
+  // that claimed execution may cancel the XState Results operation.
+  const cleanup = results.slice(results.lastIndexOf('return () => {'));
+  assert.match(cleanup, /controller\.abort\(\);[\s\S]*?setIsSearching\(false\);\s*if \(timerFired\) operations\.controller\.send\(\{ type: "RESULTS_CANCELLED", key: operationQueryKey \}\);/);
+  assert.match(results, /operations\.controller\.send\(\{ type: "RESULTS_STARTED", key: operationQueryKey \}\);[\s\S]*?if \(claimed\.key !== operationQueryKey \|\| claimed\.phase !== "executing"\) return;\s*timerFired = true;/);
+  assert.match(results, /finally \{\s*resultsBatchRequestPending\.current = false;\s*if \(!cancelled\) setIsSearching\(false\);/);
   const count = controller.slice(controller.indexOf('const resultsCountRequestIdentity = '), controller.indexOf('  // Hydrate from the existing Maestro IndexedDB store'));
   assert.match(count, /setIsCountingResults\(true\)/);
-  assert.match(count, /window\.clearTimeout\(timer\);\s*controller\.abort\(\);[\s\S]*?setIsCountingResults\(false\)/);
+  assert.match(count, /countController\.discover\(countKey, async signal/);
+  assert.match(count,/countSnapshot\.matches\("loading"\)[\s\S]*?setIsCountingResults\(false\)/);
 });
 
 test('appbar reads the selected-server health state through its declared Workspace contract', () => {

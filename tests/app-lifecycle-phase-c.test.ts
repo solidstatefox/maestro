@@ -170,3 +170,22 @@ test("explicit Bookmarks and History preserve the first Browse Return owner", ()
   assert.equal(c.getSnapshot().navigation.returnVisible, false);
   c.stop();
 });
+
+test("global Cancel is latched even with an empty task list; observers cannot rearm it", () => {
+  const c = ready();
+  c.send({ type: "GLOBAL_CANCEL" });
+  assert.equal(c.getSnapshot().query.globallyCancelled, true);
+  assert.equal(c.getSnapshot().query.phase, "cancelled");
+  c.send({ type: "REQUEST_ACTIVITY", queued: 3, active: 2 });
+  c.send({ type: "QUERY_OBSERVED", key: queryB, hydrated: true, graphReady: true });
+  c.send({ type: "RESULTS_STARTED", key: queryB });
+  c.send({ type: "RESULTS_SUCCEEDED", key: queryB });
+  assert.equal(c.getSnapshot().query.phase, "cancelled");
+  assert.equal(c.getSnapshot().requests.active, 0);
+  assert.equal(canExecute(c, queryB), false);
+  c.send({ type: "GLOBAL_RESUME" });
+  c.send({ type: "QUERY_OBSERVED", key: queryB, hydrated: true, graphReady: true });
+  assert.equal(c.getSnapshot().query.globallyCancelled, false);
+  assert.equal(canExecute(c, queryB), true);
+  c.stop();
+});

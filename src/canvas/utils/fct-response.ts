@@ -74,7 +74,7 @@ const XML_NS = "http://www.w3.org/XML/1998/namespace";
  * WHERE constraints. A normal list-values query retains ordinary FCT scope.
  * This does not mutate the live query or introduce implicit uid unions.
  */
-export function mergeValuesQueryClone(xml: string, columns: readonly ListValueProjection[] = [], resources?: readonly ListValueResource[]): string {
+export function mergeValuesQueryClone(xml: string, columns: readonly ListValueProjection[] = [], resources?: readonly ListValueResource[], projectionIds?: string[]): string {
   const document = new DOMParser().parseFromString(snapshotFctQueryXml(xml, "data"), "application/xml");
   if (document.querySelector("parsererror")) throw new Error("Invalid FCT query XML.");
   const root = document.documentElement;
@@ -150,7 +150,8 @@ export function mergeValuesQueryClone(xml: string, columns: readonly ListValuePr
       anchor.setAttribute("id", alloc());
       anchor.setAttribute("href", current.getAttribute("id")!);
       carrier.appendChild(anchor);
-    }
+      projectionIds?.push(anchor.getAttribute("id")!);
+    } else projectionIds?.push(current.getAttribute("id")!);
   }
   root.setAttribute("ctr", counter.toString(36));
   return new XMLSerializer().serializeToString(document);
@@ -326,8 +327,13 @@ const dbActivity = getText("db-activity");
     return [item];
   });
   let invalidClassCount = 0;
-  const facetItems = rowColumns.flatMap((columns) => {
+  const facetItems = rowColumns.flatMap((rawColumns) => {
+    const predicateFacet = resultType === FCT_VIEW_TYPES.PROPERTIES || resultType === FCT_VIEW_TYPES.PROPERTIES_IN;
+    const named = (name:string) => rawColumns.find(column=>column.attributes.var===name);
+    const columns = predicateFacet && rawColumns.some(column=>column.attributes.var)
+      ? [named("c1"),named("n"),named("sampleVal")] : rawColumns;
     if (!columns[0]) return [];
+    if (predicateFacet && (columns[0].termType!=="uri" || !resolveFacetIri(columns[0].value) || (columns[1]?.value.trim() && Number(columns[1].value)===0))) return [];
     // Only a full RDF class URI can be serialized as <class iri="...">.
     // Resolve relative values solely when the FCT response declares xml:base;
     // never resolve #OscarNominee against the Maestro app or SPARQL endpoint.
@@ -341,7 +347,7 @@ const dbActivity = getText("db-activity");
     return [{
       uri: value,
       label: columns[0].label || columns[0].shortform || toLabel(value, labelKind),
-      count: columns[1]?.value === undefined || !Number.isFinite(Number(columns[1].value))
+      count: columns[1]?.value === undefined || !columns[1].value.trim() || !Number.isFinite(Number(columns[1].value))
         ? -1 : Number(columns[1].value),
       ...(resultType === FCT_VIEW_TYPES.CLASSES && columns[2]?.termType === "uri" && columns[2].value ? { parent: columns[2].value } : {}),
       ...(exampleColumn?.value ? { example: { uri: exampleColumn.value, label: exampleColumn.label || exampleColumn.shortform || (exampleColumn.termType === "uri" ? toLabel(exampleColumn.value, "Class") : exampleColumn.value), termType: exampleColumn.termType } } : {}),
@@ -394,7 +400,7 @@ const dbActivity = getText("db-activity");
       // Graph SELECT projects c1=graph, n=distinct matches, bestRank=ranking.
       // The second column is NOT a graph label, and the third is NOT a count.
       label: columns[0].label || columns[0].shortform || toLabel(columns[0].value),
-      count: columns[1]?.value === undefined || !Number.isFinite(Number(columns[1].value))
+      count: columns[1]?.value === undefined || !columns[1].value.trim() || !Number.isFinite(Number(columns[1].value))
         ? -1 : Number(columns[1].value),
     }] : [])) : [],
     describe: resultType === FCT_VIEW_TYPES.DESCRIBE ? describe : [],

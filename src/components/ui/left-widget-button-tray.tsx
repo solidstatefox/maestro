@@ -1,5 +1,6 @@
 "use client";
 
+import { facetButtonFactory, completeFacetButton } from "@/components/ui/facet-button-factory";
 import { useRef, type ReactNode } from "react";
 import { Ellipsis } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -18,6 +19,19 @@ export type LeftWidgetTrayAction = {
   disabled?: boolean;
   when?: boolean;
 };
+/** A capability built from only this widget's existing actions. No DOM clicks. */
+export function facetTrayActions(actions: readonly LeftWidgetTrayAction[]) {
+  const available = () => actions.filter(action => action.when !== false && action.onSelect);
+  return {
+    list: () => available().map(({id,label,disabled}) => ({id,label,disabled: Boolean(disabled)})),
+    press: (id: string): boolean => {
+      const action=available().find(item=>item.id===id);
+      if(!action || action.disabled) return false;
+      action.onSelect?.();return true;
+    },
+  };
+}
+export type FacetTrayActions = ReturnType<typeof facetTrayActions>;
 export function LeftWidgetButtonTray({ actions, threshold = 4 }: {
   actions: LeftWidgetTrayAction[];
   /** Number of direct buttons before overflow; remainder live in the ellipsis. */
@@ -31,15 +45,13 @@ export function LeftWidgetButtonTray({ actions, threshold = 4 }: {
   const visible = available.slice(0, directButtons);
   const hidden = available.slice(directButtons);
   const button = (action: LeftWidgetTrayAction) => action.render ?? <Tooltip>
-    <TooltipTrigger render={<button type="button" disabled={action.disabled} onClick={action.onSelect}
-      aria-label={action.label} className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:opacity-30">{action.icon}</button>} />
+    <TooltipTrigger render={completeFacetButton(facetButtonFactory(action.icon), {"type":"button", "disabled":(action.disabled), "onClick":(action.onSelect), "aria-label":(action.label), "className":"inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 disabled:opacity-30"})} />
     <TooltipContent>{action.label}</TooltipContent>
   </Tooltip>;
   return <div data-left-widget-button-tray className="inline-flex shrink-0 items-center gap-1">
     {visible.map(action => <span key={action.id} data-tray-action={action.id} className="inline-flex shrink-0 opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100">{button(action)}</span>)}
     {hidden.length > 0 && <DropdownMenu>
-      <DropdownMenuTrigger asChild><button type="button" aria-label="More widget actions" title="More widget actions"
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Ellipsis className="size-4" aria-hidden="true" /></button></DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild>{completeFacetButton(facetButtonFactory(<Ellipsis className="size-4" aria-hidden="true" />), {"type":"button", "aria-label":"More widget actions", "title":"More widget actions", "className":"inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"})}</DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {hidden.map(action => <DropdownMenuItem key={action.id} disabled={action.disabled} onSelect={() => {
           if (action.onSelect) action.onSelect();

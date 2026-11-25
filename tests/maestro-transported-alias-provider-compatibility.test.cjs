@@ -46,7 +46,7 @@ test("Analyze Table/Compare, Kanban, Sankey and Spider key remote dimensions by 
   const analyze = read("src/canvas/utils/workspace-controller.tsx");
   const table = read("src/canvas/tab/analyze/page.tsx");
   const coverage = read("src/lib/sankey-coverage.ts");
-  const spider = read("src/lib/spider-numeric-policy.ts");
+  const spider = read("graph/spider/provider.ttl");
   const xslt = read("graph/maestro-analyze.ttl");
   assert.match(analyze, /analysisFacetKey\.split\("\\u0000"\)/);
   assert.match(analyze, /hops: alias\.path\.map/);
@@ -56,7 +56,7 @@ test("Analyze Table/Compare, Kanban, Sankey and Spider key remote dimensions by 
   assert.match(xslt, /node-id/);
   assert.match(coverage, /predicateKey\(s\.direction,s\.property,s\.anchorId\)/);
   assert.match(coverage, /predicateKey\(p\.direction,p\.iri,p\.anchorId\)/);
-  assert.match(spider, /alias:\$\{axis\.anchorId\}/);
+  assert.match(spider, /@node-id = \$axis\/@anchor-id/);
 });
 
 test("root labels and union UID alone receive green breadcrumb feedback; Record URI click is independent", () => {

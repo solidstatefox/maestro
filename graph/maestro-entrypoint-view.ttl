@@ -20,23 +20,13 @@ view:EntryPointCards a mui:XsltTemplate ;
   <xsl:output method="html" omit-xml-declaration="yes"/>
   <xsl:template match="/results">
     <section data-view-title="Graph Servers" data-view-icon="server" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Graph servers">
-      <!-- All selected-first ordering and page slicing happen in this stylesheet.
-           The available collection includes only results already returned by FCT;
-           a filtered-out graph server is never injected. -->
-      <xsl:variable name="offset" select="number(@page) * number(@pageSize)"/>
-      <xsl:variable name="limit" select="number(@pageSize)"/>
-      <xsl:apply-templates select="available/result">
-        <xsl:sort select="number(@selected = 'true')" data-type="number" order="descending"/>
-        <xsl:with-param name="offset" select="$offset"/>
-        <xsl:with-param name="limit" select="$limit"/>
-      </xsl:apply-templates>
+      <!-- The host supplies the authoritative current Results page in order. -->
+      <xsl:apply-templates select="result"/>
     </section>
   </xsl:template>
   <xsl:template match="result">
-    <xsl:param name="offset" select="0"/>
-    <xsl:param name="limit" select="30"/>
-    <xsl:if test="position() &gt; $offset and position() &lt;= ($offset + $limit)">
     <article>
+      <xsl:attribute name="data-graph-uri"><xsl:value-of select="@uri"/></xsl:attribute>
       <xsl:attribute name="class"><xsl:choose>
         <xsl:when test="@selected = 'true'">flex flex-col overflow-hidden rounded-xl border-2 border-primary bg-card shadow-sm ring-1 ring-primary/20</xsl:when>
         <xsl:otherwise>flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm</xsl:otherwise>
@@ -68,14 +58,14 @@ view:EntryPointCards a mui:XsltTemplate ;
           <xsl:if test="@selected = 'true'"><span class="ml-2 text-xs font-medium text-primary">Selected</span></xsl:if>
         </h3>
       </div>
-      <div class="flex items-center gap-2 text-sm text-muted-foreground">
+      <div class="flex items-center gap-2 text-sm text-muted-foreground" data-graph-meta="health">
         <xsl:choose>
           <xsl:when test="@healthState='green'"><span data-lucide-icon="badge-check" class="text-green-600"/></xsl:when>
           <xsl:when test="@healthState='red'"><span data-lucide-icon="badge-x" class="text-red-600"/></xsl:when>
           <xsl:when test="@healthState='amber'"><span data-lucide-icon="badge-alert" class="text-orange-500"/></xsl:when>
           <xsl:otherwise><span data-lucide-icon="badge-question-mark" class="text-muted-foreground"/></xsl:otherwise>
         </xsl:choose>
-        <span><xsl:value-of select="@health"/></span>
+        <span data-graph-meta="health-text"><xsl:value-of select="@health"/></span>
         <xsl:if test="string-length(@endpointId) &gt; 0">
           <button type="button" class="inline-flex size-5 shrink-0 items-center justify-center rounded border-0 bg-transparent text-muted-foreground/60 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring" aria-label="Refresh graph server health" title="Refresh health">
             <xsl:attribute name="data-endpoint-refresh"><xsl:value-of select="@endpointId"/></xsl:attribute>
@@ -85,28 +75,18 @@ view:EntryPointCards a mui:XsltTemplate ;
           </button>
         </xsl:if>
       </div>
-      <xsl:if test="string-length(normalize-space(@description)) &gt; 0">
-        <p class="text-sm leading-relaxed text-muted-foreground"><xsl:value-of select="@description"/></p>
-      </xsl:if>
-      <xsl:if test="string-length(normalize-space(@product)) &gt; 0 and @product != 'Unknown'">
-        <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <span><xsl:value-of select="@product"/></span>
-          <xsl:if test="string-length(normalize-space(@version)) &gt; 0">
-            <div class="h-4 w-px shrink-0 bg-border" data-slot="separator" role="none"/>
-            <span><xsl:value-of select="@version"/></span>
-          </xsl:if>
-        </div>
-      </xsl:if>
-      <xsl:if test="string-length(normalize-space(@rank)) &gt; 0 and starts-with(@rank, '#')">
-        <p class="text-sm text-muted-foreground">Site rank: <xsl:value-of select="@rank"/></p>
-      </xsl:if>
-      <a class="break-all text-sm text-primary hover:underline">
+      <p data-graph-meta="description" class="text-sm leading-relaxed text-muted-foreground"><xsl:value-of select="@description"/></p>
+      <p data-graph-meta="software" class="text-sm text-muted-foreground"><xsl:if test="@product != 'Unknown'"><xsl:value-of select="@product"/> <xsl:value-of select="@version"/></xsl:if></p>
+      <p data-graph-meta="rank" class="text-sm text-muted-foreground"><xsl:if test="starts-with(@rank, '#')">Site rank: <xsl:value-of select="@rank"/></xsl:if></p>
+      <xsl:if test="string-length(@protocols) &gt; 0"><p class="break-all text-xs text-muted-foreground">Conforms to: <xsl:value-of select="@protocols"/></p></xsl:if>
+      <xsl:if test="string-length(@datasets) &gt; 0"><p class="break-words text-xs text-muted-foreground">Serves datasets: <xsl:value-of select="@datasets"/></p></xsl:if>
+      <xsl:if test="string-length(@sourceResources) &gt; 0 and @sourceResources != @endpoint"><a class="text-xs text-muted-foreground hover:underline" href="{@sourceResources}" target="_blank" title="{@sourceResources}">Source resource</a></xsl:if>
+      <xsl:if test="string-length(@endpoint) &gt; 0"><a class="break-all text-sm text-primary hover:underline">
         <xsl:attribute name="href"><xsl:value-of select="@endpoint"/></xsl:attribute>
         <xsl:attribute name="target">_blank</xsl:attribute>
         <xsl:value-of select="@endpoint"/>
-      </a>
+      </a></xsl:if>
       </div>
     </article>
-    </xsl:if>
   </xsl:template>
 </xsl:stylesheet>""" .

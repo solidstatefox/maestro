@@ -2,206 +2,206 @@
   {
     "file": "dataserver-seed.ttl",
     "destination": "graphs",
-    "asset": "09d0db2d66573e278871632ef3898ab3b7706510cb79051bfe17084fe2acde83.json"
+    "asset": "4cfc93da0cb90ae4227d645ed4e6c25e8280141d8eaa9dba6616b194955d0c6b.json"
   },
   {
     "file": "dbpedia/maestro-dbpedia-policies.ttl",
     "destination": "shacl-policies",
-    "asset": "c954952238b0df35913ab4116d661f160ee19377551ba262988a1ea29bb68e95.json"
+    "asset": "27e7fa32e0d4431a40e5568428f3f1d97986fce957f6e89ba628d701c35ede64.json"
   },
   {
     "file": "email-regex/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "98658a15bc3bb4d8ba31a71003a39bfa5680d6d600b51c3baf7f319bc2aaac23.json"
+    "asset": "b5c3f93ddd74356ad79bad7492f665c8ff426e9bb6b9dad2ce1b0189785b1441.json"
   },
   {
     "file": "eu-data/author-derived.ttl",
     "destination": "shacl-policies",
-    "asset": "7cd05df94cfbfe7546c3aca1442717b71138f1212fab21a4f4365a8299f25c89.json"
+    "asset": "c04d09bae790152ce1d3343b97e03a4faad1932ad04592a657f1fa9a7874a744.json"
   },
   {
     "file": "eu-data/dcat-ap-3-0-0/range.ttl",
     "destination": "shacl-policies",
-    "asset": "3a35e9164219c035cdb31cc3c414cd99f74633d06855183d2f8744f3be2c3a4d.json"
+    "asset": "305b9f27e907fb0abdd13273f5b236cf1878b358345e847a71bc43c244bd1f3d.json"
   },
   {
     "file": "eu-data/dcat-ap-3-0-0/shapes.ttl",
     "destination": "shacl-policies",
-    "asset": "92cca7cd8ad72611aa1467836b75c7872279cd15fcb06524bf7b2223eab126d4.json"
+    "asset": "6aa1a60e7159613236f78e5b076550129faeb946c96bf4ae0557124a7aca8c63.json"
   },
   {
     "file": "eu-data/eurio-validation.ttl",
     "destination": "shacl-policies",
-    "asset": "fd6064bdfeecfe12145b84297649c380b4a53dff891a565f09bdbf53fa08ae29.json"
+    "asset": "1d1a1089c721c562a9359e953e9cff3f4f172b0c80cbad5c2d59f0393be5d4d5.json"
   },
   {
     "file": "eu-data/involved-party-derived.ttl",
     "destination": "shacl-policies",
-    "asset": "03e1244fd55a7ca3c566207f27243e13058604ea7d2590424ae3592aaa165831.json"
+    "asset": "287d5db587b2b3cafb40921f5016da30f0894e45c8a32f9ba44fb53fe618b9bd.json"
   },
   {
     "file": "eu-data/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "8253bfc3caf257cec478fa9a2678772de62a5592355b5d60c7a9fced4f22d840.json"
+    "asset": "b678f38b7efc2b5c2e6e12dd9345dc3aa51318803e57759696f8da4c720d86ca.json"
   },
   {
     "file": "eu-data/record-policies.ttl",
     "destination": "shacl-policies",
-    "asset": "19cad70a8f58fdd04deb151f259188f2489ef5fe1abed37f722569e513ba6239.json"
+    "asset": "93f7cfeb52f380d6a48ae8080550a20f564c0c14136027dcc68beb3e61a84d3a.json"
   },
   {
     "file": "eu-data/record-shapes.ttl",
     "destination": "shacl-policies",
-    "asset": "d72787d7fa589aafb8e47bf8278a516fa9a101f02914367d74045f6f04e3dd5c.json"
+    "asset": "efc7cc53d59f13e39043fd63a1b5cb7d1987930e0c02bde5c5e275bf8c266929.json"
   },
   {
     "file": "kanban/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "041a122aef4910aa14405fe4e0d7a4c3cb63e9777a4d4fdf90a253dc27be119a.json"
+    "asset": "ab287af92460dcaa87cbf9c5fe9fecef58044924a157fc42082de8874b6f0488.json"
   },
   {
     "file": "kinds/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "73a9229edfce2c7f948fda61d8fe27eb780c571cfcac289da6feb64fdc2d27f6.json"
+    "asset": "92b3799335f5c1f4ee5c6d453cd2743087de012120b2bc20cfc8b7d861feace0.json"
   },
   {
     "file": "labels.ttl",
     "destination": "graphs",
-    "asset": "658feea62144e2baca4c48c457d74d327677a39301b58e9dd5523dfdfa6de698.json"
+    "asset": "f81096154a27fac0c1dae32316354ea49162cb99c90b7b116b05f95afa6dd2e7.json"
   },
   {
     "file": "maestro-analyze.ttl",
     "destination": "shacl-policies",
-    "asset": "31c542f86c2f54dc852de1c0b85b873977e25624747702c14036609dab533d51.json"
+    "asset": "68210e1ba15d80c39ae6eb00fa4eaa8f6169783c8e940cf008227d2e25e9ad6c.json"
   },
   {
     "file": "maestro-authorship-policies.ttl",
     "destination": "shacl-policies",
-    "asset": "ca2a6b31d8fcedc03a4d7935c8a223437f88b4805fbf7a6f9b0b24501ba3ecbe.json"
+    "asset": "bea6a810e20e91d50e45ca2e78b2d8583de2ed26ee5555dab82b34da7e653a1f.json"
   },
   {
     "file": "maestro-authorship-transcoders.ttl",
     "destination": "otc-transcoders",
-    "asset": "df149f7efab4581d9b5734676d6d544637c3ee6c11a1951194f66a0411f71267.json"
+    "asset": "3802c7b2d1e08eaad4b460c5259fcfb7648cdca246086d89cfc3dae8adf946a4.json"
   },
   {
     "file": "maestro-curation-providers.ttl",
     "destination": "shacl-policies",
-    "asset": "d0b01b4d67bb136d87c0c6fed3053d32161769d43e9c5000291aafd6025d4c52.json"
+    "asset": "463873b9ad8018b55ba99448a6d522aee3e6d963d554464530168897df961622.json"
   },
   {
     "file": "maestro-entrypoint-view.ttl",
     "destination": "shacl-policies",
-    "asset": "c1e79438418a550a61a4bb5b2794203b7aeb92bfb4cb19de9a985f70b1809d50.json"
+    "asset": "d0bede37b6ce4b429ebe9ce0a60c585ccd6da7f7bd464b8e2073fd63241ce7e5.json"
   },
   {
     "file": "maestro-personal-perspectives.ttl",
     "destination": "shacl-policies",
-    "asset": "a4a3f2d609bc7b52e5056dfd7591ebcbbfd0ab3393cd8e493d9542eafcd1053e.json"
+    "asset": "979727912e3476a64ba3cf60bce2c199d05d645fa3f0c6ea17cee0b04fb7df02.json"
   },
   {
     "file": "maestro-resource-metadata-graph.ttl",
     "destination": "graphs",
-    "asset": "d9716c5925a891c71ee8e299ee6e4b884c2e9ecc465613f35be355e7cc24dd9b.json"
+    "asset": "8eaddba4cca58669f425408fbdba62a7111e4d086eb8df57898bcaaa47ed04da.json"
   },
   {
     "file": "maestro-resource-metadata-otc-transcoders.ttl",
     "destination": "otc-transcoders",
-    "asset": "e3cba433215142530d096dcec0461dd49696beb8adae8630cd079597836558d2.json"
+    "asset": "e3abe4cd40bee2104411919d7925bff5a9ba67dcc07f3c72e271ff6ab0b47a9d.json"
   },
   {
     "file": "maestro-resource-metadata-shacl-policies.ttl",
     "destination": "shacl-policies",
-    "asset": "f57789e51627fe03fb21096d71edcd75e5502f42da761361e9b43a5549a871eb.json"
+    "asset": "960b7eef23671453fe85f771f4361689ebf44723bf74a061de5c0244eca947f9.json"
   },
   {
     "file": "maestro-services.ttl",
     "destination": "shacl-policies",
-    "asset": "82c0187c238d1036f8a09b0084bde9c29bfb8a4ecbda32c0a5aa596c26905a96.json"
+    "asset": "59fa72fd7d5001d99a4b4025116232300b5cb86d852f1046825c5ab636178f9e.json"
   },
   {
     "file": "maestro-shacl-policies.ttl",
     "destination": "shacl-policies",
-    "asset": "16e08b6c6c744e1d3857110074e62fe816490739ac2b518aeb42ceb98ebd80dd.json"
+    "asset": "69db7ebe04742cf0b762ccc5d80498f8d1512babb9380b77d5373a6d744a5d73.json"
   },
   {
     "file": "maestro-status-machines.ttl",
     "destination": "state-machines",
-    "asset": "69ad9318df0039899b6f8f1fe734f17a7acf00eb345593b18800ec5e8e9f5ffd.json"
+    "asset": "4947378282f80cd54f5bbb347aa4b17445f4196082f857a011b8ab33eaff7e41.json"
   },
   {
     "file": "maestro-widget-providers.ttl",
     "destination": "shacl-policies",
-    "asset": "08f81732aa1f6d2c532eddadec90f718630100213f59f06926a33bc7b7554de8.json"
+    "asset": "197df41bd4cc0902382df862705433280afdf25b4f4a86dd889d71b883afc96f.json"
   },
   {
     "file": "map/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "ea4b87b6d17961fdece51b9f636533347c2c2828254791bd814f7ec24eb66676.json"
+    "asset": "733dd2fae186fa1880f0448671a2042c6794d5df1ed347450eac380b78cc85d9.json"
   },
   {
     "file": "numeric/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "d7bbd4a0153ed7b16b76ddea74d59d4b90519ffa1708be8cbbae33c0af9b2ec2.json"
+    "asset": "bcad2923e1c8d89b6bfc3f13fbf31a8b786308b95e6b716a65219e5517c97504.json"
   },
   {
     "file": "otc-transcoders.rdf",
     "destination": "otc-transcoders",
-    "asset": "10c197e5803d1e34d6599678b9db580303c6a48cdba2f91a1bb156c07e577f05.json"
+    "asset": "669b8b10c85b966c502297d1ea7dd5ddb6f7e91cafe9e04ec360057f7bfd9934.json"
   },
   {
     "file": "rdfs/maestro-history-bookmark-schema.ttl",
     "destination": "ontology-cache",
-    "asset": "c7e1922dd40c7ba3b3e9bacb96d4eddcf82d9902fb684cb11b4abe882c1843f0.json"
+    "asset": "1723a157aa1ec0f2f05dfb9511294e127ccdc2d3d9741d4a4edb58eee8d2eaa0.json"
   },
   {
     "file": "rdfs/maestro-node-shape-hierarchy.ttl",
     "destination": "ontology-cache",
-    "asset": "b85b463f89791f61dccffe794d1556b4882502c6e17d6ae9c2c5c6f9a8cbb269.json"
+    "asset": "308782ee70301fcbd21cdd94606a3ec67e5e80c2d19bc48a7e02cee4ffab3037.json"
   },
   {
     "file": "rdfs/maestro-resource-metadata-ontology-cache.ttl",
     "destination": "ontology-cache",
-    "asset": "6bf29e7bcb1f1ba2d5cc8de3d21fff5b4b4ec640329a4f21253a4e4a062799c3.json"
+    "asset": "ca6d49b07bc3f56c4d7acf52bb04e4d2c30829ab27722a5de5e022870a7ccfd2.json"
   },
   {
     "file": "rdfs/maestro-ui-components.ttl",
     "destination": "shacl-policies",
-    "asset": "4f069e52d3d420b34e091dd270bcdf47a5dd521c14e89ccc262f0b544cb29ca4.json"
+    "asset": "be42c692b10946ff4b79e3dfb2a4ca79a1cdc0a6b53d5678043db43464f9bcc4.json"
   },
   {
     "file": "rdfs/maestro-ui-ontology.ttl",
     "destination": "ontology-cache",
-    "asset": "b6edd7f852f31243388bf7ec69f5c9deef3d19c9d2ad8cc492cc01f09e6f4447.json"
+    "asset": "aff69593f92869ac5b72b8a92aaa55b6c5df5b4a7462fb1c4bf70b3c2a1e05f6.json"
   },
   {
     "file": "sankey-d3/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "2916ad94d318aff19902775f418f2cf27930c745f6ffcda5b8737f8b0e237964.json"
+    "asset": "d8d9e44b493395ed6c8be736ff1a9bbb6e046318bb3989f6567c61c8a3a72870.json"
   },
   {
     "file": "sankey/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "f4442bf8ff0232121ccf386299cbf0f141e121df65b5ae77d8a64353ebfff0b6.json"
+    "asset": "510481d81c56c0e173320187523af13b5f94b1e1a6e73daf6465b087fc968b97.json"
   },
   {
     "file": "spider/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "8f7e38150f3302eb47f50e94e52ed08b2ea1f49bf2c62346635f4d4bb07959fb.json"
+    "asset": "959f053e90fd1b1627f921dd1c1d2f379b1105c392f8bd2a8ca40eaf524bb51d.json"
   },
   {
     "file": "sunburst-chartkit/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "5da6e2e83148fc10f14a71f0de285ad6411318ed5771234d1c08c7893e24a7d9.json"
+    "asset": "8f8e609665cca9f6a69d7d7e11161059ad82645e4f117c551664942f2165105a.json"
   },
   {
     "file": "sunburst/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "433feb40e16c5d4c7d134a80ce6245baf5ae3b2a1a72a366500ad1fdc3254140.json"
+    "asset": "b344bb34f40496d5c0d6c580d484a4aaf312a793f14b58660566fc076b42ef64.json"
   },
   {
     "file": "tag-cloud/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "b30aedc7df7086c1177463724e2d1d1ea86f87f22cc0dbf212cc09abfd260a73.json"
+    "asset": "10d6fde2414b2785c086b6f4e2d453ed8eb7e02b1104f7495282145929750dc9.json"
   }
 ]

@@ -11,6 +11,7 @@ function moduleFrom(rel, dependencies = {}, globals = {}) {
   const holder = { exports: {} };
   const code = ts.transpileModule(source(rel), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
   vm.runInNewContext(code, { module:holder, exports:holder.exports, require:id=>{
+    if(id==='./proxy-transport-observation') return require('./transport-test-loader.cjs').loadTransportObservation(globals);
     if(id==='@/lib/sparql-request-attribution') return moduleFrom('src/lib/sparql-request-attribution.ts',{},globals);
     assert.ok(id in dependencies,`unexpected dependency ${id}`);return dependencies[id];
   }, URL, Request, Headers, AbortController, setTimeout, clearTimeout, ...globals }, {filename:rel});
@@ -25,9 +26,10 @@ test('startup and Connect use one IndexedDB user-session restoration path; dialo
   assert.ok(controller.indexOf('deps.setAuthSession(session)')<controller.indexOf('await refreshAuthBootstrap(session,attempt.signal)'));
   assert.ok(controller.indexOf('await listPersonalGraphServers(attempt.signal)')<controller.indexOf('deps.setPersonalPoliciesReady(true)'));
   assert.match(controller,/handleLoginSubmit: async[\s\S]*?event\.preventDefault\(\)/);
-  assert.match(controller,/await ensureDigestSession\([\s\S]*?await restoreUserSession\(deps,attempt,bindings\)/);
+  assert.match(controller,/await preparePersonalSeed\([\s\S]*?await ensureDigestSession\([\s\S]*?initializeUserSession\(deps,attempt,bindings \? plan : undefined,bindings\)/);
   assert.match(controller,/void restoreUserSession\(deps,attempt\)/);
-  assert.doesNotMatch(controller,/setLoginDialogOpen\(true\)|seedPersonalGraphs\(/);
+  assert.doesNotMatch(controller,/setLoginDialogOpen\(true\)/);
+  assert.ok(controller.indexOf("await seedPersonalGraphs(")<controller.indexOf("await refreshAuthBootstrap("));
   const ui=source('src/canvas/top/appbar-pane.tsx');
   assert.match(ui,/<form onSubmit=\{handleLoginSubmit\}/);
   assert.match(ui,/onClick=\{\(\) => setLoginDialogOpen\(true\)\}/);
@@ -122,6 +124,9 @@ const loginInput={username:fixture.username,graphStore:fixture.graphStore,graphP
 const bootstrapQuery='SELECT ?section WHERE { BIND("probe" AS ?section) } LIMIT 3000';
 const bootstrapBindings=[{section:{type:'literal',value:'probe'}}];
 const bootstrapResult=()=>Response.json({head:{vars:['section']},results:{bindings:bootstrapBindings}});
+const seedQuery=`SELECT ?graph ?digest WHERE { VALUES ?graph { <${fixture.graphPrefix}/query/shacl/policies> } OPTIONAL { GRAPH ?graph { ?graph <gttp://ggg.maestro.ecosys/ns/ui#seedDigest> ?digest } } }`;
+const seedBindings=[{graph:{type:'uri',value:fixture.graphPrefix+'/query/shacl/policies'}}];
+const seedResult=()=>Response.json({head:{vars:['graph','digest']},results:{bindings:seedBindings}});
 const loginNonce={realm:'SPARQL',algorithm:'MD5',qop:'auth',nonce:'first-nonce',cnonce:'first-cnonce',opaque:null,nc:1};
 test('Connect ensures the same record, never resets nc, and Disconnect removes the key',async()=>{
   let requests=0;
@@ -131,7 +136,7 @@ test('Connect ensures the same record, never resets nc, and Disconnect removes t
     assert.equal(init.cache,'no-store');
     assert.equal(init.redirect,'error');
     const body=JSON.parse(init.body);
-    assert.equal(body.query,bootstrapQuery);
+    assert.equal(body.query,seedQuery);
     assert.equal(requests===1?body.operation:body.personalRead,requests===1?'auth-probe':true);
     const carrier=init.headers.Authorization;
     assert.ok(carrier.startsWith(records.DIGEST_SESSION_SCHEME));
@@ -139,15 +144,15 @@ test('Connect ensures the same record, never resets nc, and Disconnect removes t
     const identity=JSON.parse(decodeURIComponent(carrier.slice(records.DIGEST_SESSION_SCHEME.length)));
     assert.equal(identity.ha1,createHash('md5').update(`${fixture.username}:SPARQL:${loginInput.password}`).digest('hex'));
     if(requests===1){assert.deepEqual(Object.keys(identity).sort(),['graphPrefix','graphStore','ha1','username']);return Response.json(loginNonce,{status:401});}
-    assert.equal(identity.nonce,loginNonce.nonce);assert.equal(identity.nc,1);return bootstrapResult();
+    assert.equal(identity.nonce,loginNonce.nonce);assert.equal(identity.nc,1);return seedResult();
   });
   const signal=new AbortController().signal;
   assert.equal(await ctx.api.restoreDigestSession(signal),null);
   assert.equal(requests,0);
   assert.equal(ctx.map.size,0);
   const observed=[];
-  const result=await ctx.api.ensureDigestSession(loginInput,signal,status=>observed.push(status),bootstrapQuery,()=>observed.push('challenge sent'));
-  assert.deepEqual(JSON.parse(JSON.stringify(result)),bootstrapBindings);
+  const result=await ctx.api.ensureDigestSession(loginInput,signal,status=>observed.push(status),seedQuery,()=>observed.push('challenge sent'));
+  assert.deepEqual(JSON.parse(JSON.stringify(result)),seedBindings);
   assert.deepEqual(observed,['challenge sent',200]);
   assert.equal(requests,2);
   assert.equal(ctx.hashCalls(),1);
@@ -162,7 +167,7 @@ test('Connect ensures the same record, never resets nc, and Disconnect removes t
   assert.equal(ctx.api.restoredDigestSession(),session);
   const reserved=await ctx.api.reserveDigestRequest(session);
   assert.equal(reserved.nc,2);
-  await ctx.api.ensureDigestSession({...loginInput,password:''},signal,status=>observed.push(status),bootstrapQuery);
+  await ctx.api.ensureDigestSession({...loginInput,password:''},signal,status=>observed.push(status),seedQuery);
   assert.deepEqual(observed,['challenge sent',200], 'reuse does not invent an HTTP response');
   assert.equal(requests,2);
   assert.equal(ctx.hashCalls(),1);
@@ -195,7 +200,7 @@ test('A failed or cancelled Connect never stores a Digest record',async()=>{
 });
 test('URL load and Connect invoke the same restoration and graph hydration routine',async()=>{
   const calls=[];
-  let stored=false, snapshot;
+  let stored=false, snapshot, changed=false, failed=false;
   const session={authType:'sparql-auth',graphStore:fixture.graphStore,graphPrefix:fixture.graphPrefix,username:fixture.username,rememberMe:true};
   const init=moduleFrom('src/lib/personal-initialization.ts');
   const controller=moduleFrom('src/canvas/controllers/authentication.ts',{
@@ -203,9 +208,10 @@ test('URL load and Connect invoke the same restoration and graph hydration routi
     '@/lib/client-digest-session':{
       restoreDigestSession:async()=>{calls.push('restore');return stored?session:null;},
       withSessionInitializationLock:(_signal,fn)=>fn(),readSessionHydration:async()=>({snapshot,bootstrapBindings}),commitSessionSnapshot:async(_session,value)=>{calls.push('commit');snapshot=value;},restoredDigestSession:()=>stored?session:null,
-      ensureDigestSession:async()=>{calls.push('ensure');stored=true;return bootstrapBindings;},disconnectDigestSession:()=>{},subscribeDigestSessionChanges:()=>()=>{},requestDigestPersistence:()=>{}},
+      ensureDigestSession:async(_input,_signal,_status,query)=>{assert.equal(query,seedQuery);calls.push('ensure');stored=true;return seedBindings;},disconnectDigestSession:()=>{},subscribeDigestSessionChanges:()=>()=>{},requestDigestPersistence:()=>{}},
     '@/lib/personal-initialization':init,
-    '@/lib/client-auth-bootstrap':{authBootstrapSelect:()=>bootstrapQuery,hydrateAuthBootstrap:(_session,bindings)=>{assert.equal(bindings,bootstrapBindings);calls.push('hydrate');},refreshAuthBootstrap:async()=>{calls.push('bootstrap');}},
+    '@/lib/client-graph-seed':{preparePersonalSeed:async()=>{calls.push('prepare');return {query:seedQuery};},seedPersonalGraphs:async(_signal,plan,rows)=>{calls.push('seed');if(plan)assert.equal(rows,seedBindings);if(failed)throw Error('seed failed');return {revision:'seed1',changedGraphs:changed?['policies']:[]};}},
+    '@/lib/client-auth-bootstrap':{authBootstrapSelect:()=>bootstrapQuery,hydrateAuthBootstrap:(_session,bindings)=>{assert.equal(bindings,bootstrapBindings);calls.push('hydrate');},refreshAuthBootstrap:async()=>{calls.push('bootstrap');return bootstrapBindings;}},
     '@/lib/client-kinds':{loadMaestroKinds:async()=>{calls.push('kinds');},resetMaestroKinds:()=>{},currentSessionKinds:()=>[{id:'x',pattern:'x'}],restoreSessionKinds:()=>calls.push('restore kinds')},
     '@/lib/personal-auth':{graphForPrefix:p=>`${p}/query`,personalWriteEndpoint:()=>records.digestEndpoint(fixture)},
     '@/lib/personal-session-hint':{hydratePersonalHttpOutcome:()=>{}},
@@ -223,11 +229,17 @@ test('URL load and Connect invoke the same restoration and graph hydration routi
   calls.length=0;
   const action=controller.createAuthenticationActions(deps);
   await action.handleLoginSubmit({preventDefault(){calls.push('preventDefault');}});
-  assert.deepEqual(calls,['preventDefault','ensure','restore','loading','session','hydrate','kinds','directory','commit','ready']);
+  assert.deepEqual(calls,['preventDefault','prepare','ensure','restore','loading','session','seed','bootstrap','kinds','directory','commit','ready']);
   calls.length=0;
   controller.useAuthenticationSessionLifecycle(deps);
   await new Promise(resolve=>setImmediate(resolve));
-  assert.deepEqual(calls,['restore','loading','session','hydrate','restore kinds','ready']);
+  assert.deepEqual(calls,['restore','loading','session','seed','hydrate','restore kinds','ready']);
+  calls.length=0;changed=true;
+  await controller.restoreUserSession(deps,init.beginPersonalInitialization());
+  assert.deepEqual(calls,['restore','loading','session','seed','bootstrap','kinds','directory','commit','ready']);
+  calls.length=0;failed=true;
+  assert.equal(await controller.restoreUserSession(deps,init.beginPersonalInitialization()),false);
+  assert.deepEqual(calls,['restore','loading','session','seed','loading']);
 });
 test('installed devfans acquires the initial Digest challenge and generates the first verified nonce count',async()=>{
   const library=await import('digest-fetch');
@@ -267,6 +279,7 @@ test('Connect proxy returns challenge metadata and sends the actual authenticate
     const modules={};
     for(const m of source('src/app/proxy/api/sparql/route.ts').matchAll(/from\s+"([^"]+)"/g))modules[m[1]]={};
     Object.assign(modules,{
+      '@/lib/upstream-error':moduleFrom('src/lib/upstream-error.ts',{}, {Error}),
       '@/lib/personal-update-graph-guard':moduleFrom('src/lib/personal-update-graph-guard.ts'),
       '@/lib/constants/graphs':{GRAPH:{STATUS:'status'},resolveGraph:(key,base)=>`${base}#${key}`},
       '@/lib/digest-auth':{restoredDigestRecord:()=>authenticated?{...identity,...loginNonce}:null,initialDigestIdentity:()=>identity,initialDigestRecord:()=>({...identity,...loginNonce}),restoredDigestAuthorization:()=> 'Digest test-authorization',staleDigestRecord:()=>stale?{...identity,...loginNonce,nonce:'renewed-nonce'}:null,digestRecordAuthorization:()=> 'Digest test-authorization'},
@@ -281,7 +294,7 @@ test('Connect proxy returns challenge metadata and sends the actual authenticate
       '@/lib/query-cache':{queryCacheKey:()=> 'test',getQueryCache:()=>{throw Error('authentication must bypass cache');},setQueryCache:()=>{throw Error('authentication must not populate cache');}},
       '@/lib/graph-server-target':{permittedGraphServerTarget:ep=>ep===endpoint,checkGraphServerDestination:async ep=>assert.equal(ep,endpoint)},
       '@/lib/maestro-logger':{proxyLog:()=>{},proxyFailure:(_req,_route,error)=>{throw error;}},
-      '@/lib/virtuoso-anytime':{isVirtuosoAnytime:()=>false},
+      '@/lib/virtuoso-anytime':moduleFrom('src/lib/virtuoso-anytime.ts'),
       '@/lib/sparql-read-guard':{isBoundedReadOnlySparql:q=>q===bootstrapQuery},
     });
     const route=moduleFrom('src/app/proxy/api/sparql/route.ts',modules,{AbortSignal,Response,URLSearchParams,fetch:async(url,init)=>{
@@ -296,6 +309,8 @@ test('Connect proxy returns challenge metadata and sends the actual authenticate
   assert.equal(challenge.calls.length,1);
   const success=await run([validJson()],true);
   assert.equal(success.response.status,200);
+  assert.equal(success.response.headers.get('x-maestro-upstream-source'),'network');
+  assert.equal(success.response.headers.get('x-maestro-upstream-status'),'200');
   assert.deepEqual((await success.response.json()).results.bindings,bootstrapBindings);
   assert.equal(success.calls.length,1);
   for(const {url,init} of [...challenge.calls,...success.calls]){
@@ -310,10 +325,12 @@ test('Connect proxy returns challenge metadata and sends the actual authenticate
   assert.equal(success.calls[0].init.headers.Authorization,'Digest test-authorization');
   const rejected=await run([denied()],true);
   assert.equal(rejected.response.status,401);
+  assert.equal(rejected.response.headers.get('x-maestro-upstream-status'),'401');
   assert.equal(rejected.calls.length,1);
   assert.ok(!Object.hasOwn(await rejected.response.json(),'nonce'));
   const recovered=await run([denied(),validJson()],true,true);
   assert.equal(recovered.response.status,200);assert.equal(recovered.calls.length,2);
+  assert.equal(recovered.response.headers.get('x-maestro-upstream-status'),'200','only final Digest result is authoritative');
   const metadata=JSON.parse(decodeURIComponent(recovered.response.headers.get('x-maestro-digest-refresh')));
   assert.equal(metadata.nonce,'renewed-nonce');assert.equal(metadata.nc,1);assert.ok(!Object.hasOwn(metadata,'ha1'));
   const exhausted=await run([denied(),denied()],true,true);
@@ -334,6 +351,7 @@ test('Connect proxy returns challenge metadata and sends the actual authenticate
     assert.equal(rejectedWrite.response.status,400);assert.equal(rejectedWrite.calls.length,0);
   }
   const unauthWrite=await run([],false,false,write);assert.equal(unauthWrite.response.status,401);assert.equal(unauthWrite.calls.length,0);
+  assert.equal(unauthWrite.response.headers.get('x-maestro-upstream-status'),null,'proxy-generated 401 is not upstream authentication evidence');
   const anonymous=await run([validJson()]);
   assert.equal(anonymous.response.status,502);
   assert.equal(anonymous.calls.length,1);
@@ -386,7 +404,7 @@ test('Connect proxy returns challenge metadata and sends the actual authenticate
    const signal=new AbortController().signal;
    await ctx.api.ensureDigestSession(loginInput,signal,undefined,bootstrapQuery);
    const session=await ctx.api.restoreDigestSession(signal);
-   const snapshot={bindings:bootstrapBindings,kinds:[{id:'x',pattern:'x'}],servers:[],completedAt:100};
+   const snapshot={bindings:bootstrapBindings,kinds:[{id:'x',pattern:'x'}],servers:[],completedAt:100,seedRevision:'seed1'};
    await ctx.api.commitSessionSnapshot(session,snapshot,signal);
    assert.equal(ctx.map.get(records.DIGEST_SESSION_KEY).bootstrapBindings,undefined);
    const reserved=await ctx.api.reserveDigestRequest(session);

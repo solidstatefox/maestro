@@ -11,14 +11,17 @@ function harness(stream) {
   const mod = {exports:{}};
   let started=0, completed=0;
   const calls=[];
+  const network = async (url, options) => { calls.push({url, options}); return new Response(stream,{headers:{'content-type':'text/event-stream'}}); };
+  const observation = require('./transport-test-loader.cjs').loadTransportObservation({fetch:network});
   vm.runInNewContext(js, {
     module:mod,exports:mod.exports,require(name) {
+      if (name === './proxy-transport-observation') return observation;
       if (name.endsWith('maestro-query-execution-clock')) return {
         beginMaestroQueryExecution: () => {started++; return () => {completed++;};}
       };
       throw Error(`Unexpected dependency ${name}`);
     },
-    fetch: async (url, options) => { calls.push({url, options}); return new Response(stream,{headers:{'content-type':'text/event-stream'}}); },
+    fetch: network,
     TextDecoder, TextEncoder, ReadableStream, Response, Headers, DOMException,
     AbortController, AbortSignal, Map, Set, Promise, JSON, setTimeout, clearTimeout,
   });

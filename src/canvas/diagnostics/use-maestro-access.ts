@@ -6,6 +6,7 @@ import type { PersonalAuthSession } from "@/lib/personal-auth";
 import { loadClientStatusMachines } from "@/lib/status-machine-client";
 import { machineForTarget } from "@/lib/status-machine-runtime";
 import { createMaestroAccessController } from "@/lib/app-lifecycle/access";
+import { lastProxyTransportObservation, PROXY_TRANSPORT_EVENT } from "@/lib/proxy-transport-observation";
 import { lastPersonalHttpOutcome, PERSONAL_AUTH_OUTCOME } from "@/lib/personal-session-hint";
 
 /** The session resolver is the authentication authority. XState owns all UI
@@ -32,6 +33,11 @@ export function useMaestroAccess(session: PersonalAuthSession | null, restored: 
     controller.start();
     return () => controller.stop();
   }, [controller]);
+  useEffect(() => {
+    const observe = () => { const latest=lastProxyTransportObservation(); if(latest)controller.send({type:"PROXY_TRANSPORT_OBSERVED",state:latest.state}); };
+    observe();window.addEventListener(PROXY_TRANSPORT_EVENT,observe);
+    return ()=>window.removeEventListener(PROXY_TRANSPORT_EVENT,observe);
+  },[controller]);
   useLayoutEffect(() => {
     controller.send({ type: "SESSION_OBSERVED", restored, sessionKey });
   }, [controller, restored, sessionKey]);
@@ -97,11 +103,11 @@ export function useMaestroAccess(session: PersonalAuthSession | null, restored: 
     const isTransition = previous.sessionKey !== sessionKey || previous.stage !== stage || previous.error !== snapshot.context.policyError;
     lastNotifiedStageRef.current = {sessionKey,stage,error:snapshot.context.policyError};
     if (stage === "ready" && isTransition) {
-      toast.add({ title: "Personal graphs ready", description: "Personal graph reads and State-machine verification completed.", type: "success" });
+      toast.add({ title: "Personal graphs ready", description: "Personal graph reads and state machine verification completed.", type: "success" });
     }
     if (stage === "failed") {
       if (isTransition) {
-        toast.add({title: "Personal initialization failed", description: snapshot.context.policyError || "State-machine verification failed.", type: "error"});
+        toast.add({title: "Personal initialization failed", description: snapshot.context.policyError || "state machine verification failed.", type: "error"});
       }
     }
   }, [sessionKey, snapshot.context.sessionKey, snapshot.context.policyStage, snapshot.context.policyError]);

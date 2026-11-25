@@ -16,7 +16,8 @@ test('Record uses formatted shadcn Skeleton until selection is confirmed without
  assert.match(pane,/state="unconfirmed"/);
  assert.match(pane,/<FormattedRecordSkeleton/);
  assert.doesNotMatch(pane,/<Empty\b/);
- assert.match(pane,/recordIdentityPending \|\| \(!selectedUri && !recordSelectionCleared\)/);
+ assert.match(pane,/!selectedUri && !recordSelectionCleared && !recordIdentityPending/);
+ assert.match(pane,/\(isDescribing \|\| isLoadingRecordPolicy \|\| isFormattingRecord \|\| isValidatingRecord\)/);
  assert.match(skeleton,/data-maestro-record-skeleton="formatted"/);
  assert.match(skeleton,/ElapsedStatus/);
  assert.match(skeleton,/Skeleton/);

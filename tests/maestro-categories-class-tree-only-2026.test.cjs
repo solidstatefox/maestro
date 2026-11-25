@@ -5,7 +5,7 @@ const src=fs.readFileSync('src/canvas/utils/workspace-controller.tsx','utf8');
 const categories=fs.readFileSync('src/canvas/left/filter-pane.tsx','utf8');
 const ts=require('typescript');
 test('Categories hierarchy toggle persists in canonical FCT query',()=>{
-  assert.match(categories,/setQueryAttribute\("classTree", categoriesTreeMode \? "false" : "true"\)/);
+  assert.match(categories,/setQueryAttribute\("classTree",\s*categoriesTreeMode\s*\?\s*"false"\s*:\s*"true"\)/);
   assert.match(src,/const queryXml = serializeFctQuery\(queryTree\)/);
 });
 test('Derived Results, counts, Alphabet and other facets ignore category-only layout attribute',()=>{

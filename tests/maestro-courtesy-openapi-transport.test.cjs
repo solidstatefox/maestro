@@ -73,7 +73,7 @@ test('the browser uses the three local OpenAPI operations and has no old routes'
   assert.doesNotMatch(ws,/graphServerDigest=/);
   for(const name of ['events','observations']) assert.equal(fs.existsSync(`src/app/proxy/api/${name}/route.ts`),false);
   assert.match(read('src/lib/proxy-query-telemetry.ts'),/openProxyQueryTelemetry\(request: Request, explicitId\?/);
-  assert.doesNotMatch(read('src/canvas/controllers/authentication.ts'),/setLoginDialogOpen\(true\)|seedPersonalGraphs/);
+  assert.doesNotMatch(read('src/canvas/controllers/authentication.ts'),/setLoginDialogOpen\(true\)/);
 });
 
 test('public Browse query identities use addr URL, not transient menu IDs',()=>{

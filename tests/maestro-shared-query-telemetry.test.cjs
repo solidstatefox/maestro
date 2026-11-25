@@ -12,9 +12,11 @@ function loadTypescript(relative, imports, globals = {}) {
     module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
   } }).outputText;
   const module = { exports: {} };
+  const observation = require('./transport-test-loader.cjs').loadTransportObservation(globals);
   vm.runInNewContext(js, {
     module, exports: module.exports,
     require(name) {
+      if (name === './proxy-transport-observation') return observation;
       if (Object.hasOwn(imports, name)) return imports[name];
       throw new Error('Unexpected dependency: ' + name);
     },

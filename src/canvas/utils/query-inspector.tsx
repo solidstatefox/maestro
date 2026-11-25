@@ -1,4 +1,5 @@
 "use client";
+import { facetButtonFactory, completeFacetButton } from "@/components/ui/facet-button-factory";
 import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
 
 import { ErrorDetails } from "@/components/ui/error-details";
@@ -27,6 +28,8 @@ export function QueryInspectorButton({
   toolbarButton = false,
   primaryTabLabel,
   addr,
+  controlledOpen,
+  onControlledOpenChange,
 }: {
   query: string;
   language?: "xml" | "sparql";
@@ -40,9 +43,14 @@ export function QueryInspectorButton({
   toolbarButton?: boolean;
   primaryTabLabel?: string;
   addr?: string;
+  controlledOpen?: boolean;
+  onControlledOpenChange?: (open:boolean)=>void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open=controlledOpen??localOpen;
+  const setOpen=onControlledOpenChange??setLocalOpen;
   const [activeTab, setActiveTab] = useState<string>("widget");
+  useEffect(()=>{if(open)setActiveTab("widget");},[open]);
   const [execution, setExecution] = useState<{ code: string; error: string; loading: boolean }>({ code: "", error: "", loading: false });
   useEffect(() => { setExecution({ code: "", error: "", loading: false }); }, [activeTab, displayedQueryIdentity(query, extraQueries, addr, countAddr)]);
   const sourceAddr = language === "xml" ? fctQueryExecutionAddress(query) : undefined;
@@ -76,14 +84,7 @@ export function QueryInspectorButton({
   };
   if (!query.trim()) return null;
   const inspectorButton = (
-    <button
-      type="button"
-      onClick={() => { setActiveTab("widget"); setOpen(true); }}
-      aria-label={`${label}: ${filename}`}
-      className={`inline-flex ${toolbarButton ? "size-7 rounded border" : "size-7 rounded border"} shrink-0 items-center justify-center ${toolbarButton ? "" : "opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/header:opacity-100"} ${headerTone ? "border-sky-700 bg-sky-800 text-sky-50 hover:bg-sky-700 hover:text-sky-50 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100 dark:hover:bg-sky-900" : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground"}`}
-    >
-      <Code2 className="size-4" aria-hidden="true" />
-    </button>
+    completeFacetButton(facetButtonFactory(<Code2 className="size-4" aria-hidden="true" />), {"type":"button", "onClick":(() => { setActiveTab("widget"); setOpen(true); }), "aria-label":(`${label}: ${filename}`), "className":(`inline-flex ${toolbarButton ? "size-7 rounded border" : "size-7 rounded border"} shrink-0 items-center justify-center ${toolbarButton ? "" : "opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/header:opacity-100"} ${headerTone ? "border-sky-700 bg-sky-800 text-sky-50 hover:bg-sky-700 hover:text-sky-50 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100 dark:hover:bg-sky-900" : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground"}`)})
   );
   return (
     <>

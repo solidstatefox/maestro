@@ -8,7 +8,7 @@ import { ButtonGroup } from "@/components/ui/button-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Activity } from "@/components/heatmap/calendar-heatmap";
 import { CalendarHeatmap, CalendarHeatmapBlock, CalendarHeatmapBody,
-  CalendarHeatmapFooter, CalendarHeatmapLegend, CalendarHeatmapStat } from "@/components/heatmap/calendar-heatmap";
+  CalendarHeatmapFooter, CalendarHeatmapLegend } from "@/components/heatmap/calendar-heatmap";
 import type { WeekdayHourlyActivity } from "@/components/heatmap/weekday-heatmap";
 import { WeekdayHeatmap, WeekdayHeatmapBlock, WeekdayHeatmapBody,
   WeekdayHeatmapFooter, WeekdayHeatmapLegend, WeekdayHeatmapStat } from "@/components/heatmap/weekday-heatmap";
@@ -16,8 +16,7 @@ import type { DateHourlyActivity } from "@/components/heatmap/date-heatmap";
 import { DateHeatmap, DateHeatmapBlock, DateHeatmapBody,
   DateHeatmapFooter, DateHeatmapLegend, DateHeatmapStat } from "@/components/heatmap/date-heatmap";
 
-/** Both saved-entry perspectives use their COMPLETE collected activity, not the
- * currently visible page. Missing cells are truly zero; no sample data. */
+/** Activity is computed only from the current authoritative Results page. */
 export type PerspectiveActivity = { created: string };
 export type CalendarLevel = "year" | "month" | "week" | "day";
 type Layout = "calendar" | "weekday" | "date";
@@ -138,7 +137,7 @@ export function PerspectiveCalendarHeatmap({ rows, queryXml, onDayFilter }: {
           variant={layout === name ? "secondary" : "outline"} aria-pressed={layout === name}
           onClick={() => setLayout(name)}>{name === "calendar" ? "Calendar" : name === "weekday" ? "Weekday" : "Date"}</Button>)}
       </ButtonGroup>
-      <strong>{layout === "date" ? `${format(parseISO(dateStart), "MMM d")} – ${format(parseISO(period), "MMM d, yyyy")}` : year}</strong>
+      {layout !== "calendar" && <strong>{layout === "date" ? `${format(parseISO(dateStart), "MMM d")} – ${format(parseISO(period), "MMM d, yyyy")}` : year}</strong>}
       <div className="ml-auto flex items-center gap-1">
         {activeDay && <Button size="xs" variant="ghost" onClick={() => filterDay(activeDay)}>Clear selected day</Button>}
         <Button variant="outline" size="icon-xs" aria-label="Previous heatmap period" onClick={() => move(-1)}><ChevronLeft className="size-3.5"/></Button>
@@ -148,14 +147,14 @@ export function PerspectiveCalendarHeatmap({ rows, queryXml, onDayFilter }: {
     <div className="max-w-full overflow-x-auto">
       {layout === "calendar" ? <CalendarHeatmap data={calendar} blockSize={9} blockMargin={2} blockRadius={1}
         colors={{ scale: "oklch(0.55 0.15 145)" }}>
-        <CalendarHeatmapBody yearClassName="text-base font-semibold">{({ activity: cell, dayIndex, weekIndex }) => <Tooltip>
+        <CalendarHeatmapBody yearClassName="text-base font-semibold" renderYearHeading={({year,totalCount})=>`${year} (${totalCount.toLocaleString()} contribution${totalCount === 1 ? "" : "s"})`}>{({ activity: cell, dayIndex, weekIndex }) => <Tooltip>
           <TooltipTrigger tabIndex={0} render={<CalendarHeatmapBlock activity={cell} dayIndex={dayIndex} weekIndex={weekIndex}
             onCellClick={() => filterDay(cell.date)} />}/>
           <TooltipContent side="top" sideOffset={6} className="pointer-events-none text-xs">
             {tooltip(format(parseISO(cell.date), "PPP"), cell.value)}
           </TooltipContent>
         </Tooltip>}</CalendarHeatmapBody>
-        <CalendarHeatmapFooter><CalendarHeatmapStat/><CalendarHeatmapLegend/></CalendarHeatmapFooter>
+        <CalendarHeatmapFooter><CalendarHeatmapLegend/></CalendarHeatmapFooter>
       </CalendarHeatmap> : layout === "weekday" ? <WeekdayHeatmap data={weekday}
         labels={{ cellLabel: "{{weekday}} {{hour}}: {{value}} saved entries" }} isNormalized
         colors={{ scale: "oklch(0.65 0.18 45)" }}
@@ -187,6 +186,6 @@ export function PerspectiveCalendarHeatmap({ rows, queryXml, onDayFilter }: {
           <DateHeatmapLegend labels={{ less: "Fewer", more: "More" }}/></DateHeatmapFooter>
       </DateHeatmap>}
     </div>
-    <p className="mt-1 text-[11px] text-muted-foreground">Counts from the complete saved-entry collection. Hours are UTC.</p>
+    <p className="mt-1 text-[11px] text-muted-foreground">Counts from the current Results page only, not the entire collection. Hours are UTC.</p>
   </section>;
 }

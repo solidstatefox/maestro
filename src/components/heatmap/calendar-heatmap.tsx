@@ -645,6 +645,7 @@ export type CalendarHeatmapBodyProps = Omit<
   className?: string;
   labelClassName?: string;
   yearClassName?: string;
+  renderYearHeading?: (props: { year: number; totalCount: number }) => ReactNode;
   children: (props: {
     activity: ActivityWithLevel;
     dayIndex: number;
@@ -660,6 +661,7 @@ export const CalendarHeatmapBody = ({
   className,
   labelClassName,
   yearClassName,
+  renderYearHeading,
   children,
   renderYearFooter,
   ...props
@@ -728,7 +730,7 @@ export const CalendarHeatmapBody = ({
         <div key={`year-row-${yearRow.year}`}>
           {!hideYearLabels && (
             <div className={cn("text-muted-foreground mb-2", yearClassName)}>
-              {yearRow.year}
+              {renderYearHeading ? renderYearHeading({year: yearRow.year, totalCount: yearTotalCount}) : yearRow.year}
             </div>
           )}
           <svg

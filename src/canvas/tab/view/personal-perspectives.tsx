@@ -1,5 +1,4 @@
 "use client";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { PerspectiveCalendarHeatmap } from "@/canvas/tab/view/perspective-calendar-heatmap";
 import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
@@ -8,7 +7,7 @@ import { ErrorDetails } from "@/components/ui/error-details";
 import { manageAppbarButtons } from "@/lib/client-appbar-buttons";
 import { loadPerspectiveCollection } from "@/lib/client-perspective-collections";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Trash2, RefreshCw, Pin, PinOff, Play, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, Trash2, RefreshCw, Pin, PinOff, Play } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import { createPortal } from "react-dom";
@@ -18,11 +17,9 @@ import { ButtonGroup } from "@/components/ui/button-group";
 import { Input } from "@/components/ui/input";
 import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
 import { toLabel } from "@/lib/uri-labels";
-import { cachedFetchFct } from "@/lib/client-query-cache";
-import { readFctResponse } from "@/canvas/utils/fct-response";
 import { deletePerspectiveEntries } from "@/lib/perspective-delete";
-import { snapshotFctQueryXml } from "@/lib/fct-query-api";
 import { parseFctQueryXml } from "@/canvas/utils/query-controller";
+import type { DiscoveredViewProvider } from "@/lib/personal-sparql-reads";
 import { bookmarkAtCurrentHost } from "@/lib/bookmark-host-handoff";
 
 /** Browser Fetch may report an AbortSignal cancellation as a TypeError rather
@@ -46,17 +43,10 @@ type IconSlot = { element: HTMLElement; icon: IconName };
 type PinSlot = { element: HTMLElement; id: string; pinned: boolean };
 type ActionSlot = { element: HTMLElement; id: string; action: "select" | "delete"; selected: boolean };
 type BookmarkActionSlot = { element: HTMLElement; id: string; pinned: boolean; pinEnabled: boolean };
-const PERSPECTIVE_PAGE_SIZES = [10, 20, 50, 100] as const;
 
-/** A shortcut points to a saved Bookmark IRI. Resolve that exact identity first.
- * For pre-existing providers whose action IRI no longer matches the returned
- * collection entry, the stored share URL can identify the entry ONLY when it
- * is unique within the collection; never guess from label or query text. */
-function bookmarkShortcut(entry: Entry, buttons: AppbarButton[], rows: Entry[]): AppbarButton | undefined {
-  const exact = buttons.find(button => button.action === entry.uri);
-  if (exact) return exact;
-  if (!entry.url || rows.filter(row => row.url === entry.url).length !== 1) return undefined;
-  return buttons.find(button => button.url === entry.url && !rows.some(row => row.uri === button.action));
+/** A page cannot establish global URL uniqueness. Match the exact Bookmark IRI. */
+function bookmarkShortcut(entry: Entry, buttons: AppbarButton[], _rows: Entry[]): AppbarButton | undefined {
+  return buttons.find(button => button.action === entry.uri);
 }
 
 
@@ -82,100 +72,28 @@ function queryStats(xml: string) {
   return { depth: String(depth), avgSiblings, rootClasses, searchText, signal };
 }
 
-/** SHACL provider discovery drives this collection UI. Actions are interpreted by React, not XSLT. */
-/** Project the live constraints onto the root resource (the saved-item IRI).
- * The list's own <view> may be on a property, but bookmark/history entries
- * must be intersected against resources satisfying the whole FCT query. */
-function rootResourceQuery(xml: string): string | null {
-  const doc = new DOMParser().parseFromString(snapshotFctQueryXml(xml, "data"), "application/xml");
-  if (doc.querySelector("parsererror") || doc.documentElement.localName !== "query") return null;
-  const root = doc.documentElement;
-  const isConstrained = Array.from(root.children).some(el => ["class", "property", "property-of", "text", "status", "value"].includes(el.localName));
-  if (!isConstrained) return null;
-  for (const view of Array.from(root.getElementsByTagName("*"))) if (view.localName === "view") view.remove();
-  const view = doc.createElementNS(root.namespaceURI, "view");
-  view.setAttribute("type", "list"); view.setAttribute("limit", "500"); view.setAttribute("offset", "0");
-  root.appendChild(view);
-  return new XMLSerializer().serializeToString(doc);
-}
-export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBrowse, onOpenShareUrl }: { active: boolean; kind: "bookmarks" | "history"; providerUri: string; queryXml: string; onBrowse: () => void; onOpenShareUrl: (url: string) => boolean }) {
+/** The selected, approved Perspective consumes the same page as Browse. */
+export function PersonalPerspectives({ active, kind, provider, queryXml, pageRows, pageKey, onReload, onBrowse, onOpenShareUrl }: { active: boolean; kind: "bookmarks" | "history"; provider: DiscoveredViewProvider; queryXml: string; pageRows: readonly {uri:string;title:string}[]; pageKey:string; onReload:()=>void; onBrowse: () => void; onOpenShareUrl: (url: string) => boolean }) {
+  const providerUri = provider.uri;
+  const [loadedSignature,setLoadedSignature]=useState("");
   const [collection, setCollection] = useState<Collection | null>(null);
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState<number>(20);
   const [calendarDay, setCalendarDay] = useState<string | null>(null);
-  const onCalendarFilter = useCallback((date: string | null) => { setCalendarDay(date); setPage(0); }, []);
+  const onCalendarFilter = useCallback((date: string | null) => { setCalendarDay(date); }, []);
   const [selected, setSelected] = useState<string[]>([]);
   const [html, setHtml] = useState("");
   const [renderedSignature, setRenderedSignature] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [revision, setRevision] = useState(0);
   const [notLoggedIn, setNotLoggedIn] = useState(false);
-  const loadedProviderIdentity = useRef("");
   const [appbarButtons, setAppbarButtons] = useState<AppbarButton[]>([]);
+  const pinnedRows = kind === "bookmarks" ? appbarButtons.filter(button => /^(?:https?:|gttps?:|urn:)/.test(button.action)).filter(button => Boolean(button.url)).map(button => ({uri:button.action,title:button.tooltip})) : [];
+  const pageSignature=JSON.stringify([pageKey,queryXml,provider.uri,provider.stylesheet,pageRows,pinnedRows]);
   const resultsRef = useRef<HTMLDivElement>(null);
   const [iconSlots, setIconSlots] = useState<IconSlot[]>([]);
   const [pinSlots, setPinSlots] = useState<PinSlot[]>([]);
   const [actionSlots, setActionSlots] = useState<ActionSlot[]>([]);
   const [bookmarkActionSlots, setBookmarkActionSlots] = useState<BookmarkActionSlot[]>([]);
-  const [matchingResources, setMatchingResources] = useState<{ scope: string; ids: Set<string> } | null>(null);
-  const [scopeLoading, setScopeLoading] = useState(false);
-  const scopedQuery = useMemo(() => typeof DOMParser === "undefined" ? null : rootResourceQuery(queryXml), [queryXml]);
-  useEffect(() => {
-    const controller = new AbortController();
-    // Scope results are associated with their exact FCT XML; never display a
-    // prior scope as if it were validated for the new query. Retain the old
-    // result until the new result arrives to avoid needless re-projections.
-    if (!active || !scopedQuery) { setScopeLoading(false); return () => controller.abort(); }
-    // A prior scope's error is not evidence that this FCT scope failed.
-    setError("");
-    setScopeLoading(true);
-    void (async () => {
-      try {
-        const ids = new Set<string>();
-        // Enumerate matching root resources, not projected property values.
-        // Continue through complete pages rather than filtering only page one.
-        const parser = new DOMParser();
-        for (let offset = 0; offset < 5000; offset += 500) {
-          const doc = parser.parseFromString(scopedQuery, "application/xml");
-          const view = Array.from(doc.getElementsByTagName("*" )).find(el => el.localName === "view");
-          if (!view) break;
-          view.setAttribute("offset", String(offset));
-          // Global query navigation can abort an otherwise current Perspective
-          // request without aborting this component's own signal. Retry once
-          // through the SAME FCT transport; never retry a genuine HTTP error.
-          const run = () => cachedFetchFct("/proxy/api/fct", {
-            method: "POST", cache: "no-store", signal: controller.signal,
-            headers: { "Content-Type": "text/xml; charset=utf-8", "X-Maestro-Query-Label": `PerspectiveScope:${kind}` },
-            body: new XMLSerializer().serializeToString(doc),
-          });
-          let response: Response;
-          try { response = await run(); }
-          catch (cause) {
-            if (!isPerspectiveCancellation(cause, controller.signal) || controller.signal.aborted) throw cause;
-            // Yield to the navigation transaction so its query pipeline can
-            // resume before the retry. A second cancellation is handled below.
-            await new Promise<void>(resolve => setTimeout(resolve, 100));
-            if (controller.signal.aborted) return;
-            response = await run();
-          }
-          if (!response.ok) throw new Error(`Perspective scope query returned HTTP ${response.status}`);
-          const data = await readFctResponse(response);
-          if (data.error) throw new Error(String(data.error));
-          if (controller.signal.aborted) return;
-          for (const columns of data.rows) if (columns[0]?.value) ids.add(columns[0].value);
-          if (data.rows.length < 500) break;
-          if (offset === 4500) throw new Error("The current query has more than 5000 matching resources. Narrow the query to filter this perspective precisely.");
-        }
-        if (!controller.signal.aborted) setMatchingResources({ scope: scopedQuery, ids });
-      } catch (cause) {
-        if (!isPerspectiveCancellation(cause, controller.signal))
-          setError(cause instanceof Error ? cause.message : "Could not apply current query to perspective");
-      } finally { if (!controller.signal.aborted) setScopeLoading(false); }
-    })();
-    return () => controller.abort();
-  }, [active, scopedQuery, kind]);
   const [appbarCandidate, setAppbarCandidate] = useState("");
   const [appbarTooltip, setAppbarTooltip] = useState("");
   const [appbarIcon, setAppbarIcon] = useState("bookmark");
@@ -200,20 +118,13 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
   useEffect(() => {
     if (!active || !kind) return;
     const controller = new AbortController();
-    // A same-provider refresh should not erase a previously loaded collection
-    // before the replacement arrives. That produced blank Bookmarks/History
-    // cards during provider validation/reentry. Never retain results when
-    // switching to a different provider identity.
-    const identity = `${kind}\u0000${providerUri}`;
-    if (loadedProviderIdentity.current !== identity) {
-      loadedProviderIdentity.current = identity;
-      setCollection(null); setHtml(""); setSelected([]); setPage(0);
-    }
+    // Never retain another page's collection or actions while enrichment is pending.
+    setCollection(null); setHtml(""); setSelected([]); setAppbarCandidate(""); setLoadedSignature("");
     setLoading(true); setError(""); setNotLoggedIn(false);
     void (async () => {
       try {
-        const data = await loadPerspectiveCollection(kind, providerUri, controller.signal);
-        if (!controller.signal.aborted) setCollection(data);
+        const data = await loadPerspectiveCollection(kind, provider, queryXml, pageRows, controller.signal, pinnedRows);
+        if (!controller.signal.aborted) { setCollection(data); setLoadedSignature(pageSignature); }
       } catch (err) {
         if (!isPerspectiveCancellation(err, controller.signal)) {
           const message = err instanceof Error ? err.message : "Loading failed";
@@ -227,29 +138,23 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
       finally { if (!controller.signal.aborted) setLoading(false); }
     })();
     return () => controller.abort();
-  }, [active, kind, providerUri, revision]);
-  const scopeIsReady = !scopedQuery || matchingResources?.scope === scopedQuery;
-  const filtered = useMemo(() => [...(collection?.rows ?? [])]
-    .filter(row => !scopedQuery || (matchingResources?.scope === scopedQuery && matchingResources.ids.has(row.uri)))
-    .sort((a,b) => Number(Boolean(bookmarkShortcut(b, appbarButtons, collection?.rows ?? []))) - Number(Boolean(bookmarkShortcut(a, appbarButtons, collection?.rows ?? []))))
+  }, [active, pageSignature]);
+  const scopeIsReady = loadedSignature === pageSignature;
+  const filtered = useMemo(() => (scopeIsReady ? collection?.rows ?? [] : [])
     .filter(row => (!calendarDay || row.created.slice(0,10) === calendarDay) && [row.label, row.description, row.url, row.created, ...(row.tags ?? []), row.queryXml].some(v => v.toLowerCase().includes(search.toLowerCase().trim()))),
-    [collection, search, calendarDay, appbarButtons, scopedQuery, matchingResources]);
-  // Both approved mui:Providers render one page at a time from the *complete*
-  // retrieved collection. Paging happens after FCT scope and search filtering.
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const currentPage = Math.min(Math.max(0, page), totalPages - 1);
-  const visible = useMemo(() => filtered.slice(currentPage * pageSize,
-    (currentPage + 1) * pageSize), [filtered, currentPage, pageSize]);
+    [collection, search, calendarDay, scopeIsReady]);
+  const visible = filtered;
   // A previously rendered XSLT collection must never be shown under a new
   // FCT scope or search. Rendering is async and can complete after a ribbon
   // or query change; identify the *source* of the markup, not its React node.
   const contentSignature = useMemo(() => JSON.stringify([
-    kind, providerUri, scopedQuery, visible.map(row => row.uri), selected,
+    kind, providerUri, pageSignature, visible, selected,
     appbarButtons.map(button => [button.uri, button.action, button.icon]),
-  ]), [kind, providerUri, scopedQuery, visible, selected, appbarButtons]);
+  ]), [kind, providerUri, pageSignature, visible, selected, appbarButtons]);
   useEffect(() => {
     if (!collection || !scopeIsReady) return;
     let current = true;
+    const renderController = new AbortController();
     void renderDiscoveredViewXslt(collection.provider.stylesheet, visible.map(row => ({
       appbarIcon: kind === "bookmarks" ? bookmarkShortcut(row, appbarButtons, collection.rows)?.icon : undefined,
       uri: row.uri, label: row.label, created: row.created, description: row.description, url: row.url, selected: selected.includes(row.uri),
@@ -258,12 +163,12 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
       tags: (row.tags ?? []).join(", "), ...queryStats(row.queryXml),
       lastResultCount: row.lastResultCount == null ? "" : String(row.lastResultCount),
       lastNewCount: row.lastNewCount == null ? "" : String(row.lastNewCount),
-    }))).then(markup => {
+    })), {signal:renderController.signal}).then(markup => {
       if (!current) return;
       setHtml(markup);
       setRenderedSignature(contentSignature);
     }).catch(err => { if (current) setError(err instanceof Error ? err.message : "Rendering failed"); });
-    return () => { current = false; };
+    return () => { current = false; renderController.abort(); };
   }, [collection, visible, selected, appbarButtons, kind, contentSignature, scopeIsReady]);
   // The saved bookmark link is never silently rewritten. Offer an explicit
   // same-app navigation option only when its HTTP(S) origin differs from ours.
@@ -342,9 +247,9 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
     setLoading(true);
     try {
       await deletePerspectiveEntries(kind, ids);
-      setSelected([]); setRevision(v => v + 1);
+      setSelected([]); onReload();
     } catch (err) { setError(err instanceof Error ? err.message : "Delete failed"); setLoading(false); }
-  }, [kind]);
+  }, [kind,onReload]);
   const open = useCallback((id: string) => {
     const row = collection?.rows.find(r => r.uri === id);
     if (!row) return;
@@ -375,29 +280,19 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
   if (!active) return null;
   return <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
     <div className="flex min-w-0 shrink-0 items-center gap-2 border-b px-2 py-2" aria-label={`${kind} search and pagination`}>
-      <div className="relative min-w-0 flex-1"><Search className="absolute left-2 top-2.5 size-4 text-muted-foreground"/><input aria-label="Search saved entries" value={search} onChange={event => { setSearch(event.target.value); setPage(0); }} placeholder={`Search ${kind}`} className="w-full min-w-0 rounded-md border bg-background py-2 pl-8 pr-2 text-sm" /></div>
-      <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Reload perspective" onClick={() => setRevision(v => v + 1)}><RefreshCw className="size-4"/></Button>} /><TooltipContent>Reload {kind}</TooltipContent></Tooltip>
-      {selected.length > 0 && <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm" aria-label={`Delete ${selected.length} selected entries`} onClick={() => void remove(selected)} className="shrink-0 text-destructive hover:bg-destructive/10"><Trash2 className="size-4"/></Button>} /><TooltipContent>Delete selected ({selected.length})</TooltipContent></Tooltip>}
-      <nav aria-label={`${kind} pagination`} className="ml-auto flex shrink-0 items-center gap-1 border-l pl-2">
-        <label htmlFor={`${kind}-perspective-page-size`} className="whitespace-nowrap text-xs text-muted-foreground">Per page</label>
-        <Select value={String(pageSize)} onValueChange={value => { setPageSize(Number(value)); setPage(0); }}>
-          <SelectTrigger id={`${kind}-perspective-page-size`} aria-label={`${kind} entries per page`} className="h-9 w-auto shrink-0 text-sm"><SelectValue /></SelectTrigger>
-          <SelectContent>{PERSPECTIVE_PAGE_SIZES.map(size => <SelectItem key={size} value={String(size)}>{size}</SelectItem>)}</SelectContent>
-        </Select>
-        <Button type="button" variant="outline" size="icon-sm" aria-label="Previous page" disabled={currentPage === 0 || !scopeIsReady || loading} onClick={() => setPage(Math.max(0, currentPage - 1))}><ChevronLeft className="size-4" aria-hidden="true"/></Button>
-        <span className="min-w-[5.5rem] whitespace-nowrap text-center text-xs text-muted-foreground" aria-live="polite">Page {currentPage + 1} of {totalPages}</span>
-        <Button type="button" variant="outline" size="icon-sm" aria-label="Next page" disabled={currentPage >= totalPages - 1 || !scopeIsReady || loading} onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}><ChevronRight className="size-4" aria-hidden="true"/></Button>
-      </nav>
+      <div className="relative min-w-0 flex-1"><Search className="absolute left-2 top-2.5 size-4 text-muted-foreground"/><input aria-label="Search saved entries" value={search} onChange={event => { setSearch(event.target.value); }} placeholder={`Filter this ${kind} page`} className="w-full min-w-0 rounded-md border bg-background py-2 pl-8 pr-2 text-sm" /></div>
+      <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Reload perspective" onClick={onReload}><RefreshCw className="size-4"/></Button>} /><TooltipContent>Reload {kind}</TooltipContent></Tooltip>
+      {scopeIsReady && selected.length > 0 && <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm" aria-label={`Delete ${selected.length} selected entries`} onClick={() => void remove(selected)} className="shrink-0 text-destructive hover:bg-destructive/10"><Trash2 className="size-4"/></Button>} /><TooltipContent>Delete selected ({selected.length})</TooltipContent></Tooltip>}
+
     </div>
     {error && <ErrorDetails prefix="Perspective" error={error} className="mx-4 my-2" />}
     {notLoggedIn ? <p className="p-5 text-sm text-muted-foreground">Log in to your personal graph server to view History and Bookmarks.</p>
-      : loading && !collection ? <p className="p-5 text-sm text-muted-foreground">Loading {kind}…</p>
-      : !collection ? <MaestroEmptyResults onBrowse={onBrowse} title="No perspective data" description="No saved entries were loaded. Try the default Browse perspective."/>
-      : <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1" aria-busy={loading || scopeLoading}>
-        <PerspectiveCalendarHeatmap rows={collection.rows} queryXml={queryXml} onDayFilter={onCalendarFilter} />
-        <p className="mb-1 text-xs text-muted-foreground">{!scopeIsReady ? (scopeLoading ? "Filtering by current query…" : "Current query scope unavailable") : `${filtered.length} matching entries · ${filtered.length ? `${currentPage * pageSize + 1}–${Math.min((currentPage + 1) * pageSize, filtered.length)}` : "0"} shown`}</p>
-        {!scopeIsReady && <p role="status" className="mt-2 rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">{scopeLoading ? "Checking saved entries against the current FCT query…" : "Cannot establish which saved entries match this query. See the error above and retry."}</p>}
-        {scopeIsReady && !scopeLoading && filtered.length === 0 && <MaestroEmptyResults onBrowse={onBrowse} title={`No ${kind} entries found`} description="No saved entries match this query. Try the default Browse perspective."/>}
+      : !scopeIsReady && !error ? <p className="p-5 text-sm text-muted-foreground">Loading {kind}…</p>
+      : !collection || !scopeIsReady ? <MaestroEmptyResults onBrowse={onBrowse} title="No perspective data" description="No saved entries were loaded. Try the default Browse perspective."/>
+      : <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1" aria-busy={loading || !scopeIsReady}>
+        <PerspectiveCalendarHeatmap rows={collection.rows.filter(row=>pageRows.some(page=>page.uri===row.uri))} queryXml={queryXml} onDayFilter={onCalendarFilter} />
+        <p className="mb-1 text-xs text-muted-foreground">{scopeIsReady ? `${filtered.filter(row=>pageRows.some(page=>page.uri===row.uri)).length} of ${pageRows.length} live page entries shown${filtered.some(row=>!pageRows.some(page=>page.uri===row.uri)) ? ` · ${filtered.filter(row=>!pageRows.some(page=>page.uri===row.uri)).length} pinned` : ""}` : "Loading current Results page…"}</p>
+        {scopeIsReady && !loading && filtered.length === 0 && <MaestroEmptyResults onBrowse={onBrowse} title={`No ${kind} entries found`} description="No entries on this Results page match the display filter."/>}
         <div ref={resultsRef} aria-busy={!scopeIsReady || renderedSignature !== contentSignature} className="maestro-discovered-view" onClick={event => {
           if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0) {
             const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[href]");
@@ -488,7 +383,7 @@ export function PersonalPerspectives({ active, kind, providerUri, queryXml, onBr
           slot.element,
         ))}
       </div>}
-    <Dialog open={Boolean(appbarCandidate)} onOpenChange={open => {if (!open && !appbarBusy) setAppbarCandidate("");}}>
+    <Dialog open={scopeIsReady && Boolean(appbarCandidate)} onOpenChange={open => {if (!open && !appbarBusy) setAppbarCandidate("");}}>
       <DialogContent><DialogHeader><DialogTitle>Pin bookmark to appbar</DialogTitle><DialogDescription>Choose the button tooltip and Lucide icon name. Maximum five bookmark buttons.</DialogDescription></DialogHeader>
         <label className="block text-sm">Tooltip<Input value={appbarTooltip} maxLength={120} onChange={e=>setAppbarTooltip(e.target.value)}/></label>
         <label className="block text-sm">Lucide icon name<Input value={appbarIcon} placeholder="bookmark" onChange={e=>setAppbarIcon(e.target.value)}/></label>

@@ -47,9 +47,11 @@ test('graph seeding preflights immutable manifest assets and only writes changed
   assert.match(digestHelper,/crypto\.subtle\.digest\(\s*["']SHA-256["']/);
   assert.match(digestHelper,/JSON\.stringify\(components\)/);
   assert.match(seed,/const changed=new Set/);
-  assert.match(seed,/if\(!changed\.has\(graph\)\)/);
+  assert.match(seed,/const operations=\[\.\.\.changed\]\.map/);
   assert.match(seed,/seedDigest/);
-  assert.match(seed,/await updatePersonal\(`CLEAR SILENT GRAPH/);
+  assert.doesNotMatch(seed,/CLEAR SILENT GRAPH/);
+  assert.match(seed,/managedSeedDeletes/);
+  assert.match(seed,/await verifyProviderDefinitions\(graph\);[\s\S]*?await write\(`INSERT DATA/);
 });
 
 test('History and Status avoid unchanged writes and do not change query clock rules', () => {

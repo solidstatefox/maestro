@@ -62,12 +62,12 @@ test('Login and Show Bookmarks explicitly register the current authenticated gra
   assert.match(controller, /setManagedEndpoints\(synced\.map\(asEndpointOption\)\)/);
 });
 
-test('Both saved-entry perspectives show a calendar above unpaginated activity rows with four drill levels', () => {
+test('Both saved-entry perspectives show a calendar above current-page activity rows with four drill levels', () => {
   const view = read('src/canvas/tab/view/personal-perspectives.tsx');
   const heatmap = read('src/canvas/tab/view/perspective-calendar-heatmap.tsx');
-  assert.match(view, /<PerspectiveCalendarHeatmap rows=\{collection\.rows\}/);
+  assert.match(view, /<PerspectiveCalendarHeatmap rows=\{collection\.rows\.filter\(row=>pageRows\.some\(page=>page\.uri===row\.uri\)\)\}/);
   for (const level of ['"year"', '"month"', '"week"', '"day"']) assert.ok(heatmap.includes(level));
-  assert.match(require("node:fs").readFileSync(require("node:path").resolve(__dirname, "../src/canvas/tab/view/personal-perspectives.tsx"), "utf8"), /PerspectiveCalendarHeatmap rows=\{collection\.rows\} queryXml=\{queryXml\}/);
+  assert.match(require("node:fs").readFileSync(require("node:path").resolve(__dirname, "../src/canvas/tab/view/personal-perspectives.tsx"), "utf8"), /PerspectiveCalendarHeatmap rows=\{collection\.rows\.filter\(row=>pageRows\.some\(page=>page\.uri===row\.uri\)\)\} queryXml=\{queryXml\}/);
   assert.match(heatmap, /row\.created/);
   assert.match(view, /row\.created\.slice\(0,10\) === calendarDay/);
 });

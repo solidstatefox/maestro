@@ -11,7 +11,8 @@
   rdfs:label "Spider"@en ; ma:lucideIcon "chart-radar" ; ma:order 4 ;
   mui:accepts <gttp://ggg.maestro.ecosys/analyze/spider/input> ;
   mui:widget <gttp://ggg.maestro.ecosys/analyze/spider/widget> ;
-  ma:stylesheet <gttp://ggg.maestro.ecosys/analyze/spider#xslt> .
+  ma:stylesheet <gttp://ggg.maestro.ecosys/analyze/spider#xslt> ;
+  ma:pageValidationShape <gttp://ggg.maestro.ecosys/analyze/spider/numeric-query-validator> .
 
 <gttp://ggg.maestro.ecosys/analyze/spider/input> a mui:InputShape, sh:NodeShape ;
   # Must carry precisely one live FCT view. The stylesheet derives the
@@ -36,16 +37,20 @@
   sh:property [ sh:path mui:axisValue ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:Literal ;
     sh:pattern "^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$" ] .
 
-# The provider's FCT transformation is deliberately structural: copy the
-# authoritative live query, move the view to list-values, and report the
-# outgoing/incoming projections present in that same view's parent scope.
-<gttp://ggg.maestro.ecosys/analyze/spider#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/context#" exclude-result-prefixes="fct m">
-  <xsl:output method="xml" omit-xml-declaration="yes"/>
-  <xsl:mode name="query" on-no-match="shallow-copy"/>
-  <xsl:template match="/m:context"><analysis kind="spider"><axes>
-    <xsl:for-each select="m:query/fct:query//fct:view/../*[self::fct:property or self::fct:property-of]">
-      <axis iri="{@iri}" direction="{if (self::fct:property-of) then 'reverse' else 'forward'}"/>
-    </xsl:for-each>
-  </axes><fct-query><xsl:apply-templates select="m:query/fct:query" mode="query"/></fct-query></analysis></xsl:template>
-  <xsl:template match="fct:view" mode="query"><xsl:copy><xsl:copy-of select="@* except (@type)"/><xsl:attribute name="type">list-values</xsl:attribute></xsl:copy></xsl:template>
-</xsl:stylesheet>""" .
+# The provider owns the page-to-validation RDF projection and radar presentation.
+<gttp://ggg.maestro.ecosys/analyze/spider#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/context#" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:p="urn:provider:functions" exclude-result-prefixes="#all">
+ <xsl:output method="xml" omit-xml-declaration="yes"/>
+ <xsl:function name="p:values" as="element()*"><xsl:param name="row"/><xsl:param name="axis"/>
+  <xsl:sequence select="$row/m:value[if ($axis/@anchor-id != '') then @node-id = $axis/@anchor-id else @property = $axis/@iri and @direction = $axis/@direction]"/>
+ </xsl:function>
+ <xsl:function name="p:finite" as="xs:boolean"><xsl:param name="v"/><xsl:sequence select="if (count($v) ne 1) then false() else if (($v/@type = ('uri','bnode')) or string-length(string($v)) gt 80 or not(matches(string($v),'^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$'))) then false() else if (not(string($v) castable as xs:double)) then false() else abs(xs:double($v)) lt xs:double('INF')"/></xsl:function>
+ <xsl:template match="/m:context">
+ <xsl:variable name="rows" select="m:results/m:result"/><xsl:variable name="axes" as="element()*"><xsl:for-each-group select="m:breadcrumbs/m:breadcrumb" group-by="if (@anchor-id != '') then concat('alias:',@anchor-id) else concat(@direction,'|',@iri)"><xsl:sequence select="current-group()[1]"/></xsl:for-each-group></xsl:variable>
+ <analysis><description>Every result on the current FCT page is a polygon. Axes are the view's Properties and Roles; all cells must pass the numeric query-validator policy.</description>
+ <xsl:choose><xsl:when test="count($axes) lt 3"><message>Spider needs at least three Properties or Roles in the current FCT view.</message></xsl:when><xsl:when test="empty($rows)"><message>No results were returned for the current query.</message></xsl:when><xsl:otherwise>
+ <validation><xsl:for-each select="$rows"><xsl:variable name="row" select="."/><xsl:variable name="r" select="position()"/><xsl:for-each select="$axes"><xsl:variable name="a" select="position()"/><xsl:variable name="focus" select="concat('urn:maestro:provider:cell:',$r,':',$a)"/><focus iri="{$focus}" label="{concat(@label, ': ', $row/@label)}"/><xsl:for-each select="p:values($row,.)"><triple subject="{$focus}" predicate="gttp://ggg.maestro.ecosys/ns/ui#axisValue" type="{@type}" datatype="{@datatype}" lang="{@lang}"><xsl:value-of select="."/></triple></xsl:for-each></xsl:for-each></xsl:for-each></validation>
+ <xsl:choose><xsl:when test="every $row in $rows satisfies (every $axis in $axes satisfies p:finite(p:values($row,$axis)))"><radar description="Each axis is normalized independently to 0–100% across the displayed results; tooltips preserve actual numeric values. Constant nonzero axes use the midpoint (50%). Missing, multi-valued, or nonnumeric cells invalidate this analysis instead of being silently converted to zero.">
+ <xsl:for-each select="$rows"><member label="{@label}"/></xsl:for-each>
+ <xsl:for-each select="$axes"><xsl:variable name="axis" select="."/><xsl:variable name="values" select="for $row in $rows return xs:double(p:values($row,$axis))"/><xsl:variable name="min" select="min($values)"/><xsl:variable name="max" select="max($values)"/><axis label="{@label}"><xsl:for-each select="$values"><cell raw="{.}" value="{if ($max = $min) then (if (. = 0) then 0 else 50) else max((0,min((100,100 * (if (abs($max - $min) lt xs:double('INF')) then ((. - $min) div ($max - $min)) else (((. div 2) - ($min div 2)) div (($max div 2) - ($min div 2))))))))}"/></xsl:for-each></axis></xsl:for-each>
+ </radar></xsl:when><xsl:otherwise><message>Numeric data cannot be plotted: each cell must contain exactly one finite numeric literal.</message></xsl:otherwise></xsl:choose>
+ </xsl:otherwise></xsl:choose></analysis></xsl:template></xsl:stylesheet>""" .

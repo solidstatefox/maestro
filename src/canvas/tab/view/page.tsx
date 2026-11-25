@@ -14,8 +14,9 @@ import { changeApprovals } from "@/lib/approval-update";
 import { facetValueKey, fctTermKey } from "@/canvas/utils/fct-response";
 import { PerspectiveProviderRuntime } from "@/canvas/tab/view/perspective-provider-runtime";
 import { PersonalPerspectives } from "@/canvas/tab/view/personal-perspectives";
+import { type EndpointCandidate } from "@/lib/client-endpoint-discovery";
 import { GraphServerManager } from "@/canvas/tab/view/graph-server-manager";
-import { GraphServerStatusHistory } from "@/canvas/tab/view/graph-server-status-history";
+import { GraphServerHistoryScope } from "@/canvas/tab/view/graph-server-status-history";
 import { personalPerspectiveFromUri, personalPerspectiveMatchesQuery } from "@/lib/personal-perspective-ids";
 
 import { Separator } from "@/components/ui/separator";
@@ -35,19 +36,24 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
  useEffect(() => { setSelectedGraphCardUri(""); }, [workspace.queryXml]);
  const isGraphServerPerspective = workspace.viewPanel === "perspectives" &&
    selectedViewUri === "gttp://ggg.maestro.ecosys/shacl/provider/entrypoint";
- const graphServerCardRows = useMemo(() => visibleResultsPage.map(row => {
-   const endpoint = fctEndpoints.find(option => option.url === row.uri || option.id === row.uri ||
-     option.label === row.title);
+ const pageUriRows = workspace.visibleResultsPage.filter(row => !row.termType || row.termType === "uri");
+ const pageKey = JSON.stringify([workspace.queryXml,workspace.queryRefreshRevision,resultsUiPage,resultsPageSize,pageUriRows.map(row=>[row.uri,row.title])]);
+ const [registerCandidate, setRegisterCandidate] = useState<EndpointCandidate | null>(null);
+ useEffect(() => { setRegisterCandidate(null); }, [pageKey, selectedViewUri]);
+ const graphServerCardRows = useMemo(() => workspace.graphServerViewRows.map((row,index) => {
+   const endpoint = fctEndpoints.find(option => option.id === row.endpointId);
    const status = endpoint ? workspace.endpointStatuses[endpoint.id] : undefined;
-   return { uri: row.uri, label: row.title, endpoint: endpoint?.url ?? row.uri,
-     endpointId: endpoint?.id ?? "", selected: Boolean(endpoint && endpoint.id === selectedEndpointId),
-     health: status?.status === 200 && status.state === "ok" ? "Healthy" : status?.state ?? "Unknown",
-     healthState: status?.status === 200 && status.state === "ok" ? "green" : status?.state === "degraded" || status?.state === "probe-error" ? "amber" : "red" };
- }), [visibleResultsPage, fctEndpoints, workspace.endpointStatuses, selectedEndpointId]);
- const selectedGraphCard = graphServerCardRows.find(row => row.uri === selectedGraphCardUri) ??
-   fctEndpoints.filter(endpoint => endpoint.url === selectedGraphCardUri).map(endpoint => ({
-     uri: endpoint.url, label: endpoint.label, endpoint: endpoint.url, endpointId: endpoint.id,
-     selected: endpoint.id === selectedEndpointId, health: "Unknown", healthState: "unknown" })).at(0);
+   let domain = "";
+   try { domain = new URL(row.endpoint).hostname.replace(/^www\./i, "").toLowerCase(); } catch {}
+   const software = endpoint ? workspace.viewServerSoftware[endpoint.id] : undefined;
+   return { ...row, label: row.title,
+     description: row.description || (endpoint ? workspace.viewServerDescriptions[endpoint.id] : undefined),
+     software: software && software.product !== "Unknown" ? [software.product,software.version].filter(Boolean).join(" · ") : undefined,
+     rank: workspace.viewDomainRanks[domain],
+     selected: Boolean(index===0 && endpoint && endpoint.id === selectedEndpointId),
+     health: endpoint && checkingEndpointIds[endpoint.id] ? "Checking…" : status?.status === 200 && status.state === "ok" ? "Healthy" : status?.state ?? (row.endpoint ? "Not yet pinged" : "No endpoint URL"),
+     healthState: status?.status === 200 && status.state === "ok" ? "green" : !status ? "unknown" : status.state === "degraded" || status.state === "probe-error" || status.status === null || (status.status >= 400 && status.status < 500) ? "amber" : status.status >= 500 ? "red" : "unknown" };
+ }), [workspace.graphServerViewRows, fctEndpoints, workspace.endpointStatuses, selectedEndpointId, checkingEndpointIds, workspace.viewServerSoftware, workspace.viewServerDescriptions, workspace.viewDomainRanks]);
  const toggleGraphCard = (uri: string) => setSelectedGraphCardUri(previous => previous === uri ? "" : uri);
  const [providerLetter, setProviderLetter] = useState("");
  const [selectAllPendingKey, setSelectAllPendingKey] = useState("");
@@ -69,8 +75,8 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
    window.dispatchEvent(new CustomEvent("maestro:policy-bookmark-attention", { detail: { active: policyBookmarkNeeded } }));
    return () => { window.dispatchEvent(new CustomEvent("maestro:policy-bookmark-attention", { detail: { active: false } })); };
  }, [policyBookmarkNeeded]);
- const personalKind = personalPerspectiveMatchesQuery(selectedViewUri, workspace.queryTree) ? personalPerspectiveFromUri(selectedViewUri) : null;
- const selectedRdfProvider = discoveredViews.find(provider => provider.uri === selectedViewUri);
+ const personalKind = selectedView && personalPerspectiveMatchesQuery(selectedViewUri, workspace.queryTree) ? personalPerspectiveFromUri(selectedViewUri) : null;
+ const selectedRdfProvider = selectedView;
  const providerSelected = Boolean(!personalPerspectiveFromUri(selectedViewUri) && selectedRdfProvider?.queryStylesheet && selectedRdfProvider?.resultStylesheet && workspace.viewPanel !== "providers");
  // Include the actual Personal facet values, not just geocoded marker values.
  // Some values in a facet have no corresponding mapped resource and must still
@@ -138,9 +144,15 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                     <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={isSearching || (effectiveResultsTotalCount === null ? (results.length <= (resultsUiPage+1)*resultsPageSize && (resultsPageComplete || resultsBatchRequestPending.current)) : resultsUiPage+1 >= Math.ceil(effectiveResultsTotalCount/resultsPageSize))} onClick={() => changeResultsPage(1)}>Next</button>
                   </div>
                 </div>;
- return <>
+ return <GraphServerHistoryScope active={isGraphServerPerspective && workspaceTab === "view" && workspace.accessCapabilities.canUsePersonalStore} account={JSON.stringify([workspace.authSession?.graphStore,workspace.authSession?.graphPrefix,workspace.authSession?.username])} queryXml={workspace.queryXml}>
 {workspaceTab === "view" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Views">
-                {personalKind && !viewProvider && workspace.viewPanel !== "providers" ? <PersonalPerspectives key={selectedViewUri} active={workspace.accessCapabilities.canUsePersonalStore} kind={personalKind} providerUri={selectedViewUri} queryXml={workspace.queryXml} onBrowse={() => workspace.setWorkspaceTab("browse")} onOpenShareUrl={workspace.openPinnedShareUrl}/> : providerSelected && selectedRdfProvider && !viewProvider ? <PerspectiveProviderRuntime key={selectedRdfProvider.uri} provider={selectedRdfProvider} queryXml={workspace.queryXml} queryTree={workspace.queryTree} addr={workspace.queryTree.attributes.addr ?? ""} visibleFacetTerms={visibleFacetTerms} /> : <>
+                {personalKind && !viewProvider && selectedView && workspace.viewPanel !== "providers" ? <>
+                  {workspace.perspectivePageReady ? <PersonalPerspectives key={selectedViewUri} active={workspace.accessCapabilities.canUsePersonalStore} kind={personalKind} provider={selectedView} queryXml={workspace.queryXml} pageRows={pageUriRows} pageKey={pageKey} onReload={workspace.refreshQuery} onBrowse={() => workspace.setWorkspaceTab("browse")} onOpenShareUrl={workspace.openPinnedShareUrl}/> : <p role="status" className="flex-1 p-4 text-sm text-muted-foreground">{workspace.searchError || "Waiting for live Results…"}</p>}
+                  <div className="flex shrink-0 justify-end border-t px-4 py-2">{viewPagination}</div>
+                </> : providerSelected && selectedRdfProvider && !viewProvider ? <>
+                  {workspace.perspectivePageReady ? <PerspectiveProviderRuntime key={selectedRdfProvider.uri} provider={selectedRdfProvider} queryXml={workspace.queryXml} pageRows={pageUriRows} pageKey={pageKey} queryTree={workspace.queryTree} addr={workspace.queryTree.attributes.addr ?? ""} visibleFacetTerms={visibleFacetTerms}/> : <p role="status" className="flex-1 p-4 text-sm text-muted-foreground">{workspace.searchError || "Waiting for live Results…"}</p>}
+                  <div className="flex shrink-0 justify-end border-t px-4 py-2">{viewPagination}</div>
+                </> : <>
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-4 py-3">
                   {viewProvider ? <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label={`Alphabet for ${viewProvider}`}>
                     <ToggleGroup type="multiple" value={parseAlphabetSelections(providerLetter).map(value => value.replace(/^!/, ""))} onValueChange={() => {}} className="flex flex-wrap items-center gap-1">{providerLetters.map(([letter, count]) => <ToggleGroupItem unstyled key={letter} value={letter} type="button" aria-label={`${letter}: ${count} ${viewProvider}; Shift-click excludes the letter`}
@@ -170,9 +182,6 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                     {isLoadingAlphabet && <span className="text-xs text-muted-foreground"><ElapsedStatus label="Fetching alphabet" category="alphabet" clockScope="alphabet" requestWaves={26} /></span>}
                     
                   </div>}
-                  {!viewProvider && discoveredViews.length > 1 && <MaestroSelect aria-label="Select view" className="rounded border bg-background px-2 py-1 text-sm" value={selectedViewUri} onChange={(event) => workspace.selectPerspective(event.currentTarget.value)}>
-                    {discoveredViews.map((view) => <option key={view.uri} value={view.uri}>{view.label}</option>)}
-                  </MaestroSelect>}
                   {!viewProvider && selectedView && <span className="text-xs text-muted-foreground">{selectedView.label} · {visibleResultsPage.length} results on this page</span>}
                 </div>
                 {viewProvider && <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2 text-xs" role="toolbar" aria-label={`${viewProvider} actions`}>
@@ -187,19 +196,15 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                 </div>}
                 {isGraphServerPerspective && <>
                   <GraphServerManager canMutate={workspace.accessCapabilities.canMutatePersonalStore}
-                    selectedCardUri={selectedGraphCardUri} onSelectCard={toggleGraphCard}
-                    selectedEndpointId={selectedEndpointId} configuredEndpoints={fctEndpoints}
-                    statuses={workspace.endpointStatuses}
-                    queryXml={workspace.queryXml} canReadHistory={workspace.accessCapabilities.canUsePersonalStore}
+                    account={JSON.stringify([workspace.authSession?.graphStore,workspace.authSession?.graphPrefix,workspace.authSession?.username])} configuredEndpoints={fctEndpoints}
+                    registrationCandidate={registerCandidate}
+                    onCandidateConsumed={() => setRegisterCandidate(null)}
                     onRegistryChange={() => workspace.setEndpointReloadRevision(revision => revision + 1)} />
-                  {selectedGraphCard && !fctEndpoints.some(e => e.url === selectedGraphCard.endpoint) &&
-                    <GraphServerStatusHistory endpoint={selectedGraphCard.endpoint}
-                      label={selectedGraphCard.label} queryXml={workspace.queryXml}
-                      canRead={workspace.accessCapabilities.canUsePersonalStore} />}
+
                 </>}
-                <ViewPage graphServerCards={isGraphServerPerspective ? graphServerCardRows : []}
-                  selectedGraphCardUri={selectedGraphCardUri} onSelectGraphCard={toggleGraphCard}
-                  onBrowse={() => workspace.setWorkspaceTab("browse")} queryXml={workspace.queryXml} requiresBookmark={policyBookmarkNeeded} viewProvider={viewProvider} viewProviderLoading={viewProviderLoading} viewProviderError={viewProviderError} viewProviderCount={visibleProviderCount} viewProviderHtml={visibleProviderHtml} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} selectedView={selectedView} selectedViewUri={selectedViewUri} viewSelectionPending={viewDiscoveryLoading || workspace.queryContextLoading} viewRenderError={viewRenderError} viewHtml={viewHtml} viewResultCount={visibleResultsPage.length} kanbanGroupingOptions={workspace.kanbanGroupingOptions} kanbanGroupKey={workspace.kanbanGroupKey} onKanbanGroupChange={workspace.setKanbanGroupChoice} onKanbanMoveCard={workspace.kanbanMoveCard} onSelectEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id); }} onRefreshEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (!endpoint || checkingEndpointIds[id]) return; void checkSelectedGraphServer(endpoint).catch((error) => { toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" }); }); }} onOpenResource={(uri) => {
+                {<ViewPage graphServerCards={isGraphServerPerspective ? graphServerCardRows : []}
+                  selectedGraphCardUri={selectedGraphCardUri} onSelectGraphCard={toggleGraphCard} onRegisterEndpoint={workspace.accessCapabilities.canMutatePersonalStore ? setRegisterCandidate : undefined} canReadGraphHistory={workspace.accessCapabilities.canUsePersonalStore}
+                  onBrowse={() => workspace.setWorkspaceTab("browse")} queryXml={workspace.queryXml} requiresBookmark={policyBookmarkNeeded} viewProvider={viewProvider} viewProviderLoading={viewProviderLoading} viewProviderError={viewProviderError} viewProviderCount={visibleProviderCount} viewProviderHtml={visibleProviderHtml} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} selectedView={selectedView} selectedViewUri={selectedViewUri} viewSelectionPending={viewDiscoveryLoading || workspace.queryContextLoading} viewRenderError={viewRenderError} viewHtml={viewHtml} viewRenderPhase={workspace.viewRenderPhase} kanbanGroupingOptions={workspace.kanbanGroupingOptions} kanbanGroupKey={workspace.kanbanGroupKey} onKanbanGroupChange={workspace.setKanbanGroupChoice} onKanbanMoveCard={workspace.kanbanMoveCard} onSelectEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (endpoint && endpoint.id !== selectedEndpointId) void chooseFctEndpoint(endpoint.id); }} onRefreshEndpoint={(id) => { const endpoint = fctEndpoints.find((item) => item.id === id); if (!endpoint || checkingEndpointIds[id]) return; void checkSelectedGraphServer(endpoint).catch((error) => { toast.add({ title: "Could not refresh graph server health", description: error instanceof Error ? error.message : "Health check failed.", type: "error" }); }); }} onOpenResource={(uri) => {
                     // Provider cards are FCT result items. Selecting their Record
                     // must preserve the bookmarked live Providers query, rather
                     // than replacing it with an unbookmarked URI-root query.
@@ -221,9 +226,9 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                       // refresh a different live FCT context.
                       if (approvalCurrent(originQuery, originProvider)) workspace.refreshQuery();
                     }).catch(error => toast.add({ title: "Policy approval failed", description: error instanceof Error ? error.message : "The change could not be saved.", type: "error" }));
-                  }} />
+                  }} />}
                 {!viewProvider && selectedView && <div className="flex shrink-0 items-center justify-end border-t px-4 py-2">{viewPagination}</div>}
               </>}
               </div>}
-</>;
+</GraphServerHistoryScope>;
 }

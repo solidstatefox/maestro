@@ -59,15 +59,8 @@ test('both Sunburst styles start with a single visible label style and use no on
   assert.match(host, /onValueChange=\{value=>\{if\(value==="radial" \|\| value==="arc"\)setLabelStyle\(value\)/);
 });
 
-test('Map page controls are provider-authored; the derived FCT view never writes Browse query', () => {
-  assert.match(map, /data-map-previous="true"/);
-  assert.match(map, /data-map-next="true"/);
-  assert.match(map, /const mapPageSize = 100/);
-  assert.match(map, /derivedView\.setAttribute\('limit', String\(mapPageSize \+ 1\)\)/);
-  assert.match(map, /derivedView\.setAttribute\('offset', String\(page \* mapPageSize\)\)/);
-  assert.match(map, /api\.compileQuery\(pageXml, shapeUri, queryStylesheet, requestSignal\)/);
-  assert.match(map, /ORDER BY \?c1 \?lat \?lng \?point \?wkt \?title LIMIT/);
-  assert.match(map, /const more = resultRows\.length > mapPageSize/);
-  assert.match(map, /pageRequest\?\.abort\(\)/);
-  assert.doesNotMatch(map, /replaceTree\(|setLiveQuery\(/);
+test('Map uses the committed Results page through merge-values and never writes Browse query', () => {
+  assert.match(map, /api\.projectPage\(queryXml,pageRows\.map\(row => row\.uri\),columns,signal\)/);
+  assert.doesNotMatch(map, /api\.(?:compileQuery|executeQuery)\(|mapPageSize|pageRequest|replaceTree\(|setLiveQuery\(/);
+  assert.match(map, /labels\.has\(record\.uri\)/);
 });

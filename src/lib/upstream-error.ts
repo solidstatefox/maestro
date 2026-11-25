@@ -50,3 +50,12 @@ export function describeUpstreamError(error: unknown, fallback = "Unknown error"
   }
   return sanitizeUpstreamDiagnostic(parts.join(": "));
 }
+
+/** Mark only failures occurring inside an upstream fetch/body read. */
+export class UpstreamTransportError extends Error {
+  constructor(cause: unknown) { super(describeUpstreamError(cause), { cause }); this.name = "UpstreamTransportError"; }
+}
+export async function withUpstreamTransport<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  try { return await operation(); }
+  catch (error) { if (signal?.aborted) throw error; throw new UpstreamTransportError(error); }
+}

@@ -8,7 +8,7 @@ export const MAESTRO_KIND_IDS: readonly MaestroKind[] = ["web-url", "text", "num
 export type KindDefinition = { id: MaestroKind; label: string; scope: string; pattern: string; datatypes: readonly string[] };
 const XSD = "http://www.w3.org/2001/XMLSchema#";
 const datatypeNames: Record<MaestroKind, readonly string[]> = {
-  "web-url":[], text:[], numeric:["integer","decimal","float","double","int","long","short","byte","nonNegativeInteger","positiveInteger","unsignedInt","unsignedLong","unsignedShort","unsignedByte"],
+  "web-url":[], text:[], numeric:["integer","decimal","float","double","int","long","short","byte","nonNegativeInteger","positiveInteger","nonPositiveInteger","negativeInteger","unsignedInt","unsignedLong","unsignedShort","unsignedByte"],
   date:["date","dateTime","time","gYear","gYearMonth"], email:[],phone:[],anynomous:[],
 };
 const scopes: Record<MaestroKind,string> = {
@@ -62,19 +62,43 @@ export function normalizeMaestroKind(raw:string):MaestroKind|null {
   return MAESTRO_KIND_IDS.includes(kind as MaestroKind)?kind as MaestroKind:null;
 }
 function quote(text:string){return JSON.stringify(text);}
+/** Build the entire RDF Kind predicate in the browser. The serialized FCT
+ * expression is the only input to the FCT compiler; no runtime map is needed
+ * on the execution host. Native SPARQL isNumeric handles numeric RDF types.
+ * Temporal types have no equivalent standard predicate, so retain that small
+ * explicit set. Text stays the complement of the other literal Kinds. */
 export function maestroKindSparql(kindRaw:string,term:string):string|null {
   const kind=normalizeMaestroKind(kindRaw);
   if(!kind)return null;
   if(kind==="anynomous")return `isBlank(${term})`;
-  const matches=(item:KindDefinition):string=>{
-    const regex=item.pattern?`REGEX(STR(${term}), ${quote(item.pattern)}, "i")`:"false";
-    const typed=item.datatypes.length?`DATATYPE(${term}) IN (${item.datatypes.map(d=>`<${XSD}${d}>`).join(", ")})`:"false";
-    const test=item.datatypes.length?`(${typed} || ${regex})`:regex;
-    return item.scope==="literal"?`(isLiteral(${term}) && ${test})`:
-      item.scope==="resource-or-literal"?`((isIRI(${term}) || isLiteral(${term})) && ${test})`:test;
+  if(!patterns.size)return null; // provider discovery has not completed
+  const regex=(id:MaestroKind)=>{
+    const pattern=patterns.get(id);
+    return pattern?`REGEX(STR(${term}), ${quote(pattern)}, "i")`:null;
   };
-  if(kind==="text")return `(isLiteral(${term}) && !(${MAESTRO_KINDS.filter(item=>!['text','anynomous'].includes(item.id)).map(matches).join(" || ")}))`;
-  return matches(MAESTRO_KINDS.find(item=>item.id===kind)!);
+  const temporal=`DATATYPE(${term}) IN (${datatypeNames.date.map(d=>`<${XSD}${d}>`).join(", ")})`;
+  const numeric=`(isNumeric(${term}) && DATATYPE(${term}) != <${XSD}boolean>)`;
+  if(kind==="text") {
+    // Only literals reach this branch, so all lexical exclusions can share
+    // the same outer type guard. Keep regexes separate (capture/backreference
+    // semantics must not change when different Kinds are combined).
+    const lexicalKinds=MAESTRO_KIND_IDS.filter(id=>id!=="text" && id!=="anynomous");
+    const lexical=lexicalKinds.map(regex);
+    if(lexical.some(expression=>expression===null))return null;
+    const exclusions=[numeric,temporal,...lexical];
+    return `(isLiteral(${term}) && !(${exclusions.join(" || ")}))`;
+  }
+  const lexical=regex(kind);
+  if(!lexical)return null;
+  if(kind==="numeric" || kind==="date") {
+    const typed=kind==="numeric"?numeric:temporal;
+    return `(isLiteral(${term}) && (${[typed,lexical].filter(Boolean).join(" || ")}))`;
+  }
+  return kind==="web-url"?`((isIRI(${term}) || isLiteral(${term})) && ${lexical})`:lexical;
+}
+/** Reserved operand in serialized, generic FCT filter expressions. */
+export function maestroKindFilter(kind:string):string {
+  return maestroKindSparql(kind,"?value") ?? "";
 }
 export function classifyMaestroKind(value:string,termType:string,datatype=""):MaestroKind {
   if(termType==="bnode" || termType==="blank")return "anynomous";

@@ -10,13 +10,13 @@ test('the shared XState access selector gates personal features until manifest s
  assert.match(text,/const bookmarked = policyReady && queryMatches/);
  assert.match(text,/bookmarkVerified: policyReady && queryMatches/);
 });
-test('user avatar follows HTTP failures and requires XState readiness for green', () => {
+test('user avatar follows HTTP independently from XState readiness', () => {
  const text=read('src/canvas/top/appbar-pane.tsx');
  assert.match(text,/\{authSession \? \(/);
  const access=read('src/lib/app-lifecycle/access.ts');
  assert.match(text,/workspace\.accessCapabilities\.userSignal/);
  assert.match(text,/workspace\.accessCapabilities\.userSignalLabel/);
- assert.match(access,/policyReady && status !== null && status >= 200 && status < 300 \? "green"/);
+ assert.match(access,/sessionReady && status !== null && status >= 200 && status < 300 \? \(policyReady \? "green" : "pulsingGreen"\)/);
  assert.match(access,/challenge \? "401 — awaiting authenticated result"/);
  assert.match(access,/status >= 400 && status < 500/);
  assert.match(access,/status >= 500 && status < 600/);

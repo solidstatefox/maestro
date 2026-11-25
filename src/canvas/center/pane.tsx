@@ -36,6 +36,8 @@ import { maestroStorageSet } from "@/lib/maestro-storage";
 
 import { CenterPaneFrame, CenterPaneBody } from "@/canvas/workspace-pane-shells";
 import { CodeBlock } from "@/components/ui/code-block";
+import { isRibbonQueryFormat, RIBBON_QUERY_FORMATS, PROVIDER_QUERY_KINDS, ribbonQuerySource } from "@/lib/ribbon-query-source";
+import type { ProviderKind } from "@/lib/provider-catalog-xslt";
 import { ValidationNotice } from "@/components/ui/validation-notice";
 
 import xmlFormat from "xml-formatter";
@@ -109,6 +111,7 @@ import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 /** UI owned by CenterCanvasPanel. State and commands come from the shared workspace controller. */
 export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceController }) {
   const [dismissedQueryValidation, setDismissedQueryValidation] = useState("");
+  const [inspectorProviderKind, setInspectorProviderKind] = useState<ProviderKind>("policies");
   const contextReportKey = `${workspace.queryXml}::${workspace.historyBookmarkId ?? ""}`;
   const showingContextValidation = workspace.workspaceTab === "analyze" ||
     (workspace.workspaceTab === "view" && workspace.viewPanel === "perspectives");
@@ -129,7 +132,6 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
     alphabetError,
     alphabetIndex,
     alphabetLabelUris,
-    alphabetPreflight,
     alphabetQueryXml,
     alphabetSparql,
     analysisColumnWidths,
@@ -259,6 +261,12 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
     visibleResultsPage,
     workspaceTab,
   } = workspace;
+  const ribbonSource = centralTab === "view-query" && isRibbonQueryFormat(querySourceFormat)
+    ? ribbonQuerySource({ format: querySourceFormat, session: workspace.authSession, tree: workspace.queryTree,
+        endpoints: workspace.fctEndpoints, batchSize: workspace.resultsBatchSize, limits: workspace.ribbonDiscoveryLimits, providerKind: inspectorProviderKind,
+        analysisClasses: workspace.ribbonInspectorAnalysisClasses, contextualProviders: workspace.ribbonInspectorProviders })
+    : null;
+
   const { renderScopeValueBadge, renderRootBreadcrumb, renderPathBreadcrumb } = createBreadcrumbRenderers(workspace);
   return (
 <CenterPaneFrame defaultSize={workspaceTab === "browse" ? 45 : 75}>
@@ -294,13 +302,13 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
 
               {/* An active alphabet restriction must remain visible and toggleable even when
                   subsequent filters eliminate its count or the grouped count request fails. */}
-              {workspaceTab === "browse" && centralTab === "results" && (alphabetPreflight === "available" || alphabetPreflight === "checking" || Boolean(alphabetIndex)) && (
+              {workspaceTab === "browse" && centralTab === "results" && (Object.values(alphabetCounts).some(count => count > 0) || isLoadingAlphabet || Boolean(alphabetIndex)) && (
                 <div id="maestro-alphabet" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2" aria-label="Alphabetical browse by selected label properties">
                   {!isLoadingAlphabet && <IncompleteWidgetIndicator source="alphabet" />}
                   <ToggleGroup type="multiple" value={parseAlphabetSelections(alphabetIndex).map(value => value.replace(/^!/, ""))} onValueChange={() => {}} className="flex flex-wrap items-center gap-1">
                   {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ").filter((letter) => (alphabetCounts[letter] ?? 0) > 0 || parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)).map((letter) => (
-                    <ToggleGroupItem unstyled key={letter} value={letter} type="button" title={`Letter ${letter}; Shift-click excludes the letter; multiple selections are OR`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] ?? 0} results`} aria-pressed={parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)}
-                      disabled={isLoadingAlphabet || (!alphabetCounts[letter] && !parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`))}
+                    <ToggleGroupItem unstyled key={letter} value={letter} type="button" title={`Letter ${letter}; Shift-click excludes the letter; multiple selections are OR`} aria-label={`Letter ${letter}: ${alphabetCounts[letter] === undefined ? "count unavailable" : `${alphabetCounts[letter]} results`}`} aria-pressed={parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)}
+                      disabled={!alphabetCounts[letter] && !parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`)}
                       className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
                       onClick={(event) => {
                         setNodeAttribute("query-view", "indexLabels", alphabetLabelUris);
@@ -309,7 +317,7 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                       }}>
                       <span className="font-medium">{parseAlphabetSelections(alphabetIndex).includes(`!${letter}`) ? <><span className="inline-flex items-center gap-1.5"><Ban aria-label="Excluded" className="size-3.5 shrink-0" />{letter}</span></> : letter}</span>
                       <Separator orientation="vertical" className="mx-1 h-4 bg-current opacity-30 data-vertical:self-center" />
-                      <span className={`tabular-nums font-normal ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{shortenCount(alphabetCounts[letter] ?? 0)}</span>
+                      <span className={`tabular-nums font-normal ${parseAlphabetSelections(alphabetIndex).some((value) => value === letter || value === `!${letter}`) ? "text-primary-foreground/65" : "text-muted-foreground"}`}>{alphabetCounts[letter] === undefined ? "…" : shortenCount(alphabetCounts[letter])}</span>
                     </ToggleGroupItem>
                   ))}
                   </ToggleGroup>
@@ -393,21 +401,36 @@ export function CenterCanvasPanel({ workspace }: { workspace: WorkspaceControlle
                         <Toggle pressed={querySourceFormat === "list-values-sparql"} onPressedChange={(pressed) => { if (pressed) { setQuerySourceFormat("list-values-sparql"); } }} className="h-auto min-w-0 whitespace-normal rounded-none border-0 px-3 py-1.5 text-xs">Merged Values SPARQL</Toggle>
                       </>}
                       <Toggle pressed={querySourceFormat === "response"} onPressedChange={(pressed) => { if (pressed) { setQuerySourceFormat("response"); } }} className="rounded-none border-0 px-3 py-1.5 text-xs">FCT response</Toggle>
+                      {RIBBON_QUERY_FORMATS.map(({ value, label }) => <Toggle key={value} pressed={querySourceFormat === value}
+                        onPressedChange={(pressed) => { if (pressed) setQuerySourceFormat(value); }}
+                        className="h-auto min-w-0 whitespace-normal rounded-none border-0 px-3 py-1.5 text-xs">{label}</Toggle>)}
                     </ButtonGroup>
                     <button type="button" onClick={() => { setCentralTab(groupByPropertyUri ? "groups" : "results"); setQueryTreeOpen(true); }} className="shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent">Back to Query</button>
                   </div>
+                  {ribbonSource && <div className="mb-2 space-y-1 text-xs text-muted-foreground">
+                    {querySourceFormat === "providers-sparql" && <label className="flex flex-wrap items-center gap-2">
+                      Provider catalog
+                      <select aria-label="Provider catalog" value={inspectorProviderKind}
+                        onChange={event => { const kind = PROVIDER_QUERY_KINDS.find(item => item.value === event.target.value); if (kind) setInspectorProviderKind(kind.value); }}
+                        className="rounded-md border border-input bg-background px-2 py-1 text-foreground">
+                        {PROVIDER_QUERY_KINDS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+                      </select>
+                    </label>}
+                    <p>{ribbonSource.note}</p>
+                    {ribbonSource.addr && <p className="break-all">Execution address: {ribbonSource.addr}</p>}
+                  </div>}
                   <CodeBlock
                     className="h-full min-h-0"
-                    executionAddr={querySourceFormat === "sparql" ? sparqlExecutionAddr : queryTree.attributes.addr}
+                    executionAddr={querySourceFormat === "sparql" ? sparqlExecutionAddr : ribbonSource ? ribbonSource.addr : queryTree.attributes.addr}
                     language={(querySourceFormat === "xml" || querySourceFormat === "alphabet-xml" || querySourceFormat === "list-values-xml" || querySourceFormat === "response") ? "xml" : "sparql"}
-                    code={querySourceFormat === "xml" ? prettyQueryXml
+                    code={ribbonSource ? ribbonSource.code : querySourceFormat === "xml" ? prettyQueryXml
                       : querySourceFormat === "sparql" ? sourceSparql
                       : querySourceFormat === "alphabet-xml" ? xmlFormat(alphabetQueryXml, { indentation: "  " })
                       : querySourceFormat === "list-values-xml" && showResultBadges ? xmlFormat(resultsListValuesXml, { indentation: "  " })
                       : querySourceFormat === "list-values-sparql" && showResultBadges ? resultsListValuesSparql
                       : querySourceFormat === "response" ? resultsRawResponse
                       : alphabetSparql}
-                    filename={querySourceFormat === "xml" ? "fct-query.xml"
+                    filename={ribbonSource ? ribbonSource.filename : querySourceFormat === "xml" ? "fct-query.xml"
                       : querySourceFormat === "sparql" ? "query.sparql"
                       : querySourceFormat === "alphabet-xml" ? "alphabet-query.xml"
                       : querySourceFormat === "list-values-xml" && showResultBadges ? "results-merge-values.xml"

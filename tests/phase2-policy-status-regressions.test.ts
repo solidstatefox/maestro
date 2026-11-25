@@ -56,14 +56,16 @@ test("Status projections are derived from independently verified bookmark XML", 
   assert.match(code, /compileFctXmlToSparql\(statusViewXml, undefined, false, false, false, false,/);
 });
 
-test("Statuses render through the common fixture and Bookmark animates its glyph only", () => {
+test("Statuses render through the common fixture and Bookmark preserves its state-specific glyph colors", () => {
   const widget = read("src/canvas/left/status-widget.tsx");
   const pane = read("src/canvas/left/filter-pane.tsx");
   const bar = read("src/canvas/top/appbar-pane.tsx");
   assert.match(widget, /function StatusFacetWidget/);
   assert.match(widget, /function LiveQueryStatusWidget/);
   assert.match(pane, /<LiveQueryStatusWidget/);
-  assert.match(bar, /className=\{isQueryBookmarked \? "fill-current text-amber-500" : bookmarkBounce && policyBookmarkVisible \? "text-amber-500"/);
+  const current=bar.slice(bar.indexOf('id="maestro-bookmark-button"'),bar.indexOf('aria-label="Pinned bookmark shortcuts"'));
+  assert.match(current, /<Bookmark aria-hidden="true"\s+className=\{`size-4 \$\{isQueryBookmarked \? "fill-current text-amber-500" : bookmarkBounce && policyBookmarkVisible \? "text-amber-500" : ""\}`\}/);
+  assert.match(current,/bookmarkBounce && policyBookmarkVisible && !isQueryBookmarked \? "animate-bounce/);
   assert.ok(!bar.includes('animate-bounce ring-2 ring-amber-400'));
 });
 

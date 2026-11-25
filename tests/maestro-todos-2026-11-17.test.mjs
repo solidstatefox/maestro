@@ -18,12 +18,12 @@ check('Signal click persists mode before closing picker', 'src/canvas/top/breadc
 check('View diagnostics use portaled centered collision-aware Base UI menu', 'src/canvas/top/view-diagnostics-hover.tsx', /@base-ui\/react\/menu/, /Menu\.Portal/, /align="center"/, /collisionPadding=\{12\}/);
 check('View defaults to Perspectives', 'src/canvas/controllers/view.ts', /"perspectives"/);
 check('View selection auto activation is XState-gated', 'src/lib/app-lifecycle/perspective-selection.ts', /RIBBON_OBSERVED/, /AUTO_APPLIED/, /selected:\s*\{/);
-check('View ribbon retains selected personal perspective while discovery changes', 'src/canvas/tab/view/ribbon.tsx', /personalPerspectiveFromUri\(selectedViewUri\)/, /personalToRender\.push/);
+check('View retains selected personal perspective only in its validated unchanged query scope', 'src/canvas/utils/workspace-controller.tsx', /personalPerspectiveMatchesQuery\(selectedViewUri, queryTree\) && retainedSelectedViewRef/, /retentionKey = JSON\.stringify\(\[queryXml, accessSessionKey/);
 check('Tags discover without waiting for datatype probing', 'src/lib/client-facet-providers.ts', /const tagDiscovery/, /onTags\?\.\(ready\)/, /const tags = await tagDiscovery/);
 check('Tags have an independent XState discovery response', 'src/lib/app-lifecycle/providers.ts', /DISCOVERY_TAGS_RESOLVED/, /matches: \{ \.\.\.context\.matches, tags: event\.tags \}/);
 check('Tag cloud shows an explicit loading/empty state', 'src/canvas/left/personal-tag-cloud.tsx', /Loading tags/, /No tag values/);
-check('Spider validates raw values then normalizes each axis', 'src/lib/spider-numeric-policy.ts', /valuesByAxis/, /Math\.min\(\.\.\.values\)/, /row\[`raw_\$\{key\}`\] = value/);
-check('Spider radial axis uses percent; tooltips display actual numeric values', 'src/canvas/tab/analyze/spider.tsx', /domain=\{\[0, 100\]\}/, /raw_\$\{String\(item\.dataKey\)\}/);
+check('Spider validates raw values then normalizes each axis', 'graph/spider/provider.ttl', /p:finite/, /min\(\$values\)/, /<cell raw=/);
+check('Spider radial axis uses percent; tooltips display actual numeric values', 'src/canvas/tab/analyze/page-provider.tsx', /domain=\{\[0, 100\]\}/, /raw_\$\{String\(item\.dataKey\)\}/);
 check('View badge uses approval count from XState', 'src/canvas/top/appbar-pane.tsx', /selectPendingApprovalBadge/, /pendingBadge\.total/);
 check('Saved View selection is preserved in share URL', 'src/canvas/utils/workspace-controller.tsx', /params\.set\("ribbonButton"/, /setSelectedViewUri\(restored\.selectedViewUri\)/);
 check('Configure Properties and Roles inspectors expose six actual XML/SPARQL tabs and execute read-only SPARQL',

@@ -1,7 +1,9 @@
 "use client";
+import { facetButtonFactory, completeFacetButton } from "@/components/ui/facet-button-factory";
 import { MaestroSelect } from "@/components/ui/maestro-select";
 import { MAESTRO_KIND_IDS, getMaestroKindsRevision, subscribeMaestroKinds } from "@/lib/maestro-kinds";
 import { browserLog } from "@/lib/maestro-client-logging";
+import { resetMaestroQueryExecutionScope } from "@/lib/maestro-query-execution-clock";
 import { ErrorDetails } from "@/components/ui/error-details";
 
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
@@ -254,76 +256,75 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
     showClassResults,
     toggleClass,
   } = workspace;
-  const [kindController] = useState(createMaestroKindDiscoveryController);
-  const [kindRetry, setKindRetry] = useState(0);
+  const [propertyKindController] = useState(createMaestroKindDiscoveryController);
+  const [roleKindController] = useState(createMaestroKindDiscoveryController);
+  const [kindRetry, setKindRetry] = useState({property:0,role:0});
   const kindsRevision = useSyncExternalStore(subscribeMaestroKinds, getMaestroKindsRevision, getMaestroKindsRevision);
-  const kindSnapshot = useSyncExternalStore(kindController.subscribe, kindController.getSnapshot, kindController.getSnapshot);
+  const propertyKindSnapshot = useSyncExternalStore(propertyKindController.subscribe, propertyKindController.getSnapshot, propertyKindController.getSnapshot);
+  const roleKindSnapshot = useSyncExternalStore(roleKindController.subscribe, roleKindController.getSnapshot, roleKindController.getSnapshot);
   const kindScopeXml = serializeFctQuery(queryTree);
-  const kindKey = defaultLeftTab === "facets" ? `${kindScopeXml}::patterns-${kindsRevision}::retry-${kindRetry}` : "";
-  const kindState = selectKinds(kindSnapshot, kindKey);
-  const checkingKinds = kindState.loading;
+  const kindKey = defaultLeftTab === "facets" && !workspace.queryExecutionCancelled ? `${kindScopeXml}::patterns-${kindsRevision}::refresh-${workspace.queryRefreshRevision}` : "";
+  const propertyKindKey = kindKey ? `${kindKey}::property::retry-${kindRetry.property}` : "";
+  const roleKindKey = kindKey ? `${kindKey}::role::retry-${kindRetry.role}` : "";
+  const propertyKindState = selectKinds(propertyKindSnapshot, propertyKindKey);
+  const roleKindState = selectKinds(roleKindSnapshot, roleKindKey);
   useEffect(() => {
-    if (kindState.error) browserLog.error("configure.kinds.failed", { error: kindState.error });
-  }, [kindState.error]);
-  const kindAvailability = kindState.availability;
-  useEffect(() => { kindController.start(); return () => kindController.stop(); }, [kindController]);
-  useEffect(() => {
-    if (!kindKey) { kindController.clear(); return; }
+    propertyKindController.start(); roleKindController.start();
+    return () => { propertyKindController.stop(); roleKindController.stop(); };
+  }, [propertyKindController, roleKindController]);
+  // Each direction has its own invocation, dispatch clock and terminal outcome.
+  // Neither an error nor a retry in Roles can destroy the Properties result.
+  function startKinds(controller: ReturnType<typeof createMaestroKindDiscoveryController>, direction: "property"|"role", key: string, retry: number) {
+    if (!key) { controller.clear(); return; }
     const snapshotTree = JSON.parse(JSON.stringify(queryTree));
     const address = queryTree.attributes.addr;
-    kindController.execute(kindKey, async signal => {
+    const clockScope = `component:kinds:${direction}` as const;
+    resetMaestroQueryExecutionScope(clockScope);
+    controller.execute(key, async signal => {
       const timeoutMs = readMaestroWidgetTimeouts().kinds * 1000;
-      const timeout = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
-      const requestSignal = timeout ? AbortSignal.any([signal, timeout]) : signal;
-      // Client owns Kind SPARQL generation using the in-memory RDF projection
-      // populated once at login. The untouched /sparql route is only the transport.
-      const entries = await Promise.all((["property", "role"] as const).map(async direction => {
-        async function run(query: string): Promise<{ results?: {bindings?: Array<{maestroKind?:{value?:string}}>};boolean?:boolean;error?:string;incomplete?:boolean }> {
-          const response = await maestroQueryFetch("/proxy/api/sparql", {
-            method: "POST", signal: requestSignal, cache: "no-store",
-            headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": `Configure:Kinds:${direction}`, ...proxyDebugHeaders("Configure:Kinds", `ConfigureKind:${direction}`),
-              ...(timeoutMs ? { "X-Maestro-Query-Timeout-Ms": String(timeoutMs) } : {}) },
-            body: JSON.stringify({ addr: address, query }),
-          });
-          const data = await response.json() as { results?: {bindings?: Array<{maestroKind?:{value?:string}}>};boolean?:boolean;error?:string;incomplete?:boolean };
-          if (!response.ok || data.incomplete) throw new Error(data.error || `Kind discovery HTTP ${response.status}`);
-          return data;
-        }
-        const query = buildFctKindAvailabilitySparql(snapshotTree, direction);
-        if (!query) throw new Error(`Cannot compile ${direction} Kind scope.`);
-        try {
-          const batch = await run(query);
-          if (Array.isArray(batch.results?.bindings)) {
-            const found = new Set(batch.results.bindings.map(row => row.maestroKind?.value).filter((value): value is string => Boolean(value)));
-            return [direction, MAESTRO_KIND_IDS.filter(kind => found.has(kind))] as const;
-          }
-        } catch (error) {
-          if (requestSignal.aborted) throw error;
-          // Older Virtuoso endpoints may reject the VALUES/EXISTS batching
-          // idiom. Fall back to normal client-generated ASK queries.
-          browserLog.warn("configure.kinds.batch-fallback", error);
-        }
-        const checks = await Promise.allSettled(MAESTRO_KIND_IDS.map(async kind => {
-          const ask = buildFctKindAvailabilitySparql(snapshotTree, direction, kind);
-          if (!ask) throw new Error(`Cannot compile ${kind} preflight.`);
-          return (await run(ask)).boolean ? kind : null;
-        }));
-        const success = checks.filter(check => check.status === "fulfilled");
-        if (!success.length) {
-          const first = checks.find(check => check.status === "rejected");
-          throw first && first.status === "rejected" ? first.reason : new Error("Kind availability queries failed.");
-        }
-        const found = success.flatMap(check => check.status === "fulfilled" && check.value ? [check.value] : []);
-        return [direction, found] as const;
+      async function run(query: string): Promise<{results?:{bindings?:Array<{maestroKind?:{value?:string}}>}; boolean?:boolean; incomplete?:boolean}> {
+        const response = await maestroQueryFetch("/proxy/api/sparql", {
+          method: "POST", signal, cache: "no-store",
+          headers: { "Content-Type":"application/json", "X-Maestro-Query-Label":`Configure:Kinds:${direction}`, ...proxyDebugHeaders("Configure:Kinds",`ConfigureKind:${direction}`),
+            "X-Maestro-Clock-Component":clockScope, ...(retry ? {"X-Maestro-Component-Retry":"1"} : {}),
+            ...(timeoutMs ? {"X-Maestro-Query-Timeout-Ms":String(timeoutMs)} : {}) },
+          body:JSON.stringify({addr:address,query}),
+        });
+        const data = await response.json() as {results?:{bindings?:Array<{maestroKind?:{value?:string}}>};boolean?:boolean;error?:string;incomplete?:boolean};
+        if (!response.ok) throw Object.assign(new Error(data.error || `Kind discovery HTTP ${response.status}`),{status:response.status});
+        return {...data,incomplete: data.incomplete === true || response.headers.get("X-Maestro-Incomplete") === "true"};
+      }
+      const query = buildFctKindAvailabilitySparql(snapshotTree,direction);
+      if (!query) throw new Error(`Cannot compile ${direction} Kind scope.`);
+      try {
+        const batch = await run(query);
+        if (!Array.isArray(batch.results?.bindings)) throw new Error("Invalid Kinds SELECT result.");
+        const found = new Set(batch.results.bindings.map(row=>row.maestroKind?.value));
+        return {kinds:MAESTRO_KIND_IDS.filter(kind=>found.has(kind)),incomplete:batch.incomplete===true};
+      } catch (error) {
+        // Only a real query rejection can justify the compatibility ASK
+        // fallback. A timeout is terminal, not an invitation to send 7 more queries.
+        if (signal.aborted || (error as {status?:number}).status !== 400) throw error;
+        browserLog.warn("configure.kinds.batch-fallback",error);
+      }
+      const checks = await Promise.allSettled(MAESTRO_KIND_IDS.map(async kind=>{
+        const ask = buildFctKindAvailabilitySparql(snapshotTree,direction,kind);
+        if (!ask) throw new Error(`Cannot compile ${kind} preflight.`);
+        const result = await run(ask);
+        if (typeof result.boolean !== "boolean") throw new Error("Invalid Kinds ASK result.");
+        return {kind, found:result.boolean, incomplete:result.incomplete===true};
       }));
-      return Object.fromEntries(entries) as { property: string[]; role: string[] };
+      signal.throwIfAborted();
+      const success = checks.flatMap(check=>check.status === "fulfilled" ? [check.value] : []);
+      if (!success.length) throw new Error("Kind availability queries failed.");
+      return {kinds:success.filter(check=>check.found).map(check=>check.kind), incomplete:success.length !== checks.length || success.some(check=>check.incomplete)};
     });
-  }, [kindController, kindKey, queryTree.attributes.addr]);
+  }
+  useEffect(() => {startKinds(propertyKindController,"property",propertyKindKey,kindRetry.property); return ()=>propertyKindController.clear();},[propertyKindController,propertyKindKey]);
+  useEffect(() => {startKinds(roleKindController,"role",roleKindKey,kindRetry.role); return ()=>roleKindController.clear();},[roleKindController,roleKindKey]);
   const availableKinds = (direction: "property" | "role", selected: string) => {
-    const known = MAESTRO_KIND_IDS;
-    const found = kindAvailability?.[direction];
-    // Keep any selected kind visible until the user changes it.
-    return known.filter(kind => (Array.isArray(found) && found.includes(kind)) || kind === selected);
+    const found = (direction === "property" ? propertyKindState : roleKindState).availability;
+    return MAESTRO_KIND_IDS.filter(kind => found?.includes(kind) || kind === selected);
   };
   return <>
 {defaultLeftTab === "facets" && (
@@ -471,6 +472,10 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
 
                       if ((group === "Properties" || group === "Roles") && items.length === 0 && selectedItems.length === 0) return null;
 
+                      const direction = group === "Roles" ? "role" : "property";
+                      const kindState = direction === "role" ? roleKindState : propertyKindState;
+                      const checkingKinds = kindState.loading;
+                      const retryKinds = () => { resetMaestroQueryExecutionScope(`component:kinds:${direction}`); setKindRetry(value=>({...value,[direction]:value[direction]+1})); };
                       return (
                         <section
                           key={group}
@@ -491,14 +496,17 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                                 <h2 className="truncate text-sm font-semibold">{group}</h2>
                               </button>
                             </div>
-                            {(group === "Properties" || group === "Roles") && checkingKinds && <span role="status" className="shrink-0 text-xs text-white/90"><ElapsedStatus label="Kinds" category="kinds" clockScope="component:kinds" /></span>}
+                            {(group === "Properties" || group === "Roles") && checkingKinds && <span role="status" className="shrink-0 text-xs text-white/90"><ElapsedStatus label="Kinds" category="kinds" clockScope={`component:kinds:${direction}`} /></span>}
                             {(group === "Properties" || group === "Roles") && kindState.error && !checkingKinds &&
-                              <span className="inline-flex items-center gap-1 rounded border border-white/40 bg-background px-1.5 py-0.5">
+                              <span className="inline-flex items-center gap-1 rounded border border-white/40 px-1.5 py-0.5" style={{ backgroundColor: CONFIGURE_HEADER_BACKGROUND_COLOR }} data-kind-error="true">
                                 <ErrorDetails prefix="Kinds unavailable" error={kindState.error} />
-                                <button type="button" className="inline-flex size-6 items-center justify-center rounded text-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Retry ${group} Kinds discovery`} title="Retry Kinds discovery" onClick={() => setKindRetry(value => value + 1)}>
-                                  <RotateCw className="size-3.5" aria-hidden="true" />
-                                </button>
+                                {completeFacetButton(facetButtonFactory(<RotateCw className="size-3.5" aria-hidden="true" />), {
+                                  className: "inline-flex items-center justify-center rounded text-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+                                  "aria-label": `Retry ${group} Kinds discovery`, title: "Retry Kinds discovery",
+                                  onClick: retryKinds,
+                                })}
                               </span>}
+                            {(group === "Properties" || group === "Roles") && kindState.partial && !checkingKinds && <button type="button" onClick={retryKinds} className="text-xs text-white underline" title="Anytime returned positive matches only; retry for complete availability">Incomplete · Retry</button>}
                             {(group === "Properties" || group === "Roles") && kindState.ready && !checkingKinds && <MaestroSelect
                               aria-label={`${group} object kind`}
                               aria-busy={false}

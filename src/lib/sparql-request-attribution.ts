@@ -1,3 +1,4 @@
+import { observeProxyFetch } from "./proxy-transport-observation";
 /** A SPARQL proxy request must have an owning component, never a URL-derived label. */
 export function requireSparqlAttribution(input: RequestInfo | URL, init?: RequestInit): void {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -9,5 +10,5 @@ export function requireSparqlAttribution(input: RequestInfo | URL, init?: Reques
 }
 export function attributedSparqlFetch(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
   requireSparqlAttribution(input, init);
-  return fetch(input, init);
+  return observeProxyFetch(input, init);
 }

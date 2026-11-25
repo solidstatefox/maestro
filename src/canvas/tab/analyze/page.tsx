@@ -20,11 +20,10 @@ import { OverviewNodeAnalytics } from "@/canvas/tab/view/overview-node-analytics
 import { NODE_ANALYTICS_ANALYSIS_URI } from "@/lib/overview-analytics-ids";
 import { OVERVIEW_PERSPECTIVE_URI } from "@/lib/overview-metrics";
 import { OverviewPerspective } from "@/canvas/tab/view/overview";
-import { AnalyzeSpider } from "@/canvas/tab/analyze/spider";
+import { AnalyzePageProvider } from "@/canvas/tab/analyze/page-provider";
 import { AnalyzeSankey } from "@/canvas/tab/analyze/sankey";
 import { D3_SANKEY_ANALYSIS_URI } from "@/lib/d3-sankey-id";
 import { SANKEY_ANALYSIS_URI } from "@/lib/sankey-coverage";
-import { SPIDER_ANALYSIS_URI } from "@/lib/spider-numeric-policy";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 import { shortenCount } from "@/lib/utils";
 
@@ -37,7 +36,7 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
  const { renderScopeValueBadge, renderRootBreadcrumb, renderPathBreadcrumb } = createBreadcrumbRenderers(workspace);
  const nodeAnalyticsSelected = selectedAnalysisUri===NODE_ANALYTICS_ANALYSIS_URI;
  const overviewSelected = selectedAnalysisUri===OVERVIEW_PERSPECTIVE_URI;
- const spiderSelected = selectedAnalysisUri===SPIDER_ANALYSIS_URI;
+ const pageProvider = workspace.analysisDefinitions.find(item => item.uri === selectedAnalysisUri && item.pageValidationShape);
  const sankeySelected = selectedAnalysisUri===SANKEY_ANALYSIS_URI;
  const d3SankeySelected = selectedAnalysisUri===D3_SANKEY_ANALYSIS_URI;
  const [populationState,setPopulationState]=useState<{key:string;items:OverviewPopulation[];error:string}|null>(null);
@@ -52,7 +51,7 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
  },[workspaceTab,nodeAnalyticsSelected,workspace.endpointReadyForQuery,populationKey]);
  const populationCurrent=populationState?.key===populationKey?populationState:null;
  if(workspaceTab === "analyze" && overviewSelected) return <OverviewPerspective workspace={workspace}/>;
- if(workspaceTab === "analyze" && spiderSelected) return <AnalyzeSpider workspace={workspace}/>;
+ if(workspaceTab === "analyze" && pageProvider) return <AnalyzePageProvider workspace={workspace} definition={pageProvider}/>;
  if(workspaceTab === "analyze" && sankeySelected) return <AnalyzeSankey workspace={workspace}/>;
  if(workspaceTab === "analyze" && d3SankeySelected) return <AnalyzeSankey workspace={workspace} renderer="d3"/>;
  if(workspaceTab === "analyze" && nodeAnalyticsSelected) return <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Analyze Node Analytics canvas">

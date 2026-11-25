@@ -66,6 +66,7 @@ export function useGraphServersState() {
     healthController.replace(next), [healthController]);
   const reportGraphHealthFailure = useCallback((id: string, endpointUrl: string, diagnostic: string, at = Date.now()) =>
     healthController.send({ type: "TRANSPORT_FAILED", id, endpointUrl, diagnostic, at }), [healthController]);
+  const reportGraphQuery = useCallback((id:string,endpointUrl:string,operation:string,sequence:number,scope:number,status:number|null,timeout?:boolean,diagnostic?:string)=>healthController.send({type:"QUERY_REPORTED",id,endpointUrl,operation,sequence,scope,status,timeout,diagnostic}),[healthController]);
   const reportGraphHealthProbe = useCallback((status: EndpointStatus, startedAt: number) =>
     healthController.reportProbe(status, startedAt), [healthController]);
   const [isCheckingEndpoints, setIsCheckingEndpoints] = useState(false);
@@ -88,8 +89,11 @@ export function useGraphServersState() {
     selectedEndpointId,
     observeGraphServerQuery,
     endpointStatuses,
+    subscribeEndpointStatuses: healthController.subscribe,
+    getEndpointStatuses: healthController.getSnapshot,
     setEndpointStatuses,
     reportGraphHealthFailure,
+    reportGraphQuery,
     reportGraphHealthProbe,
     isCheckingEndpoints,
     setIsCheckingEndpoints,

@@ -35,6 +35,7 @@ export function useRecordState() {
     recordPolicyError: recordSnapshot.context.errors.policy,
     setRecordPolicyError: (value: string) => error("policy", value),
     isDescribing: recordSnapshot.context.phases.description === "loading",
+    isFormattingRecord: recordSnapshot.context.phases.format === "loading",
     setIsDescribing: (value: boolean) => send("description", value),
     recordDescriptionError: recordSnapshot.context.errors.description,
     setRecordDescriptionError: (value: string) => error("description", value),

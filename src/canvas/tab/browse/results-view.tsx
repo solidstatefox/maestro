@@ -11,6 +11,7 @@ import type { FctResult, ScopeValue } from "@/canvas/utils/fct-response";
 type Preview = { kind: "record" | "facet"; label: string; direction: "forward" | "reverse" } | null;
 export interface BrowseResultsProps {
   results: FctResult[];
+  seenUris?: ReadonlySet<string>;
   selectedUri: string;
   expandedUris: Set<string>;
   setExpandedUris: Dispatch<SetStateAction<Set<string>>>;
@@ -34,8 +35,8 @@ export function recordMatchBoldMarkup(excerpt: string): string {
   return excerpt.replace(/&lt;(\/?)b&gt;/gi, "<$1b>")
     .replace(/<[^>]*>/g, tag => /^<\/?b>$/i.test(tag) ? tag : tag.replace(/</g, "&lt;").replace(/>/g, "&gt;"));
 }
-export function BrowseResults({ results, selectedUri, expandedUris, setExpandedUris, showResultBadges, isRootView, liveQueryHasText, search, searchError, isLoading, endpointReady, facetHoverPreview, tutorialMode, onSelectResult, onNavigateClass, onNavigateMatchProperty, renderBadge }: BrowseResultsProps) {
-  return               <div className="relative min-h-0 flex-1 overflow-y-auto p-2">
+export function BrowseResults({ results, seenUris, selectedUri, expandedUris, setExpandedUris, showResultBadges, isRootView, liveQueryHasText, search, searchError, isLoading, endpointReady, facetHoverPreview, tutorialMode, onSelectResult, onNavigateClass, onNavigateMatchProperty, renderBadge }: BrowseResultsProps) {
+  return               <div data-results-scroll className="relative min-h-0 flex-1 overflow-y-auto p-2">
                 {!facetHoverPreview && results.map((item, index) => {
                   const isExpanded = expandedUris.has(item.uri);
                   const recordClasses = Array.from(new Set(
@@ -76,7 +77,7 @@ export function BrowseResults({ results, selectedUri, expandedUris, setExpandedU
                           onClick={(event) => onSelectResult(item.uri,event.shiftKey)}
                           className="min-w-0 flex-1 text-left cursor-pointer"
                         >
-                          <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm font-medium cursor-pointer">
+                          <span className={`flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm ${seenUris?.has(item.uri) ? "font-normal" : "font-medium"} cursor-pointer`}>
                             <span>{item.title || (item.termType === "uri" ? toLabel(item.uri, "Class") : item.uri)}</span>
                           </span>
                           <span className="mt-1 block break-all text-xs text-muted-foreground">
@@ -109,7 +110,7 @@ export function BrowseResults({ results, selectedUri, expandedUris, setExpandedU
                       </div>
 
                       {isRootView && liveQueryHasText && isExpanded && search.trim().length > 0 && (
-                        <div className="px-3 py-2" aria-label="Matching Record properties">
+                        <div className="border-t border-border px-3 py-2" aria-label="Matching Record properties">
                           <table className={DEFAULT_RECORD_TABLE}>
                             <tbody>{item.matches.map((match, matchIndex) => (
                               <tr key={`${item.uri}-match-${matchIndex}`} className={matchIndex ? "border-t border-border" : ""}

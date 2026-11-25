@@ -7,7 +7,8 @@ import { pendingApprovalController, selectPendingApprovalBadge } from "@/lib/app
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
 import { Server, Database, Globe, LayoutGrid, Kanban, Filter, Network, ShieldCheck, FileCode2, ArrowLeftRight, Landmark, Blocks, Bookmark, History, Route, Regex, Telescope, ChartNoAxesCombined } from "lucide-react";
 import type { ProviderKind } from "@/lib/provider-catalog-xslt";
-import { discoverMatchedClientPerspectives } from "@/lib/client-personal-perspectives";
+import { createMaestroViewDiscoveryController } from "@/lib/app-lifecycle/view-discovery";
+import { discoverMatchedClientPerspectives, type ClientPerspective } from "@/lib/client-personal-perspectives";
 import { personalPerspectiveFromUri } from "@/lib/personal-perspective-ids";
 type ViewDefinition = { uri: string; label: string; icon?: string; stylesheet: string };
 export interface ViewRibbonProps {
@@ -36,43 +37,31 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
   // Discovery results belong to their exact FCT/History scope. A provider
   // approved for the previous query must not be offered for a different query
   // while its own SHACL validation is pending.
-  const [personalDiscoveryError, setPersonalDiscoveryError] = useState("");
+  const [personalDiscovery] = useState(() => createMaestroViewDiscoveryController<ClientPerspective>());
+  const personalSnapshot = useSyncExternalStore(personalDiscovery.subscribe, personalDiscovery.getSnapshot, personalDiscovery.getSnapshot);
+  useEffect(() => { personalDiscovery.start(); return () => personalDiscovery.stop(); }, [personalDiscovery]);
   const classKey = useMemo(() => [...new Set(queryClassUris)].sort().join("\n"), [queryClassUris]);
   // The query-context machine has already validated contextual SHACL targets
   // for this exact History visit. Use that existing result, including when
   // the query has no root class. No timers or extra population probes.
   const contextualKey = useMemo(() => [...new Set(queryMatchedProviders)].sort().join("\n"), [queryMatchedProviders]);
   const discoveryKey = [queryXml, triggerUri, historyUri ?? "", classKey, contextualKey].join("\u0000");
+  const hasPersonalPerspective = discoveredViews.some(view => Boolean(personalPerspectiveFromUri(view.uri)));
   useEffect(() => {
-    const controller = new AbortController();
-    setPersonalDiscoveryError("");
-    if (viewPanel !== "perspectives" || viewDiscoveryLoading || (!classKey && !contextualKey)) return () => controller.abort();
-    void discoverMatchedClientPerspectives(classKey ? classKey.split("\n") : [],
-      queryXml, triggerUri, historyUri, controller.signal,
-      contextualKey ? contextualKey.split("\n") : [])
-      .then(() => { if (!controller.signal.aborted) setPersonalDiscoveryError(""); })
-      .catch(error => {
-        // Preserve the selection across transient discovery errors but retain
-        // the original cause for browser diagnostics rather than dropping it.
-        if (!controller.signal.aborted) setPersonalDiscoveryError(error instanceof Error ? error.message : String(error));
-      });
-    return () => controller.abort();
-  }, [classKey, contextualKey, queryXml, triggerUri, historyUri, discoveryKey, viewPanel, viewDiscoveryLoading]);
-  // While contextual validation is still resolving, show only the retained
-  // explicit selection, not providers discovered for an unrelated query.
-  // Even if an asynchronous SHACL refresh temporarily omits the selected
-  // Personal provider, its ribbon selection remains visible and owned by the
-  // user's explicit selection/share URL. Eligibility is a separate concern.
+    if (viewPanel !== "perspectives") { personalDiscovery.inactive(); return; }
+    if (viewDiscoveryLoading) return;
+    if (!hasPersonalPerspective) { personalDiscovery.inactive(); return; }
+    personalDiscovery.discover(discoveryKey, signal => discoverMatchedClientPerspectives(
+      classKey ? classKey.split("\n") : [], queryXml, triggerUri, historyUri, signal,
+      contextualKey ? contextualKey.split("\n") : []));
+  }, [personalDiscovery, classKey, contextualKey, queryXml, triggerUri, historyUri, discoveryKey, viewPanel, viewDiscoveryLoading, hasPersonalPerspective]);
+  const personalDiscoveryError = personalSnapshot.context.key === discoveryKey && personalSnapshot.matches("failed") ? personalSnapshot.context.error : "";
+  // Render only providers supplied by the exact-scope eligibility gate.
   const visibleViews = [...new Map(discoveredViews.map(view => [view.uri, view])).values()];
   const personalToRender = visibleViews.flatMap(view => {
     const kind = personalPerspectiveFromUri(view.uri);
     return kind ? [{ uri: view.uri, kind, label: kind === "bookmarks" ? "Bookmarks" : "History" }] : [];
   });
-  const retainedPersonalKind = personalPerspectiveFromUri(selectedViewUri);
-  if (retainedPersonalKind && !personalToRender.some(item => item.uri === selectedViewUri)) {
-    personalToRender.push({ uri: selectedViewUri, kind: retainedPersonalKind,
-      label: retainedPersonalKind === "bookmarks" ? "Bookmarks" : "History" });
-  }
   const firstAvailableUri = visibleViews.find(view => !personalPerspectiveFromUri(view.uri))?.uri ?? personalToRender[0]?.uri ?? "";
   const [selectionController] = useState(createMaestroPerspectiveSelectionController);
   const selectionSnapshot = useSyncExternalStore(selectionController.subscribe,
@@ -101,6 +90,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
   const onRibbonPanelChange = (panel: "trail" | "perspectives" | "providers") => {
     if (panel === viewPanel) return;
     setViewPanel(panel);
+    if (panel === "perspectives") setViewProvider(null);
     if (panel === "providers") {
       onFeaturesEntered();
       onSelectProvider("policies");

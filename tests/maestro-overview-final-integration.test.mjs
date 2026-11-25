@@ -58,7 +58,8 @@ test('Kinds are externalized in a seeded provider, and selections restore from v
   const manifest=JSON.parse(read('graph/manifest.json'));
   assert.ok(manifest['kinds/provider.ttl']);
   const compiled=read('src/lib/fct-sparql-translator.ts');
-  assert.match(compiled,/maestroKindSparql/);
+  assert.match(compiled,/bindFctFilterExpression/);
+  assert.doesNotMatch(compiled,/from "\.\/maestro-kinds"/);
   const session=read('src/canvas/utils/workspace-controller.tsx');
   assert.match(session,/"kind-property"|`kind-\$\{direction\}`/);
   assert.match(session,/"kind",normalized===/);

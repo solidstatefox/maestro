@@ -1,7 +1,7 @@
 /** Structured proxy logger. Server-only: never import this module into client components. */
 import pino from "pino";
 import { NextResponse } from "next/server";
-import { describeUpstreamError } from "./upstream-error";
+import { describeUpstreamError, UpstreamTransportError } from "./upstream-error";
 
 export type MaestroLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 const logger = pino({ level: process.env.MAESTRO_LOG_LEVEL || "info", redact: {
@@ -30,11 +30,12 @@ export function proxyFailure(request: Request, operation: string, error: unknown
   const statusValue = error && typeof error === "object" && "status" in error ? Number(error.status) : NaN;
   const status = timedOut ? 504 : Number.isInteger(statusValue) && statusValue >= 400 && statusValue <= 599 ? statusValue : 502;
   const upstreamBody = error && typeof error === "object" && "responseBody" in error ? String(error.responseBody) : "";
-  const code = timedOut ? "UPSTREAM_TIMEOUT" : "UPSTREAM_ERROR";
+  const origin = request.signal.aborted ? "cancelled" : error instanceof UpstreamTransportError ? "upstream-transport" : "proxy";
+  const code = origin === "cancelled" ? "CANCELLED" : origin === "upstream-transport" ? (timedOut ? "UPSTREAM_TIMEOUT" : "UPSTREAM_ERROR") : "PROXY_ERROR";
   const requestId = request.headers.get("x-maestro-debug-request") || "";
   proxyLog(timedOut ? "debug" : "error", operation, { code, status, requestId,
     ...extra, ...(timedOut ? {} : { message, err: error }) });
   return NextResponse.json({ error: message, code, status, requestId,
     ...(upstreamBody ? { upstreamBody: upstreamBody.slice(0, 16000), upstreamBodyTruncated: upstreamBody.length > 16000 } : {}),
-  }, { status, headers: browserDiagnosticHeaders(request, operation, { message, code, status, ...extra }) });
+  }, { status, headers: { ...Object.fromEntries(new Headers(browserDiagnosticHeaders(request, operation, { message, code, status, ...extra }))), "X-Maestro-Failure-Origin": origin } });
 }

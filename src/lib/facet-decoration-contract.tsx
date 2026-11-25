@@ -1,5 +1,6 @@
 "use client";
 
+import { facetButtonFactory, completeFacetButton } from "@/components/ui/facet-button-factory";
 import { useSyncExternalStore } from "react";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
@@ -55,15 +56,21 @@ export async function publishXsltFacetDecorations(source: string, stylesheet: st
 }
 /** Stable XSLT-defined header action; the underlying facet is still native and
  * the action is delegated back to its provider runtime. */
+export function useFacetDecorationAction(direction: "class" | "forward" | "reverse", iri: string, anchorId?: string) {
+  const current=useSyncExternalStore(subscribe,getSnapshot,()=>EMPTY);
+  const key=facetKey(direction,iri,anchorId);
+  const rule=current.facets.get(key);
+  return rule?.action && current.onAction ? ()=> {
+    const latest=getSnapshot();const active=latest.facets.get(key);
+    if(active?.action)latest.onAction?.(active.action,key);
+  } : undefined;
+}
 export function FacetDecorationControl({ direction, iri, anchorId }: { direction: "class" | "forward" | "reverse"; iri: string; anchorId?: string }) {
   const current = useSyncExternalStore(subscribe, getSnapshot, () => EMPTY);
   const rule = current.facets.get(facetKey(direction, iri, anchorId));
-  if (!rule?.action || !current.onAction) return null;
-  return <button type="button" title={rule.label} aria-label={rule.label} aria-pressed={rule.selected}
-    onClick={() => current.onAction?.(rule.action, facetKey(direction, iri, anchorId))}
-    className={`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${rule.selected ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`}>
-    <DynamicIcon name={(supportedFacetDecorationIcons.has(rule.icon) ? rule.icon : "puzzle") as IconName} className="size-4" aria-hidden="true"/>
-  </button>;
+  const onSelect=useFacetDecorationAction(direction,iri,anchorId);
+  if (!rule?.action || !onSelect) return null;
+  return completeFacetButton(facetButtonFactory(<DynamicIcon name={(supportedFacetDecorationIcons.has(rule.icon) ? rule.icon : "puzzle") as IconName} className="size-4" aria-hidden="true"/>), {"type":"button", "title":(rule.label), "aria-label":(rule.label), "aria-pressed":(rule.selected), "onClick":(onSelect), "className":(`inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100 ${rule.selected ? "border-sky-300 bg-sky-200 text-sky-800 hover:bg-sky-200 hover:text-sky-800 dark:border-sky-700 dark:bg-sky-900/70 dark:text-sky-100 dark:hover:bg-sky-900/70 dark:hover:text-sky-100" : ""}`)});
 }
 /** Neutral per-item slot: XSLT supplies the color for exact RDF values. */
 export function FacetItemDecoration({ direction, iri, value, anchorId }: { direction: "class" | "forward" | "reverse"; iri: string; value: string; anchorId?: string }) {

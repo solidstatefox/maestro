@@ -1,8 +1,6 @@
 import { restoredDigestRecord, restoredDigestAuthorization, initialDigestIdentity, initialDigestRecord, staleDigestRecord, digestRecordAuthorization } from "@/lib/digest-auth";
 import { digestEndpoint } from "@/lib/digest-session-record";
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
-import { MAESTRO_KIND_IDS, normalizeMaestroKind } from "@/lib/maestro-kinds";
-import { buildFctKindAvailabilitySparql } from "@/lib/fct-count-sparql";
 import { buildBlankNodeRecordSparql } from "@/lib/bnode";
 import { currentProxyClient, withProxyClient } from "@/lib/maestro-proxy-client-preferences";
 import { weightMaestroQuery, type QueryPriority } from "@/lib/graph-server-query-scheduler";
@@ -17,9 +15,9 @@ import { virtuosoRankFailure } from "@/lib/virtuoso-query-fallbacks";
 import { getQueryCache, queryCacheKey, setQueryCache } from "@/lib/query-cache";
 import { normalizeGraphServerUri, resolveFctEndpointFromAddr, fctAddrFromXml } from "@/lib/personal-sparql";
 import { permittedGraphServerTarget, checkGraphServerDestination } from "@/lib/graph-server-target";
-import { describeUpstreamError } from "@/lib/upstream-error";
+import { describeUpstreamError, sanitizeUpstreamDiagnostic, withUpstreamTransport } from "@/lib/upstream-error";
 import { proxyFailure, proxyLog } from "@/lib/maestro-logger";
-import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
+import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders, upstreamDeliveryTimeoutMs } from "@/lib/virtuoso-anytime";
 import { inspectPersonalUpdateGraphs, hasExplicitPersonalUpdateTemplates } from "@/lib/personal-update-graph-guard";
 import { isBoundedReadOnlySparql } from "@/lib/sparql-read-guard";
 
@@ -233,8 +231,9 @@ async function querySparqlTransport(endpoint: string, query: string, configuredT
   requestSignal?: AbortSignal, priorityOverride?: QueryPriority, bypassCache = false,
   personalRequest?: Request, authorization?: string, writing = false): Promise<SparqlQueryResult> {
   const timeoutMs = configuredTimeoutMs ?? 20000;
+  const deliveryMs = writing ? timeoutMs : upstreamDeliveryTimeoutMs(timeoutMs);
   const sparqlUrl = endpoint;
-  const key = queryCacheKey("sparql", sparqlUrl.toString(), query);
+  const key = queryCacheKey("sparql", sparqlUrl.toString(), `${timeoutMs}\u0000${query}`);
   const pendingKey = `${currentProxyClient()}:${key}:${timeoutMs}`;
   const cached = bypassCache || authorization ? undefined : getQueryCache<string>(key);
   if (cached !== undefined) {
@@ -255,21 +254,24 @@ async function querySparqlTransport(endpoint: string, query: string, configuredT
 
   const requestPromise = (async () => {
     await checkGraphServerDestination(sparqlUrl);
-    const response = await withGraphServerSlot(
+    const result = await withGraphServerSlot(
       sparqlUrl, priorityOverride ?? (/\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive"), requestSignal,
-      () => traceVirtuosoDispatch(() => fetch(sparqlUrl, {
+      () => traceVirtuosoDispatch(() => withUpstreamTransport(async () => {
+      const response = await fetch(sparqlUrl, {
       method: "POST",
       headers: {
         "Content-Type": writing ? "application/sparql-update" : "application/x-www-form-urlencoded; charset=UTF-8",
         Accept: writing ? "text/plain, application/json;q=0.9" : "application/sparql-results+json, application/json;q=0.9",
         ...(authorization ? { Authorization: authorization } : {}),
       },
-      body: writing ? query : new URLSearchParams({ query, ...(configuredTimeoutMs ? { timeout: String(configuredTimeoutMs) } : {}) }).toString(),
+      body: writing ? query : new URLSearchParams({ query, timeout: String(timeoutMs) }).toString(),
       cache: "no-store",
       redirect: "manual",
-      signal: requestSignal ? AbortSignal.any([requestSignal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
-    })), weightMaestroQuery(query, priorityOverride ?? (/\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive")));
-    return { responseText: await response.text(), response, key };
+      signal: requestSignal ? AbortSignal.any([requestSignal, AbortSignal.timeout(deliveryMs)]) : AbortSignal.timeout(deliveryMs),
+    });
+      return { responseText: await response.text(), response, key };
+    }, requestSignal)), weightMaestroQuery(query, priorityOverride ?? (/\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive")));
+    return result;
   })();
   if (!requestSignal && !authorization) inFlightSparqlRequests.set(pendingKey, requestPromise);
   try {
@@ -331,7 +333,7 @@ async function handlePost(request: Request) {
       signal?:AbortSignal, priority?:QueryPriority, bypass=false) =>
       querySparqlTransport(endpoint,query,timeout,signal,priority,bypass,request);
     // Connect's first request obtains the challenge only. The SPA sends the
-    // actual authenticated bootstrap through the ordinary personal READ path.
+    // same authenticated seed digest SELECT through the ordinary personal READ path.
     if (body?.operation === "auth-probe" && typeof body?.update !== "string") {
       const reply=(payload:unknown,status:number)=>NextResponse.json(payload,{status,headers:{"Cache-Control":"no-store"}});
       const identity=initialDigestIdentity(request);
@@ -390,18 +392,21 @@ async function handlePost(request: Request) {
           if(response.ok)headers["x-maestro-digest-refresh"]=encodeURIComponent(JSON.stringify({realm:renewed.realm,algorithm:renewed.algorithm,qop:renewed.qop,nonce:renewed.nonce,cnonce:renewed.cnonce,opaque:renewed.opaque,nc:renewed.nc}));
         }
       }
-      if(!response.ok)return NextResponse.json({error:`Personal SPARQL HTTP ${response.status}${responseText.trim()?`: ${responseText.trim().slice(0,1000)}`:""}`},{status:response.status>=400?response.status:502,headers:{"Cache-Control":"no-store"}});
-      if(response.status===206 || isVirtuosoAnytime(response,responseText))return NextResponse.json({error:"Incomplete personal SPARQL result."},{status:502,headers:{"Cache-Control":"no-store"}});
+      Object.assign(headers, upstreamDiagnosticHeaders(response));
+      const incomplete=response.status===206 || isVirtuosoAnytime(response,responseText);
+      if(!response.ok&&!incomplete)return NextResponse.json({error:`Personal SPARQL HTTP ${response.status}${responseText.trim()?`: ${responseText.trim()}`:""}`},{status:response.status>=400?response.status:502,headers});
+      if(incomplete)Object.assign(headers,anytimeResponseHeaders(response,true));
+      if(incomplete&&writing)return NextResponse.json({error:"Incomplete personal SPARQL update.",incomplete:true},{status:502,headers});
       if(writing)return new Response(null,{status:204,headers});
       if(/^\s*(?:(?:PREFIX\s+[^\n]+)\s*)?ASK\b/i.test(body.query.trim())) {
-        try { const result=JSON.parse(responseText); if(typeof result.boolean==="boolean")return NextResponse.json(result,{headers}); } catch {}
+        try { const result=JSON.parse(responseText); if(typeof result.boolean==="boolean")return NextResponse.json({...result,incomplete},{headers}); } catch {}
       }
       const parsed=parseSparqlResults(responseText);
-      if(!parsed)return NextResponse.json({error:"Invalid personal SPARQL results."},{status:502,headers:{"Cache-Control":"no-store"}});
-      return NextResponse.json(parsed,{headers});
+      if(!parsed)return NextResponse.json({error:incomplete?"Incomplete personal SPARQL result with no usable bindings.":"Invalid personal SPARQL results.",incomplete},{status:502,headers});
+      return NextResponse.json({...parsed,incomplete},{headers});
     }
     // Every SPARQL request carries the address of its originating FCT query.
-    const nested = body?.recordSelect ?? body?.recordBlankNodes ?? body?.recordValueLabels ?? body?.facetValueCount ?? body?.kindAvailability;
+    const nested = body?.recordSelect ?? body?.recordBlankNodes ?? body?.recordValueLabels ?? body?.facetValueCount;
     const explicitAddr = (typeof nested?.addr === "string" ? nested.addr : "") ||
       (typeof body?.addr === "string" ? body.addr : "") ||
       fctAddrFromXml(nested?.queryXml ?? body?.queryXml);
@@ -448,14 +453,18 @@ async function handlePost(request: Request) {
       }
       diagnosticOperation = autocomplete ? "priority URI autocomplete" : "generic read-only SPARQL";
       diagnosticQuery = query;
-      const { responseText, response, key } = await querySparql(fctEndpoint, query, autocomplete ? Math.min(120000, Math.max(1000, queryTimeoutMs || 5000)) : queryTimeoutMs, request.signal, autocomplete ? "autocomplete" : undefined);
-      if (autocomplete && (response.status === 206 || isVirtuosoAnytime(response,responseText)))
-        return NextResponse.json({error:"Autocomplete lookup returned incomplete results."},{status:502});
-      if (!response.ok) return NextResponse.json({ error: `SPARQL HTTP ${response.status}` }, { status: response.status });
-      const parsed = parseSparqlResults(responseText);
-      if (!parsed) return NextResponse.json({ error: "Invalid SPARQL results" }, { status: 502 });
-      if (response.status === 200) setQueryCache(key, responseText);
-      return NextResponse.json(parsed, { headers: { "Cache-Control": "no-store" } });
+      const { responseText, response, key } = await querySparql(fctEndpoint, query, autocomplete ? Math.min(120000, Math.max(1000, queryTimeoutMs || 5000)) : queryTimeoutMs, request.signal, autocomplete ? "autocomplete" : undefined, request.headers.get("x-maestro-component-retry") === "1");
+      const incomplete = response.status === 206 || isVirtuosoAnytime(response, responseText);
+      const headers = { "Cache-Control": "no-store", ...sparqlResponseHeaders(response, incomplete) };
+      if (!response.ok && !incomplete) return NextResponse.json({ error: `SPARQL HTTP ${response.status}`, details: sanitizeUpstreamDiagnostic(responseText, Infinity) }, { status: response.status, headers });
+      let parsed: ReturnType<typeof parseSparqlResults> | { boolean: boolean } = parseSparqlResults(responseText);
+      // Generic ASK is a legitimate SPARQL Results JSON document too.
+      if (!parsed) {
+        try { const value = JSON.parse(responseText); if (typeof value.boolean === "boolean") parsed = { boolean: value.boolean }; } catch { /* invalid result */ }
+      }
+      if (!parsed || (autocomplete && incomplete)) return NextResponse.json({ error: incomplete ? "SPARQL returned incomplete results without a usable complete answer." : "Invalid SPARQL results", incomplete }, { status: incomplete ? 504 : 502, headers });
+      if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
+      return NextResponse.json({ ...parsed, incomplete }, { headers });
     }
 
     // Resolve still-missing URI labels only in named graphs that the existing
@@ -819,43 +828,6 @@ async function handlePost(request: Request) {
       if (response.status === 200 && !incomplete) setQueryCache(key, responseText);
       return NextResponse.json({ ...parsed, query: actualQuery, incomplete,
         orderingFallback: actualQuery !== resultsQuery }, { headers: sparqlResponseHeaders(response, incomplete) });
-    }
-
-    if (body?.kindAvailability && typeof body.kindAvailability === "object") {
-      const { tree, direction } = body.kindAvailability;
-      if (!tree || typeof tree !== "object" || tree.name !== "query" ||
-          !Array.isArray(tree.children) || !tree.attributes || typeof tree.attributes.addr !== "string" ||
-          !["property", "role"].includes(direction) || JSON.stringify(tree).length > 100000) {
-        return NextResponse.json({error: "Kind preflight requires a bounded FCT query tree and direction."}, {status: 400});
-      }
-      const query = buildFctKindAvailabilitySparql(tree, direction);
-      if (!query) return NextResponse.json({error: "Cannot compile the FCT kind scope."}, {status: 400});
-      const allKinds = MAESTRO_KIND_IDS;
-      diagnosticOperation = "FCT kind availability batched SELECT";
-      diagnosticQuery = query;
-      const batch = await querySparql(fctEndpoint, query, queryTimeoutMs, request.signal);
-      const batchParsed = batch.response.ok ? parseSparqlResults(batch.responseText) : null;
-      const partial = batch.response.status === 206 || isVirtuosoAnytime(batch.response, batch.responseText);
-      if (batch.response.ok && !partial && batchParsed && batchParsed.head.vars.includes("maestroKind")) {
-        const kinds = [...new Set(batchParsed.results.bindings.flatMap(row => {
-          const kind = normalizeMaestroKind(row.maestroKind?.value ?? "");
-          return kind === null ? [] : [kind];
-        }))];
-        return NextResponse.json({ kinds, query, method: "batch" });
-      }
-      // Compatibility fallback: six independent ASK statements derived from
-      // the *same* FCT focus, not arbitrary client-supplied SPARQL strings.
-      const individual = await Promise.all(allKinds.map(async kind => {
-        const ask = buildFctKindAvailabilitySparql(tree, direction, kind);
-        if (!ask) throw new Error("Could not compile FCT Kind ASK query");
-        const result = await querySparql(fctEndpoint, ask, queryTimeoutMs, request.signal);
-        if (!result.response.ok || result.response.status === 206 || isVirtuosoAnytime(result.response, result.responseText))
-          throw new Error(`Kind ASK ${kind} failed with HTTP ${result.response.status}`);
-        const json = JSON.parse(result.responseText) as { boolean?: unknown };
-        if (typeof json.boolean !== "boolean") throw new Error(`Invalid ASK result for ${kind}`);
-        return json.boolean ? kind : null;
-      }));
-      return NextResponse.json({ kinds: individual.filter((kind) => kind !== null), query, method: "asks" });
     }
 
     if (body?.facetValueCount && typeof body.facetValueCount === "object") {

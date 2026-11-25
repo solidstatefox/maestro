@@ -65,7 +65,7 @@ export type ShareableUiState = {
   showResultBadges?: boolean;
   /** Explicit state for the Badges toolbar toggle. */
   badgesToggle?: boolean;
-  querySourceFormat?: "xml" | "sparql" | "alphabet-xml" | "alphabet-sparql" | "list-values-xml" | "list-values-sparql" | "response";
+  querySourceFormat?: "xml" | "sparql" | "alphabet-xml" | "alphabet-sparql" | "list-values-xml" | "list-values-sparql" | "response" | "perspectives-sparql" | "providers-sparql" | "analysis-sparql";
   defaultLeftTab?: "facets" | "personal" | "community";
   focusListOrder?: "Properties" | "Roles";
   focusWidgetsSuppressed?: boolean;

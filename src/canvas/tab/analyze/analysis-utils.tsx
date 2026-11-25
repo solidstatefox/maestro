@@ -1,7 +1,7 @@
 "use client";
 import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { ScopeValue } from "@/canvas/utils/fct-response";
-export type AnalysisDefinition = { uri: string; label: string; icon: string; stylesheet: string; order: number };
+export type AnalysisDefinition = { uri: string; label: string; icon: string; stylesheet: string; order: number; pageValidationShape?: string };
 export type AnalysisCell = { values: string[]; checked: boolean; badgeStyle: CSSProperties; cellStyle: CSSProperties };
 export type AnalysisTable = { trailStyle: CSSProperties; tableStyle: CSSProperties; headerStyle: CSSProperties; cellStyle: CSSProperties; rowStyle: CSSProperties; columns: { kind: string; nodeId: string; label: string; breadcrumbStyle: CSSProperties; headerStyle: CSSProperties }[]; rows: { uri: string; label: string; cells: AnalysisCell[] }[] };
 

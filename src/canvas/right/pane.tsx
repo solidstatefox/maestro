@@ -26,7 +26,8 @@ import { ValidationNotice, hasVisibleValidationWarning } from "@/components/ui/v
 import maestroLanguages from "@/data/maestro-languages.json";
 
 import { createPortal } from "react-dom";
-import { InputGroup, InputGroupAddon, InputGroupText, InputGroupButton } from "@/components/ui/input-group";
+import { ButtonGroup } from "@/components/ui/button-group";
+import { InputGroup, InputGroupAddon, InputGroupText } from "@/components/ui/input-group";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import { createRecordExplorerPresentationController } from "@/lib/app-lifecycle/record-explorer-presentation";
 import { getMaestroComponentPortals } from "@/components/maestro-xslt-components";
@@ -45,7 +46,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { Button } from "@/components/ui/button";
 import { RECORD_EXPORT_FORMATS, type RecordExportFormat } from "@/canvas/right/record-export";
 
-import { Check, ChevronDown, ChevronRight, LoaderCircle, ClipboardCheck, ClockFading, Download, Eye, Expand, FileSearch } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, LoaderCircle, ClipboardCheck, ClockFading, Download, Eye, Expand, FileSearch, Pin, PinOff } from "lucide-react";
 import { retryMaestroComponent } from "@/lib/maestro-component-retry";
 import { shortenCount } from "@/lib/utils";
 
@@ -199,6 +200,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     formattedRecordContainerRef,
     invokeRecordService,
     isDescribing,
+    isFormattingRecord,
     isLoadingRecordPolicy,
     isValidatingRecord,
     loadingRecordAuthors,
@@ -222,7 +224,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     recordFormatError,
     recordStatus,
     recordFormatMenuOpen,
-    recordFormatPreferenceKey,
+    recordFormatPreferenceKey, recordFormatPinned, setRecordFormatPinned, recordFormatMemoryEnabled,
     recordFormatPreferenceLoaded,
     recordFormatPreviews,
     recordGraphError,
@@ -272,6 +274,9 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     validateSelectedRecord,
     workspaceTab,
   } = workspace;
+  // Match the Graph Server menu: a dropdown trigger and a sibling action in one ButtonGroup.
+  const recordFormatButtonClass = `inline-flex items-center justify-center gap-1 rounded-md border py-1.5 text-sm font-medium disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90" : "bg-background hover:bg-accent"}`;
+  const recordTitleShimmer = Boolean(selectedUri && (isLoadingRecordPolicy || isFormattingRecord) && !workspace.queryExecutionCancelled);
   const recordHeaderLabel = [selectedResult?.title, selectedGroupRecord?.title,
     recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr ?? ""}\u0000${selectedUri}`)]
     .find(label => label?.trim() && label !== selectedUri) || toLabel(selectedUri);
@@ -517,10 +522,10 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                     <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_title_icon }} />
                   )}
                   {recordDescribeIncomplete && <Tooltip><TooltipTrigger render={<button type="button" onClick={() => retryMaestroComponent("record")} aria-label="Retry only this Record DESCRIBE" title="Retry only this Record DESCRIBE" className="inline-flex shrink-0 items-center rounded-sm hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"><ClockFading className="size-4" /></button>} /><TooltipContent>Virtuoso returned an incomplete DESCRIBE. Click to retry this Record without refreshing Browse.</TooltipContent></Tooltip>}
-                  {selectedUri && (fullscreenPane || sessionIndex > 0) ? <span title={selectedUri} className="truncate">{recordHeaderLabel}</span> : selectedUri ? (
+                  {selectedUri && (fullscreenPane || sessionIndex > 0) ? <span title={selectedUri} className={`truncate ${recordTitleShimmer ? "shimmer motion-reduce:shimmer-none" : ""}`}>{recordHeaderLabel}</span> : selectedUri ? (
                     <Tooltip><TooltipTrigger render={<button
                       type="button"
-                      className={`cursor-pointer text-left underline-offset-2 hover:underline ${facetHoverPreview?.kind === "record" && facetHoverPreview.uri === selectedUri ? "text-purple-700 dark:text-purple-300" : ""}`}
+                      className={`cursor-pointer text-left underline-offset-2 hover:underline ${recordTitleShimmer ? "shimmer motion-reduce:shimmer-none" : ""} ${facetHoverPreview?.kind === "record" && facetHoverPreview.uri === selectedUri ? "text-purple-700 dark:text-purple-300" : ""}`}
                       onClick={() => { if (selectedRecordTermType !== "bnode") { clearTutorialPreview(); applyRecordAsRootValue(selectedUri); } }}
                       onMouseEnter={() => beginRecordHoverPreview(selectedUri, selectedResult?.title ?? (selectedGroupRecord ? (selectedGroupRecord.termType === "uri" ? toLabel(selectedGroupRecord.uri) : selectedGroupRecord.title || selectedGroupRecord.uri) : toLabel(selectedUri)))}
                       onMouseLeave={clearTutorialPreview}
@@ -636,13 +641,15 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild><button type="button" disabled={isValidatingRecord} title="Validate record" aria-label="Validate record" className="inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50">{isValidatingRecord ? <LoaderCircle className="size-4 animate-spin" aria-label="Validating record" /> : <ClipboardCheck className="size-4" aria-hidden="true" />}<span>Validate</span>{recordPolicies.length > 1 && <ChevronDown className="size-3.5" />}</button></DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className={fullscreenPane ? "z-[120] w-72" : "w-72"}>
-                        {recordPolicies.map((policy) => <DropdownMenuItem key={policy.uri} onSelect={() => { const templateUri = policy.templates[0]?.uri ?? ""; manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(templateUri); setRecordValidation(null); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(templateUri, templateKey); } catch (error) { browserLog.warn("record.policy.persist-failed", error); } void validateSelectedRecord(policy); }}>{policy.label}</DropdownMenuItem>)}
+                        {recordPolicies.map((policy) => <DropdownMenuItem key={policy.uri} onSelect={() => { const templateUri = policy.templates[0]?.uri ?? ""; manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(templateUri); setRecordValidation(null); try { const store = recordFormatMemoryEnabled() ? queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences") : undefined; const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(templateUri, templateKey); } catch (error) { browserLog.warn("record.policy.persist-failed", error); } void validateSelectedRecord(policy); }}>{policy.label}</DropdownMenuItem>)}
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    <ButtonGroup aria-label="Record format and pin" className="shrink-0">
                     <DropdownMenu open={recordFormatMenuOpen} onOpenChange={setRecordFormatMenuOpen}>
-                      <DropdownMenuTrigger asChild><button type="button" aria-pressed={recordFormatEnabled} disabled={!recordFormatPreferenceLoaded} className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`} title="Format record" aria-label="Format record"><Eye className="size-4" aria-hidden="true" /><span>Format</span><ChevronDown className="size-3.5" /></button></DropdownMenuTrigger>
+                      <DropdownMenuTrigger asChild><button type="button" aria-pressed={recordFormatEnabled} disabled={!recordFormatPreferenceLoaded} className={`${recordFormatButtonClass} px-3`} title="Format record" aria-label="Format record"><Eye className="size-4" aria-hidden="true" /><span>Format</span><ChevronDown className="size-3.5" /></button></DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className={fullscreenPane ? "z-[120] w-80" : "w-80"}>
                         <DropdownMenuItem onSelect={() => {
+                          manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: recordPolicy.uri, templateUri: "" };
                           setRecordFormatEnabled(false);
                           setSelectedRecordTemplateUri("");
                           setFormattedRecordHtml("");
@@ -656,12 +663,33 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                           </span>
                           <span className="min-w-0 flex-1"><span className="flex items-center gap-2 font-medium">Default{!recordFormatEnabled && <Check className="size-4 text-primary" aria-label="Selected format" />}</span><span className="block text-xs text-muted-foreground">Property/value table and roles</span></span>
                         </DropdownMenuItem>
-                        {recordPolicies.flatMap((policy) => policy.templates.map((template) => ({ policy, template }))).map(({ policy, template }) => <DropdownMenuItem key={`${policy.uri}:${template.uri}`} onSelect={() => { manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri: template.uri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(template.uri); setRecordValidation(null); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setRecordFormatError(""); try { const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences"); const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(template.uri, templateKey); } catch (error) { browserLog.warn("record.format.persist-failed", error); } if (!recordFormatEnabled) setRecordFormatEnabled(true); }} className="flex items-start gap-3 py-3">
+                        {recordPolicies.flatMap((policy) => policy.templates.map((template) => ({ policy, template }))).map(({ policy, template }) => <DropdownMenuItem key={`${policy.uri}:${template.uri}`} onSelect={() => { manualRecordFormatSelectionRef.current = { recordUri: selectedUri, queryXml, policyUri: policy.uri, templateUri: template.uri }; setRecordPolicy(policy); setSelectedRecordTemplateUri(template.uri); setRecordValidation(null); setFormattedRecordHtml(""); setFormattedRecordButtonsHtml({}); setRecordFormatError(""); try { const store = recordFormatMemoryEnabled() ? queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences") : undefined; const policyKey = recordFormatPreferenceKey("policy"); const templateKey = recordFormatPreferenceKey("template"); if (policyKey) store?.put(policy.uri, policyKey); if (templateKey) store?.put(template.uri, templateKey); } catch (error) { browserLog.warn("record.format.persist-failed", error); } if (!recordFormatEnabled) setRecordFormatEnabled(true); }} className="flex items-start gap-3 py-3">
                           <span className="mt-0.5 block h-24 w-24 shrink-0 overflow-hidden rounded border bg-background"><span className="pointer-events-none block h-24 w-44 origin-top-left scale-[0.5] overflow-hidden" dangerouslySetInnerHTML={{ __html: (policy.uri === recordPolicy.uri ? recordFormatPreviews[template.uri] : undefined) ?? "<div class=\"p-2 text-xs text-muted-foreground\">Preview available after selection</div>" }} /></span>
                           <span className="min-w-0 flex-1"><span className="flex items-center gap-2 font-medium">{template.label}{recordFormatEnabled && recordPolicy.uri === policy.uri && selectedRecordTemplateUri === template.uri && <Check className="size-4 shrink-0 text-primary" aria-label="Selected format" />}</span><span className="block break-all text-xs text-muted-foreground">{template.uri}</span></span>
                         </DropdownMenuItem>)}
                       </DropdownMenuContent>
                     </DropdownMenu>
+                      <button type="button" className={`${recordFormatButtonClass} w-8`} aria-pressed={recordFormatPinned}
+                        disabled={!recordFormatPreferenceLoaded} title={recordFormatPinned ? "Unpin Format" : "Pin Format"}
+                        aria-label={recordFormatPinned ? "Unpin Format" : "Pin Format"} onClick={() => {
+                          const pinned = !recordFormatPinned;
+                          // Changing memory mode must not change the current Record's format.
+                          const currentChoice = recordPolicy && recordPolicyCheckedUri === selectedUri && !isLoadingRecordPolicy
+                            ? { recordUri: selectedUri, queryXml, policyUri: recordPolicy.uri, templateUri: recordFormatEnabled ? selectedRecordTemplateUri : "" }
+                            : null;
+                          if (currentChoice) manualRecordFormatSelectionRef.current = currentChoice;
+                          setRecordFormatPinned(pinned);
+                          if (!pinned || !currentChoice) return;
+                          try {
+                            const policyKey = recordFormatPreferenceKey("policy"), templateKey = recordFormatPreferenceKey("template");
+                            const store = queryTreeHeightDbRef.current?.transaction("preferences", "readwrite").objectStore("preferences");
+                            if (policyKey) store?.put(currentChoice.policyUri, policyKey);
+                            if (templateKey) store?.put(currentChoice.templateUri, templateKey);
+                          } catch (error) { browserLog.warn("record.format.pin-persist-failed", error); }
+                        }}>
+                        {recordFormatPinned ? <Pin className="size-4 fill-current" aria-hidden="true"/> : <PinOff className="size-4" aria-hidden="true"/>}
+                      </button>
+                    </ButtonGroup>
                   </>}
                   {isLoadingRecordPolicy && <span className="text-xs text-muted-foreground">Looking for a record policy…</span>}
                   {recordPolicyError && <ErrorDetails prefix="Record policy" error={recordPolicyError} />}
@@ -712,13 +740,15 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                 )}
                 </CollapsibleContent>
               </Collapsible>
-              {(recordIdentityPending || (!selectedUri && !recordSelectionCleared)) ? (
+              {!selectedUri && !recordSelectionCleared && !recordIdentityPending ? (
+                <p className="px-3 py-2 text-xs text-muted-foreground">No Record selected — select a result to inspect its properties and roles</p>
+              ) : recordIdentityPending ? (
                 <FormattedRecordSkeleton
-                  label={recordIdentityPending ? "Waiting for Results" : "No Record selected — select a result to inspect its properties and roles"}
+                  label="Waiting for Results"
                   pending={recordIdentityPending}
                   state="unconfirmed"
                 />
-              ) : selectedRecordTermType !== "bnode" && recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && !recordDescriptionError && (isDescribing || isLoadingRecordPolicy || (Boolean(authSession) && recordPolicyCheckedUri !== selectedUri) || (Boolean(recordPolicy) && (!recordDescriptionSnapshot || recordDescriptionSnapshot.key !== currentRecordDescriptionKey || (!currentFormattedRecordHtml && !recordFormatError)))) ? (
+              ) : selectedRecordTermType !== "bnode" && recordFormatPreferenceLoaded && recordFormatEnabled && selectedUri && !recordDescriptionError && (isDescribing || isLoadingRecordPolicy || isFormattingRecord || isValidatingRecord) ? (
                 <FormattedRecordSkeleton
                   label={recordPolicy && selectedRecordTemplateUri ? ("Loading record (formatted)") : "Loading record"}
                   clockScope={recordPolicy && selectedRecordTemplateUri ? "policies" : isDescribing ? "record" : "policies"}
@@ -727,7 +757,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
               ) : selectedRecordTermType !== "bnode" && currentFormattedRecordHtml ? (
                 <>
                   <RecordPerformanceDebug />
-                  <div ref={formattedRef} className="min-h-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
+                  <div ref={formattedRef} className="maestro-record-format-surface min-h-0 w-full min-w-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
                   {xsltPortals}
                   {recordServiceDom && recordServices.length > 0 && createPortal(recordServices.map((service) => (
                     <button key={service.uri} type="button" role="tab" aria-selected={recordServiceTab === service.uri}

@@ -2,7 +2,7 @@ import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 /** Render a SHACL-discovered XSLT View over the currently visible FCT result page. */
 export type ViewResult = {
   uri: string; label: string; selected?: boolean;
-  endpoint?: string; endpointId?: string; favicon?: string; rank?: string;
+  endpoint?: string; endpointId?: string; sourceResources?:string; protocols?:string; datasets?:string; favicon?: string; rank?: string;
   tags?: string; searchText?: string; signal?: string; depth?: string; avgSiblings?: string;
   appbarAdded?: boolean; appbarAvailable?: boolean; appbarIcon?: string;
   rootClasses?: string; lastResultCount?: string; lastNewCount?: string;
@@ -10,11 +10,11 @@ export type ViewResult = {
 };
 
 export async function renderDiscoveredViewXslt(stylesheetText: string, rows: ViewResult[], options?: {
-  availableRows?: ViewResult[]; page?: number; pageSize?: number;
+  availableRows?: ViewResult[]; page?: number; pageSize?: number;signal?:AbortSignal;
 }): Promise<string> {
-  if (stylesheetText.length > 250000 || /<\s*xsl:(?:import|include)\b|\bdocument\s*\(|\b(?:javascript|data):/i.test(stylesheetText)) {
-    throw new Error("View stylesheet contains unsupported external references.");
-  }
+  if (stylesheetText.length > 250000) throw new Error(`View stylesheet exceeds the 250000-character limit (${stylesheetText.length}).`);
+  const blocked = /<\s*xsl:(?:import|include)\b|\bdocument\s*\(|\b(?:javascript|data):/i.exec(stylesheetText);
+  if (blocked) throw new Error(`View stylesheet contains unsupported external references: ${blocked[0]} (character ${blocked.index}).`);
   const doc = document.implementation.createDocument(null, "results");
   const makeResult = (row: ViewResult) => {
     const element = doc.createElement("result");
@@ -28,7 +28,7 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
     if (row.appbarAdded) element.setAttribute("appbarAdded", "true");
     if (row.appbarAvailable) element.setAttribute("appbarAvailable", "true");
     if (row.pinging) element.setAttribute("pinging", "true");
-    for (const key of ["endpoint", "endpointId", "favicon", "rank", "health", "healthState", "group", "product", "version", "description", "author", "activation", "created", "url", "target", "detail", "targetLabel", "detailLabel", "status", "triggeredBy", "lastRequestedBy", "lastRequestDate", "bookmarked", "tags", "searchText", "signal", "depth", "avgSiblings", "rootClasses", "lastResultCount", "lastNewCount", "appbarIcon"] as const) {
+    for (const key of ["endpoint", "endpointId", "sourceResources", "protocols", "datasets", "favicon", "rank", "health", "healthState", "group", "product", "version", "description", "author", "activation", "created", "url", "target", "detail", "targetLabel", "detailLabel", "status", "triggeredBy", "lastRequestedBy", "lastRequestDate", "bookmarked", "tags", "searchText", "signal", "depth", "avgSiblings", "rootClasses", "lastResultCount", "lastNewCount", "appbarIcon"] as const) {
       if (row[key]) element.setAttribute(key, row[key]);
     }
     return element;
@@ -44,6 +44,7 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
   const html = await transformWithMaestroSaxon(
     stylesheetText,
     new XMLSerializer().serializeToString(doc),
+    {signal:options?.signal},
   );
   const parsed = new DOMParser().parseFromString(html, "text/html");
   const transformed = document.createDocumentFragment();
@@ -131,6 +132,10 @@ export async function renderDiscoveredViewXslt(stylesheetText: string, rows: Vie
           } else if (["data-perspective-open", "data-perspective-select", "data-perspective-delete", "data-perspective-appbar"].includes(name)
               && element.localName.toLowerCase() === "button" && attribute.value === "true") {
             // Actions are interpreted by the trusted React controller, never by stylesheet code.
+          } else if (name === "data-graph-uri" && element.localName.toLowerCase() === "article") {
+            // Inert resource identity; host matches only known FCT rows.
+          } else if (name === "data-graph-meta" && ["health","health-text","description","software","rank"].includes(attribute.value)) {
+            // Inert presentation anchors; the host writes plain text, not HTML.
           } else if (name === "data-endpoint-select" && element.localName.toLowerCase() === "button") {
             // The delegated View handler validates the registry ID before selection.
           } else if (name === "data-endpoint-refresh" && element.localName.toLowerCase() === "button") {

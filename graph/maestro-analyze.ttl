@@ -3,6 +3,8 @@
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
+ma:pageValidationShape a rdf:Property ; rdfs:label "Page validation shape"@en ; rdfs:domain ma:Analysis ; rdfs:range sh:NodeShape .
+
 <gttp://ggg.maestro.ecosys/analyze/table> a ma:Analysis, sh:NodeShape ;
   rdfs:label "Table"@en ;
   ma:lucideIcon "table-2" ;

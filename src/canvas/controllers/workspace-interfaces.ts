@@ -3,6 +3,8 @@
 import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 
 export type ConfigurePaneWorkspace = Pick<WorkspaceController,
+  | "queryExecutionCancelled"
+  | "queryRefreshRevision"
   | "commitConfigureFacetChanges"
   | "reportConfigureLifecycle"
   | "configureSelectedProperties"
@@ -287,6 +289,7 @@ export type LeftPaneDirectWorkspace = Pick<WorkspaceController,
 >;
 
 export type RecordPaneWorkspace = Pick<WorkspaceController,
+  | "queryExecutionCancelled"
   | "recordSelectionCleared"
   | "recordIdentityPending"
   | "accessCapabilities"
@@ -318,6 +321,7 @@ export type RecordPaneWorkspace = Pick<WorkspaceController,
   | "formattedRecordContainerRef"
   | "invokeRecordService"
   | "isDescribing"
+  | "isFormattingRecord"
   | "isLoadingRecordPolicy"
   | "isValidatingRecord"
   | "loadingRecordAuthors"
@@ -341,6 +345,10 @@ export type RecordPaneWorkspace = Pick<WorkspaceController,
   | "recordFormatError"
   | "recordFormatMenuOpen"
   | "recordFormatPreferenceKey"
+  | "recordFormatPinned"
+  | "setRecordFormatPinned"
+  | "recordFormatMemoryEnabled"
+  | "captureRecordFormatMode"
   | "recordFormatPreferenceLoaded"
   | "recordFormatPreviews"
   | "recordGraphError"
@@ -391,6 +399,8 @@ export type RecordPaneWorkspace = Pick<WorkspaceController,
 >;
 
 export type SettingsPaneWorkspace = Pick<WorkspaceController,
+  | "ribbonDiscoveryLimits"
+  | "setRibbonDiscoveryLimit"
   | "accessCapabilities"
   | "accessController"
   | "queryConcurrency"
@@ -596,6 +606,7 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "recordDescriptionQueryLimit"
   | "refreshMaestroPage"
   | "cancelMaestroPage"
+  | "queryExecutionCancelled"
   | "queryActivityPending"
   | "refreshQuery"
   | "restoreHistoryActionItem"
@@ -669,6 +680,6 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "viewProvider"
 >;
 
-export type FilterPaneWorkspace = FilterPaneDirectWorkspace & PersonalWidgetCardsWorkspace & Pick<WorkspaceController, "setPersonalDateRange" | "setPersonalNumericRange" | "propertyFacets" | "activePropertyFilters" | "viewProvider" | "policyApprovalRevision" | "togglePolicyStatusFilter" | "toggleLiveStatusFilter" | "isQueryBookmarked" | "accessCapabilities" | "accessController" | "reportProviderLifecycle" | "queryXml">;
+export type FilterPaneWorkspace = FilterPaneDirectWorkspace & PersonalWidgetCardsWorkspace & Pick<WorkspaceController, "setPersonalDateRange" | "setPersonalNumericRange" | "propertyFacets" | "activePropertyFilters" | "viewProvider" | "policyApprovalRevision" | "togglePolicyStatusFilter" | "toggleLiveStatusFilter" | "isQueryBookmarked" | "accessCapabilities" | "accessController" | "reportProviderLifecycle" | "queryXml" | "authSession">;
 export type LeftPaneWorkspace = LeftPaneDirectWorkspace & FilterPaneWorkspace & ConfigurePaneWorkspace;
 export type AppBarWorkspace = AppBarDirectWorkspace & SettingsPaneWorkspace;

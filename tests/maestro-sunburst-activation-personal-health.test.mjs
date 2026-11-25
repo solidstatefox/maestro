@@ -13,13 +13,16 @@ test('approved facet presentation activates automatically, with reversible user 
 
 test('personal SPARQL transport reports server 5xx and success to the graph-server registry without exposing query or HTML',()=>{
   const transport=read('src/lib/client-personal-sparql.ts');
+  const authenticated=read("src/lib/client-personal-request.ts");
+  const health=read("src/lib/personal-sparql-health.ts");
   const controller=read('src/canvas/utils/workspace-controller.tsx');
   assert.match(transport,/PERSONAL_SPARQL_HEALTH_EVENT/);
-  assert.match(transport,/response\.ok \|\| response\.status>=500/);
-  assert.match(transport,/endpointUrl,status/);
+  assert.match(transport,/const upstreamStatus=observedUpstreamStatus\(response\)/);
+  assert.match(authenticated,/signalPersonalHealth\(session\.graphStore, upstreamStatus\)/);
+  assert.match(health,/endpointUrl, status, at: Date\.now\(\)/);
   assert.match(transport,/sanitizeUpstreamDiagnostic\(upstream\)/);
-  assert.match(transport,/Personal SPARQL returned HTTP \$\{response\.status\}/);
+  assert.match(transport,/\$\{origin\} returned HTTP \$\{response\.status\}/);
   assert.match(controller,/addEventListener\(PERSONAL_SPARQL_HEALTH_EVENT,onPersonalHealth\)/);
   assert.match(controller,/graphServerUrlMatches\(item\.url,endpointUrl,item\.schemeInferred\)/);
-  assert.match(controller,/status >= 500 \? "server-error" : status === 401 \? "http-error" : "ok"/);
+  assert.match(controller,/status >= 500 \? "server-error" : \(status === 401 \|\| status === 403\) \? "http-error" : "ok"/);
 });

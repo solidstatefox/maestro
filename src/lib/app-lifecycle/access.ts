@@ -24,8 +24,10 @@ export type AccessContext = {
   authState: "unknown" | "success" | "rejected" | "degraded";
   authResponseStatus: number | null;
   authResponseAt: number;
+  proxyTransport: "unknown" | "reachable" | "unavailable";
 };
 export type AccessEvent =
+  | { type: "PROXY_TRANSPORT_OBSERVED"; state: "reachable" | "unavailable" }
   | { type: "LOGIN_ACTIVITY"; pending: boolean }
   | { type: "AUTH_CHALLENGE_SENT" }
   | { type: "SESSION_OBSERVED"; restored: boolean; sessionKey: string }
@@ -37,7 +39,7 @@ export type AccessEvent =
   | { type: "BOOKMARK_REVOKED"; queryKey: string };
 
 const initialContext: AccessContext = {
-  sessionKey: "", queryKey: "", bookmark: "unavailable", bookmarkId: "", verificationPending: false, bookmarkExecutor: null, loginPending: false, challengeResponsePending: false, initializationPulse: false, policyStage: "unavailable", policyError: "", authState: "unknown", authResponseStatus: null, authResponseAt: 0,
+  sessionKey: "", queryKey: "", bookmark: "unavailable", bookmarkId: "", verificationPending: false, bookmarkExecutor: null, loginPending: false, challengeResponsePending: false, initializationPulse: false, policyStage: "unavailable", policyError: "", authState: "unknown", authResponseStatus: null, authResponseAt: 0, proxyTransport: "unknown",
 };
 /** A pure context updater, not a reusable XState action. XState infers the
  * precise SESSION_OBSERVED event type at each assign(...) call site. */
@@ -71,6 +73,7 @@ export const maestroAccessMachine = setup({
   initial: "restoring",
   context: initialContext,
   on: {
+    PROXY_TRANSPORT_OBSERVED: { actions: assign(({event}) => ({proxyTransport: event.state})) },
     LOGIN_ACTIVITY: { actions: assign(({ context, event }) => ({ loginPending: event.pending, challengeResponsePending: false, initializationPulse: !event.pending && Boolean(context.sessionKey) && context.initializationPulse && (context.policyStage === "seeding" || context.policyStage === "verifying"),
       ...(event.pending && !context.sessionKey ? { authState: "unknown" as const, authResponseStatus: null, authResponseAt: 0 } : {}) })) },
     AUTH_CHALLENGE_SENT: { guard: ({context}) => context.loginPending,
@@ -182,16 +185,17 @@ export function selectMaestroCapabilities(snapshot: MaestroAccessSnapshot, input
   const status = snapshot.context.authResponseStatus;
   const challenge = snapshot.context.challengeResponsePending;
   const initializing = sessionReady && (snapshot.context.policyStage === "seeding" || snapshot.context.policyStage === "verifying");
-  const userSignal = status !== null && status >= 500 && status < 600 ? "red"
+  const userSignal = snapshot.context.proxyTransport === "unavailable" ? "amber" : status !== null && status >= 500 && status < 600 ? "red"
     : status !== null && status >= 400 && status < 500 && !challenge ? "amber"
-    : challenge || (snapshot.context.initializationPulse && !policyReady && (initializing || snapshot.context.loginPending)) ? "pulsingAmber"
-    : policyReady && status !== null && status >= 200 && status < 300 ? "green"
+    : challenge ? "pulsingAmber"
+    : sessionReady && status !== null && status >= 200 && status < 300 ? (policyReady ? "green" : "pulsingGreen")
     : "amber";
-  const userSignalLabel = challenge ? "401 — awaiting authenticated result"
+  const userSignalLabel = snapshot.context.proxyTransport === "unavailable" ? "Maestro proxy unavailable — personal authentication not reverified" : challenge ? "401 — awaiting authenticated result"
     : status !== null && status >= 400 ? `HTTP ${status}`
-    : snapshot.context.policyStage === "failed" ? "Personal initialization failed"
-    : initializing ? "Loading personal store"
+    : snapshot.context.policyStage === "failed" ? "Personal initialization failed (authentication status shown separately)"
+    : initializing ? `${status !== null && status >= 200 && status < 300 ? `HTTP ${status} — authenticated; ` : ""}Loading personal store`
     : userSignal === "green" ? `HTTP ${status} — ready`
+    : userSignal === "pulsingGreen" ? `HTTP ${status} — authenticated; personal policies not ready`
     : snapshot.context.loginPending ? "Connecting"
     : snapshot.context.authState === "degraded" ? "Personal endpoint request failed" : "No authenticated response yet";
   const queryMatches = Boolean(input.queryKey) && snapshot.context.queryKey === input.queryKey;
@@ -199,6 +203,7 @@ export function selectMaestroCapabilities(snapshot: MaestroAccessSnapshot, input
   return {
     canUsePersonalStore: policyReady,
     userSignal, userSignalLabel,
+    proxyTransport: snapshot.context.proxyTransport,
     authState: snapshot.context.authState,
     authResponseStatus: snapshot.context.authResponseStatus,
     challengeResponsePending: snapshot.context.challengeResponsePending,

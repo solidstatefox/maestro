@@ -10,7 +10,7 @@ test('Graph status observations are private graph RDF and use existing SPARQL tr
   const constants = source('src/lib/graph-context.ts');
   assert.match(constants, /GRAPH_SERVER_STATUS_GRAPH_SUFFIX = "\/graph\/server-status"/);
   assert.match(store, /updatePersonal\(`INSERT DATA \{ GRAPH/);
-  assert.match(store, /selectPersonal\(`SELECT \?at \?state \?code/);
+  assert.match(store, /selectPersonal\(`SELECT \?endpoint \?at \?state \?code/);
   assert.match(store, /GRAPH_SERVER_STATUS_ENDPOINT/);
   assert.doesNotMatch(store, /\/(?:proxy|api)\/api\/(?:status|graph-server-history)/);
 });
@@ -32,9 +32,12 @@ test('Graph Server card selection is separate from execution-server selection', 
   const page = source('src/canvas/tab/view/page.tsx');
   const manager = source('src/canvas/tab/view/graph-server-manager.tsx');
   assert.match(page,/const toggleGraphCard/);
-  assert.match(manager,/onSelectCard\?\.\(entry\.url\)/);
-  assert.match(manager,/Selected: \{state\}/);
-  assert.match(manager,/<GraphServerStatusHistory/);
+  const view = source('src/canvas/tab/view/view-components.tsx');
+  assert.doesNotMatch(manager,/<article|<GraphServerStatusHistory/);
+  assert.match(view,/onSelectGraphCard\?\.\(uri\)/);
+  assert.match(view,/onSelectEndpoint\(/);
+  assert.match(view,/selectedGraphCardUri === row.uri/);
+  assert.match(view,/createPortal\(<GraphServerStatusHistory endpoint=\{row.endpoint\}/);
 });
 test('Query Tree uses one native button group and editor labels preserve FCT operators', () => {
   const workspace = source('src/canvas/utils/workspace-controller.tsx');

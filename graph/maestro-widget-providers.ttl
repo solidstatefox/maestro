@@ -1,11 +1,14 @@
 @prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
 @prefix schema: <https://schema.org/> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/entrypoint> a mui:Provider ;
     rdfs:label "Graph Servers" ;
-    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/entrypoint-input> ;
+    mui:accepts <gttp://ggg.maestro.ecosys/shacl/provider/entrypoint-input>,
+        <gttp://ggg.maestro.ecosys/shacl/provider/dcat-service-input>,
+        <gttp://ggg.maestro.ecosys/shacl/provider/dcat-distribution-input> ;
     mui:widget <gttp://ggg.maestro.ecosys/shacl/view#EntryPointCards> .
 
 <gttp://ggg.maestro.ecosys/shacl/provider/record-0-template-0> a mui:Provider ;
@@ -108,3 +111,33 @@
 <gttp://ggg.maestro.ecosys/shacl/provider/record-0-input> a mui:InputShape ;
     sh:class <http://www.w3.org/2002/01/bookmark#Bookmark> .
 
+
+# DCAT input shapes extend the existing Graph Servers widget. Recipes are
+# descriptive discovery metadata only; runtime uses the live page merge-values.
+<gttp://ggg.maestro.ecosys/shacl/provider/dcat-service-input> a mui:InputShape, sh:NodeShape ;
+    sh:class <http://www.w3.org/ns/dcat#DataService> ;
+    sh:targetClass <http://www.w3.org/ns/dcat#DataService> ;
+    mui:endpointDiscoveryQuery <gttp://ggg.maestro.ecosys/shacl/provider/dcat-endpoint-urls>, <gttp://ggg.maestro.ecosys/shacl/provider/dcat-services> .
+<gttp://ggg.maestro.ecosys/shacl/provider/dcat-distribution-input> a mui:InputShape, sh:NodeShape ;
+    sh:class <http://www.w3.org/ns/dcat#Distribution> ;
+    sh:targetClass <http://www.w3.org/ns/dcat#Distribution> ;
+    mui:endpointDiscoveryQuery <gttp://ggg.maestro.ecosys/shacl/provider/dcat-endpoint-urls>, <gttp://ggg.maestro.ecosys/shacl/provider/dcat-services> .
+<gttp://ggg.maestro.ecosys/shacl/provider/dcat-endpoint-urls> rdf:value """PREFIX dcat: <http://www.w3.org/ns/dcat#>
+SELECT DISTINCT ?endpoint
+WHERE {
+  { ?service dcat:endpointURL ?endpoint . }
+  UNION
+  { ?distribution dcat:accessURL ?endpoint . }
+  FILTER (CONTAINS(LCASE(STR(?endpoint)), "sparql"))
+}
+ORDER BY ?endpoint
+LIMIT 500""" .
+<gttp://ggg.maestro.ecosys/shacl/provider/dcat-services> rdf:value """PREFIX dcat: <http://www.w3.org/ns/dcat#>
+PREFIX dct: <http://purl.org/dc/terms/>
+SELECT DISTINCT ?service ?title ?endpoint ?standard
+WHERE {
+  ?service dcat:endpointURL ?endpoint .
+  OPTIONAL { ?service dct:title ?title }
+  OPTIONAL { ?service dct:conformsTo ?standard }
+}
+LIMIT 100""" .

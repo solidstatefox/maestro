@@ -4,14 +4,17 @@ import { ErrorDetails } from "@/components/ui/error-details";
 import { describeFctSource } from "@/lib/rdf-source";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 import { ProviderCatalogLoadingSkeleton } from "@/canvas/workspace-skeleton";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { GraphServerStatusHistory } from "@/canvas/tab/view/graph-server-status-history";
 import { CodeBlock } from "@/components/ui/code-block";
 import { ArrowLeft } from "lucide-react";
 import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
+import type { EndpointCandidate } from "@/lib/client-endpoint-discovery";
 import type { ProviderKind } from "@/lib/provider-catalog-xslt";
 type ViewChoice = { uri: string };
 type GraphServerCard = { uri: string; label: string; endpoint: string; endpointId: string;
-  selected: boolean; health: string; healthState: string };
+  services:string[]; standards:string[]; likelySparql:boolean; selected: boolean; health: string; healthState: string; description?:string; software?:string; rank?:string };
 const BOOKMARK_APPROVAL_MESSAGE = "Bookmark this query to manage {kind} approvals. Use the highlighted Bookmark button in the appbar.";
 const PROVIDER_APPROVAL_LABEL: Record<ProviderKind, string> = {
   policies: "policy", formats: "format", "facet-widgets": "facet", transcoders: "transcoder", curators: "curator", "fsm-providers": "FSM provider", kinds: "Kinds provider", perspectives: "perspective provider", "analysis-providers": "Analysis provider",
@@ -31,7 +34,7 @@ export interface ViewPageProps {
   viewSelectionPending?: boolean;
   viewRenderError: string;
   viewHtml: string;
-  viewResultCount: number;
+  viewRenderPhase: import("@/lib/app-lifecycle/provider-catalog").ProviderCatalogPhase;
   kanbanGroupingOptions?: { key: string; label: string }[];
   kanbanGroupKey?: string;
   onKanbanGroupChange?: (key: string) => void;
@@ -43,10 +46,12 @@ export interface ViewPageProps {
   onSelectProvider?: (uri: string, selected: boolean) => void;
   onBrowse: () => void;
   graphServerCards?: GraphServerCard[];
+  canReadGraphHistory?: boolean;
   selectedGraphCardUri?: string;
   onSelectGraphCard?: (uri: string) => void;
+  onRegisterEndpoint?: (candidate:EndpointCandidate)=>void;
 }
-export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider, viewProviderLoading, viewProviderError, viewProviderCount, viewProviderHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, selectedViewUri = "", viewSelectionPending = false, viewRenderError, viewHtml, viewResultCount, onSelectEndpoint, onRefreshEndpoint, onPolicyAction, onOpenResource, onSelectProvider, onBrowse, kanbanGroupingOptions = [], kanbanGroupKey = "none", onKanbanGroupChange, onKanbanMoveCard, graphServerCards = [], selectedGraphCardUri = "", onSelectGraphCard }: ViewPageProps) {
+export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider, viewProviderLoading, viewProviderError, viewProviderCount, viewProviderHtml, viewDiscoveryLoading, viewDiscoveryError, selectedView, selectedViewUri = "", viewSelectionPending = false, viewRenderError, viewHtml, viewRenderPhase, onSelectEndpoint, onRefreshEndpoint, onPolicyAction, onOpenResource, onSelectProvider, onBrowse, kanbanGroupingOptions = [], kanbanGroupKey = "none", onKanbanGroupChange, onKanbanMoveCard, graphServerCards = [], canReadGraphHistory = false, selectedGraphCardUri = "", onSelectGraphCard, onRegisterEndpoint }: ViewPageProps) {
   const kanbanActive = selectedViewUri === "gttp://ggg.maestro.ui/provider/kanban" && selectedView?.uri === selectedViewUri && !viewProvider;
   // The XSLT still owns cards. Decorate its *sanitized* HTML with trusted,
   // page-bounded selection metadata so native React can implement a toggle
@@ -60,39 +65,27 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
       const id = button?.getAttribute("data-endpoint-select") ?? "";
       const hrefs = Array.from(article.querySelectorAll<HTMLAnchorElement>("a[href]"))
         .map(anchor => anchor.getAttribute("href") ?? "");
-      const matches = graphServerCards.filter(row => !used.has(row.uri) && (
-        (id && row.endpointId === id) || hrefs.includes(row.endpoint) || hrefs.includes(row.uri) ||
-        (row.label && article.textContent?.includes(row.label))));
+      const explicit = article.getAttribute("data-graph-uri");
+      const matches = graphServerCards.filter(row => !used.has(row.uri) && (explicit ? row.uri === explicit :
+        ((id && row.endpointId === id) || hrefs.includes(row.endpoint) || hrefs.includes(row.uri))));
       // Ambiguous cards must not be given the identity of the wrong server.
       if (matches.length !== 1) continue;
       const row = matches[0]; used.add(row.uri);
       article.setAttribute("data-maestro-graph-card", row.uri);
       article.setAttribute("tabindex", "0");
-      article.setAttribute("aria-label", `${row.label} · select card for status history`);
-      article.classList.add("cursor-pointer", "focus-visible:ring-2", "focus-visible:ring-ring", "hover:border-primary/60");
-      if (selectedGraphCardUri === row.uri || selectedGraphCardUri === row.endpoint)
-        article.classList.add("ring-2", "ring-primary", "border-primary");
-      if (row.selected) {
-        const header = article.querySelector("header");
-        if (header) {
-          header.classList.add("flex", "items-center", "justify-between", "gap-2");
-          const state = row.healthState === "green" ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100"
-            : row.healthState === "amber" ? "bg-amber-100 text-amber-950 dark:bg-amber-950 dark:text-amber-100"
-            : row.healthState === "red" ? "bg-red-100 text-red-950 dark:bg-red-950 dark:text-red-100"
-            : "bg-muted text-muted-foreground";
-          header.classList.add(...state.split(" "));
-          const indicator = doc.createElement("span");
-          indicator.className = "ml-auto shrink-0 text-xs font-semibold";
-          indicator.textContent = `Selected: ${row.health}`;
-          header.appendChild(indicator);
-        }
+      article.setAttribute("aria-label", row.label);
+      if (row.endpoint && !row.endpointId && onRegisterEndpoint) {
+        const button=doc.createElement("button"); button.type="button";
+        button.setAttribute("data-maestro-register-endpoint",row.uri);
+        button.className="mx-5 mb-3 self-start rounded-md border px-2 py-1 text-xs hover:bg-muted";
+        button.textContent="Verify and register"; article.appendChild(button);
       }
+      const slot = doc.createElement("div"); slot.setAttribute("data-maestro-health-slot", row.uri); slot.className = "px-4 pb-3"; article.appendChild(slot);
+      article.classList.add("cursor-pointer", "focus-visible:ring-2", "focus-visible:ring-ring", "hover:border-primary/60");
+
     }
     return doc.body.innerHTML;
-  }, [viewHtml, graphServerCards, selectedGraphCardUri]);
-  // A ref survives the native drag lifecycle synchronously; React state updates
-  // may not have committed by the first dragover event.
-  const kanbanDragged = useRef<{uri: string; from: string} | null>(null);
+  }, [viewHtml, JSON.stringify(graphServerCards.map(row => [row.uri,row.endpoint,row.endpointId,row.label])), Boolean(onRegisterEndpoint)]);
   const [policyCode, setPolicyCode] = useState<{ uri: string; code: string; query: string; loading: boolean; error: string } | null>(null);
   useEffect(() => { setPolicyCode(null); }, [viewProvider, viewProviderHtml]);
   async function openPolicyCode(uri: string) {
@@ -144,9 +137,88 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
                     : viewDiscoveryError && !selectedView ? <ErrorDetails prefix="View discovery" error={viewDiscoveryError} />
                     : !selectedView ? <MaestroEmptyResults onBrowse={onBrowse} title={selectedViewUri ? viewSelectionPending ? "Checking selected Perspective…" : "Selected Perspective unavailable" : "No perspectives available"} description={selectedViewUri ? viewSelectionPending ? "The saved selection is retained while discovery and SHACL validation complete. You can use the default Browse perspective meanwhile." : "The selected provider did not match this query context. Try the default Browse perspective." : "No Perspectives match the current query. Try the default Browse perspective."}/>
                     : viewRenderError ? <ErrorDetails prefix="View rendering" error={viewRenderError} />
-                    : !viewHtml.trim() && viewResultCount > 0 ? <p role="status" className="text-sm text-muted-foreground"><ElapsedStatus label="Rendering perspective" category="other" clockScope="views"/></p>
+                    : viewRenderPhase === "waitingForResults" ? <p role="status" className="text-sm text-muted-foreground">Waiting for results…</p>
+                    : viewRenderPhase === "cancelled" ? <p role="status" className="text-sm text-muted-foreground">Perspective rendering cancelled.</p>
+                    : viewRenderPhase === "resolving" || viewRenderPhase === "rendering" ? <p role="status" className="text-sm text-muted-foreground"><ElapsedStatus label="Rendering perspective" category="other" clockScope="views"/></p>
                     : !viewHtml.trim() ? <MaestroEmptyResults onBrowse={onBrowse} title="No results to display" description="This Perspective returned no cards for the current page. Try the default Browse perspective."/>
-                    : <div className="maestro-discovered-view w-full min-h-0 flex-1"
+                    : <PerspectiveHtmlSurface key={JSON.stringify([selectedView.uri, graphServerHtml])}
+                        graphServerHtml={graphServerHtml} graphServerCards={graphServerCards}
+                        selectedGraphCardUri={selectedGraphCardUri} onSelectGraphCard={onSelectGraphCard}
+                        onRegisterEndpoint={onRegisterEndpoint} queryXml={queryXml} canReadGraphHistory={canReadGraphHistory}
+                        onSelectEndpoint={onSelectEndpoint} onRefreshEndpoint={onRefreshEndpoint}
+                        onOpenResource={onOpenResource} kanbanActive={kanbanActive} onKanbanMoveCard={onKanbanMoveCard} />}
+                </div>;
+}
+
+
+/** One immutable XSLT markup generation, including its React-owned portals.
+ * The caller keys this boundary by provider and exact decorated markup. Health
+ * changes update portal props and source decorations, not the HTML lifetime.
+ * Do not move portal state to ViewPage: a new page, provider, error, or cancel
+ * must retire the old host and all its portals in one React reconciliation.
+ */
+type PerspectiveHtmlSurfaceProps = Pick<ViewPageProps,
+  "onSelectGraphCard" | "onRegisterEndpoint" | "onSelectEndpoint" | "onRefreshEndpoint" |
+  "onOpenResource" | "onKanbanMoveCard"> & {
+  graphServerHtml: string;
+  graphServerCards: GraphServerCard[];
+  selectedGraphCardUri: string;
+  queryXml: string;
+  canReadGraphHistory: boolean;
+  kanbanActive: boolean;
+};
+function PerspectiveHtmlSurface({ graphServerHtml, graphServerCards, selectedGraphCardUri,
+  onSelectGraphCard, onRegisterEndpoint, queryXml, canReadGraphHistory,
+  onSelectEndpoint, onRefreshEndpoint, onOpenResource, kanbanActive, onKanbanMoveCard }: PerspectiveHtmlSurfaceProps) {
+  // React must receive the same innerHTML prop object for this entire mount.
+  // A freshly allocated object on a status update can cause the host contents
+  // to be assigned again, destroying the slot DOM outside React's ownership.
+  const [surfaceMarkup] = useState(() => ({ __html: graphServerHtml }));
+  const graphHtmlHost = useRef<HTMLDivElement | null>(null);
+  const [healthSlots, setHealthSlots] = useState<HTMLElement[]>([]);
+  useLayoutEffect(() => {
+    const host = graphHtmlHost.current;
+    if (!host) return;
+    setHealthSlots(Array.from(host.querySelectorAll<HTMLElement>("[data-maestro-health-slot]")));
+    // Only the immutable XSLT surface owns its source images. React owns
+    // the descendants of each health slot; never replace or clear them.
+    const images = Array.from(host.querySelectorAll("img"));
+    for (const image of images) image.onerror = () => {
+      const fallback = image.getAttribute("data-favicon-fallback");
+      if (fallback && image.src !== fallback) {
+        image.removeAttribute("data-favicon-fallback");
+        image.src = fallback;
+      } else image.hidden = true;
+    };
+    return () => { for (const image of images) image.onerror = null; };
+  }, []);
+  // Live status colors are local host decoration, never an XSLT execution key.
+  useLayoutEffect(() => {
+    for (const row of graphServerCards) {
+      const slot = healthSlots.find(item => item.dataset.maestroHealthSlot === row.uri);
+      const article = slot?.closest("article");
+      if (!article) continue;
+      article.classList.toggle("ring-2", selectedGraphCardUri === row.uri);
+      article.classList.toggle("ring-primary", selectedGraphCardUri === row.uri);
+      const status = article.querySelector<HTMLElement>('[data-graph-meta="health-text"]') ?? article.querySelector<HTMLElement>("[data-maestro-live-health]") ?? document.createElement("div");
+      status.setAttribute("data-maestro-live-health", "true");
+      status.className = `text-xs ${row.healthState === "green" ? "text-green-600" : row.healthState === "amber" ? "text-amber-600" : row.healthState === "red" ? "text-red-600" : "text-muted-foreground"}`;
+      status.textContent = `${row.selected ? "Selected: " : ""}${row.health}`;
+      if (!status.parentElement) article.insertBefore(status, slot!);
+      // Remove the stale snapshot glyph; the live colored text is authoritative.
+      const health = article.querySelector('[data-graph-meta="health"]');
+      health?.querySelector(':scope > span:has(svg)')?.remove();
+      for (const [name,value] of Object.entries({description:row.description??"",software:row.software??"",rank:row.rank?.startsWith("#")?`Site rank: ${row.rank}`:""})) {
+        const node=article.querySelector<HTMLElement>(`[data-graph-meta="${name}"]`);
+        if(node){node.textContent=value;node.hidden=!value;}
+      }
+    }
+  }, [graphServerCards, healthSlots, selectedGraphCardUri]);
+  // A ref survives the native drag lifecycle synchronously; React state updates
+  // may not have committed by the first dragover event.
+  const kanbanDragged = useRef<{uri: string; from: string} | null>(null);
+  return <>
+    <div className="maestro-discovered-view w-full min-h-0 flex-1"
                       onDragStart={event => {
                         if (!kanbanActive) return;
                         const card = (event.target as HTMLElement).closest<HTMLElement>('article[data-kanban-card="true"]');
@@ -182,6 +254,12 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
                           if (/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(uri)) onOpenResource?.(uri);
                           return;
                         }
+                        const register = target.closest<HTMLButtonElement>("button[data-maestro-register-endpoint]");
+                        if(register){
+                          const row=graphServerCards.find(card=>card.uri===register.dataset.maestroRegisterEndpoint && card.endpoint && !card.endpointId);
+                          if(row && onRegisterEndpoint)onRegisterEndpoint({endpoint:row.endpoint,title:row.label,services:row.services,standards:row.standards,likelySparql:row.likelySparql,description:row.description});
+                          return;
+                        }
                         const select = target.closest<HTMLButtonElement>("button[data-endpoint-select]");
                         if (select) {
                           if (select.dataset.endpointSelect) onSelectEndpoint(select.dataset.endpointSelect);
@@ -204,19 +282,10 @@ export function ViewPage({ queryXml = "", requiresBookmark = false, viewProvider
                         if (uri && graphServerCards.some(row => row.uri === uri)) {
                           event.preventDefault(); onSelectGraphCard?.(uri);
                         }
-                      }} ref={(element) => {
-                        if (!element) return;
-                        // Native favicon fetching is optional; expose the XSLT's Lucide fallback when missing.
-                        element.querySelectorAll("img").forEach((image) => {
-                          image.onerror = () => {
-                            const fallback = image.getAttribute("data-favicon-fallback");
-                            if (fallback && image.src !== fallback) {
-                              image.removeAttribute("data-favicon-fallback");
-                              image.src = fallback;
-                            } else image.hidden = true;
-                          };
-                        });
-                      }} dangerouslySetInnerHTML={{ __html: graphServerHtml }}/>} 
-                </div>;
+                      }} ref={graphHtmlHost} dangerouslySetInnerHTML={surfaceMarkup}/>
+                  {healthSlots.map(slot => {
+                    const row = graphServerCards.find(card => card.uri === slot.dataset.maestroHealthSlot);
+                    return row?.endpoint ? createPortal(<GraphServerStatusHistory endpoint={row.endpoint} label={row.label} queryXml={queryXml} canRead={canReadGraphHistory} compact/>,slot,row.uri) : null;
+                  })}
+  </>;
 }
-

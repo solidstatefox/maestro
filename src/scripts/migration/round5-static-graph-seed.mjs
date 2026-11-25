@@ -1,7 +1,8 @@
 /** Compile the repo's RDF documents into static RDFJS triple assets at BUILD
  * time, never while serving an authenticated user request. Blank nodes are
  * serialized in one browser-side SPARQL INSERT DATA per input document. */
-import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { readFile, mkdir, lstat } from 'node:fs/promises';
+import { writeSeedOutput, publishSeedManifest } from './static-graph-seed-output.mjs';
 import { createHash } from 'node:crypto';
 import { resolve, dirname, join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,7 @@ const graph=join(root,'graph');
 const out=join(root,'public','maestro-seed');
 const manifest=JSON.parse(await readFile(join(graph,'manifest.json'),'utf8'));
 await mkdir(out,{recursive:true});
+if (!(await lstat(out)).isDirectory()) throw Error('Unsafe seed output directory');
 const BASE='https://seed.maestro.invalid/base';
 const formats={'.ttl':'Turtle','.nt':'N-Triples','.n3':'N3','.trig':'TriG','.nq':'N-Quads','.n4':'N-Quads'};
 async function parse(content,file){
@@ -34,11 +36,14 @@ for(const file of Object.keys(manifest).sort((a,b)=>a==='dataserver-seed.ttl'?-1
   const quads=await parse(source,file);
   const triples=quads.map(q=>({subject:term(q.subject),predicate:term(q.predicate),object:term(q.object)}));
   const digest=`sha256:${createHash('sha256').update(source,'utf8').digest('hex')}`;
-  const asset=`${createHash('sha256').update(file).digest('hex')}.json`;
-  await writeFile(join(out,asset),JSON.stringify({file,destination,digest,triples}));
+  const payload=JSON.stringify({file,destination,digest,triples});
+  const asset=`${createHash('sha256').update(payload).digest('hex')}.json`;
+  await writeSeedOutput(join(out,asset),payload);
   entries.push({file,destination,asset});
 }
-await writeFile(join(out,'manifest.json'),JSON.stringify(entries,null,2)+'\n');
 // OTC model instructions are immutable deployment assets, not request-time filesystem reads.
-await writeFile(join(out,'otc-survey-skill.md'),await readFile(join(root,'src','skills','otc-survey-skill.md')));
+await writeSeedOutput(join(out,'otc-survey-skill.md'),await readFile(join(root,'src','skills','otc-survey-skill.md')));
+const cleanup=await publishSeedManifest(out,entries);
+console.log(`Removed ${cleanup.removed} obsolete static RDF graph assets.`);
+for(const name of cleanup.preserved) console.warn(`Preserved unrecognized seed JSON: ${name}`);
 console.log(`Created ${entries.length} static RDF graph assets in public/maestro-seed.`);

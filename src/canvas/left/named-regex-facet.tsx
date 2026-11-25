@@ -1,4 +1,5 @@
 "use client";
+import { facetButtonFactory, completeFacetButton } from "@/components/ui/facet-button-factory";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { useState } from "react";
 import { Regex, X } from "lucide-react";
@@ -69,9 +70,7 @@ export function NamedRegexCreateButton({ relationship, propertyUri }: { relation
     setOpen(false); setError(""); setName(""); setPattern("");
   };
   return <>
-    <Tooltip><TooltipTrigger render={<button type="button" onClick={() => setOpen(true)}
-      aria-label="Add named regular-expression filter"
-      className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"><Regex className="size-4" /></button>} />
+    <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(<Regex className="size-4" />), {"type":"button", "onClick":(() => setOpen(true)), "aria-label":"Add named regular-expression filter", "className":"inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/header:opacity-100"})} />
       <TooltipContent>Add named regex filter</TooltipContent></Tooltip>
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent aria-label="Named regular expression" className="w-full max-w-lg space-y-3 p-4">

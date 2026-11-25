@@ -1,12 +1,13 @@
 "use client";
 /** Build-time RDF archives are static files. At login the browser owns the
- * graph import transaction and talks to the graph server using SPARQL Update.
+ * graph import sequence and talks to the graph server using SPARQL Update.
  * The Next.js host never reads graph/ at request time or seeds user accounts. */
 import { GRAPH, resolveGraph, type GraphKey } from "@/lib/constants/graphs";
-import { personalContext, selectPersonal, updatePersonal } from "@/lib/client-personal-sparql";
+import { personalContext, selectPersonal, updatePersonal, type PersonalRows } from "@/lib/client-personal-sparql";
 import { invalidateClientStatusMachines } from "@/lib/status-machine-client";
 import { createBlankNodeLabelAllocator } from "@/lib/bnode";
 import { MUI_NS } from "@/lib/personal-status-vocabulary";
+import { graphForPrefix } from "@/lib/personal-auth";
 import { destinationSeedDigest } from "@/lib/graph-seed-content-digest";
 
 type Term = {termType: "NamedNode" | "BlankNode" | "Literal"; value: string; language?: string; datatype?: {value:string}};
@@ -47,9 +48,23 @@ function buildInsertData(graph:string,triples:Triple[],base:string):string {
   return update;
 }
 async function staticJson<T>(url:string,signal?:AbortSignal):Promise<T> {
-  const response=await fetch(url,{cache:"no-store",signal});
+  // Manifest is always authoritative. Individual compiled payloads have
+  // content-addressed filenames and are safe to share across same-origin tabs.
+  const immutable=/\/[a-f0-9]{64}\.json$/.test(url);
+  const store=immutable && typeof caches!=="undefined" ? await caches.open("maestro-rdf-assets-v2").catch(()=>null) : null;
+  signal?.throwIfAborted();
+  const cached=await store?.match(url).catch(()=>undefined);
+  if(cached){
+    try { const result=await cached.json() as T; signal?.throwIfAborted(); return result; }
+    catch { await store?.delete(url).catch(()=>false); signal?.throwIfAborted(); }
+  }
+  const response=await fetch(url,{cache:immutable?"force-cache":"no-store",signal});
   if(!response.ok)throw new Error(`Missing static graph-seed asset ${url} (HTTP ${response.status}). Run prebuild.`);
-  return response.json() as Promise<T>;
+  const copy=store ? response.clone() : null;
+  const result=await response.json() as T;
+  signal?.throwIfAborted();
+  if(copy)await store?.put(url,copy).catch(()=>{});
+  return result;
 }
 function target(base:string,destination:string):string {
   // Asset destinations are stable graph registry keys; an absolute IRI is
@@ -86,6 +101,10 @@ function browserGraphAssets():Promise<Array<{entry:Entry;asset:Asset}>> {
       }
     };
     await Promise.all(Array.from({length:Math.min(4,entries.length)},()=>worker()));
+    if(typeof caches!=="undefined")void caches.open("maestro-rdf-assets-v2").then(async cache=>{
+      const live=new Set(entries.map(entry=>`${PREFIX}${entry.asset}`));
+      for(const request of await cache.keys())if(!live.has(new URL(request.url).pathname))await cache.delete(request);
+    }).catch(()=>{});
     return assets;
   })().catch(error=>{browserAssets=null;throw error;});
   return browserAssets;
@@ -93,73 +112,137 @@ function browserGraphAssets():Promise<Array<{entry:Entry;asset:Asset}>> {
 /** May run before authentication: no personalContext, SPARQL or credentials. */
 export async function initializeBrowserGraphAssets():Promise<void>{await browserGraphAssets();}
 
-const seedInFlight=new Map<string,Promise<Array<{file:string;graph:string}>>>();
-export async function seedPersonalGraphs(signal?:AbortSignal):Promise<Array<{file:string;graph:string}>> {
-  const ctx=await personalContext(),key=ctx.addr+"|"+ctx.base;
-  const pending=seedInFlight.get(key);
-  if(pending)return pending;
+const seedPredicate=`${MUI_NS}seedDigest`;
+type Document={entry:Entry;graph:string;triples:Triple[];digest:string};
+export type SeedPlan={base:string;documents:Document[];desired:Map<string,string>;revision:string;query:string};
+export type SeedResult={revision:string;changedGraphs:string[]};
+const seedSource="GraphSeed:CheckDigests";
+function resolvedValue(value:string,graph:string,base:string):string {
+  return value.replace(/^urn:maestro:graph:([\s\S]*)$/,(_match,suffix:string)=>`${base}${suffix}`).replace(BASE_PLACEHOLDER,graph);
+}
+/** Include one result per destination even if no marker exists. A missing row
+ * is incomplete evidence, not an empty graph. */
+export function seedDigestSelect(graphs:readonly string[]):string {
+  return `SELECT ?graph ?digest WHERE { VALUES ?graph { ${graphs.map(iri).join(" ")} } OPTIONAL { GRAPH ?graph { ?graph ${iri(seedPredicate)} ?digest } } }`;
+}
+export function parseSeedDigests(rows:PersonalRows,graphs:readonly string[]):Map<string,string> {
+  const expected=new Set(graphs), found=new Map<string,string>();
+  for(const row of rows){
+    const graph=row.graph?.value;
+    if(!graph||!expected.has(graph)||found.has(graph)||row.graph.type!=="uri")throw new Error("Invalid or conflicting graph seed digest result.");
+    const digest=row.digest?.value??"";
+    if(row.digest && (!/^[a-f0-9]{64}$/.test(digest)||row.digest.type!=="literal"))throw new Error("Invalid graph seed digest marker.");
+    found.set(graph,digest);
+  }
+  if(found.size!==expected.size)throw new Error("Incomplete graph seed digest result.");
+  return found;
+}
+/** Static preparation can occur before the initial Digest challenge. */
+export async function preparePersonalSeed(graphPrefix:string,signal?:AbortSignal):Promise<SeedPlan> {
+  const base=graphForPrefix(graphPrefix);
+  const entries=await browserGraphAssets();
+  const documents:Array<Document>=[];
+  const groups=new Map<string,Array<{file:string;digest:string}>>();
+  for(const {entry,asset} of entries){
+    signal?.throwIfAborted();
+    const graph=target(base,entry.destination);
+    // Only distributed graph definitions are writable by this synchronizer.
+    if(![GRAPH.SHACL_POLICIES,GRAPH.ONTOLOGY_CACHE,GRAPH.STATE_MACHINES,GRAPH.OTC_TRANSCODERS,GRAPH.GRAPHS].some(key=>resolveGraph(key,base)===graph))throw new Error(`Unmanaged seed destination: ${graph}`);
+    const triples=[...asset.triples];
+    for(const resource of new Set(triples.filter(t=>t.predicate.value===RDF_TYPE&&t.object.value===MUI_PROVIDER&&t.subject.termType==="NamedNode").map(t=>t.subject.value)))
+      triples.push({subject:{termType:"NamedNode",value:resource},predicate:{termType:"NamedNode",value:`${MUI_NS}implementationDigest`},object:{termType:"Literal",value:asset.digest}});
+    if(triples.length)buildInsertData(graph,triples,base);
+    documents.push({entry,graph,triples,digest:asset.digest});
+    const current=groups.get(graph)??[];current.push({file:entry.file,digest:asset.digest});groups.set(graph,current);
+  }
+  const desired=new Map<string,string>();
+  for(const [graph,items] of groups)desired.set(graph,await destinationSeedDigest(items,"managed-definition-slots-v1"));
+  const revision=await destinationSeedDigest([...desired].map(([file,digest])=>({file,digest})));
+  return {base,documents,desired,revision,query:seedDigestSelect([...desired.keys()])};
+}
+/** The distributed documents own their named subject/predicate slots. Do not
+ * clear mixed graphs, or delete triples on user resources. Template content
+ * is a single logical slot with two supported predicates. */
+export function managedSeedDeletes(plan:SeedPlan,graph:string):string[] {
+  const slots=new Set<string>();
+  const rdfValue=RDF_TYPE.replace(/type$/,"value"), templateContent=`${MUI_NS}templateContent`;
+  for(const doc of plan.documents.filter(doc=>doc.graph===graph))for(const triple of doc.triples){
+    if(triple.subject.termType!=="NamedNode")continue;
+    const subject=iri(resolvedValue(triple.subject.value,graph,plan.base));
+    const predicate=resolvedValue(triple.predicate.value,graph,plan.base);
+    slots.add(`(${subject} ${iri(predicate)})`);
+    if((predicate===rdfValue||predicate===templateContent)&&triple.object.termType==="Literal"&&/xsl:(stylesheet|transform)/.test(triple.object.value)){
+      slots.add(`(${subject} ${iri(rdfValue)})`);slots.add(`(${subject} ${iri(templateContent)})`);
+    }
+  }
+  // The definition's declared rdf:type slot is authoritative, like its shape.
+  const all=[...slots];const updates:string[]=[];
+  for(let i=0;i<all.length;i+=120){
+    const update=`DELETE { GRAPH ${iri(graph)} { ?s ?p ?o } } WHERE { VALUES (?s ?p) { ${all.slice(i,i+120).join(" ")} } GRAPH ${iri(graph)} { ?s ?p ?o } }`;
+    if(update.length>100000)throw new Error("Managed graph deletion exceeds SPARQL limit.");
+    updates.push(update);
+  }
+  return updates;
+}
+const seedInFlight=new Map<string,Promise<SeedResult>>();
+export async function seedPersonalGraphs(signal?:AbortSignal,prepared?:SeedPlan,initialRows?:PersonalRows):Promise<SeedResult> {
+  const ctx=await personalContext(),key=ctx.addr+"|"+ctx.session.username;
+  const pending=seedInFlight.get(key);if(pending)return pending;
   const task=(async()=>{
-    // The graph-server courtesy list is NOT a personal RDF seed graph.
-    // It lives in the browser's grouped directory and is digest-checked against
-    // the proxy's static flat files. Never CLEAR the user's Shared group.
-    // Static assets are already available from the independent browser boot
-    // when possible. Awaiting them here never starts an authenticated fetch.
-    const entries=await browserGraphAssets();
-    if(signal?.aborted)throw signal.reason;
-    // Preflight *every* compiled /graph document before clearing a single
-    // personal graph. An unavailable or stale asset must not erase the user's
-    // existing provider definitions, registry, ontology or Status machines.
-    const documents:Array<{entry:Entry;graph:string;triples:Triple[];digest:string}>=[];
-    for(const {entry,asset} of entries){
-      if(signal?.aborted)throw signal.reason;
-      const graph=target(ctx.base,entry.destination);
-      const triples=[...asset.triples];
-      for(const resource of new Set(triples.filter(t=>t.predicate.value===RDF_TYPE&&t.object.value===MUI_PROVIDER&&t.subject.termType==="NamedNode").map(t=>t.subject.value)))
-        triples.push({subject:{termType:"NamedNode",value:resource},predicate:{termType:"NamedNode",value:`${MUI_NS}implementationDigest`},object:{termType:"Literal",value:asset.digest}});
-      // Verify the complete SPARQL serialization before making any changes.
-      if(triples.length)buildInsertData(graph,triples,ctx.base);
-      documents.push({entry,graph,triples,digest:asset.digest});
+    const plan=prepared??await preparePersonalSeed(ctx.session.graphPrefix,signal);
+    if(plan.base!==ctx.base)throw new Error("Seed plan belongs to another personal graph.");
+    const graphs=[...plan.desired.keys()];
+    const rows=initialRows??await selectPersonal(plan.query,ctx,signal,seedSource);
+    const existing=parseSeedDigests(rows,graphs);
+    const changed=new Set(graphs.filter(graph=>existing.get(graph)!==plan.desired.get(graph)));
+    const operations=[...changed].map(graph=>({graph,deletes:managedSeedDeletes(plan,graph),inserts:plan.documents.filter(doc=>doc.graph===graph&&doc.triples.length).map(doc=>buildInsertData(graph,doc.triples,ctx.base))}));
+    // Validate provider declarations and literal template content from the actual
+    // graph, not merely the marker written by this client. No downloads of
+    // unrelated personal resources, and no count-only acceptance of XSLT.
+    const verifyProviderDefinitions=async(graph:string)=>{
+      if(graph!==resolveGraph(GRAPH.SHACL_POLICIES,plan.base))return;
+      const predicates=new Set([`${MUI_NS}accepts`,`${MUI_NS}widget`,`${MUI_NS}endpointDiscoveryQuery`,`${MUI_NS}templateContent`,RDF_TYPE.replace(/type$/,"value"),"http://www.w3.org/ns/shacl#class","http://www.w3.org/ns/shacl#targetClass"]);
+      const slots=new Map<string,{s:string;p:string;values:Set<string>}>();
+      const rdfValue=RDF_TYPE.replace(/type$/,"value"), templateContent=`${MUI_NS}templateContent`;
+      const key=(s:string,p:string)=>JSON.stringify([s,p]);
+      const slot=(s:string,p:string)=>{const k=key(s,p);let result=slots.get(k);if(!result){result={s,p,values:new Set()};slots.set(k,result);}return result;};
+      for(const doc of plan.documents.filter(doc=>doc.graph===graph))for(const t of doc.triples){
+        if(t.subject.termType!=="NamedNode"||!predicates.has(t.predicate.value)||t.object.termType==="BlankNode")continue;
+        const s=resolvedValue(t.subject.value,graph,plan.base),p=t.predicate.value;
+        if((p===rdfValue||p===templateContent)&&t.object.termType==="Literal"&&/xsl:(stylesheet|transform)/.test(t.object.value)){slot(s,rdfValue);slot(s,templateContent);}
+        slot(s,p).values.add(resolvedValue(t.object.value,graph,plan.base));
+      }
+      // Skip slots containing blank nodes: their graph-local identifiers are
+      // not portable. Their original RDF structures are inserted as a unit.
+      for(const doc of plan.documents.filter(doc=>doc.graph===graph))for(const t of doc.triples)
+        if(t.subject.termType==="NamedNode"&&t.object.termType==="BlankNode")slots.delete(key(resolvedValue(t.subject.value,graph,plan.base),t.predicate.value));
+      const items=[...slots.values()];
+      for(let i=0;i<items.length;i+=30){
+        const batch=items.slice(i,i+30);
+        const rows=await selectPersonal(`SELECT ?s ?p ?o WHERE { VALUES (?s ?p) { ${batch.map(t=>`(${iri(t.s)} ${iri(t.p)})`).join(" ")} } GRAPH ${iri(graph)} { ?s ?p ?o } }`,ctx,signal,"GraphSeed:VerifyDefinitions");
+        const actual=new Map<string,Set<string>>();
+        for(const row of rows){const k=key(row.s?.value??"",row.p?.value??"");const values=actual.get(k)??new Set<string>();if(typeof row.o?.value!=="string")throw new Error("Invalid seeded definition response.");values.add(row.o.value);actual.set(k,values);}
+        for(const t of batch){const values=actual.get(key(t.s,t.p))??new Set<string>();if(values.size!==t.values.size||[...t.values].some(value=>!values.has(value)))throw new Error(`Seeded provider definition verification failed: ${t.s} ${t.p}`);}
+      }
+    };
+    const write=(update:string)=>updatePersonal(update,signal,undefined,"GraphSeed:Synchronize",ctx.session);
+    for(const {graph,deletes,inserts} of operations){
+      signal?.throwIfAborted();
+      // Remove the old completion marker first. Failed partial writes cannot
+      // be mistaken for a completed import on the next initialization.
+      await write(`DELETE WHERE { GRAPH ${iri(graph)} { ${iri(graph)} ${iri(seedPredicate)} ?digest } }`);
+      for(const update of deletes)await write(update);
+      for(const update of inserts)await write(update);
+      await verifyProviderDefinitions(graph);
+      await write(`INSERT DATA { GRAPH ${iri(graph)} { ${iri(graph)} ${iri(seedPredicate)} "${plan.desired.get(graph)}" . } }`);
     }
-    // Reuse the build-time content SHA-256 fingerprints already installed as
-    // mui:implementationDigest for curator approval. The graph's seedDigest is
-    // an aggregate of those same fingerprints, not of stable asset filenames.
-    const groups=new Map<string,Array<{file:string;digest:string}>>();
-    for(const {entry,graph,digest} of documents){
-      const current=groups.get(graph)??[];
-      current.push({file:entry.file,digest});
-      groups.set(graph,current);
+    if(changed.size){
+      const verified=parseSeedDigests(await selectPersonal(plan.query,ctx,signal,"GraphSeed:VerifyDigests"),graphs);
+      if(graphs.some(graph=>verified.get(graph)!==plan.desired.get(graph)))throw new Error("Graph seed digest verification failed.");
+      invalidateClientStatusMachines();
     }
-    const desired=new Map<string,string>();
-    for(const [graph,items] of groups)desired.set(graph,await destinationSeedDigest(
-      items,
-    ));
-    const seedPredicate=`${MUI_NS}seedDigest`;
-    const existing=new Map<string,string>();
-    // One batched read, not one ASK per graph. A missing marker means this
-    // graph came from a pre-digest version of Maestro and must be reseeded.
-    const rows=await selectPersonal(`SELECT ?graph ?digest WHERE {
-      VALUES ?graph { ${[...groups.keys()].map(iri).join(" ")} }
-      GRAPH ?graph { ?graph ${iri(seedPredicate)} ?digest }
-    }`,ctx,signal,"GraphSeed:CheckDigests");
-    for(const row of rows){const graph=row.graph?.value,digest=row.digest?.value;
-      if(graph&&digest)existing.set(graph,digest);
-    }
-    const changed=new Set([...groups.keys()].filter(graph=>existing.get(graph)!==desired.get(graph)));
-    const cleared=new Set<string>(),loaded:Array<{file:string;graph:string}>=[];
-    for(const {entry,graph,triples} of documents){
-      if(!changed.has(graph)){loaded.push({file:entry.file,graph});continue;}
-      if(!cleared.has(graph)){await updatePersonal(`CLEAR SILENT GRAPH ${iri(graph)}`,signal,undefined,"client-graph-seed:seedPersonalGraphs");cleared.add(graph);}
-      // The browser sends RDF triples to the existing SPARQL Update transport.
-      // The remote graph server never dereferences Maestro's localhost URL.
-      if(triples.length)await updatePersonal(buildInsertData(graph,triples,ctx.base),signal,undefined,"client-graph-seed:seedPersonalGraphs");
-      loaded.push({file:entry.file,graph});
-    }
-    // A marker is written only after all assets for that destination have
-    // succeeded. A partial import therefore self-heals on the next login.
-    for(const graph of changed)await updatePersonal(`INSERT DATA { GRAPH ${iri(graph)} {
-      ${iri(graph)} ${iri(seedPredicate)} "${desired.get(graph)}" . } }`,signal,undefined,"client-graph-seed:seedPersonalGraphs");
-    invalidateClientStatusMachines();
-    return loaded;
+    signal?.throwIfAborted();
+    return {revision:plan.revision,changedGraphs:[...changed]};
   })();
   seedInFlight.set(key,task);
   try{return await task;}finally{if(seedInFlight.get(key)===task)seedInFlight.delete(key);}

@@ -25,12 +25,12 @@ import { getConfiguredFctEndpoints, getPersonalSession, personalSparqlUrl, norma
 import { permittedGraphServerTarget, checkGraphServerDestination } from "@/lib/graph-server-target";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
 import { probeSparqlEndpoint } from "@/lib/sparql-health-probe";
-import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
+import { describeUpstreamError, sanitizeUpstreamDiagnostic, withUpstreamTransport, UpstreamTransportError } from "@/lib/upstream-error";
 import { updateFctExecutionAddress } from "@/lib/fct-execution-address";
 import { proxyLog } from "@/lib/maestro-logger";
 import { withGraphServerSlot } from "@/lib/server-query-scheduler";
 import { virtuosoRankFailure, virtuosoAggregateFailure } from "@/lib/virtuoso-query-fallbacks";
-import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
+import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders, upstreamDeliveryTimeoutMs } from "@/lib/virtuoso-anytime";
 
 
 function parseResults(text: string): SparqlJsonResults | null {
@@ -83,6 +83,7 @@ async function resolveFctLabels(
   bindings: Record<string, SparqlBindingTerm>[],
   acceptLanguage: string | null,
   timeoutMs: number,
+  requestSignal?: AbortSignal,
 ): Promise<Map<string, string>> {
   // Resolve every URI term in the result rows, not just the primary list-view
   // column. Properties, Roles, Classes, Graphs and DESCRIBE all need labels too.
@@ -120,11 +121,11 @@ async function resolveFctLabels(
     "ORDER BY STR(?s)",
   ].join("\n");
   try {
-    const result = await executeSparql(endpoint, query, undefined, timeoutMs || 20000);
+    const result = await executeSparql(endpoint, query, undefined, timeoutMs || 20000, requestSignal);
     if (!result.response.ok) return labels;
     const parsed = parseResults(result.text);
     if (!parsed) return labels;
-    if (result.response.status === 200) setQueryCache(result.key, result.text);
+    if (result.response.status === 200 && !isVirtuosoAnytime(result.response, result.text)) setQueryCache(result.key, result.text);
 
     const candidates = new Map<string, { predicate: string; label: SparqlBindingTerm }[]>();
     const predicatePriority = new Map<string, number>([
@@ -173,11 +174,11 @@ const inFlightFctSparql = new Map<string, Promise<ExecutedSparql>>();
 
 async function executeSparql(endpoint: string, query: string, accept = "application/sparql-results+json, application/json;q=0.9", timeoutMs = 20000, requestSignal?: AbortSignal, bypassCache = false): Promise<ExecutedSparql> {
   const url = endpoint;
-  const key = queryCacheKey("sparql", url, `${accept}\\u0000${query}`);
+  const key = queryCacheKey("sparql", url, `${accept}\\u0000${timeoutMs}\\u0000${query}`);
   const cached = bypassCache ? undefined : getQueryCache<string>(key);
   if (cached !== undefined) {
     return {
-      response: new Response(cached, { status: 200, headers: { "Content-Type": accept.toLowerCase().includes("xml") || accept.toLowerCase().includes("rdf") ? "application/rdf+xml; charset=utf-8" : "application/sparql-results+json; charset=utf-8" } }),
+      response: new Response(cached, { status: 200, headers: { "X-Maestro-Upstream-Source": "cache", "Content-Type": accept.toLowerCase().includes("xml") || accept.toLowerCase().includes("rdf") ? "application/rdf+xml; charset=utf-8" : "application/sparql-results+json; charset=utf-8" } }),
       text: cached,
       key,
     };
@@ -188,9 +189,10 @@ async function executeSparql(endpoint: string, query: string, accept = "applicat
 
   const requestPromise = (async (): Promise<ExecutedSparql> => {
     await checkGraphServerDestination(endpoint);
-    const response = await withGraphServerSlot(
+    const result = await withGraphServerSlot(
       endpoint, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive", requestSignal,
-      () => traceVirtuosoDispatch(() => fetch(url, {
+      () => traceVirtuosoDispatch(() => withUpstreamTransport(async () => {
+      const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -201,11 +203,13 @@ async function executeSparql(endpoint: string, query: string, accept = "applicat
       cache: "no-store",
       redirect: "manual",
       signal: requestSignal
-        ? AbortSignal.any([requestSignal, AbortSignal.timeout(Math.max(120000, timeoutMs * 3))])
-        : AbortSignal.timeout(Math.max(120000, timeoutMs * 3)),
-    })), weightMaestroQuery(query, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive"));
-    const text = await response.text();
-    return { response, text, key };
+        ? AbortSignal.any([requestSignal, AbortSignal.timeout(upstreamDeliveryTimeoutMs(timeoutMs))])
+        : AbortSignal.timeout(upstreamDeliveryTimeoutMs(timeoutMs)),
+    });
+      const text = await response.text();
+      return { response, text, key };
+    }, requestSignal)), weightMaestroQuery(query, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive"));
+    return result;
   })();
   if (!requestSignal) inFlightFctSparql.set(pendingKey, requestPromise);
   try {
@@ -245,9 +249,9 @@ function xmlText(value: unknown): string {
     .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
-function fctError(message: string, status: number, details?: string): Response {
+function fctError(message: string, status: number, details?: string, origin = "proxy"): Response {
   const body = `<fct:facets xmlns:fct="${FCT_NS}"><fct:error>${xmlText(message)}${details ? `: ${xmlText(details)}` : ""}</fct:error></fct:facets>`;
-  return new Response(body, { status, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
+  return new Response(body, { status, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Failure-Origin": origin } });
 }
 
 function fctColumn(term: SparqlBindingTerm | undefined, label?: string, extraAttrs?: Record<string, string>): string {
@@ -697,7 +701,7 @@ async function handlePost(request: Request) {
   const labelAcceptLanguage = effectiveLanguage === "all"
     ? request.headers.get("accept-language") : effectiveLanguage;
   const compileFctXmlToSparql = (...args: Parameters<typeof compileFctXmlBase>) =>
-    compileFctXmlBase(args[0], args[1], args[2], args[3], args[4], args[5], args[6], effectiveLanguage);
+    compileFctXmlBase(args[0], args[1], args[2], args[3], args[4], args[5], args[6], effectiveLanguage, args[8]);
   logProxyCaller(request, "fct.POST");
   let stage: "compile" | "execute" = "compile";
   try {
@@ -794,7 +798,7 @@ async function handlePost(request: Request) {
         { ok: false; timeout: boolean; status: number };
       const tryDiscovery = async (mode: "ranked" | "first-match"): Promise<DiscoveryAttempt> => {
         const timeoutMs = mode === "ranked" ? 5500 : 10000;
-        const attemptSignal = AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs + 1500)]);
+        const attemptSignal = request.signal;
         const compiled = mode === "ranked" ? rankedDiscovery : compileFctXmlToSparql(queryXml, undefined, false, false, "first");
         try {
           stage = "execute";
@@ -1026,12 +1030,12 @@ async function handlePost(request: Request) {
     // cause Maestro to discard the valid rows in the response body.
     if (!response.ok && !anytime) {
       proxyLog("error", "fct.upstream", { status: response.status, sqlState, sqlMessage, responseBody: text.slice(0, 16000) });
-      return fctError(`Virtuoso SPARQL endpoint returned HTTP ${response.status}${sqlState ? ` (${sqlState})` : ""}`, response.status, sqlMessage || text.slice(0, 16000));
+      return fctError(`SPARQL endpoint returned HTTP ${response.status}${sqlState ? ` (${sqlState})` : ""}`, response.status, sanitizeUpstreamDiagnostic([sqlMessage, text, `SPARQL query:\n${activeQuery}`].filter(Boolean).join("\n\n"), Infinity), executionEndpoint === endpoint.url ? "upstream-http" : "federated-upstream-http");
     }
 
     if (anytime) proxyLog("warn", "fct.anytime", { endpoint: endpoint.url, view: compiled.view, status: response.status, sqlState, message: virtuosoAnytimeMessage(response, text) });
 
-    const incompleteHeaders = anytimeResponseHeaders(response, partial);
+    const incompleteHeaders = { ...anytimeResponseHeaders(response, partial), "X-Maestro-Upstream-Status": String(response.status), "X-Maestro-Upstream-Source": executionEndpoint !== endpoint.url ? "federated" : response.headers.get("X-Maestro-Upstream-Source") === "cache" ? "cache" : "network" };
     if (isDescribe) {
       let bindings: Record<string, SparqlBindingTerm>[];
       try {
@@ -1085,21 +1089,21 @@ async function handlePost(request: Request) {
       });
       const xml = `<fct:facets xmlns:fct="${FCT_NS}">${metadata}<fct:result type="${FCT_VIEW_TYPES.ASK}"><fct:boolean>${askBoolean ? "true" : "false"}</fct:boolean></fct:result></fct:facets>`;
       if (!hasStatusConstraints && !isValidate && response.status === 200) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
-      return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
+      return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", ...incompleteHeaders } });
     }
     const parsed = parseResults(text);
-    if (!parsed && !anytime) return fctError("Virtuoso SPARQL endpoint returned an invalid SPARQL Results JSON document", 502, text.slice(0, 1500));
+    if (!parsed && !partial) return fctError("Virtuoso SPARQL endpoint returned an invalid SPARQL Results JSON document", 502, text.slice(0, 1500));
     // An ANYTIME timeout can arrive with an error-only body and no result rows.
     // No rows were received: do not fabricate rows or report a complete empty set.
     if (!parsed && anytime) proxyLog("warn", "fct.anytime-no-rows", { view: compiled.view, status: response.status });
     let bindings = parsed?.results?.bindings ?? [];
     let vars = parsed?.head?.vars ?? [];
     if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
-    const labels = countOnly || compiled.view === FCT_VIEW_TYPES.VALIDATE || (compiled.view === FCT_VIEW_TYPES.LIST_VALUES || compiled.view === FCT_VIEW_TYPES.MERGE_VALUES) ||
+    const labels = partial || countOnly || compiled.view === FCT_VIEW_TYPES.VALIDATE || (compiled.view === FCT_VIEW_TYPES.LIST_VALUES || compiled.view === FCT_VIEW_TYPES.MERGE_VALUES) ||
       (compiled.graphOnly && compiled.view === FCT_VIEW_TYPES.GRAPHS && /<view\b[^>]*\brecord=["']yes["']/i.test(queryXml))
       ? new Map<string, string>()
       : await resolveFctLabels(endpoint.url, bindings,
-          labelAcceptLanguage, compiled.timeoutMs);
+          labelAcceptLanguage, Math.min(compiled.timeoutMs || 5000, 5000), request.signal);
     if ((compiled.view === FCT_VIEW_TYPES.LIST_VALUES || compiled.view === FCT_VIEW_TYPES.MERGE_VALUES) && !countOnly && !graphOnly) {
       const address = queryXml.match(/\baddr\s*=\s*["']([^"']+)["']/)?.[1] ?? "";
       const graph = unscopedGraph(address.includes("@") ? address.slice(0, address.indexOf("@")) : "");
@@ -1133,7 +1137,7 @@ async function handlePost(request: Request) {
       });
       if (response.status === 200 && !partial && expansion.complete)
         if (!hasStatusConstraints) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
-      return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
+      return new Response(xml, { headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", ...anytimeResponseHeaders(response, partial || !expansion.complete), ...incompleteHeaders } });
     }
     if ((compiled.view === FCT_VIEW_TYPES.LIST || compiled.view === FCT_VIEW_TYPES.LIST_SUBJECTS || compiled.view === FCT_VIEW_TYPES.LIST_OBJECTS) && !countOnly && !graphOnly) {
       bindings = bindings.map((binding) => {
@@ -1199,7 +1203,8 @@ async function handlePost(request: Request) {
   } catch (error) {
     proxyLog("error", "fct.POST.failed", { stage, err: error, message: describeUpstreamError(error) });
     const message = describeUpstreamError(error, "Failed to compile or execute the FCT query as SPARQL.");
-    return fctError(message, stage === "compile" ? 400 : /aborted due to timeout|timed? out/i.test(message) ? 504 : 502);
+    const origin = request.signal.aborted ? "cancelled" : error instanceof UpstreamTransportError ? "upstream-transport" : "proxy";
+    return fctError(message, stage === "compile" ? 400 : /aborted due to timeout|timed? out/i.test(message) ? 504 : 502, undefined, origin);
   }
 }
 

@@ -37,6 +37,7 @@ export function RecordValuePages({
   pageSize = 5,
   maxPageSize = 100,
   pageSizeSelect = false,
+  filterLabel = "",
   listTag = "div",
   listClassName = "",
   className = "",
@@ -48,6 +49,7 @@ export function RecordValuePages({
   maxPageSize?: number;
   /** Opt-in selector for provider-managed lists (e.g. EURIO Project Results). */
   pageSizeSelect?: boolean;
+  filterLabel?: string;
   /** Render an actual ordered list for provider-authored <li> children. */
   listTag?: "div" | "ol";
   listClassName?: string;
@@ -55,7 +57,21 @@ export function RecordValuePages({
   layout?: "stack" | "wrap" | "groups";
   id?: string;
 }) {
-  const values = React.Children.toArray(children).filter(React.isValidElement);
+  const elements = React.Children.toArray(children).filter(React.isValidElement);
+  type FilterProps = { "data-maestro-filter-option"?: string; "data-maestro-filter-count"?: string; "data-maestro-filter-types"?: string; children?: React.ReactNode };
+  const propsOf = (element: React.ReactElement) => element.props as FilterProps;
+  const allValues = elements.filter(element => !propsOf(element)["data-maestro-filter-option"]);
+  const typesOf = (element: React.ReactElement) => (propsOf(element)["data-maestro-filter-types"] ?? "").split(/\s+/).filter(Boolean);
+  const options = elements.filter(element => propsOf(element)["data-maestro-filter-option"]).map(element => {
+    const props = propsOf(element);
+    const iri = props["data-maestro-filter-option"]!;
+    const loaded = allValues.filter(value => typesOf(value).includes(iri)).length;
+    const count = Number(props["data-maestro-filter-count"]);
+    return {iri, label:props.children, count: Number.isSafeInteger(count) && count === loaded ? count : loaded};
+  });
+  const [selectedType, setSelectedType] = React.useState("");
+  const activeType = filterLabel && options.some(option => option.iri === selectedType) ? selectedType : "";
+  const values = activeType ? allValues.filter(value => typesOf(value).includes(activeType)) : allValues;
   const cap = Number.isFinite(maxPageSize) ? Math.max(1, Math.min(100, Math.floor(maxPageSize))) : 100;
   const initialSize = Number.isFinite(pageSize) ? Math.max(1, Math.min(cap, Math.floor(pageSize))) : 5;
   // Preserve the original controlled-by-prop behavior for every existing
@@ -78,6 +94,13 @@ export function RecordValuePages({
   };
   return (
     <div id={id} className={`min-w-0 ${className}`}>
+      {filterLabel && <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+        <MaestroSelect aria-label={filterLabel} value={activeType} className="max-w-full" onChange={event => {setSelectedType(event.target.value);setPage(0);}}>
+          <option value="">{filterLabel} · All ({allValues.length})</option>
+          {options.map(option => <option key={option.iri} value={option.iri}>{option.label} · {option.count}</option>)}
+        </MaestroSelect>
+        <span className="text-xs tabular-nums text-muted-foreground">{values.length}</span>
+      </div>}
       <ListContainer className={listClassName || (layout === "wrap" ? "min-w-0 leading-8" : "flex min-w-0 flex-col gap-1.5")}>
         {values.slice(start, start + size).map((value, i) => (
           layout === "groups" || isResultList ? (

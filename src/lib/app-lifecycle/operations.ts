@@ -12,6 +12,7 @@ export type GraphEvent = {
   selected: boolean; ready: boolean; failed: boolean;
 };
 export type QueryEvent =
+  | { type: "GLOBAL_CANCEL" | "GLOBAL_RESUME" }
   | { type: "QUERY_OBSERVED"; key: string; hydrated: boolean; graphReady: boolean }
   | { type: "QUERY_RESTORE_FAILED"; key: string; error: string }
   | { type: "RESULTS_STARTED" | "RESULTS_SUCCEEDED" | "RESULTS_FAILED" | "RESULTS_CANCELLED"; key: string };
@@ -30,7 +31,7 @@ export type NavigationEvent =
 export type MaestroOperationsEvent = GraphEvent | QueryEvent | RequestEvent | NavigationEvent;
 
 type GraphContext = { key: string };
-type QueryContext = { key: string; hydrated: boolean; graphReady: boolean; restoreError: string };
+type QueryContext = { key: string; hydrated: boolean; graphReady: boolean; restoreError: string; claimed: boolean; globallyCancelled: boolean; cancellationGeneration: number };
 type RequestContext = { queued: number; active: number };
 type NavigationContext = {
   key: string; lastUrl: string; returnUrl: string; pendingEntryUrl: string;
@@ -39,7 +40,7 @@ type NavigationContext = {
   returnVisible: boolean; historyPending: "backward" | "forward" | null;
 };
 const emptyGraph: GraphContext = { key: "" };
-const emptyQuery: QueryContext = { key: "", hydrated: false, graphReady: false, restoreError: "" };
+const emptyQuery: QueryContext = { key: "", hydrated: false, graphReady: false, restoreError: "", claimed: false, globallyCancelled: false, cancellationGeneration: 0 };
 const emptyRequests: RequestContext = { queued: 0, active: 0 };
 const emptyNavigation: NavigationContext = {
   key: "", lastUrl: "", returnUrl: "", pendingEntryUrl: "",
@@ -69,33 +70,39 @@ const queryMachine = setup({
 }).createMachine({
   id: "maestro-query-lifecycle", initial: "restoring", context: emptyQuery,
   on: {
+    GLOBAL_CANCEL: { target: ".cancelled", actions: assign(({ context }) => ({ globallyCancelled: true, claimed: true, cancellationGeneration: context.cancellationGeneration + 1 })) },
+    GLOBAL_RESUME: { guard: ({ context }) => context.globallyCancelled, target: ".restoring", actions: assign({ globallyCancelled: false, claimed: false, hydrated: false, graphReady: false, restoreError: "" }) },
     QUERY_OBSERVED: [
+      { guard: ({ context }) => context.globallyCancelled,
+        actions: assign(({ event }) => ({ key: event.key, hydrated: event.hydrated, graphReady: event.graphReady })) },
+      // Once a semantic key has been claimed, health observations alone must
+      // not re-arm it. A new key/retry revision is the sole re-arm operation.
+      { guard: ({ context, event }) => context.claimed && context.key === event.key,
+        actions: assign(({ event }) => ({ hydrated: event.hydrated, graphReady: event.graphReady })) },
       // A failed URL restore must not be turned back into an infinite spinner
       // just because graph observations or another React render arrive.
       { guard: ({ context, event }) => !event.hydrated && context.key === event.key && Boolean(context.restoreError),
         target: ".restoreFailed",
         actions: assign(({ event }) => ({ key: event.key, hydrated: false, graphReady: event.graphReady })) },
       { guard: ({ event }) => !event.hydrated, target: ".restoring",
-        actions: assign(({ event }) => ({ key: event.key, hydrated: false, graphReady: event.graphReady, restoreError: "" })) },
+        actions: assign(({ event }) => ({ key: event.key, hydrated: false, graphReady: event.graphReady, restoreError: "", claimed: false })) },
       { guard: ({ event }) => !event.graphReady, target: ".waitingForServer",
-        actions: assign(({ event }) => ({ key: event.key, hydrated: true, graphReady: false, restoreError: "" })) },
+        actions: assign(({ event }) => ({ key: event.key, hydrated: true, graphReady: false, restoreError: "", claimed: false })) },
       { guard: ({ context, event }) => context.key !== event.key || !context.hydrated || !context.graphReady,
         target: ".readyToExecute",
-        actions: assign(({ event }) => ({ key: event.key, hydrated: true, graphReady: true, restoreError: "" })) },
+        actions: assign(({ event }) => ({ key: event.key, hydrated: true, graphReady: true, restoreError: "", claimed: false })) },
       { actions: assign(({ event }) => ({ key: event.key, hydrated: event.hydrated, graphReady: event.graphReady, restoreError: "" })) },
     ],
     QUERY_RESTORE_FAILED: {
-      guard: ({ context, event }) => !context.hydrated && Boolean(event.error),
+      guard: ({ context, event }) => !context.globallyCancelled && !context.hydrated && Boolean(event.error),
       target: ".restoreFailed",
       actions: assign(({ event }) => ({ key: event.key, restoreError: event.error, hydrated: false })),
     },
-    RESULTS_STARTED: {
-      guard: ({ context, event }) => context.key === event.key && context.hydrated && context.graphReady,
-      target: ".executing",
-    },
   },
   states: {
-    restoring: {}, restoreFailed: {}, waitingForServer: {}, readyToExecute: {},
+    restoring: {}, restoreFailed: {}, waitingForServer: {}, readyToExecute: { on: {
+      RESULTS_STARTED: { guard: ({ context, event }) => context.key === event.key && context.hydrated && context.graphReady, target: "executing", actions: assign({ claimed: true }) },
+    } },
     executing: { on: {
       RESULTS_SUCCEEDED: { guard: ({ context, event }) => context.key === event.key, target: "ready" },
       RESULTS_FAILED: { guard: ({ context, event }) => context.key === event.key, target: "failed" },
@@ -300,6 +307,7 @@ export function createMaestroOperationsController() {
       } else if (event.type === "QUERY_OBSERVED") {
         if (query && (snapshot.query.key !== event.key || snapshot.query.hydrated !== event.hydrated || snapshot.query.graphReady !== event.graphReady)) query.send(event);
       } else if (event.type === "REQUEST_ACTIVITY") {
+        if (snapshot.query.globallyCancelled) return;
         if (requests && (snapshot.requests.queued !== event.queued || snapshot.requests.active !== event.active)) requests.send(event);
       } else if (event.type === "NAVIGATION_OBSERVED") {
         if (navigation && (snapshot.navigation.key !== event.key || snapshot.navigation.lastUrl !== event.url || snapshot.navigation.hydrated !== event.hydrated || snapshot.navigation.tab !== event.tab || snapshot.navigation.viewPanel !== event.viewPanel || snapshot.navigation.isProviderQuery !== event.isProviderQuery)) navigation.send(event);
@@ -307,6 +315,7 @@ export function createMaestroOperationsController() {
         navigation?.send(event);
       } else {
         query?.send(event);
+        if (event.type === "GLOBAL_CANCEL") requests?.send({ type: "REQUEST_ACTIVITY", queued: 0, active: 0 });
       }
     },
     getSnapshot: () => snapshot,
@@ -322,7 +331,7 @@ export function selectMaestroExecution(snapshot: MaestroOperationsSnapshot, inpu
 }) {
   const graphReady = input.sourceReady && snapshot.graph.phase === "ready" && snapshot.graph.key === input.graphKey;
   return {
-    canExecuteQuery: input.hydrated && graphReady && snapshot.query.key === input.queryKey &&
+    canExecuteQuery: !snapshot.query.globallyCancelled && input.hydrated && graphReady && snapshot.query.key === input.queryKey &&
       snapshot.query.graphReady && snapshot.query.hydrated &&
       snapshot.query.phase !== "restoring" && snapshot.query.phase !== "restoreFailed" && snapshot.query.phase !== "waitingForServer",
     queryPhase: snapshot.query.key === input.queryKey ? snapshot.query.phase : "waitingForServer" as QueryPhase,

@@ -26,10 +26,9 @@ function asParsed(item){
  for(const child of item.children){ const v=asParsed(child); out[child.name]=out[child.name] ? [...(Array.isArray(out[child.name])?out[child.name]:[out[child.name]]),v] : v; }
  return out;
 }
-function compile(sample){
+function compile(sample,countOnly=false){
  const kinds={TEXT:'text',LIST:'list',LIST_COUNT:'list-count',DESCRIBE:'describe',PROPERTIES:'properties',PROPERTIES_IN:'properties-in',CLASSES:'classes',GRAPHS:'graphs',COUNT_DISTINCT:'count-distinct',LIST_VALUES:'list-values',MERGE_VALUES:'merge-values'};
  const mocks={
-  './maestro-kinds':{normalizeMaestroKind:()=>null,maestroKindSparql:()=>''},
   './fct-view-types':{FCT_VIEW_TYPES:kinds,isFctViewType:v=>Object.values(kinds).includes(v)},
   './bnode':{isBlankNodeTerm:()=>false,bnodeDescribeBounds:()=>null,RDF_REST_IRI:'http://www.w3.org/1999/02/22-rdf-syntax-ns#rest'},
   'fast-xml-parser':{XMLValidator:{validate:()=>true},XMLParser:class{parse(){return {query:asParsed(sample)}}}},
@@ -41,7 +40,7 @@ function compile(sample){
   './fct-value-references':refs,
   './maestro-language':{effectiveMaestroLanguage:()=> 'en',validMaestroLanguage:value=>value},
  };
- return loadTs('src/lib/fct-sparql-translator.ts',mocks).compileFctXmlToSparql('<query/>','list').query;
+ return loadTs('src/lib/fct-sparql-translator.ts',mocks).compileFctXmlToSparql('<query/>',sample.children.find(n=>n.name==='view')?.attributes.type ?? 'list',false,countOnly,false,false,undefined,'en').query;
 }
 test('from compiles same-solution subject comparison with a stable node ID',()=>{
  const sample=tree([
@@ -136,9 +135,15 @@ test('Record XSLT numeric batch captures its document context beforehand and emb
  const xsl=read('graph/eu-data/record.xsl');
  const ttl=read('graph/eu-data/provider.ttl');
  const block=xsl.match(/<xsl:template name="eurio-runtime-label-queries">([\s\S]*?)<\/xsl:template>/)?.[1]??'';
- assert.match(block, /name="runtimeGraph"[^\n]+\/mctx:context/);
- assert.ok(block.indexOf('name="runtimeGraph"')<block.indexOf('xsl:for-each select="1 to'));
- assert.match(block,/name="graph" select="\$runtimeGraph"/);
+ const batchStart=block.indexOf('<xsl:for-each select="1 to');
+ assert.ok(batchStart>0, 'numeric batch loop must exist');
+ const before=block.slice(0,batchStart), batch=block.slice(batchStart);
+ assert.match(before,/name="runtimeQuery" select="\/mctx:context\/mctx:query\/\*\[local-name\(\)='query'\]"/);
+ assert.match(before,/name="runtimeAddr" select="string\(\$runtimeQuery\/@addr\)"/);
+ assert.match(before,/name="runtimeGraph"[^\n]+select="[^"\n]*\$runtimeAddr[^"\n]*\$runtimeQuery\/@graph/);
+ assert.ok(before.indexOf('name="runtimeQuery"')<before.indexOf('name="runtimeAddr"') && before.indexOf('name="runtimeAddr"')<before.indexOf('name="runtimeGraph"'));
+ assert.match(batch,/name="graph" select="\$runtimeGraph"/);
+ assert.doesNotMatch(batch,/\/mctx:context/, 'numeric loop cannot access the input document through its integer context');
  const copies=[...ttl.matchAll(/mui:templateContent """([\s\S]*?)"""/g)];
  assert.equal(copies.length,3);
  for(const item of copies.slice(1,2))assert.equal(item[1].replace(/\\\\/g,'\\'),xsl);
@@ -246,4 +251,87 @@ test('dependency results list all external href, from and fromView links, exclud
   '<value id="g" from="d"/>','<value id="i" fromView="b"/>','<a id="j" href="d"/>','<a id="k" href="b"/>']);
  assert.equal(refs.dependentFctNodeReferences(sample,'j').length,0);
  assert.deepEqual(refs.dependentFctNodeReferences(tree([sample.children[0]]),'b'),[]);
+});
+
+
+test('Kind-filtered Properties carries a self-contained filter in the named graph',()=>{
+ const browser=loadTs('src/lib/maestro-kinds.ts');
+ browser.hydrateMaestroKinds([{id:'web-url',pattern:'^https?://'}]);
+ const graph='http://dbpedia.org/resource/Daniel_Day-Lewis';
+ const filter=browser.maestroKindFilter('web-url');
+ const sample=tree([node('s','view',{type:'properties',limit:'400',offset:'0',kind:'web-url','kind-property':'web-url',kindFilter:filter})]);
+ sample.attributes.addr=graph+'@https://linkeddata.uriburner.com/sparql';
+ const browserQuery=compile(sample);
+ assert.match(browserQuery,/REGEX\(STR\(\?o\), "\(\?:\^https\?:\/\/\)", "i"\)/);
+ assert.match(browserQuery,/GRAPH <http:\/\/dbpedia.org\/resource\/Daniel_Day-Lewis>/);
+ assert.match(browserQuery,/GROUP BY \?p/);
+ browser.clearMaestroKinds();
+ assert.equal(compile(sample),browserQuery);
+ browser.hydrateMaestroKinds([{id:'web-url',pattern:'^https://'}]);
+ assert.notEqual(browser.maestroKindFilter('web-url'),filter);
+ assert.equal(compile(sample),browserQuery,'saved XML retains original semantics');
+ sample.children[0].attributes.kind='unknown-metadata';
+ assert.equal(compile(sample),browserQuery,'compiler does not interpret Kind identity');
+ delete sample.children[0].attributes.kindFilter;
+ assert.throws(()=>compile(sample),/requires kindFilter/);
+});
+
+test('Text materializes native numeric, all temporal and five lexical exclusions',()=>{
+ const browser=loadTs('src/lib/maestro-kinds.ts');
+ const patterns=[['web-url','^https?://'],['numeric','^[0-9]+$'],['date','^[0-9]{4}-'],['email','@'],['phone','^tel:']];
+ browser.hydrateMaestroKinds(patterns.map(([id,pattern])=>({id,pattern})));
+ const filter=browser.maestroKindFilter('text');
+ assert.match(filter,/isLiteral\(\?value\) && !\(\(isNumeric\(\?value\) && DATATYPE\(\?value\) != <http:\/\/www.w3.org\/2001\/XMLSchema#boolean>/);
+ for(const dt of ['date','dateTime','time','gYear','gYearMonth'])assert.ok(filter.includes(`http://www.w3.org/2001/XMLSchema#${dt}>`));
+ assert.equal((filter.match(/REGEX\(/g)||[]).length,5);
+ const sample=tree([node('s','view',{type:'properties',kind:'text',kindFilter:filter})]);
+ const query=compile(sample);
+ assert.match(query,/isNumeric\(\?o\)/);
+ assert.doesNotMatch(query,/\?value\b/);
+ assert.equal((query.match(/REGEX\(/g)||[]).length,5);
+ browser.clearMaestroKinds();assert.equal(compile(sample),query);
+ assert.equal(browser.maestroKindFilter('text'),'');
+ browser.hydrateMaestroKinds([{id:'web-url',pattern:'^https?://'}]);
+ assert.equal(browser.maestroKindFilter('text'),'','incomplete providers cannot silently broaden Text');
+});
+
+test('incoming Roles filter and count bind the actual related subject',()=>{
+ const sample=tree([node('s','view',{type:'properties-in',kind:'web-url',kindFilter:'isIRI(?value)'})]);
+ for(const countOnly of [false,true]){
+  const query=compile(sample,countOnly);
+  assert.match(query,/FILTER \(isIRI\(\?related\)\)/);
+  assert.doesNotMatch(query,/FILTER \(isIRI\(\?s1\)\)/);
+ }
+});
+
+test('generic FCT filter validation rejects injection and substitutes only the operand token',()=>{
+ const sample=tree([node('s','view',{type:'properties',kind:'web-url',kindFilter:'REGEX(STR(?value), "[?]value", "i")'})]);
+ assert.match(compile(sample),/REGEX\(STR\(\?o\), "\[\?\]value", "i"\)/);
+ for(const raw of ['isIRI(?value)) } SERVICE <https://bad.example/> { ?s ?p ?o . } #','isIRI(?other)','bif:exec(?value)','EXISTS { ?value ?p ?o }','REGEX(STR(?value), "a", "i") # comment','isIRI(?value) ||']){
+  sample.children[0].attributes.kindFilter=raw;assert.throws(()=>compile(sample),/invalid kindFilter/);
+ }
+});
+
+test('Remove All deletes every dependent href and value link before the target, without modifying the supplied query',()=>{
+ const identity=loadTs('src/lib/fct-node-identity.ts');
+ const serialize=loadTs('src/lib/fct-query-serialize.ts',{'./fct-node-identity':identity});
+ const store=loadTs('src/lib/fct-query.ts',{
+  react:{useMemo:x=>x,useSyncExternalStore:()=>({})},
+  './fct-node-identity':identity,'./fct-query-clone':{cloneFctQueryTree:source=>structuredClone(source)},
+  './fct-query-serialize':serialize,'./fct-value-references':refs,
+ });
+ const query=identity.ensureFctQueryIds(tree([
+  rel('b','urn:test:path',[rel('d','urn:test:target')]),
+  rel('f','urn:test:from',[value('g',{from:'d'})]),
+  rel('h','urn:test:fromView',[value('i',{fromView:'b'})]),
+  node('j','a',{href:'d'}),node('k','a',{href:'b'}),node('l','view',{type:'list'})]));
+ const before=serialize.serializeFctQuery(query), api=store.fctQueryTreeApi;
+ assert.throws(()=>api.deleteNode(query,'b'),refs.FctNodeInUseError);
+ assert.throws(()=>api.deleteNode(query,'b',{removeDependents:true,expectedQueryXml:before+'changed'}),/query changed/);
+ const result=api.deleteNode(query,'b',{removeDependents:true,expectedQueryXml:before});
+ assert.deepEqual(result.children.map(n=>n.id),['f','h','l']);
+ assert.equal(result.children[0].children.length,0);
+ assert.equal(result.children[1].children.length,0);
+ assert.equal(serialize.serializeFctQuery(query),before);
+ assert.equal(refs.inspectFctValueReferences(result).references.length,0);
 });

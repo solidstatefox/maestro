@@ -348,6 +348,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     recordDescriptionQueryLimit,
     refreshMaestroPage,
     cancelMaestroPage,
+    queryExecutionCancelled,
     queryActivityPending,
     resetQuery,
     setSearch,
@@ -450,9 +451,10 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
   const personalAuthStatus = workspace.accessCapabilities.authResponseStatus;
   const personalChallengePending = workspace.accessCapabilities.challengeResponsePending;
   const personalAuthBadgeClass = {red:"bg-destructive",amber:"bg-amber-500",green:"bg-emerald-500",
+    pulsingGreen:"bg-emerald-500 animate-pulse motion-reduce:animate-none",
     pulsingAmber:"bg-amber-500 animate-pulse motion-reduce:animate-none"}[workspace.accessCapabilities.userSignal];
   const personalAuthBadgeLabel = workspace.accessCapabilities.userSignalLabel;
-  const showCancel = pendingQueryCount > 0 || queryActivityPending;
+  const showCancel = !queryExecutionCancelled && (pendingQueryCount > 0 || queryActivityPending);
   const liveServer = (queryTree.attributes.addr ?? "").split("@").slice(1).join("@");
   const activeGraphServer = fctEndpoints.find(endpoint => liveServer &&
     (endpoint.id === liveServer || graphServerUrlMatches(endpoint.url, liveServer, endpoint.schemeInferred)));
@@ -660,7 +662,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               <Button variant={workspaceTab === "browse" ? "secondary" : "ghost"} size="sm" onClick={() => workspace.navigateWorkspaceTab("browse")}>Browse</Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="More Maestro tabs"><span className="text-lg leading-none" aria-hidden="true">…</span></Button></DropdownMenuTrigger>
-                <DropdownMenuContent align="start" side="bottom" sideOffset={6} collisionPadding={12} avoidCollisions className="max-w-[calc(100vw-1.5rem)]">
+                <DropdownMenuContent align="start" side="bottom" sideOffset={6} collisionPadding={12} avoidCollisions className="max-w-[calc(100vw-1.5rem)] cursor-default">
                   <DropdownMenuItem disabled={!workspace.accessCapabilities.canUsePersonalStore} onSelect={() => {
                     workspace.navigateWorkspaceTab("view"); setCentralTab("results");
                   }}>View{workspaceTab === "view" ? " ✓" : ""}{viewBadge}</DropdownMenuItem>
@@ -671,13 +673,13 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               </DropdownMenu>
             </div> : <Tabs value={workspaceTab} onValueChange={(tab) => { if (tab === "browse" || ((tab === "view" || tab === "analyze") && workspace.accessCapabilities.canUsePersonalStore)) { workspace.navigateWorkspaceTab(tab); if (tab !== "browse") setCentralTab("results");
                } }} className="shrink-0" aria-label="Maestro ribbon">
-              <TabsList aria-label="Maestro ribbon tabs">
+              <TabsList aria-label="Maestro ribbon tabs" className="cursor-default">
                 <TabsTrigger value="browse" className="cursor-pointer">Browse</TabsTrigger>
                 <ViewDiagnosticsHover enabled={workspace.accessCapabilities.canUsePersonalStore}>
-                  <TabsTrigger value="view" disabled={!workspace.accessCapabilities.canUsePersonalStore} className="cursor-pointer">View{viewBadge}</TabsTrigger>
+                  <TabsTrigger value="view" disabled={!workspace.accessCapabilities.canUsePersonalStore} className={workspace.accessCapabilities.canUsePersonalStore ? "cursor-pointer" : "cursor-default"}>View{viewBadge}</TabsTrigger>
                 </ViewDiagnosticsHover>
-                <TabsTrigger value="analyze" disabled={!workspace.accessCapabilities.canUsePersonalStore} className="cursor-pointer">Analyze</TabsTrigger>
-                <Tooltip><TooltipTrigger render={<TabsTrigger value="publish" disabled className="cursor-pointer">Publish</TabsTrigger>} /><TooltipContent>Coming soon</TooltipContent></Tooltip>
+                <TabsTrigger value="analyze" disabled={!workspace.accessCapabilities.canUsePersonalStore} className={workspace.accessCapabilities.canUsePersonalStore ? "cursor-pointer" : "cursor-default"}>Analyze</TabsTrigger>
+                <Tooltip><TooltipTrigger render={<TabsTrigger value="publish" disabled className="cursor-default">Publish</TabsTrigger>} /><TooltipContent>Coming soon</TooltipContent></Tooltip>
               </TabsList>
             </Tabs>}
           </div>
@@ -695,7 +697,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               id="maestro-bookmark-button"
               disabled={bookmarkOpening}
               aria-label={bookmarkOpening ? "Opening bookmark dialog" : isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}
-              className={`${bookmarkOpening ? "h-9 w-auto min-w-20 px-2.5" : "size-9"} text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:text-amber-500 ${bookmarkBounce && policyBookmarkVisible && !isQueryBookmarked ? "animate-bounce !border-amber-400 text-amber-500" : ""}`}
+              className={`text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:text-amber-500 ${bookmarkBounce && policyBookmarkVisible && !isQueryBookmarked ? "animate-bounce !border-amber-400 text-amber-500" : ""}`}
               onClick={async () => {
                 setBookmarkAttention(false);
                 setBookmarkBounce(false);
@@ -749,14 +751,14 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   setBookmarkOpening(false);
                 }
               }}
-            >{bookmarkOpening ? <span className="inline-flex min-w-0 items-center justify-center gap-1 whitespace-nowrap text-xs tabular-nums" aria-label={`Opening bookmark dialog, ${Math.floor(bookmarkOpeningTenths / 10)} seconds elapsed`}><BookmarkLoadingClock className="size-3.5 shrink-0" aria-hidden="true" /><span>{Math.floor(bookmarkOpeningTenths / 10)}s</span></span> : <Bookmark aria-hidden="true"
-              className={isQueryBookmarked ? "fill-current text-amber-500" : bookmarkBounce && policyBookmarkVisible ? "text-amber-500" : ""}
+            >{bookmarkOpening ? <span className="inline-flex min-w-0 items-center justify-center gap-1 whitespace-nowrap text-xs tabular-nums" aria-label={`Opening bookmark dialog, ${Math.floor(bookmarkOpeningTenths / 10)} seconds elapsed`}><BookmarkLoadingClock className="size-4 shrink-0" aria-hidden="true" /></span> : <Bookmark aria-hidden="true"
+              className={`size-4 ${isQueryBookmarked ? "fill-current text-amber-500" : bookmarkBounce && policyBookmarkVisible ? "text-amber-500" : ""}`}
               onAnimationIteration={() => {
                 const visible = Boolean(document.querySelector('[data-policy-bookmark-banner="true"]'));
                 if (!visible || !policyBookmarkVisible || isQueryBookmarked) setBookmarkBounce(false);
               }} />}</Button>
           } />
-          <TooltipContent>{bookmarkAttention && !isQueryBookmarked ? "Bookmark this query to continue" : isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}</TooltipContent>
+          <TooltipContent>{bookmarkOpening ? `Opening bookmark dialog · ${Math.floor(bookmarkOpeningTenths / 10)}s` : bookmarkAttention && !isQueryBookmarked ? "Bookmark this query to continue" : isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}</TooltipContent>
         </Tooltip>
         </ButtonGroup>
         {appbarButtons.length > 0 && (
@@ -1031,7 +1033,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                 </Avatar>
               </button>
             } />
-            <TooltipContent>{personalAuthStatus !== null || loginTesting ? personalAuthBadgeLabel : authRestoreIssue ? "Your previous personal graph server login could not be restored. Please log in again." : "Log in to personal graph server"}</TooltipContent>
+            <TooltipContent>{workspace.accessCapabilities.proxyTransport === "unavailable" || personalAuthStatus !== null || loginTesting ? personalAuthBadgeLabel : authRestoreIssue ? "Your previous personal graph server login could not be restored. Please log in again." : "Log in to personal graph server"}</TooltipContent>
           </Tooltip>
         )}
 

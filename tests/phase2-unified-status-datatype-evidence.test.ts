@@ -36,7 +36,9 @@ test('Bookmark animation applies to its button and both inspectors have executab
   const bookmark = read('src/canvas/top/appbar-pane.tsx');
   const appbar = bookmark.slice(bookmark.indexOf('id="maestro-bookmark-button"'));
   assert.match(appbar, /bookmarkBounce && policyBookmarkVisible && !isQueryBookmarked \? "animate-bounce/);
-  assert.match(appbar, /<Bookmark aria-hidden="true"\s+className=\{isQueryBookmarked[^\n]*\? "text-amber-500"/);
+  assert.match(appbar, /<Bookmark aria-hidden="true"\s+className=\{`size-4 \$\{isQueryBookmarked \? "fill-current text-amber-500" : bookmarkBounce && policyBookmarkVisible \? "text-amber-500" : ""\}`\}/);
+  assert.match(bookmark,/<Button\s+type="button" variant="outline" size="icon"\s+aria-pressed=\{isQueryBookmarked\}\s+id="maestro-bookmark-button"/);
+  assert.match(bookmark,/aria-label="Pinned bookmark shortcuts"[\s\S]*?<Button type="button" size="icon" variant="outline"/);
   const inspector = read('src/canvas/left/filter-pane.tsx');
   assert.match(inspector, /facetQueryInspectorTabs/);
   assert.match(inspector, /list-count/);

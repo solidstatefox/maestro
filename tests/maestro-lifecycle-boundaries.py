@@ -21,9 +21,9 @@ facets=get('src/canvas/left/filter.tsx')
 readiness=get('src/canvas/diagnostics/use-maestro-access.ts')
 root=get('src/canvas/top/breadcrumb-renderers.tsx')
 
-check('seedPersonalGraphs(' not in auth and 'setLoginDialogOpen(true)' not in auth,
-      'login does not seed graphs or open itself')
-check('updatePersonal(buildInsertData(' in seed and '/maestro-seed/' in seed,
+check('await seedPersonalGraphs(' in auth and 'setLoginDialogOpen(true)' not in auth,
+      'login seeds managed graphs without opening itself')
+check('updatePersonal(update,' in seed and '/maestro-seed/' in seed,
       'the browser imports precompiled RDF using the existing SPARQL transport')
 check('hasExplicitPersonalUpdateTemplates(structure)' in sparql,
       'personal graph mutation transport is graph-scoped')

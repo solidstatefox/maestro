@@ -3,30 +3,21 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 const read = path => fs.readFileSync(path, 'utf8');
 
-test('History and Bookmarks collections page through all ordered ODS result rows before client filtering', () => {
+test('History and Bookmarks preserve the authoritative Results page, allowing explicit pinned Bookmarks', () => {
   const source = read('src/lib/client-perspective-collections.ts');
-  assert.match(source, /const batchSize = 500, maxResultRows = 25_000/);
-  assert.match(source, /ORDER BY DESC\(\?created\) \?entry \?tagPredicate \?tag __PAGINATION__/);
-  assert.match(source, /ORDER BY DESC\(\?created\) \?entry __PAGINATION__/);
-  assert.match(source, /q\.replace\("__PAGINATION__", `LIMIT \$\{batchSize\} OFFSET \$\{offset\}`\)/);
-  assert.match(source, /if \(!complete\) throw new Error/);
-  assert.doesNotMatch(source, /ORDER BY DESC\(\?created\) LIMIT 500/);
+  assert.match(source, /fctProjectPage\(queryXml,all\.map\(row=>row\.uri\),\[\.\.\.columns,/);
+  assert.match(source, /kind === "bookmarks" \? pinned : \[\]/);
+  assert.match(source, /new Map\(\[\.\.\.candidates,\.\.\.page\]/);
+  assert.match(source, /pageIds\.has\(row\.uri\)/);
+  assert.doesNotMatch(source, /SELECT |__PAGINATION__|rootResourceQuery/);
 });
-
-test('Both perspectives have one shared search and page-navigation toolbar with an accessible page count', () => {
+test('Both saved-entry perspectives share Results pagination without independent collection slicing', () => {
   const source = read('src/canvas/tab/view/personal-perspectives.tsx');
-  assert.match(source, /PERSPECTIVE_PAGE_SIZES = \[10, 20, 50, 100\] as const/);
-  assert.match(source, /const \[pageSize, setPageSize\] = useState<number>\(20\)/);
-  assert.match(source, /const totalPages = Math\.max\(1, Math\.ceil\(filtered\.length \/ pageSize\)\)/);
-  assert.match(source, /filtered\.slice\(currentPage \* pageSize/);
-  assert.match(source, /aria-label=\{`\$\{kind\} entries per page`\}/);
-  assert.match(source, /PERSPECTIVE_PAGE_SIZES\.map\(size =>/);
-  assert.match(source, /setPageSize\(Number\(value\)\)/);
-  assert.match(source, /aria-label=\{`\$\{kind\} search and pagination`\}/);
-  assert.match(source, /aria-label="Previous page"/);
-  assert.match(source, /aria-label="Next page"/);
-  assert.match(source, /Page \{currentPage \+ 1\} of \{totalPages\}/);
-  assert.match(source, /setSearch\(event\.target\.value\); setPage\(0\)/);
+  const page = read('src/canvas/tab/view/page.tsx');
+  assert.match(source, /const visible = filtered/);
+  assert.doesNotMatch(source, /setPageSize|filtered\.slice\(/);
+  assert.match(page, /viewPagination/);
+  assert.match(page, /perspectivePageReady/);
 });
 
 test('History and Bookmarks provider-authored rows use safe React action slots for Lucide play and trash buttons', () => {

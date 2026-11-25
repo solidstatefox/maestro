@@ -1,4 +1,5 @@
 "use client";
+import { facetButtonFactory, completeFacetButton } from "@/components/ui/facet-button-factory";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { useEffect, useRef, useState } from "react";
 import { Braces } from "lucide-react";
@@ -32,11 +33,7 @@ export function DerivedFacetButton({ source }: { source: FctQueryNode }) {
     } finally {if (controller.current===next) {setBusy(false);controller.current=null;}}
   };
   return <div className="inline-flex items-center gap-1">
-    <Tooltip><TooltipTrigger render={<button type="button" disabled={busy}
-      className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
-      onClick={() => void extract()} aria-label="Extract approved derived facets">
-        <Braces className="size-4" />
-      </button>} /><TooltipContent>Extract fields using an approved facet provider</TooltipContent></Tooltip>
+    <Tooltip><TooltipTrigger render={completeFacetButton(facetButtonFactory(<Braces className="size-4" />), {"type":"button", "disabled":(busy), "className":"inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40", "onClick":(() => void extract()), "aria-label":"Extract approved derived facets"})} /><TooltipContent>Extract fields using an approved facet provider</TooltipContent></Tooltip>
     {error && <ErrorDetails prefix="Facet provider" error={error} />}
   </div>;
 }

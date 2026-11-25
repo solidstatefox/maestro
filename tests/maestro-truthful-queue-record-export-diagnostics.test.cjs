@@ -12,10 +12,13 @@ test('browser indexes stay browser-local and proxy lane addresses come only from
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
   }).outputText;
   const mod = { exports: {} }; const pendingNetwork = []; const telemetryCallbacks=[];
+  const network = ()=>new Promise(resolve=>pendingNetwork.push(resolve));
+  const observation = require('./transport-test-loader.cjs').loadTransportObservation({fetch:network});
   const attribution={exports:{}};
-  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,"../src/lib/sparql-request-attribution.ts"),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:attribution.exports,Headers,Request,URL});
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,"../src/lib/sparql-request-attribution.ts"),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:attribution.exports,Headers,Request,URL,require:id=>{assert.equal(id,'./proxy-transport-observation');return observation;}});
   const mocks = {
     "@/lib/sparql-request-attribution":attribution.exports,
+    "@/lib/proxy-transport-observation":observation,
     '@/lib/client-personal-request': { withPersonalProxyCredentials: async (_url,init)=>({init,authenticated:false}) },
     '@/lib/personal-session-hint': { observePersonalAuthResponse: response => response },
     './maestro-language': { maestroLanguageHeader: () => 'en' },
@@ -23,6 +26,7 @@ test('browser indexes stay browser-local and proxy lane addresses come only from
     './maestro-query-execution-clock': { maestroQueryClockScope:()=>null },
     './client-query-events': { subscribeMaestroQueryEvents: async (id, scope, signal, notify) => {telemetryCallbacks.push(notify); return {close(){}}} },
     './maestro-incomplete-results': { setMaestroIncompleteResults:()=>{} },
+     './virtuoso-anytime': (()=>{const mod={exports:{}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/lib/virtuoso-anytime.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:mod.exports});return mod.exports;})(),
     './maestro-query-timeouts': { applyFctQueryTimeout:(source,xml)=>xml,configuredTimeoutMs:()=>0 },
   };
   vm.runInNewContext(code, {

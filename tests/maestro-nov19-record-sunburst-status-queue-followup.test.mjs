@@ -78,7 +78,11 @@ test('Status header has text and reads both ODS and remote proxy dispatch clocks
   const clocks = source('src/lib/maestro-query-execution-clock.ts');
   assert.match(header, /<ElapsedStatus label="Status" category="status" clockScope="statuses"/);
   assert.match(personal, /await personalAuthenticatedFetch\(ctx\.session,"\/proxy\/api\/sparql",\{/);
-  assert.match(personal, /\},maestroQueryFetch\);/);
+  // Only the health-history ledger bypasses the normal timed query transport.
+  assert.match(personal, /\},requestSource\.includes\("graph-server-status-history"\) \? observeProxyFetch : maestroQueryFetch\);/);
+  const history = source('src/lib/client-graph-server-status-history.ts');
+  assert.match(history, /"client-graph-server-status-history:operation"/);
+  assert.match(history, /"urn:maestro:component:graph-server-status-history"/);
   const transport = source('src/lib/client-personal-request.ts');
   assert.match(transport, /await transport\(input,scoped\.init\)/);
   assert.match(client, /selectPersonal\(countQuery, ctx, signal, "status-facet-count"\)/);

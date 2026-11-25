@@ -2,15 +2,16 @@
 import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
 import { DIGEST_SESSION_DB, DIGEST_SESSION_STORE, DIGEST_SESSION_KEY, DIGEST_SESSION_HEADER, DIGEST_SESSION_SCHEME, parseDigestIdentity, parseDigestSession, digestEndpoint, type DigestSessionRecord } from "./digest-session-record";
 import type { PersonalAuthSession } from "./personal-auth";
+import type { PersonalRows } from "./client-personal-sparql";
 import type { BootstrapBinding, BootstrapButton } from "./client-auth-bootstrap";
 
 import type { PersonalGraphServer } from "./client-personal-graph-servers";
 export type SessionKind = {id:string;pattern:string};
 export type SessionSnapshot = {
   bindings:BootstrapBinding[]; kinds:SessionKind[]; servers:PersonalGraphServer[];
-  buttons?:BootstrapButton[]; completedAt:number;
+  buttons?:BootstrapButton[]; completedAt:number; seedRevision:string;
 };
-type SavedSession = DigestSessionRecord & {generation?:string; bootstrapBindings?:BootstrapBinding[];
+type SavedSession = DigestSessionRecord & {generation?:string;
   snapshot?:SessionSnapshot; httpOutcome?:{status:number;at:number}};
 const generationOf=(record:SavedSession)=>record.generation??record.cnonce;
 let active: {record:DigestSessionRecord; generation:string; session:PersonalAuthSession; abort:AbortController} | null = null;
@@ -80,7 +81,7 @@ export async function restoreDigestSession(signal:AbortSignal):Promise<PersonalA
   }catch{return null;}
 }
 /** Connect only. Never replace an existing valid record or reset its nonce count. */
-export async function ensureDigestSession(input:{username:string;graphStore:string;graphPrefix:string;password:string},signal:AbortSignal,onHttpStatus:((status:number)=>void)|undefined, bootstrapQuery:string,onChallengeSent?:()=>void):Promise<BootstrapBinding[]|undefined>{
+export async function ensureDigestSession(input:{username:string;graphStore:string;graphPrefix:string;password:string},signal:AbortSignal,onHttpStatus:((status:number)=>void)|undefined, seedQuery:string,onChallengeSent?:()=>void):Promise<PersonalRows|undefined>{
   return withDigestSessionLock(signal,async()=>{
   signal.throwIfAborted();
   const existing=await readRecord();
@@ -98,7 +99,7 @@ export async function ensureDigestSession(input:{username:string;graphStore:stri
   const challenge=await attributedSparqlFetch("/proxy/api/sparql",{method:"POST",cache:"no-store",redirect:"error",
     signal:AbortSignal.any([signal,AbortSignal.timeout(35_000)]),headers:{"x-maestro-debug-source":"urn:maestro:component:DigestConnect:Challenge","x-maestro-debug-component":"DigestConnect:Challenge","Content-Type":"application/json",
       [DIGEST_SESSION_HEADER]:DIGEST_SESSION_SCHEME+encodeURIComponent(JSON.stringify(identity))},
-    body:JSON.stringify({operation:"auth-probe",query:bootstrapQuery})});
+    body:JSON.stringify({operation:"auth-probe",query:seedQuery})});
   signal.throwIfAborted();
   if(challenge.status!==401){onHttpStatus?.(challenge.status);throw new Error(`Personal SPARQL authentication failed (HTTP ${challenge.status}).`);}
   const metadata=await challenge.json().catch(()=>null);
@@ -108,21 +109,20 @@ export async function ensureDigestSession(input:{username:string;graphStore:stri
   const endpoint=digestEndpoint(record);
   const addr=`${record.graphPrefix.replace(/\/+$/, "")}/query@${endpoint}`;
   const pending=attributedSparqlFetch("/proxy/api/sparql",{method:"POST",cache:"no-store",redirect:"error",
-    signal:AbortSignal.any([signal,AbortSignal.timeout(60_000)]),headers:{"x-maestro-debug-source":"urn:maestro:component:DigestConnect:Bootstrap","x-maestro-debug-component":"DigestConnect:Bootstrap","Content-Type":"application/json",
+    signal:AbortSignal.any([signal,AbortSignal.timeout(60_000)]),headers:{"x-maestro-debug-source":"urn:maestro:component:DigestConnect:SeedDigests","x-maestro-debug-component":"DigestConnect:SeedDigests","Content-Type":"application/json",
       [DIGEST_SESSION_HEADER]:DIGEST_SESSION_SCHEME+encodeURIComponent(JSON.stringify(record))},
-    body:JSON.stringify({addr,personalRead:true,query:bootstrapQuery})});
+    body:JSON.stringify({addr,personalRead:true,query:seedQuery})});
   // Only now has the challenge response been sent to the proxy.
   onChallengeSent?.();
   const response=await pending;
   signal.throwIfAborted();
   onHttpStatus?.(response.status);
   if(!response.ok)throw new Error(`Personal SPARQL authentication failed (HTTP ${response.status}).`);
-  const parsed=await response.json() as {results?:{bindings?:BootstrapBinding[]}};
-  if(!Array.isArray(parsed.results?.bindings) || parsed.results.bindings.length>=3000 ||
-    !parsed.results.bindings.some(row=>row.section?.value==="probe"))throw new Error("Authentication bootstrap returned invalid SPARQL Results JSON.");
+  const parsed=await response.json() as {results?:{bindings?:PersonalRows};incomplete?:boolean};
+  if(parsed.incomplete || !Array.isArray(parsed.results?.bindings))throw new Error("Authentication seed digest query returned invalid SPARQL Results JSON.");
   const bindings=parsed.results.bindings;
   signal.throwIfAborted();
-  let savedBootstrap=false;
+  let savedIdentity=false;
   const db=await openDb();
   try{await new Promise<void>((resolve,reject)=>{
     signal.throwIfAborted();
@@ -131,12 +131,12 @@ export async function ensureDigestSession(input:{username:string;graphStore:stri
     const req=store.get(DIGEST_SESSION_KEY);
     const abort=()=>{try{tx.abort();}catch{}};
     signal.addEventListener("abort",abort,{once:true});
-    req.onsuccess=()=>{if(signal.aborted){abort();return;}if(!parseDigestSession(req.result)){store.put({...(refreshedDigestRecord(record,response)??record),generation:record.cnonce,bootstrapBindings:bindings,httpOutcome:{status:response.status,at:Date.now()}},DIGEST_SESSION_KEY);savedBootstrap=true;}};
+    req.onsuccess=()=>{if(signal.aborted){abort();return;}if(!parseDigestSession(req.result)){store.put({...(refreshedDigestRecord(record,response)??record),generation:record.cnonce,httpOutcome:{status:response.status,at:Date.now()}},DIGEST_SESSION_KEY);savedIdentity=true;}};
     tx.oncomplete=()=>{signal.removeEventListener("abort",abort);resolve();};
     tx.onabort=tx.onerror=()=>{signal.removeEventListener("abort",abort);reject(new Error("Could not save personal user session."));};
   });}finally{db.close();}
-  if(savedBootstrap)notifySessionChanged();
-  return savedBootstrap?bindings:undefined;
+  if(savedIdentity)notifySessionChanged();
+  return savedIdentity?bindings:undefined;
   });
 }
 export function restoredDigestSession():PersonalAuthSession|null{return active?.session??null;}
@@ -209,7 +209,7 @@ export async function forgetDigestSession():Promise<void>{
 }
 
 /** Read the current generation's serializable data, not the Digest carrier. */
-export async function readSessionHydration(session:PersonalAuthSession):Promise<Pick<SavedSession,"snapshot"|"bootstrapBindings"|"httpOutcome">>{
+export async function readSessionHydration(session:PersonalAuthSession):Promise<Pick<SavedSession,"snapshot"|"httpOutcome">>{
   const current=active;
   const record=await readRecord();
   if(!current || current!==active || current.session!==session || !record || !sameIdentity(record,current.record) || generationOf(record)!==current.generation)
@@ -220,8 +220,8 @@ export async function readSessionHydration(session:PersonalAuthSession):Promise<
       !Array.isArray(snapshot.kinds) || !snapshot.kinds.length || !snapshot.kinds.every(row=>typeof row?.id==="string" && typeof row?.pattern==="string") ||
       !Array.isArray(snapshot.servers) || !snapshot.servers.every(row=>typeof row?.uri==="string" && typeof row?.url==="string" && typeof row?.label==="string" && typeof row?.description==="string" && typeof row?.isPersonal==="boolean") ||
       (snapshot.buttons!==undefined && (!Array.isArray(snapshot.buttons) || !snapshot.buttons.every(row=>[row?.uri,row?.action,row?.icon,row?.tooltip,row?.url].every(value=>typeof value==="string"))))))
-    throw new Error("Saved personal session snapshot is incomplete.");
-  return {snapshot,bootstrapBindings:record.bootstrapBindings,httpOutcome:record.httpOutcome};
+    return {httpOutcome:record.httpOutcome};
+  return {snapshot,httpOutcome:record.httpOutcome};
 }
 async function changeSavedSession(session:PersonalAuthSession,change:(record:SavedSession)=>SavedSession,signal?:AbortSignal):Promise<void>{
   const current=active;
@@ -243,7 +243,7 @@ async function changeSavedSession(session:PersonalAuthSession,change:(record:Sav
   });}finally{db.close();}
 }
 export async function commitSessionSnapshot(session:PersonalAuthSession,snapshot:SessionSnapshot,signal:AbortSignal):Promise<void>{
-  await changeSavedSession(session,record=>{const {bootstrapBindings:_,...rest}=record;return {...rest,snapshot};},signal);
+  await changeSavedSession(session,record=>({...record,snapshot}),signal);
   notifySessionChanged("snapshot");
 }
 /** Explicit successful mutations merge only the affected projection. */

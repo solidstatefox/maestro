@@ -63,7 +63,7 @@ test('multi-server pending positions are unique, regardless of lane', async () =
 
 test('OpenAPI /service event subscription preserves proxy queue positions without wrapping results', () => {
   const code = fs.readFileSync(path.join(__dirname, '../src/lib/client-query-events.ts'), 'utf8');
-  assert.match(code, /fetch\("\/proxy\/api\/service"/);
+  assert.match(code, /observeProxyFetch\("\/proxy\/api\/service"/);
   assert.match(code, /operationId: "subscribeQueryEvents"/);
   assert.match(code, /Accept: "text\/event-stream"/);
   assert.match(code, /event === "ready"/);

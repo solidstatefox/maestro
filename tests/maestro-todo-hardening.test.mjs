@@ -20,20 +20,22 @@ test('Query and population targeting coexist in contextual SHACL discovery',()=>
 });
 test('one common validation notice used for Record, query context and Spider',()=>{
   assert.ok(existsSync(new URL('../src/components/ui/validation-notice.tsx',import.meta.url)));
-  for(const filename of ['src/canvas/center/pane.tsx','src/canvas/right/pane.tsx','src/canvas/tab/analyze/spider.tsx'])
+  for(const filename of ['src/canvas/center/pane.tsx','src/canvas/right/pane.tsx','src/canvas/tab/analyze/page-provider.tsx'])
     assert.match(read(filename),/import \{[^}]*ValidationNotice[^}]*\} from "@\/components\/ui\/validation-notice"/);
-  assert.match(read('src/lib/client-spider-shacl.ts'),/SHACLValidator/);
-  assert.match(read('src/lib/client-spider-shacl.ts'),/numeric-query-validator/);
+  assert.match(read('src/lib/client-record-shacl.ts'),/SHACLValidator/);
+  assert.match(read('src/lib/client-provider-validation.ts'),/validateClientShaclRows/);
+  assert.doesNotMatch(read('src/lib/client-provider-validation.ts'),/spider|numeric-query-validator/i);
   // The shared RDF bnode allocator accepts only alphanumeric/underscore prefixes.
-  for (const path of ['src/lib/client-spider-shacl.ts', 'src/lib/client-query-shacl.ts']) {
+  for (const path of ['src/lib/client-record-shacl.ts', 'src/lib/client-query-shacl.ts']) {
     assert.doesNotMatch(read(path),/createBlankNodeLabelAllocator\("[^"]*-[^"]*"\)/);
   }
 });
 test('Kind discovery and Analyze discovery have XState request actors',()=>{
   const configure=read('src/canvas/left/configure-pane.tsx');
-  assert.match(configure,/selectKinds\(kindSnapshot, kindKey\)/);
+  assert.match(configure,/selectKinds\(propertyKindSnapshot, propertyKindKey\)/);
+  assert.match(configure,/selectKinds\(roleKindSnapshot, roleKindKey\)/);
   assert.match(configure,/kindState\.ready && !checkingKinds && <MaestroSelect/);
-  assert.match(configure,/setKindRetry\(value => value \+ 1\)/);
+  assert.match(configure,/setKindRetry\(value=>\(\{\.\.\.value,\[direction\]:value\[direction\]\+1\}\)\)/);
   assert.match(read('src/lib/app-lifecycle/analyze-discovery.ts'),/fromPromise/);
   assert.match(read('src/canvas/utils/workspace-controller.tsx'),/analyzeDiscoveryController\.discover/);
 });

@@ -63,12 +63,8 @@
   const field = name => root.querySelector('[data-provider-field="' + name + '"]')?.value || '';
   const providerUri = root.dataset.providerUri;
   const queryXml = field('queryXml');
-  const shapeUri = field('shapeUri');
-  const queryStylesheet = field('queryStylesheet');
-  const resultStylesheet = field('resultStylesheet');
   const paletteStylesheet = field('paletteStylesheet');
   const facetStylesheet = field('facetStylesheet');
-  const addr = new DOMParser().parseFromString(queryXml, 'application/xml').documentElement.getAttribute('addr') || '';
   const select = root.querySelector('[data-map-colorby]');
   const status = root.querySelector('[data-map-status]');
   const error = root.querySelector('[data-map-error]');
@@ -161,6 +157,7 @@
   const statusText = (message) => { status.textContent = message; };
   const setUrlColor = key => {
     const params = new URLSearchParams(window.location.search);
+    if ((params.get('colorBy') || '') === key) return;
     if (key) params.set('colorBy', key); else params.delete('colorBy');
     window.history.replaceState(window.history.state, '', window.location.pathname + '?' + params.toString() + window.location.hash);
     if (key) {
@@ -236,7 +233,7 @@
     const clone = parseXml(queryXml);
     const projectionView = Array.from(clone.getElementsByTagName('*')).find(node => node.localName === 'view');
     if (!projectionView) throw new Error('Live FCT query has no view');
-    projectionView.setAttribute('type', 'list-values');
+    // projectValues builds the bound merge-values clone.
     projectionView.removeAttribute('badges');
     const projectionXml = new XMLSerializer().serializeToString(clone);
     const projected = new Map();
@@ -312,26 +309,47 @@
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     resizeObserver = new ResizeObserver(() => { if (!signal.aborted) map.resize(); });
     resizeObserver.observe(canvas);
-    const compiled = await api.compileQuery(queryXml, shapeUri, queryStylesheet, signal);
-    const resultXml = await api.executeQuery({ kind: 'sparql', addr, sparql: compiled.sparql }, signal);
-    const pointsXml = await api.transformXml(resultStylesheet, resultXml, signal);
+    const pageRows = JSON.parse(field('pageRows') || '[]');
+    const labels = new Map(pageRows.map(row => [row.uri,row.title]));
+    const GEO = 'http://www.w3.org/2003/01/geo/wgs84_pos#';
+    const GSP = 'http://www.opengis.net/ont/geosparql#';
+    const coordinatePairs = [[GEO+'lat',GEO+'long'],['https://schema.org/latitude','https://schema.org/longitude'],['http://schema.org/latitude','http://schema.org/longitude']];
+    const pointPredicates = ['http://www.georss.org/georss/point',GEO+'lat_long'];
+    const wkt = GSP+'asWKT';
+    const geometry = GSP+'hasGeometry';
+    const columns = [...coordinatePairs.flat(), ...pointPredicates,wkt].map(property => ({property,direction:'forward'}));
+    columns.push({property:wkt,direction:'forward',path:[geometry,wkt]});
+    const records = await api.projectPage(queryXml,pageRows.map(row => row.uri),columns,signal);
     if (signal.aborted) return;
-    const seen = new Set();
-    points = Array.from(parseXml(pointsXml).documentElement.children).flatMap(node => {
-      if (node.localName !== 'point') return [];
-      const uri = node.getAttribute('uri');
-      const lat = Number(node.getAttribute('lat'));
-      const lng = Number(node.getAttribute('lng'));
-      if (!uri || seen.has(uri) || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return [];
-      seen.add(uri);
-      return [{ uri, lat, lng, title: node.getAttribute('title') || uri, colorTermKey: '', colorValue: '' }];
+    // Normalize only enriched resources on this page. Never mix latitude and
+    // longitude from different RDF vocabularies or invent missing coordinates.
+    const coordinate = (a,b) => a != null && b != null && String(a).trim() && String(b).trim() && Number.isFinite(Number(a)) && Number.isFinite(Number(b)) && Math.abs(Number(a)) <= 90 && Math.abs(Number(b)) <= 180 ? [Number(a),Number(b)] : null;
+    points = records.flatMap(record => {
+      if (!labels.has(record.uri)) return [];
+      const first = predicate => record.properties.get(predicate)?.[0]?.value;
+      let pair = coordinatePairs.map(([lat,lng]) => coordinate(first(lat),first(lng))).find(Boolean);
+      if (!pair) for (const predicate of pointPredicates) {
+        const parts = (first(predicate) || '').trim().replaceAll(',', ' ').split(/ +/);
+        if (parts.length === 2) pair = coordinate(parts[0],parts[1]);
+        if (pair) break;
+      }
+      if (!pair) for (const value of [...(record.properties.get(wkt) || []),...(record.properties.get('forward|'+geometry+'/'+wkt) || [])]) {
+        const text = value.value.trim();
+        const start = text.toUpperCase().lastIndexOf('POINT');
+        const inside = start < 0 ? '' : text.slice(start+5).trim();
+        if (!inside.startsWith('(') || !inside.endsWith(')')) continue;
+        const parts = inside.slice(1,-1).trim().split(/ +/);
+        if (parts.length === 2) pair = coordinate(parts[1],parts[0]);
+        if (pair) break;
+      }
+      return pair ? [{uri:record.uri,lat:pair[0],lng:pair[1],title:labels.get(record.uri)||record.uri,colorTermKey:'',colorValue:''}] : [];
     });
-    statusText(points.length + ' mapped resources');
+    statusText(points.length + ' mapped resources on current Results page');
     if (points.length) {
       const bounds = new maplibre.LngLatBounds();
-      points.forEach(point => bounds.extend([point.lng, point.lat]));
+      points.forEach(point => bounds.extend([point.lng,point.lat]));
       map.resize();
-      map.fitBounds(bounds, { padding: 48, maxZoom: 12, duration: 0 });
+      map.fitBounds(bounds,{padding:48,maxZoom:12,duration:0});
     }
     await recolor();
   } catch (reason) {

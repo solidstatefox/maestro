@@ -1,3 +1,4 @@
+import { observedUpstreamStatus } from "./proxy-transport-observation";
 import type { PersonalAuthSession } from "@/lib/personal-auth";
 /** Completed protected HTTP observations for existing XState consumers. */
 export const PERSONAL_AUTH_OUTCOME = "maestro:personal-auth-http-outcome";
@@ -32,7 +33,7 @@ function publish(session:PersonalAuthSession,status:number|null,timestamp=Date.n
 export function hydratePersonalHttpOutcome(session:PersonalAuthSession,outcome:{status:number;at:number}):void{
   if((outcomes.get(session)?.timestamp??0)<=outcome.at)publish(session,outcome.status,outcome.at);
 }
-export function observePersonalAuthResponse(response:Response,session:PersonalAuthSession,_responseBody?:string):Response{publish(session,response.status);return response;}
-export function observePersonalAuthTransportError(session:PersonalAuthSession,signal?:AbortSignal):void{if(!signal?.aborted)publish(session,null);}
+export function observePersonalAuthResponse(response:Response,session:PersonalAuthSession,_responseBody?:string):Response{const status=observedUpstreamStatus(response);if(status!==null)publish(session,status);return response;}
+
 export async function markPersonalSuccessHint(_session:PersonalAuthSession):Promise<void>{}
 export function clearPersonalSuccessHint():void{}

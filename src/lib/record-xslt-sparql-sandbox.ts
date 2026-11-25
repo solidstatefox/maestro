@@ -51,10 +51,9 @@ export async function executeRecordXsltSandboxQueries(
   if (!inspected?.queries.length) return null;
   const doc = document.implementation.createDocument(CONTEXT, "mctx:enrichment");
   const execute = async (query: string): Promise<Binding[]> => {
-    const timeout = AbortSignal.timeout(20_000);
     const response = await maestroQueryFetch("/proxy/api/sparql", {
       method: "POST", cache: "no-store", credentials: "same-origin",
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      signal,
       headers: {"x-maestro-debug-component":"record-xslt-sparql-sandbox:execute", "Content-Type": "application/json", "Accept": "application/json",
         "x-maestro-debug-source": "urn:maestro:component:record-xslt-sandbox" },
       body: JSON.stringify({ addr: `@${inspected.endpoint}`, query }),

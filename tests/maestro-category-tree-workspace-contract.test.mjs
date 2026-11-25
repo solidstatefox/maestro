@@ -12,5 +12,5 @@ test('Sunburst receives category tree roots from the workspace controller throug
   assert.match(controller, /categoryTreeAllCollapsed,\s*categoryTreeRoots,\s*categoryTreePages,/);
   assert.match(contracts, /"categoryTreeAllCollapsed"\s*\|\s*"categoryTreeRoots"\s*\|\s*"categoryTreePages"/);
   assert.match(pane, /categoryTreeAllCollapsed,\s*categoryTreeRoots,\s*categoryTreePages,/);
-  assert.match(pane, /<FacetPresentationSurface\s+presentation=\{classPresentation\}\s+tree=\{categoryTreeRoots\}/);
+  assert.match(pane, /<FacetPresentationSurface\s+presentation=\{classPresentation\}[^>]*?\btree=\{categoryTreeRoots\}/);
 });

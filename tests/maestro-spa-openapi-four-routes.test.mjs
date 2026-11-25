@@ -28,7 +28,7 @@ test('/service handles only allowlisted OpenAPI operations',()=>{
 test('URI observation beacon and POST both use the registered OpenAPI service',()=>{
   const browser=read('src/lib/uri-labels.ts');
   assert.match(browser,/sendBeacon\("\/proxy\/api\/service"/);
-  assert.match(browser,/fetch\("\/proxy\/api\/service"/);
+  assert.match(browser,/observeProxyFetch\("\/proxy\/api\/service"/);
   assert.match(browser,/operationId: "recordUriObservations"/);
 });
 test('three deliberate transport routes with local OpenAPI telemetry; no legacy server operations',()=>{

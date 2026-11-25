@@ -41,7 +41,7 @@ export function useRecordPivotWorkspace(
   // policy discovery and automated validation. User expansion is preserved.
   useEffect(() => { own.setRecordControlsOpen(false); }, []); // mount only
   const validation = useRecordValidationState(own.recordLifecycle);
-  const [formatEnabled, setFormatEnabled] = useState(browse.recordFormatEnabled);
+  const [formatEnabled, setFormatEnabled] = useState(browse.recordFormatMemoryEnabled() && browse.recordFormatEnabled);
   const { identity } = session;
   const selectedUri = identity.value;
   const recordTermType = identity.termType;
@@ -231,13 +231,17 @@ export function useRecordPivotWorkspace(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, own.selectedRecordGraph, graphsInSelectedFamily.join("\u0000"), browse.queryTree.attributes.addr]);
 
+  useEffect(() => {
+    const manual = own.manualRecordFormatSelectionRef.current;
+    if (manual && (manual.recordUri !== selectedUri || manual.queryXml !== identity.queryXml)) own.manualRecordFormatSelectionRef.current = null;
+  }, [selectedUri, identity.queryXml]);
   // Policy discovery is per pivot, not copied from Browse's selected Record.
   // The formatter is never chosen from a different Record's rdf:type.
   useEffect(() => {
     own.setRecordPolicy(null);
     own.setRecordPolicies([]);
     own.setRecordPolicyCheckedUri("");
-    if (recordTermType === "bnode" || !browse.authSession || own.isDescribing ||
+    if (!browse.recordFormatPreferenceLoaded || recordTermType === "bnode" || !browse.authSession || own.isDescribing ||
         describedRecordUri !== selectedUri) return;
     // An empty but completed DESCRIBE has no policy candidates. Do not leave
     // the Record formatter stuck on "Looking for a record policy" forever.
@@ -270,9 +274,38 @@ export function useRecordPivotWorkspace(
           matchedClasses: p.matchedClasses ?? [], template: p.templates[0]?.uri ?? null }));
         own.setRecordDebug(current => ({ ...current, policyDiscovery: data.debugSparql ?? "" }));
         own.setRecordPolicies(policies);
-        const preferred = policies.find(p => recordTypes.some(type => p.matchedClasses.includes(type))) ?? policies[0] ?? null;
+        let preferred = policies.find(p => p.templates.length && recordTypes.some(type => p.matchedClasses.includes(type))) ?? policies.find(p => p.templates.length) ?? null;
+        let template = preferred?.templates[0]?.uri ?? "";
+        let remembered = false;
+        const memoryLease = browse.captureRecordFormatMode();
+        if (memoryLease.pinned) {
+          try {
+            const store = browse.queryTreeHeightDbRef.current?.transaction("preferences", "readonly").objectStore("preferences");
+            const read = (kind: "policy" | "template") => new Promise<string | undefined>(resolve => {
+              if (!store) { resolve(undefined); return; }
+              const request = store.get(`record-${kind}-category:${recordTypes[0]}`);
+              request.onsuccess = () => resolve(typeof request.result === "string" ? request.result : undefined);
+              request.onerror = () => resolve(undefined);
+            });
+            const [savedPolicy, savedTemplate] = await Promise.all([read("policy"), read("template")]);
+            const saved = policies.find(p => p.uri === savedPolicy && p.templates.some(t => t.uri === savedTemplate));
+            if (memoryLease.isCurrent() && (saved || savedTemplate === "")) {
+              remembered = true; preferred = saved ?? preferred; template = savedTemplate ?? "";
+            }
+          } catch { /* No saved choice available. */ }
+        }
+        if (request.signal.aborted) return;
+        const manual = own.manualRecordFormatSelectionRef.current;
+        if (manual?.recordUri === selectedUri && manual.queryXml === identity.queryXml) {
+          const chosen = policies.find(p => p.uri === manual.policyUri && p.templates.some(t => t.uri === manual.templateUri));
+          if (manual.templateUri === "" || chosen) {
+            preferred = chosen ?? preferred; template = manual.templateUri; remembered = true;
+          }
+        }
+        if (browse.recordFormatMemoryEnabled() && !remembered) template = "";
         own.setRecordPolicy(preferred);
-        own.setSelectedRecordTemplateUri(preferred?.templates[0]?.uri ?? "");
+        own.setSelectedRecordTemplateUri(template);
+        setFormatEnabled(Boolean(template));
       } catch (error) {
         if (!request.signal.aborted) own.setRecordPolicyError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -282,7 +315,7 @@ export function useRecordPivotWorkspace(
     })();
     return () => { request.abort(); release(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, selectedUri, identity.queryXml, recordTermType, describedRecord, describedRecordUri, own.isDescribing, browse.authSession]);
+  }, [session.id, selectedUri, identity.queryXml, recordTermType, describedRecord, describedRecordUri, own.isDescribing, browse.authSession, browse.recordFormatPreferenceLoaded]);
 
   const validationRequestRef = useRef<AbortController | null>(null);
   useEffect(() => () => validationRequestRef.current?.abort(), []);
@@ -316,12 +349,15 @@ export function useRecordPivotWorkspace(
   useEffect(() => {
     own.setFormattedRecordHtml("");
     own.setFormattedRecordButtonsHtml({});
-    if (!formatEnabled || !recordPolicy || !selectedRecordTemplateUri || !recordDescriptionSnapshot ||
+    if (!browse.recordFormatPreferenceLoaded || own.isLoadingRecordPolicy || own.recordPolicyCheckedUri !== selectedUri ||
+        own.recordLifecycle.getSnapshot().context.phases.policy === "loading" ||
+        !formatEnabled || !recordPolicy || !selectedRecordTemplateUri || !recordDescriptionSnapshot ||
         recordDescriptionSnapshot.key !== currentRecordDescriptionKey ||
         recordTermType === "bnode" || own.isDescribing) return;
     const snapshot = recordDescriptionSnapshot;
     const request = new AbortController();
     const release = controller.registerRequest(session.id, request);
+    const formatMode = browse.captureRecordFormatMode();
     const formatRequestKey = `${currentRecordDescriptionKey}|${selectedRecordTemplateUri}`;
     own.recordLifecycle.operation("format", "OP_STARTED", currentRecordDescriptionKey, formatRequestKey);
     void (async () => {
@@ -349,6 +385,7 @@ export function useRecordPivotWorkspace(
         if (request.signal.aborted) return;
         own.setRecordDebug(current => ({ ...current, templateLookup: data.debugSparql ?? "" }));
         own.setFormattedRecordHtml(document.body.innerHTML);
+        if (formatMode.ready && !formatMode.pinned && formatMode.isCurrent()) own.setRecordControlsOpen(false);
         own.setRecordFormatError("");
       } catch (error) {
         if (!request.signal.aborted) own.setRecordFormatError(error instanceof Error ? error.message : String(error));
@@ -362,7 +399,7 @@ export function useRecordPivotWorkspace(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, formatEnabled, recordPolicy?.uri, selectedRecordTemplateUri,
       recordDescriptionSnapshot, currentRecordDescriptionKey, selectedUri, recordTermType,
-      own.isDescribing, identity.queryXml]);
+      own.isDescribing, own.isLoadingRecordPolicy, own.recordPolicyCheckedUri, browse.recordFormatPreferenceLoaded, identity.queryXml]);
 
   const describedProperties = useMemo(() => [...describedRecord.reduce((map, row) => {
     const key = `${row.direction}\u0000${row.property}`;
@@ -376,6 +413,7 @@ export function useRecordPivotWorkspace(
   const page = Math.min(own.recordDescriptionPage, pageCount - 1);
   const visible = describedProperties.slice(page * browse.RECORD_DESCRIPTION_PAGE_SIZE, (page + 1) * browse.RECORD_DESCRIPTION_PAGE_SIZE);
   const recordFormatPreferenceKey = (kind: "policy" | "template") => {
+    if (!browse.recordFormatMemoryEnabled()) return "";
     const type = describedRecord.find(row => row.direction === "property" &&
       row.property === "http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?.value;
     return type ? `record-${kind}-category:${type}` : "";
@@ -404,6 +442,7 @@ export function useRecordPivotWorkspace(
     formattedRecordContainerRef: own.formattedRecordContainerRef,
     invokeRecordService: async () => { /* Services are never invoked against session 0 from a pivot. */ },
     isDescribing: own.isDescribing,
+    isFormattingRecord: own.isFormattingRecord,
     isLoadingRecordPolicy: own.isLoadingRecordPolicy,
     isValidatingRecord: validation.isValidatingRecord,
     loadingRecordAuthors: own.loadingRecordAuthors,

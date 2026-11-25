@@ -6,7 +6,7 @@ const vm=require('node:vm');
 const ts=require('typescript');
 const root=path.join(__dirname,'..');
 const read=f=>fs.readFileSync(path.join(root,f),'utf8');
-function load(f,extra={}) {const mod={exports:{}};vm.runInNewContext(ts.transpileModule(read(f),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:mod.exports,Headers,Request,URL,...extra});return mod.exports;}
+function load(f,extra={}) {const mod={exports:{}};vm.runInNewContext(ts.transpileModule(read(f),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:mod.exports,Headers,Request,URL,require:id=>{assert.equal(id,'./proxy-transport-observation');return require('./transport-test-loader.cjs').loadTransportObservation(extra);},...extra});return mod.exports;}
 test('SPARQL requests require both attribution headers before network dispatch',async()=>{
  let dispatches=0;const api=load('src/lib/sparql-request-attribution.ts',{fetch:async()=>{dispatches++;return new Response('ok')}});
  for(const headers of [{},{'x-maestro-debug-source':'urn:maestro:component:RecordPolicy'},{'x-maestro-debug-component':'RecordPolicy'},{'x-maestro-debug-source':'sparql','x-maestro-debug-component':'RecordPolicy'}])assert.throws(()=>api.attributedSparqlFetch('/proxy/api/sparql',{headers}),/owning component/);

@@ -159,7 +159,9 @@ test("access controllers are isolated and survive Strict Mode stop/start", () =>
   const c=createMaestroAccessController();c.start();
   c.send({type:"SESSION_OBSERVED",restored:true,sessionKey:session});
   c.send({type:"AUTH_STATUS_OBSERVED",sessionKey:session,state:"success",status:200,at:1});
-  assert.equal(caps(c).canUsePersonalStore,false);assert.notEqual(caps(c).userSignal,"green");
+  assert.equal(caps(c).canUsePersonalStore,false);assert.equal(caps(c).userSignal,"pulsingGreen");
+  c.send({type:"POLICY_STATUS_OBSERVED",sessionKey:session,stage:"failed"});
+  assert.equal(caps(c).canUsePersonalStore,false);assert.equal(caps(c).userSignal,"pulsingGreen");
   c.send({type:"POLICY_STATUS_OBSERVED",sessionKey:session,stage:"ready"});
   assert.equal(caps(c).canUsePersonalStore,true);assert.equal(caps(c).userSignal,"green");
   c.send({type:"AUTH_STATUS_OBSERVED",sessionKey:session,state:"rejected",status:401,at:2});
@@ -175,7 +177,7 @@ test("access controllers are isolated and survive Strict Mode stop/start", () =>
   assert.equal(caps(c).canUsePersonalStore,false);assert.notEqual(caps(c).userSignal,"green");c.stop();
 });
 
-test("first challenge pulses only until ready; restored sessions never pulse", () => {
+test("initial challenge pulses amber; authenticated initialization pulses green until ready", () => {
   const first = createMaestroAccessController(); first.start();
   first.send({type:"SESSION_OBSERVED",restored:true,sessionKey:""});
   first.send({type:"LOGIN_ACTIVITY",pending:true});
@@ -184,9 +186,9 @@ test("first challenge pulses only until ready; restored sessions never pulse", (
   assert.equal(caps(first).userSignal,"pulsingAmber");
   first.send({type:"AUTH_STATUS_OBSERVED",sessionKey:"",state:"success",status:200,at:1});
   first.send({type:"SESSION_OBSERVED",restored:true,sessionKey:session});
-  assert.equal(caps(first).userSignal,"pulsingAmber");
+  assert.equal(caps(first).userSignal,"pulsingGreen");
   first.send({type:"LOGIN_ACTIVITY",pending:false});
-  assert.equal(caps(first).userSignal,"pulsingAmber");
+  assert.equal(caps(first).userSignal,"pulsingGreen");
   first.send({type:"POLICY_STATUS_OBSERVED",sessionKey:session,stage:"ready"});
   assert.equal(caps(first).userSignal,"green");
   first.send({type:"LOGIN_ACTIVITY",pending:false});
@@ -194,7 +196,7 @@ test("first challenge pulses only until ready; restored sessions never pulse", (
   restored.send({type:"SESSION_OBSERVED",restored:true,sessionKey:session});
   assert.notEqual(caps(restored).userSignal,"pulsingAmber");
   restored.send({type:"AUTH_STATUS_OBSERVED",sessionKey:session,state:"success",status:200,at:1});
-  assert.notEqual(caps(restored).userSignal,"green");
+  assert.equal(caps(restored).userSignal,"pulsingGreen");
   assert.notEqual(caps(restored).userSignal,"pulsingAmber");
   restored.send({type:"POLICY_STATUS_OBSERVED",sessionKey:session,stage:"ready"});
   assert.equal(caps(restored).userSignal,"green");

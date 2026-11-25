@@ -13,22 +13,6 @@ test('radial names use the shadcn labeled 250px rings without a custom SVG label
   assert.match(labeled,/\.sort\(\(a,b\)=>b\.percentage-a\.percentage/);
   assert.doesNotMatch(labeled,/<text x=|ringShape|<Legend/);
 });
-test('Spider is a discoverable seeded analysis provider and declares a numeric query-validation policy',()=>{
-  const manifest=JSON.parse(read('graph/manifest.json'));
-  assert.equal(manifest['spider/provider.ttl'],'shacl-policies');
-  const rdf=read('graph/spider/provider.ttl');
-  assert.match(rdf,/a mui:Provider, ma:Analysis, sh:NodeShape/);
-  assert.match(rdf,/ma:lucideIcon "chart-radar"/);
-  assert.match(rdf,/numeric-query-validator> a mui:ClassPolicy, sh:NodeShape/);
-  assert.match(rdf,/mui:numericCoercion "finite-lexical-v1"/);
-  assert.match(rdf,/fct:view/);
-  const host=read('src/canvas/tab/analyze/page.tsx');
-  assert.match(host,/spiderSelected\) return <AnalyzeSpider workspace=\{workspace\}/);
-  const ui=read('src/canvas/tab/analyze/spider.tsx');
-  assert.match(ui,/workspace\.readyAnalysisValues/);
-  assert.match(ui,/<Radar /);
-  assert.match(read('src/lib/spider-numeric-policy.ts'),/isCoercibleNumericLexical/);
-});
 test('Kinds provider has an explicit class, stays in default curator, and gets an FCT-backed Providers ribbon entry',()=>{
   assert.match(read('graph/kinds/provider.ttl'),/a mui:Provider, mui:KindProvider/);
   assert.match(read('graph/maestro-curation-providers.ttl'),/shacl\/provider\/kinds/);

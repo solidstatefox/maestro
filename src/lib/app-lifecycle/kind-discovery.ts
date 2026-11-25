@@ -1,6 +1,6 @@
 import { assign, createActor, fromPromise, setup } from "xstate";
 
-export type KindDiscoveryResult = Record<"property" | "role", string[]>;
+export type KindDiscoveryResult = { kinds: string[]; incomplete: boolean };
 type Context = { key: string; result: KindDiscoveryResult | null; error: string; execute: ((signal: AbortSignal) => Promise<KindDiscoveryResult>) | null };
 type Event = { type: "EXECUTE"; key: string; execute: (signal: AbortSignal) => Promise<KindDiscoveryResult> } | { type: "CLEAR" };
 const initial = (): Context => ({ key: "", result: null, error: "", execute: null });
@@ -12,15 +12,18 @@ export const maestroKindDiscoveryMachine = setup({
   id: "maestro-kind-discovery", initial: "idle", context: initial,
   on: {
     CLEAR: { target: ".idle", actions: assign(initial) },
-    EXECUTE: { target: ".loading", actions: assign(({ event }) => ({ ...initial(), key: event.key, execute: event.execute })) },
+    EXECUTE: { guard: ({context,event}) => context.key !== event.key, target: ".loading", reenter:true, actions: assign(({ event }) => ({ ...initial(), key: event.key, execute: event.execute })) },
   },
   states: {
     idle: {},
     loading: { invoke: { src: "discover", input: ({ context }) => ({ execute: context.execute! }),
-      onDone: { target: "ready", actions: assign(({ event }) => ({ result: event.output, error: "", execute: null })) },
+      onDone: [
+        { guard: ({event}) => event.output.incomplete, target: "partial", actions: assign(({event}) => ({result:event.output,error:"",execute:null})) },
+        { target: "ready", actions: assign(({ event }) => ({ result: event.output, error: "", execute: null })) },
+      ],
       onError: { target: "failed", actions: assign(({ event }) => ({ result: null, error: event.error instanceof Error ? event.error.message : String(event.error), execute: null })) },
     } },
-    ready: {}, failed: {},
+    ready: {}, partial: {}, failed: {},
   },
 });
 function freshActor() { return createActor(maestroKindDiscoveryMachine); }
@@ -41,6 +44,7 @@ export function createMaestroKindDiscoveryController() {
 }
 export function selectKinds(s: ReturnType<ReturnType<typeof createMaestroKindDiscoveryController>["getSnapshot"]>, key: string) {
   const same = s.context.key === key;
-  return { loading: key !== "" && (!same || s.matches("loading")), ready: same && s.matches("ready"),
-    error: same && s.matches("failed") ? s.context.error : "", availability: same && s.matches("ready") ? s.context.result : null };
+  const ready = same && (s.matches("ready") || s.matches("partial"));
+  return { loading: same && s.matches("loading"), ready, partial: same && s.matches("partial"),
+    error: same && s.matches("failed") ? s.context.error : "", availability: ready ? s.context.result?.kinds ?? [] : null };
 }

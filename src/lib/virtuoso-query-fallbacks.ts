@@ -2,7 +2,7 @@
  * Messages can contain echoed SPARQL, so a bare IRI_RANK or GROUP BY is
  * NOT evidence that ordering or aggregation caused the error. */
 export function virtuosoRankFailure(message: string): boolean {
-  return /(?:\b(?:SR185|SR353)\b|sorted results (?:limit|exceed)|sort(?:ing)? limit|(?:unknown|undefined|unsupported|unrecognized|not supported|not defined)[^\n]{0,100}IRI_RANK|IRI_RANK[^\n]{0,100}(?:unknown|undefined|unsupported|not supported|not defined))/i.test(message);
+  return (/\bSQ074\b/i.test(message) && /Raw SQL access to internal RDF functions/i.test(message) && /SPARQL_SELECT_RAW/i.test(message)) || /(?:\b(?:SR185|SR353)\b|sorted results (?:limit|exceed)|sort(?:ing)? limit|(?:unknown|undefined|unsupported|unrecognized|not supported|not defined)[^\n]{0,100}IRI_RANK|IRI_RANK[^\n]{0,100}(?:unknown|undefined|unsupported|not supported|not defined))/i.test(message);
 }
 
 export function virtuosoAggregateFailure(message: string): boolean {

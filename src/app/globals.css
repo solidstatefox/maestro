@@ -202,3 +202,9 @@ svg[data-maestro-icon] { stroke-width: var(--maestro-icon-stroke-width); }
   text-decoration: underline !important;
   text-underline-offset: 2px;
 }
+
+/* Record formats fill the physical column, regardless of provider width caps. */
+.maestro-record-format-surface > :not(script):not(style),
+.maestro-record-format-surface #maestro-record-viewer {
+  box-sizing: border-box; width: 100% !important; min-width: 0 !important; max-width: 100% !important;
+}

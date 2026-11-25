@@ -140,9 +140,9 @@ export function D3SankeyDiagram({data,minWidth,onOpenResource}:{data:SankeyCover
     return colors;
   },[graph.nodes,multicolorColumns,palette,paletteName]);
   const nodeColor=(node:Node)=>nodeColors.get(node.id)??palette[node.kind];
-  const streamFocus=useMemo(()=>selectedNode!==null && multicolorColumns
+  const streamFocus=useMemo(()=>selectedNode!==null
     ?traceSankeyStreams(graph.links.map(link=>({source:link.source.id,target:link.target.id})),selectedNode)
-    :null,[graph.links,selectedNode,multicolorColumns]);
+    :null,[graph.links,selectedNode]);
   const path = sankeyLinkHorizontal<Node,Link>();
   const gradientId = (index:number) => `${gradientPrefix}-ribbon-${index}`;
   const edgeStroke=(l:Link,i:number) => linkColor==="source-target"?`url(#${gradientId(i)})`
@@ -167,7 +167,7 @@ export function D3SankeyDiagram({data,minWidth,onOpenResource}:{data:SankeyCover
       <SankeySelect label="Link color" value={linkColor} onChange={value=>setLinkColor(value as LinkColor)}
         options={[{value:"source-target",label:"Source → target gradient"},{value:"source",label:"Source"},{value:"target",label:"Target"},{value:"stage",label:"Stage"},{value:"neutral",label:"Neutral"}]}/>
       <SankeyCheckbox label="Multicolor columns" checked={multicolorColumns} onChange={setMulticolorColumns}/>
-      {multicolorColumns && selectedNode!==null && <Button type="button" variant="outline" size="xs"
+      {selectedNode!==null && <Button type="button" variant="outline" size="xs"
         onClick={()=>setSelectedNode(null)}>Show all streams</Button>}
       <SankeySelect label="Colors by node stage" value={paletteName} onChange={setPaletteName}
         options={Object.keys(palettes).map(name=>({value:name,label:name}))}/>
@@ -205,14 +205,13 @@ export function D3SankeyDiagram({data,minWidth,onOpenResource}:{data:SankeyCover
             <title>{`${link.source.name} → ${link.target.name}: ${format(link.value)}`}</title>
           </path>)}</g>
           <g>{graph.nodes.map(node=><g key={node.id} data-d3-sankey-node="true"
-            tabIndex={multicolorColumns || (node.kind==="resource"&&node.uri)?0:undefined}
-            role={multicolorColumns || (node.kind==="resource"&&node.uri)?"button":undefined}
-            aria-pressed={multicolorColumns ? selectedNode===node.id : undefined}
-            aria-label={multicolorColumns ? `Isolate streams through ${node.name}. Shift-click to open resource.`
-              :node.kind==="resource"&&node.uri?`Open ${node.name} in Record`:undefined}
-            className={multicolorColumns || (node.kind==="resource"&&node.uri)?"cursor-pointer":undefined}
+            tabIndex={0}
+            role="button"
+            aria-pressed={selectedNode===node.id}
+            aria-label={`Isolate streams through ${node.name}. Shift-click to open resource.`}
+            className="cursor-pointer"
             onClick={event=>{
-              if(multicolorColumns && !event.shiftKey && !event.metaKey && !event.ctrlKey){
+              if(!event.shiftKey && !event.metaKey && !event.ctrlKey){
                 setSelectedNode(previous=>previous===node.id?null:node.id);return;
               }
               if(node.kind==="resource"&&node.uri)onOpenResource(node.uri);
@@ -220,7 +219,7 @@ export function D3SankeyDiagram({data,minWidth,onOpenResource}:{data:SankeyCover
             onDoubleClick={()=>{if(node.kind==="resource"&&node.uri)onOpenResource(node.uri);}}
             onKeyDown={event=>{if(event.key!=="Enter"&&event.key!==" ")return;
               event.preventDefault();
-              if(multicolorColumns && !event.shiftKey){setSelectedNode(previous=>previous===node.id?null:node.id);return;}
+              if(!event.shiftKey){setSelectedNode(previous=>previous===node.id?null:node.id);return;}
               if(node.kind==="resource"&&node.uri)onOpenResource(node.uri);
             }}>
             <rect x={node.x0} y={node.y0} width={Math.max(1,node.x1-node.x0)} height={Math.max(1,node.y1-node.y0)} rx={2}
@@ -239,6 +238,6 @@ export function D3SankeyDiagram({data,minWidth,onOpenResource}:{data:SankeyCover
         </g>
       </svg>
     </div>}
-    <p className="text-xs text-muted-foreground">The D3 provider shares the same FCT focus, forward query-tree traversal, result pagination and predicate-coverage weights as Recharts. Controls and zoom are presentation-only; drag the chart background to pan. In multicolor mode, click a node to isolate its incoming and outgoing paths; click it again or use Show all streams to clear. Click a resource label, double-click the node, or Shift-click to open Record. No personal graph updates.</p>
+    <p className="text-xs text-muted-foreground">The D3 provider shares the same FCT focus, forward query-tree traversal, result pagination and predicate-coverage weights as Recharts. Controls and zoom are presentation-only; drag the chart background to pan. In either color mode, click a node to isolate its incoming and outgoing paths; click it again or use Show all streams to clear. Click a resource label, double-click the node, or Shift-click to open Record. No personal graph updates.</p>
   </div>;
 }

@@ -4,6 +4,7 @@ import { executeProviderDerivedQuery, type ProviderQueryRequest } from "@/lib/ma
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 import { compileProviderXsltQuery } from "@/lib/provider-xslt-query";
 import { cachedFetchFct } from "@/lib/client-query-cache";
+import { fctProjectPage } from "@/lib/fct-client";
 import { mergeValuesQueryClone } from "@/canvas/utils/fct-response";
 import { publishXsltFacetDecorations, resetFacetDecorations, type DecorationFacet } from "@/lib/facet-decoration-contract";
 
@@ -63,6 +64,7 @@ export type MaestroProviderBrowserApi = {
   executeQuery: (query: ProviderQueryRequest, signal?: AbortSignal) => Promise<string>;
   compileQuery: typeof compileProviderXsltQuery;
   transformXml: (stylesheet: string, xml: string, signal?: AbortSignal) => Promise<string>;
+  projectPage: typeof fctProjectPage;
   projectValues: (queryXml: string, resources: { type: string; value: string }[], projections: { property: string; direction: string; hops?: Array<{ iri: string; direction: "forward" | "reverse" }> }[], signal?: AbortSignal) => Promise<string>;
   decorateFacets: (providerUri: string, stylesheet: string, facets: DecorationFacet[], selected: string, action: (name: string, facetKey: string) => void) => Promise<void>;
   clearFacetDecorations: (providerUri: string) => void;
@@ -77,6 +79,7 @@ export function installMaestroProviderBridge(): MaestroProviderBrowserApi {
     executeQuery: executeProviderDerivedQuery,
     compileQuery: compileProviderXsltQuery,
     transformXml: (stylesheet, xml, signal) => transformWithMaestroSaxon(stylesheet, xml, { signal }),
+    projectPage: fctProjectPage,
     projectValues: async (queryXml, resources, projections, signal) => {
       const xml = mergeValuesQueryClone(queryXml,
         projections.map(({property,direction,hops}) => ({property, direction: direction === "reverse" ? "reverse" as const : "forward" as const, ...(hops?.length ? { hops } : {})})),

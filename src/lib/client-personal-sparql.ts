@@ -41,15 +41,15 @@ async function perform(input:{query?:string;update?:string;addr?:string;bookmark
   const raw=await response.text();let data:Record<string,unknown>={};
   if(raw){try{data=JSON.parse(raw) as Record<string,unknown>;}catch(error){
     // Preserve ODS account-authentication behavior (401 is a separate issue).
-    if(response.status===401)throw new Error(`${origin} returned HTTP ${response.status}: ${raw.slice(0,500)}`);
-    const upstream = sanitizeUpstreamDiagnostic(raw);
+    if(response.status===401)throw new Error(`${origin} returned HTTP ${response.status}: ${sanitizeUpstreamDiagnostic(raw, Infinity)}`);
+    const upstream = sanitizeUpstreamDiagnostic(raw, Infinity);
     if(!response.ok)throw new Error(`${origin} returned HTTP ${response.status} ${response.statusText}: ${upstream} (JSON parse: ${describeUpstreamError(error)})`, {cause:error});
     throw new Error(`${origin} returned invalid JSON: ${describeUpstreamError(error)}; upstream body: ${upstream}`, {cause:error});
   }}
   if(!response.ok) {
     if(response.status===401)throw new Error(typeof data.error==="string"?data.error:`${origin} HTTP ${response.status}`);
-    const upstream = typeof data.error==="string" ? data.error : typeof data.message==="string" ? data.message : raw;
-    throw new Error(`${origin} returned HTTP ${response.status} ${response.statusText}: ${sanitizeUpstreamDiagnostic(upstream)}`);
+    const upstream = [typeof data.error==="string" ? data.error : typeof data.message==="string" ? data.message : raw, typeof data.details==="string" ? data.details : ""].filter(Boolean).join("\n\n");
+    throw new Error(`${origin} returned HTTP ${response.status} ${response.statusText}: ${sanitizeUpstreamDiagnostic(upstream, Infinity)}`);
   }
   if(data.incomplete===true||response.headers.get("X-Maestro-Incomplete")==="true")throw new Error("Personal SPARQL query returned an incomplete result.");
   return data;

@@ -4,7 +4,6 @@ import { maestroLanguageHeader } from "./maestro-language";
 import { readMaestroConcurrency } from "./maestro-concurrency";
 import { maestroQueryClockScope } from "./maestro-query-execution-clock";
 import { subscribeMaestroQueryEvents } from "./client-query-events";
-import { QUERY_OPERATION_WATCHDOG_MS } from "./virtuoso-anytime";
 import { setMaestroIncompleteResults } from "./maestro-incomplete-results";
 import { applyFctQueryTimeout, configuredTimeoutMs } from "./maestro-query-timeouts";
 /**
@@ -140,13 +139,16 @@ export function computeClientCacheKey(url: string, init?: RequestInit): string |
     // Never put credentials or authenticated personal responses into the
     // generic public response cache. Personal snapshots have their own scope.
     if (headers.has("authorization") || /"personal(?:Read|Write)"\s*:\s*true/i.test(bodyStr) || /\/ods\/home\//i.test(bodyStr) || /"update"\s*:/i.test(bodyStr)) return null;
+    // A reconstructed blank-node Record is a response-local candidate set.
+    // Do not replay old response labels/parent evidence through the public cache.
+    if (/"responseScope"\s*:\s*"request"/.test(bodyStr)) return null;
     // Endpoint selection mutation should not be cached
     if ((bodyStr.includes('"selectEndpointId"') || bodyStr.includes('"selectEndpointUrl"'))) return null;
     const language = new Headers(init?.headers).get("x-maestro-language") ?? "";
     // The FCT route now emits authoritative page labels for text and list
     // results. A new cache namespace avoids replaying pre-fix URI-only cards
     // from IndexedDB after logout/login (without clearing unrelated user data).
-    const responseRevision = url.includes("/proxy/api/fct") ? "fct-labels-v4::" : "public-v4::";
+    const responseRevision = url.includes("/proxy/api/fct") ? "fct-labels-v4::anytime-v1::" : "public-v4::anytime-v1::";
     return `POST::${responseRevision}${url}::lang=${language}::timeout=${headers.get("x-maestro-query-timeout-ms") ?? ""}::${bodyStr}`;
   }
   return null;
@@ -444,13 +446,9 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
   if ((init?.method ?? "GET").toUpperCase() !== "POST") return observeProxyFetch(input, init);
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   if (!/\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) return observeProxyFetch(input, init);
-  // This is a local liveness watchdog, not the Sheet execution budget.
-  // It bounds a lost queue/telemetry/HTTP response without charging queue time
-  // to Virtuoso. Its abort is not upstream failure evidence.
-  const originalOwner = init?.signal ? pendingQueryOwnerBySignal.get(init.signal) : undefined;
-  const watchdog = AbortSignal.timeout(QUERY_OPERATION_WATCHDOG_MS);
-  init = { ...init, signal: init?.signal ? AbortSignal.any([init.signal, watchdog]) : watchdog };
-  if (originalOwner && init.signal) pendingQueryOwnerBySignal.set(init.signal, originalOwner);
+  // The caller's lifecycle owns cancellation. A wall-clock watchdog attached
+  // to the fetch would also abort a request already dispatched to Virtuoso.
+  // Neither browser nor proxy queue residence is charged against execution.
   const background = isBackgroundQuery(init);
   return new Promise<Response>((resolve, reject) => {
     let started = false;
@@ -461,7 +459,7 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
       const index = requestQueue.indexOf(job);
       if (index >= 0) requestQueue.splice(index, 1);
       refreshPendingQueueIndexes();
-      reject(watchdog.aborted ? new Error("Maestro local request watchdog expired while queued.") : new DOMException("Query canceled", "AbortError"));
+      reject(new DOMException("Query canceled", "AbortError"));
       dispatchScheduledRequests();
     };
     const clockScope = maestroQueryClockScope(init?.headers ? new Headers(init.headers) : undefined);
@@ -552,11 +550,11 @@ async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit)
   if (body.trimStart().startsWith("{")) {
     try {
       const parsed = JSON.parse(body);
-      const nested=parsed.recordSelect??parsed.recordBlankNodes??parsed.recordValueLabels??parsed.facetValueCount;
+      const nested=parsed.recordSelect??parsed.recordValueLabels??parsed.facetValueCount;
       fctXml = typeof (nested?.queryXml??parsed.queryXml) === "string" ? nested?.queryXml??parsed.queryXml : "";
       if(!parsed.personalRead && !parsed.personalWrite && !parsed.update && parsed.operation!=="auth-probe"){
         directAddr=typeof (nested?.addr??parsed.addr)==="string" ? nested?.addr??parsed.addr : "";
-        directOperation=typeof parsed.query==="string" ? "query" : Object.keys(parsed).find(key=>["recordSelect","recordBlankNodes","recordValueLabels","facetValueCount","resultsQuery","facetIntersection"].includes(key))??"";
+        directOperation=typeof parsed.query==="string" ? "query" : Object.keys(parsed).find(key=>["recordSelect","recordValueLabels","facetValueCount","resultsQuery","facetIntersection"].includes(key))??"";
       }
     } catch { fctXml = ""; }
   }
@@ -593,7 +591,7 @@ async function monitoredProxyFetch(input: RequestInfo | URL, init?: RequestInit)
     // A valid Anytime partial result is a supported execution outcome. It is
     // neither a hard transport failure nor proof that all requested values exist.
     const successful = response.ok && network && actual === 200 && !partial && ((isFctQuery && !isStatusProjection) || directNetwork);
-    if (successful || ((origin === "upstream-http" || directNetwork) && actual >= 400 && !partial) || timeout) {
+    if (successful || ((origin === "upstream-http" || directNetwork) && actual >= 400 && actual !== 401 && !partial) || timeout) {
       if (!init?.signal?.aborted) window.dispatchEvent(new CustomEvent(MAESTRO_GRAPH_SERVER_QUERY_OUTCOME,{detail:{endpointUrl,operation,sequence,scope,status:successful ? 200 : timeout && actual===504 ? null : actual,timeout,diagnostic:timeout?"Upstream query transport timeout":successful?undefined:`Upstream query HTTP ${actual}`}}));
     }
     if (response.status === 200 && isFctQuery && !isStatusProjection && !timeout && !partial && response.headers.get("X-Maestro-Upstream-Source")==="network") {
@@ -624,11 +622,8 @@ async function maestroQueryFetchImpl(input: RequestInfo | URL, init?: RequestIni
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const method = (init?.method ?? "GET").toUpperCase();
   if (method === "POST" && /\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) {
-    // The proxy starts the upstream deadline after its heavy/light scheduler
-    // grants a slot. A browser AbortSignal.timeout started here would charge
-    // the *browser queue* and the telemetry handshake against the query budget,
-    // yielding spurious `signal timed out` errors on busy Personal counts.
-    // Preserve the caller's AbortSignal for cancellation/navigation.
+    // Virtuoso owns its SQL execution budget. The browser queue and proxy
+    // delivery do not have a competing deadline. Preserve the owner signal.
     if (url.includes("/proxy/api/fct") && typeof init?.body === "string") {
       let body = init.body;
       if (body.trimStart().startsWith("{")) {
@@ -689,7 +684,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
   const requestId = requestHeaders.get("x-maestro-debug-request") || "";
   const track = (response: Response): Response => {
     const incomplete = response.headers.get("x-maestro-incomplete") === "true";
-    setMaestroIncompleteResults(source, { incomplete, requestId, message: incomplete ? "Virtuoso ANYTIME returned incomplete results." : "" });
+    if (response.ok) setMaestroIncompleteResults(source, { incomplete, requestId, message: incomplete ? "Virtuoso ANYTIME returned incomplete results." : "" });
     return response;
   };
   // Personal state assertions are mutable independently of the live XML.
@@ -711,7 +706,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
   }
 
   const response = await monitoredProxyFetch(input, init);
-  if (response.status === 200 && response.headers.get("x-maestro-incomplete") !== "true") {
+  if (response.status === 200 && response.headers.get("x-maestro-incomplete") !== "true" && !response.headers.has("x-maestro-enrichment-unavailable") && !response.headers.has("x-maestro-count-fallback") && !response.headers.has("x-maestro-ordering-fallback")) {
     try {
       const clone = response.clone();
       const bodyText = await clone.text();

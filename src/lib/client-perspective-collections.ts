@@ -22,7 +22,7 @@ export async function loadPerspectiveCollection(kind:"bookmarks"|"history", prov
   const candidates = kind === "bookmarks" ? pinned : [];
   const all = [...new Map([...candidates,...page].map(row=>[row.uri,row])).values()];
   const typeProperty = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-  const records = await fctProjectPage(queryXml,all.map(row=>row.uri),[...columns,{property:typeProperty,direction:"forward"}],signal);
+  const records = await fctProjectPage(queryXml,all.map(row=>row.uri),[...columns,{property:typeProperty,direction:"forward"}],signal,false,kind === "bookmarks");
   signal?.throwIfAborted();
   const byUri = new Map(records.map(record=>[record.uri,record]));
   const numeric=(value:string):number|null=>/^\d+$/.test(value)&&Number.isSafeInteger(Number(value))?Number(value):null;

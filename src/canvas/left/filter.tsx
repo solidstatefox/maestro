@@ -17,7 +17,6 @@ import { cachedFetchFct, maestroQueryFetch } from "@/lib/client-query-cache";
 import { setMaestroIncompleteResults } from "@/lib/maestro-incomplete-results";
 import { componentRetryHeaders, useMaestroComponentRetry } from "@/lib/maestro-component-retry";
 import { resetMaestroQueryExecutionScope } from "@/lib/maestro-query-execution-clock";
-import { watchPersonalFacetDeadline } from "@/lib/personal-facet-deadline";
 import { configuredTimeoutMs } from "@/lib/maestro-query-timeouts";
 import { shortenCount } from "@/lib/utils";
 import { useFctQuery, serializeFctQuery, createPersonalFacetValuesQuery, createDistinctCountQuery } from "@/lib/fct-query-api";
@@ -476,14 +475,9 @@ export function PersonalWidgetQueryListener({
       return;
     }
     let cancelled = false;
-    let timeoutReason = "";
     const controller = new AbortController();
     const clockScope = `component:personal:${identity}` as const;
     resetMaestroQueryExecutionScope(clockScope);
-    const stopDeadline = watchPersonalFacetDeadline(clockScope, queryTimeoutMs, reason => {
-      timeoutReason = reason;
-      controller.abort(new DOMException(reason, "TimeoutError"));
-    });
     setPersonalWidgets((current) =>
       current.map((widget) =>
         (widget.key ?? widget.uri) === identity
@@ -533,7 +527,7 @@ export function PersonalWidgetQueryListener({
                   values,
                   valuesQuerySparql: data.sparql,
                   datatypeEvidence: [...new Set((data.datatypeEvidence ?? []).map(item => item.datatype))],
-                  datatypeEvidenceScope: liveQueryScopeXml,
+                  datatypeEvidenceScope: response.headers.has("x-maestro-enrichment-unavailable") ? undefined : liveQueryScopeXml,
                   loading: false,
                   error: "",
                   page: Math.min(
@@ -546,7 +540,7 @@ export function PersonalWidgetQueryListener({
         );
       } catch (error) {
         if (cancelled) return;
-        if (!timeoutReason && error instanceof Error && error.name === "AbortError") {
+        if (error instanceof Error && error.name === "AbortError") {
           // Individual/global transport cancellation is terminal for this live
           // widget. Only effect cleanup belongs to a superseded query.
           setPersonalWidgets((current) => current.map(widget =>
@@ -560,8 +554,7 @@ export function PersonalWidgetQueryListener({
                   ...widget,
                   loading: false,
                   error: [
-                    timeoutReason ||
-                      `Personal facet update failed: ${error instanceof Error ? error.message : String(error)}`,
+                    `Personal facet update failed: ${error instanceof Error ? error.message : String(error)}`,
                     `Component: PersonalWidgetQueryListener:${propertyUri}`,
                     `RDF property: ${propertyUri}`,
                     `x-maestro-debug-source: ${attribution["X-Maestro-Debug-Source"]}`,
@@ -576,15 +569,12 @@ export function PersonalWidgetQueryListener({
               : widget,
           ),
         );
-      } finally {
-        stopDeadline();
       }
     }
 
     void refreshWidget();
     return () => {
       cancelled = true;
-      stopDeadline();
       controller.abort();
     };
   }, [widgetQueryXml, identity, propertyUri, anchorId, href, setPersonalWidgets, endpointReady, refreshRevision, retryRevision]);
@@ -661,10 +651,6 @@ export function PersonalRoleWidget({
     const controller = new AbortController();
     const clockScope = `component:personal-role:${uri}` as const;
     resetMaestroQueryExecutionScope(clockScope);
-    let timeoutReason = "";
-    const stopDeadline = watchPersonalFacetDeadline(clockScope, queryTimeoutMs, reason => {
-      timeoutReason = reason; controller.abort(new DOMException(reason, "TimeoutError"));
-    });
     setLoading(true);
     setError("");
     async function loadValues() {
@@ -688,15 +674,14 @@ export function PersonalRoleWidget({
         setValues((current) => current.length === fetched.length && current.every((item, index) => item.uri === fetched[index]?.uri && item.datatype === fetched[index]?.datatype && item.lang === fetched[index]?.lang && facetMembershipCount(item) === facetMembershipCount(fetched[index])) ? current : fetched);
         setPage((current) => Math.min(current, Math.max(0, Math.ceil(fetched.length / 10) - 1)));
       } catch (requestError) {
-        if (cancelled || (!timeoutReason && requestError instanceof Error && requestError.name === "AbortError")) return;
-        setError(timeoutReason || presentServerError(requestError instanceof Error ? requestError.message : "Failed to load role values."));
+        if (cancelled || (requestError instanceof Error && requestError.name === "AbortError")) return;
+        setError(presentServerError(requestError instanceof Error ? requestError.message : "Failed to load role values."));
       } finally {
-        stopDeadline();
-        if (!cancelled) setLoading(false);
+          if (!cancelled) setLoading(false);
       }
     }
     void loadValues();
-    return () => { cancelled = true; stopDeadline(); controller.abort(); };
+    return () => { cancelled = true; controller.abort(); };
   // widgetQueryXml already encodes the entire current FCT tree, role binding,
   // page limit, and group-by state. Depending on the *object identity* of tree
   // additionally re-dispatches an identical request when parent UI state

@@ -18,15 +18,15 @@ export function useRecordCoreState() {
   // An RDF blank-node label identifies a node only within the SELECT result set.
   // Retain its parent URI and predicate instead of attempting to query _:label.
   const [explicitBlankNodeAnchor, setExplicitBlankNodeAnchor] = useState<{
-    label: string; parent: string; predicate: string;
+    label: string; parent: string; predicate: string; direction: "forward" | "reverse"; queryXml: string;
   } | null>(null);
-  const [blankNodeRecords, setBlankNodeRecords] = useState<BlankNodeRecord[]>([]);
+  const [blankNodeResponse, setBlankNodeResponse] = useState<{ key: string; records: BlankNodeRecord[] } | null>(null);
   const [activeBlankNodeTab, setActiveBlankNodeTabState] = useState(-1);
   const activeBlankNodeTabRef = useRef(-1);
-  const chooseBlankNodeCandidate = useCallback((index: number) => blankNodeContext.choose(index), [blankNodeContext]);
+  const chooseBlankNodeSibling = useCallback((index: number) => blankNodeContext.choose(index), [blankNodeContext]);
   const setActiveBlankNodeTab = useCallback((update: SetStateAction<number>) => {
     const index = typeof update === "function" ? update(activeBlankNodeTabRef.current) : update;
-    if (index !== -1 && !blankNodeContext.choose(index)) return;
+    if (index !== -1 && !blankNodeContext.isChosen(index)) return;
     activeBlankNodeTabRef.current = index;
     setActiveBlankNodeTabState(index);
   }, [blankNodeContext]);
@@ -56,7 +56,7 @@ export function useRecordCoreState() {
   );
   const recordAuthors = recordGraphAuthors.filter((entry) => graphsInSelectedFamily.includes(entry.graph));
 
-  return { blankNodeContext, chooseBlankNodeCandidate, explicitBlankNodeAnchor, setExplicitBlankNodeAnchor, blankNodeRecords, setBlankNodeRecords, activeBlankNodeTab, setActiveBlankNodeTab, describedRecord, setDescribedRecord, describedRecordUri, setDescribedRecordUri, recordDescriptionSnapshot, setRecordDescriptionSnapshot, recordGraphs, setRecordGraphs, selectedRecordGraph, setSelectedRecordGraph, selectedRecordAuthor, setSelectedRecordAuthor, recordGraphError, setRecordGraphError, loadingRecordGraphs, setLoadingRecordGraphs, loadingRecordAuthors, setLoadingRecordAuthors, recordAuthorError, setRecordAuthorError, recordGraphAuthors, setRecordGraphAuthors, recordGraphOptions, graphsInSelectedFamily, recordAuthors, recordGraphFamily };
+  return { blankNodeContext, chooseBlankNodeSibling, explicitBlankNodeAnchor, setExplicitBlankNodeAnchor, blankNodeResponse, setBlankNodeResponse, activeBlankNodeTab, setActiveBlankNodeTab, describedRecord, setDescribedRecord, describedRecordUri, setDescribedRecordUri, recordDescriptionSnapshot, setRecordDescriptionSnapshot, recordGraphs, setRecordGraphs, selectedRecordGraph, setSelectedRecordGraph, selectedRecordAuthor, setSelectedRecordAuthor, recordGraphError, setRecordGraphError, loadingRecordGraphs, setLoadingRecordGraphs, loadingRecordAuthors, setLoadingRecordAuthors, recordAuthorError, setRecordAuthorError, recordGraphAuthors, setRecordGraphAuthors, recordGraphOptions, graphsInSelectedFamily, recordAuthors, recordGraphFamily };
 }
 
 export type RecordService = { uri: string; label: string; operations: { uri: string; label: string; requires: string[] }[] };

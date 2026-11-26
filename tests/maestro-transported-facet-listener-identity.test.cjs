@@ -58,5 +58,10 @@ test("widget preparation and parsing contribute to navigation activity, and Abor
   const listener = read("src/canvas/left/filter.tsx");
   assert.match(controller, /queryActivityPending: \(urlStateInitialized && endpointReadyForQuery && !focusWidgetsSuppressed && personalWidgets\.some\(widget => widget\.loading/);
   assert.match(controller, /function cancelMaestroPage\(\) \{[\s\S]*?GLOBAL_CANCEL[\s\S]*?stopPendingMaestroQueries\(\);\s*setPersonalWidgets\(/);
-  assert.match(listener, /if \(cancelled\) return;\s*if \(!timeoutReason && error instanceof Error && error\.name === "AbortError"\) \{[\s\S]*?loading: false/);
+  // The transport must not impose a competing execution/delivery deadline.
+  // Abort is owner-controlled and must settle only the matching live widget.
+  const abortBranch = listener.match(/catch \(error\) \{\s*if \(cancelled\) return;\s*if \(error instanceof Error && error\.name === "AbortError"\) \{([\s\S]*?)\n\s*\}/);
+  assert.ok(abortBranch, "live personal facet AbortError must have its own terminal branch");
+  assert.match(abortBranch[1], /setPersonalWidgets\(\(current\) => current\.map\(widget =>\s*\(widget\.key \?\? widget\.uri\) === identity \? \{ \.\.\.widget, loading: false \} : widget\)\);\s*return;/);
+  assert.doesNotMatch(listener, /\btimeoutReason\b|\bpersonalFacetDeadline\b|AbortSignal\.timeout\s*\(/);
 });

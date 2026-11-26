@@ -20,7 +20,7 @@ test('personal SPARQL transport reports server 5xx and success to the graph-serv
   assert.match(transport,/const upstreamStatus=observedUpstreamStatus\(response\)/);
   assert.match(authenticated,/signalPersonalHealth\(session\.graphStore, upstreamStatus\)/);
   assert.match(health,/endpointUrl, status, at: Date\.now\(\)/);
-  assert.match(transport,/sanitizeUpstreamDiagnostic\(upstream\)/);
+  assert.match(transport,/sanitizeUpstreamDiagnostic\(upstream, Infinity\)/);
   assert.match(transport,/\$\{origin\} returned HTTP \$\{response\.status\}/);
   assert.match(controller,/addEventListener\(PERSONAL_SPARQL_HEALTH_EVENT,onPersonalHealth\)/);
   assert.match(controller,/graphServerUrlMatches\(item\.url,endpointUrl,item\.schemeInferred\)/);

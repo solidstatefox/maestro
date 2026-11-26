@@ -36,8 +36,10 @@ test('Kind discovery and Analyze discovery have XState request actors',()=>{
   assert.match(configure,/selectKinds\(roleKindSnapshot, roleKindKey\)/);
   assert.match(configure,/kindState\.ready && !checkingKinds && <MaestroSelect/);
   assert.match(configure,/setKindRetry\(value=>\(\{\.\.\.value,\[direction\]:value\[direction\]\+1\}\)\)/);
-  assert.match(read('src/lib/app-lifecycle/analyze-discovery.ts'),/fromPromise/);
-  assert.match(read('src/canvas/utils/workspace-controller.tsx'),/analyzeDiscoveryController\.discover/);
+  assert.match(read('src/lib/app-lifecycle/analyze-discovery.ts'),/createProviderDiscoverySupervisor/);
+  assert.match(read('src/lib/app-lifecycle/provider-discovery-supervisor.ts'),/makeDiscoveryMachine/);
+  assert.match(read('src/lib/app-lifecycle/view-discovery.ts'),/fromPromise/);
+  assert.match(read('src/canvas/utils/workspace-controller.tsx'),/analyzeDiscoveryController\.observe/);
 });
 test('URI autocomplete uses high priority bounded proxy transport and invoked cancellation',()=>{
   assert.match(read('src/lib/graph-server-query-scheduler.ts'),/autocomplete: -1/);

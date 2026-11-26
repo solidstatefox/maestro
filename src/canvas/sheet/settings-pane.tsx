@@ -32,6 +32,8 @@ import { RIBBON_DISCOVERY_OPTIONS } from "@/lib/ribbon-discovery-limits";
 import { readRecordGraphDiscoveryLimits, writeRecordGraphDiscoveryLimits, RECORD_GRAPH_CANDIDATE_OPTIONS, RECORD_GRAPH_RESULT_OPTIONS } from "@/lib/record-graph-limits";
 
 import { Slider } from "@/components/ui/slider";
+import { Input } from "@/components/ui/input";
+import { readBlankNodeRecordLimits, writeBlankNodeRecordLimits, validBlankNodeRecordLimit, type BlankNodeRecordLimits } from "@/lib/bnode/limits";
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
 import { useEffect, useState } from "react";
 import { Switch } from "@/components/ui/switch";
@@ -42,6 +44,9 @@ import { selectMaestroCapabilities } from "@/lib/app-lifecycle/access";
 // SPARQL shares enough query syntax with SQL for useful keyword/string highlighting.
 
 const MAESTRO_ALPHABET_LANGUAGES = maestroLanguages;
+const blankNodeLimitDraftFrom = (value: BlankNodeRecordLimits) => ({
+  window: String(value.window), rows: String(value.rows), responseMiB: String(value.responseMiB),
+});
 
 /*
 const sampleResults = [
@@ -209,6 +214,33 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     setAutocompleteSettings(next);
     writeUriAutocompleteSettings(next);
   };
+  const [blankNodeLimits, setBlankNodeLimits] = useState(readBlankNodeRecordLimits);
+  const [blankNodeLimitDraft, setBlankNodeLimitDraft] = useState(() => blankNodeLimitDraftFrom(readBlankNodeRecordLimits()));
+  const [blankNodeLimitsReady, setBlankNodeLimitsReady] = useState(false);
+  useEffect(() => {
+    if (!controlsSheetOpen) return;
+    let active = true;
+    setBlankNodeLimitsReady(false);
+    void initializeMaestroStorage().then(() => {
+      if (!active) return;
+      const saved = readBlankNodeRecordLimits();
+      setBlankNodeLimits(saved);
+      setBlankNodeLimitDraft(blankNodeLimitDraftFrom(saved));
+      setBlankNodeLimitsReady(true);
+    });
+    return () => { active = false; };
+  }, [controlsSheetOpen]);
+  const parsedBlankNodeLimits: BlankNodeRecordLimits = {
+    window: Number(blankNodeLimitDraft.window), rows: Number(blankNodeLimitDraft.rows), responseMiB: Number(blankNodeLimitDraft.responseMiB),
+  };
+  const blankNodeLimitsValid = (Object.keys(parsedBlankNodeLimits) as (keyof BlankNodeRecordLimits)[]).every(key =>
+    /^\d+$/.test(blankNodeLimitDraft[key]) && validBlankNodeRecordLimit(key, parsedBlankNodeLimits[key]));
+  const blankNodeLimitsDirty = (Object.keys(parsedBlankNodeLimits) as (keyof BlankNodeRecordLimits)[]).some(key => parsedBlankNodeLimits[key] !== blankNodeLimits[key]);
+  const applyBlankNodeLimits = (value: BlankNodeRecordLimits) => {
+    writeBlankNodeRecordLimits(value);
+    setBlankNodeLimits(value);
+    setBlankNodeLimitDraft(blankNodeLimitDraftFrom(value));
+  };
   const [masterTimeoutEnabled, setMasterTimeoutEnabled] = useState(false);
   const [masterTimeout, setMasterTimeout] = useState(0);
   const [masterLimit, setMasterLimit] = useState("none");
@@ -253,6 +285,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
     setPendingGroupsBatchLimit(limit);
     maestroStorageSet(RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY, String(limit));
     setPendingRecordDescriptionLimit(limit);
+    applyBlankNodeLimits({ ...readBlankNodeRecordLimits(), window: limit, rows: limit });
   };
   return (
 <Sheet open={controlsSheetOpen} onOpenChange={(open) => {
@@ -632,7 +665,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                     <h3 className="text-xs font-semibold text-muted-foreground">Right panel</h3>
 
                   <div className="flex items-center justify-between gap-3">
-                    <Label htmlFor="right-describe-limit">Record SELECT LIMIT</Label>
+                    <Label htmlFor="right-describe-limit">URI / literal Record SELECT LIMIT</Label>
                     <MaestroSelect id="right-describe-limit" aria-label="Right Record DESCRIBE query limit" value={pendingRecordDescriptionLimit ?? recordDescriptionQueryLimit}
                       onChange={(event) => {
                         const limit = Number(event.currentTarget.value);
@@ -655,7 +688,23 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
                       {RIGHT_PANEL_PAGE_LIMIT_OPTIONS.map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
                     </MaestroSelect>
                   </div>
-                  <p className="text-xs text-muted-foreground">SELECT controls the shared Default/formatter snapshot and loads URI labels. Table paging is local. Saved in IndexedDB.</p>
+                  <p className="text-xs text-muted-foreground">SELECT controls the shared Default/formatter snapshot for URI and literal Records. Blank-node limits are separate. Table paging is local. Saved in IndexedDB.</p>
+                  </section>
+                  <section className="space-y-3 border-t pt-3">
+                    <h3 className="text-xs font-semibold text-muted-foreground">Blank-node Record retrieval</h3>
+                    {([ ["window", "Candidate / sibling window LIMIT"], ["rows", "Blank-node SELECT LIMIT"], ["responseMiB", "Response size limit (MiB)"] ] as const).map(([key, label]) => (
+                      <div key={key} className="flex items-center justify-between gap-3">
+                        <Label htmlFor={`blank-node-limit-${key}`}>{label}</Label>
+                        <Input id={`blank-node-limit-${key}`} type="number" min={1} step={1}
+                          className="w-28 shrink-0" disabled={!blankNodeLimitsReady} value={blankNodeLimitDraft[key]}
+                          aria-invalid={!/^\d+$/.test(blankNodeLimitDraft[key]) || !validBlankNodeRecordLimit(key, parsedBlankNodeLimits[key])}
+                          onChange={event => { const value = event.currentTarget.value; setBlankNodeLimitDraft(previous => ({ ...previous, [key]: value })); }} />
+                      </div>
+                    ))}
+                    <Button type="button" variant="outline" size="sm" disabled={!blankNodeLimitsReady || !blankNodeLimitsValid || !blankNodeLimitsDirty}
+                      onClick={() => applyBlankNodeLimits(parsedBlankNodeLimits)}>Apply blank-node limits</Button>
+                    {!blankNodeLimitsValid && <p className="text-xs text-destructive" role="alert">Enter positive whole numbers with a safely representable byte count.</p>}
+                    <p className="text-xs text-muted-foreground">Saved in IndexedDB. Applies to subsequent blank-node requests in Browse and fullscreen; does not reload open Records. Initial candidates stay within the original Results page. The row limit also bounds the candidate/sibling window. Large values may increase memory use and query time.</p>
                   </section>
                 </CollapsibleContent>
               </Collapsible>

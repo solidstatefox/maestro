@@ -27,6 +27,6 @@ test('Blank-node XState gate permits same-key reload after failure or a prior ca
   const lifecycle = source('src/lib/bnode/lifecycle.ts');
   assert.match(lifecycle, /failed:\s*\{\s*on:\s*\{\s*LOAD:\s*\{\s*guard:\s*"sameKey",\s*target:\s*"loading"/);
   assert.match(lifecycle, /ready:\s*\{\s*on:\s*\{\s*LOAD:\s*\{\s*guard:\s*"sameKey",\s*target:\s*"loading"/);
-  assert.match(lifecycle, /ambiguous:\s*\{\s*on:\s*\{\s*LOAD:\s*\{\s*guard:\s*"sameKey",\s*target:\s*"loading"/);
+  assert.doesNotMatch(lifecycle, /ambiguous:\s*\{/);
   assert.match(lifecycle, /termType === "bnode"/);
 });

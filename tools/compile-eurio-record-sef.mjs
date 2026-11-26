@@ -26,5 +26,5 @@ if (result.status !== 0 || !existsSync(target)) {
     String(result.stderr || result.stdout || result.error || "").slice(0,500));
   rmSync(target,{force:true}); rmSync(manifest,{force:true}); process.exit(0);
 }
-writeFileSync(manifest, JSON.stringify({ format: 1, sourceSha256: hash, asset: "/maestro-sef/eu-data-record.sef.json" }));
+writeFileSync(manifest, JSON.stringify({ format: 2, sourceSha256: hash, assetSha256: createHash("sha256").update(readFileSync(target)).digest("hex"), asset: "/maestro-sef/eu-data-record.sef.json" }));
 console.log("Built verified static EURIO Record SEF (source digest pinned).");

@@ -24,7 +24,7 @@ export async function fctRead(xml: string, signal?: AbortSignal) {
 }
 
 /** Read the selected page with a self-contained FCT XML merge-values query. */
-export async function fctProjectPage(liveXml: string, resources: string[], columns: Projection[], signal?: AbortSignal, _isBookmarked = false): Promise<ProjectedRecord[]> {
+export async function fctProjectPage(liveXml: string, resources: string[], columns: Projection[], signal?: AbortSignal, _isBookmarked = false, fresh = false): Promise<ProjectedRecord[]> {
   const unique = [...new Set(resources.filter(validIri))];
   if (!unique.length) return [];
   const records = new Map<string, ProjectedRecord>();
@@ -33,7 +33,7 @@ export async function fctProjectPage(liveXml: string, resources: string[], colum
     const projectionIds: string[] = [];
     const queryXml = mergeValuesQueryClone(liveXml, columns, batch.map(value => ({ type: "uri", value })), projectionIds);
     const response = await cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal,
-      headers: { "Content-Type": "text/xml; charset=utf-8" }, body: queryXml });
+      headers: { "Content-Type": "text/xml; charset=utf-8", ...(fresh ? {"X-Maestro-Component-Retry":"1"} : {}) }, body: queryXml });
     const xml = await response.text();
     if (!response.ok) {
       const parsed = parseFctResponse(xml);

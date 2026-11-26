@@ -4,14 +4,16 @@ import { PerspectiveCalendarHeatmap } from "@/canvas/tab/view/perspective-calend
 import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import { ErrorDetails } from "@/components/ui/error-details";
 
+import { EDIT_BOOKMARK_REQUEST, BOOKMARK_METADATA_UPDATED } from "@/lib/app-lifecycle/bookmark-metadata";
 import { manageAppbarButtons } from "@/lib/client-appbar-buttons";
 import { loadPerspectiveCollection } from "@/lib/client-perspective-collections";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Trash2, RefreshCw, Pin, PinOff, Play } from "lucide-react";
+import { Search, Trash2, RefreshCw, Pin, PinOff, Play, Pencil } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import { createPortal } from "react-dom";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Input } from "@/components/ui/input";
@@ -77,6 +79,7 @@ export function PersonalPerspectives({ active, kind, provider, queryXml, pageRow
   const providerUri = provider.uri;
   const [loadedSignature,setLoadedSignature]=useState("");
   const [collection, setCollection] = useState<Collection | null>(null);
+  const [bookmarkTab,setBookmarkTab]=useState<"unpinned"|"pinned">("unpinned");
   const [search, setSearch] = useState("");
   const [calendarDay, setCalendarDay] = useState<string | null>(null);
   const onCalendarFilter = useCallback((date: string | null) => { setCalendarDay(date); }, []);
@@ -88,7 +91,9 @@ export function PersonalPerspectives({ active, kind, provider, queryXml, pageRow
   const [notLoggedIn, setNotLoggedIn] = useState(false);
   const [appbarButtons, setAppbarButtons] = useState<AppbarButton[]>([]);
   const pinnedRows = kind === "bookmarks" ? appbarButtons.filter(button => /^(?:https?:|gttps?:|urn:)/.test(button.action)).filter(button => Boolean(button.url)).map(button => ({uri:button.action,title:button.tooltip})) : [];
-  const pageSignature=JSON.stringify([pageKey,queryXml,provider.uri,provider.stylesheet,pageRows,pinnedRows]);
+  const [metadataRevision,setMetadataRevision]=useState(0);
+  useEffect(()=>{const updated=()=>setMetadataRevision(current=>current+1);window.addEventListener(BOOKMARK_METADATA_UPDATED,updated);return()=>window.removeEventListener(BOOKMARK_METADATA_UPDATED,updated);},[]);
+  const pageSignature=JSON.stringify([metadataRevision,pageKey,queryXml,provider.uri,provider.stylesheet,pageRows,pinnedRows]);
   const resultsRef = useRef<HTMLDivElement>(null);
   const [iconSlots, setIconSlots] = useState<IconSlot[]>([]);
   const [pinSlots, setPinSlots] = useState<PinSlot[]>([]);
@@ -140,9 +145,10 @@ export function PersonalPerspectives({ active, kind, provider, queryXml, pageRow
     return () => controller.abort();
   }, [active, pageSignature]);
   const scopeIsReady = loadedSignature === pageSignature;
-  const filtered = useMemo(() => (scopeIsReady ? collection?.rows ?? [] : [])
+  const partitioned = useMemo(() => (scopeIsReady ? collection?.rows ?? [] : []).filter(row => kind !== "bookmarks" || Boolean(bookmarkShortcut(row, appbarButtons, collection?.rows ?? [])) === (bookmarkTab === "pinned")), [collection, scopeIsReady, kind, bookmarkTab, appbarButtons]);
+  const filtered = useMemo(() => partitioned
     .filter(row => (!calendarDay || row.created.slice(0,10) === calendarDay) && [row.label, row.description, row.url, row.created, ...(row.tags ?? []), row.queryXml].some(v => v.toLowerCase().includes(search.toLowerCase().trim()))),
-    [collection, search, calendarDay, scopeIsReady]);
+    [partitioned, search, calendarDay]);
   const visible = filtered;
   // A previously rendered XSLT collection must never be shown under a new
   // FCT scope or search. Rendering is async and can complete after a ribbon
@@ -278,22 +284,16 @@ export function PersonalPerspectives({ active, kind, provider, queryXml, pageRow
     }
   }, [collection, onOpenShareUrl]);
   if (!active) return null;
-  return <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-    <div className="flex min-w-0 shrink-0 items-center gap-2 border-b px-2 py-2" aria-label={`${kind} search and pagination`}>
-      <div className="relative min-w-0 flex-1"><Search className="absolute left-2 top-2.5 size-4 text-muted-foreground"/><input aria-label="Search saved entries" value={search} onChange={event => { setSearch(event.target.value); }} placeholder={`Filter this ${kind} page`} className="w-full min-w-0 rounded-md border bg-background py-2 pl-8 pr-2 text-sm" /></div>
-      <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Reload perspective" onClick={onReload}><RefreshCw className="size-4"/></Button>} /><TooltipContent>Reload {kind}</TooltipContent></Tooltip>
-      {scopeIsReady && selected.length > 0 && <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm" aria-label={`Delete ${selected.length} selected entries`} onClick={() => void remove(selected)} className="shrink-0 text-destructive hover:bg-destructive/10"><Trash2 className="size-4"/></Button>} /><TooltipContent>Delete selected ({selected.length})</TooltipContent></Tooltip>}
-
-    </div>
+  const panel = <>
     {error && <ErrorDetails prefix="Perspective" error={error} className="mx-4 my-2" />}
     {notLoggedIn ? <p className="p-5 text-sm text-muted-foreground">Log in to your personal graph server to view History and Bookmarks.</p>
       : !scopeIsReady && !error ? <p className="p-5 text-sm text-muted-foreground">Loading {kind}…</p>
       : !collection || !scopeIsReady ? <MaestroEmptyResults onBrowse={onBrowse} title="No perspective data" description="No saved entries were loaded. Try the default Browse perspective."/>
       : <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1" aria-busy={loading || !scopeIsReady}>
-        <PerspectiveCalendarHeatmap rows={collection.rows.filter(row=>pageRows.some(page=>page.uri===row.uri))} queryXml={queryXml} onDayFilter={onCalendarFilter} />
+        <PerspectiveCalendarHeatmap rows={partitioned} queryXml={queryXml} onDayFilter={onCalendarFilter} />
         <p className="mb-1 text-xs text-muted-foreground">{scopeIsReady ? `${filtered.filter(row=>pageRows.some(page=>page.uri===row.uri)).length} of ${pageRows.length} live page entries shown${filtered.some(row=>!pageRows.some(page=>page.uri===row.uri)) ? ` · ${filtered.filter(row=>!pageRows.some(page=>page.uri===row.uri)).length} pinned` : ""}` : "Loading current Results page…"}</p>
-        {scopeIsReady && !loading && filtered.length === 0 && <MaestroEmptyResults onBrowse={onBrowse} title={`No ${kind} entries found`} description="No entries on this Results page match the display filter."/>}
-        <div ref={resultsRef} aria-busy={!scopeIsReady || renderedSignature !== contentSignature} className="maestro-discovered-view" onClick={event => {
+        {scopeIsReady && !loading && filtered.length === 0 && <MaestroEmptyResults onBrowse={onBrowse} title={kind === "bookmarks" ? `No ${bookmarkTab} bookmarks found` : `No ${kind} entries found`} description="No entries on this Results page match the display filter."/>}
+        <div key={scopeIsReady && renderedSignature === contentSignature ? html : "waiting"} ref={resultsRef} aria-busy={!scopeIsReady || renderedSignature !== contentSignature} className="maestro-discovered-view" onClick={event => {
           if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0) {
             const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[href]");
             if (anchor && anchor.target !== "_blank" && !anchor.hasAttribute("download")) {
@@ -322,7 +322,7 @@ export function PersonalPerspectives({ active, kind, provider, queryXml, pageRow
           else if (button.dataset.perspectiveDelete === "true") void remove([id]);
           else if (button.dataset.perspectiveSelect === "true") setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
         }} dangerouslySetInnerHTML={{ __html: scopeIsReady && renderedSignature === contentSignature ? html : "" }}/>
-        {bookmarkActionSlots.map(slot => createPortal(
+        {(scopeIsReady && renderedSignature === contentSignature ? bookmarkActionSlots.filter(slot=>resultsRef.current?.contains(slot.element)) : []).map(slot => createPortal(
           <ButtonGroup aria-label="Bookmark actions" className="shrink-0 self-start">
             <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm"
               aria-label={slot.pinned ? "Unpin from appbar" : "Pin to appbar"}
@@ -340,6 +340,7 @@ export function PersonalPerspectives({ active, kind, provider, queryXml, pageRow
               className="size-7 text-muted-foreground hover:text-foreground">
               {slot.pinned ? <PinOff className="size-4" aria-hidden="true"/> : <Pin className="size-4" aria-hidden="true"/>}
             </Button>} /><TooltipContent>{slot.pinned ? "Unpin from appbar" : "Pin to appbar"}</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm" aria-label="Edit bookmark" className="size-7 text-muted-foreground hover:text-foreground" onClick={event=>{event.stopPropagation();window.dispatchEvent(new CustomEvent(EDIT_BOOKMARK_REQUEST,{detail:{id:slot.id}}));}}><Pencil className="size-4" aria-hidden="true"/></Button>} /><TooltipContent>Edit bookmark</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm"
               aria-label="Delete bookmark"
               onClick={event => { event.stopPropagation(); void remove([slot.id]); }}
@@ -349,7 +350,7 @@ export function PersonalPerspectives({ active, kind, provider, queryXml, pageRow
           </ButtonGroup>,
           slot.element,
         ))}
-        {actionSlots.map(slot => createPortal(
+        {(scopeIsReady && renderedSignature === contentSignature ? actionSlots.filter(slot=>resultsRef.current?.contains(slot.element)) : []).map(slot => createPortal(
           <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm"
             data-perspective-id={slot.id}
             {...(slot.action === "select" ? { "data-perspective-select": "true" } : { "data-perspective-delete": "true" })}
@@ -369,7 +370,7 @@ export function PersonalPerspectives({ active, kind, provider, queryXml, pageRow
           </Button>} /><TooltipContent>{slot.action === "select" ? (slot.selected ? "Deselect entry" : "Select entry") : "Delete entry"}</TooltipContent></Tooltip>,
           slot.element,
         ))}
-        {pinSlots.map(slot => createPortal(
+        {(scopeIsReady && renderedSignature === contentSignature ? pinSlots.filter(slot=>resultsRef.current?.contains(slot.element)) : []).map(slot => createPortal(
           <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm"
             data-perspective-id={slot.id} data-perspective-appbar="true"
             aria-label={slot.pinned ? "Unpin from appbar" : "Pin to appbar"}
@@ -378,11 +379,23 @@ export function PersonalPerspectives({ active, kind, provider, queryXml, pageRow
           </Button>} /><TooltipContent>{slot.pinned ? "Unpin from appbar" : "Pin to appbar"}</TooltipContent></Tooltip>,
           slot.element,
         ))}
-        {iconSlots.map(slot => createPortal(
+        {(scopeIsReady && renderedSignature === contentSignature ? iconSlots.filter(slot=>resultsRef.current?.contains(slot.element)) : []).map(slot => createPortal(
           <DynamicIcon name={slot.icon} className="size-4 text-muted-foreground" aria-hidden="true" />,
           slot.element,
         ))}
       </div>}
+  </>;
+  return <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-w-0 shrink-0 items-center gap-2 border-b px-2 py-2" aria-label={`${kind} search and pagination`}>
+      <div className="relative min-w-0 flex-1"><Search className="absolute left-2 top-2.5 size-4 text-muted-foreground"/><input aria-label="Search saved entries" value={search} onChange={event => { setSearch(event.target.value); }} placeholder={`Filter this ${kind} page`} className="w-full min-w-0 rounded-md border bg-background py-2 pl-8 pr-2 text-sm" /></div>
+      <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Reload perspective" onClick={onReload}><RefreshCw className="size-4"/></Button>} /><TooltipContent>Reload {kind}</TooltipContent></Tooltip>
+      {scopeIsReady && selected.length > 0 && <Tooltip><TooltipTrigger render={<Button type="button" variant="outline" size="icon-sm" aria-label={`Delete ${selected.length} selected entries`} onClick={() => void remove(selected)} className="shrink-0 text-destructive hover:bg-destructive/10"><Trash2 className="size-4"/></Button>} /><TooltipContent>Delete selected ({selected.length})</TooltipContent></Tooltip>}
+
+    </div>
+    {kind === "bookmarks" ? <Tabs className="flex min-h-0 flex-1 flex-col overflow-hidden" value={bookmarkTab} onValueChange={value=>{if(value === "pinned" || value === "unpinned"){setBookmarkTab(value);setSelected([]);setCalendarDay(null);}}}>
+      <TabsList aria-label="Bookmark pin status" className="mx-2 my-2 shrink-0 self-start"><TabsTrigger value="unpinned">Unpinned</TabsTrigger><TabsTrigger value="pinned">Pinned</TabsTrigger></TabsList>
+      <TabsContent value={bookmarkTab} className="flex min-h-0 flex-1 flex-col overflow-hidden">{panel}</TabsContent>
+    </Tabs> : panel}
     <Dialog open={scopeIsReady && Boolean(appbarCandidate)} onOpenChange={open => {if (!open && !appbarBusy) setAppbarCandidate("");}}>
       <DialogContent><DialogHeader><DialogTitle>Pin bookmark to appbar</DialogTitle><DialogDescription>Choose the button tooltip and Lucide icon name. Maximum five bookmark buttons.</DialogDescription></DialogHeader>
         <label className="block text-sm">Tooltip<Input value={appbarTooltip} maxLength={120} onChange={e=>setAppbarTooltip(e.target.value)}/></label>

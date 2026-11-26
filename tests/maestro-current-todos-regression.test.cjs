@@ -41,6 +41,6 @@ test('new controls retain bounded dimension, exact ribbon eligibility and full R
  assert.match(factory,/facetButtonFactory\(icon: ReactNode\)/);assert.match(factory,/width:28,height:28,minWidth:28,minHeight:28,maxWidth:28,maxHeight:28/);assert.match(factory,/style:\{\.\.\.props.style,\.\.\.button.props.style\}/);
  assert.doesNotMatch(ribbon,/retainedPersonalKind/);assert.match(workspace,/personalPerspectiveMatchesQuery\(selectedViewUri, queryTree\) && retainedSelectedViewRef/);
  assert.match(workspace,/parseFctResponse\(rawResponse\)\.error \|\| rawResponse/);assert.doesNotMatch(workspace,/rawResponse\.slice\(0, 500\)/);
- assert.match(sun,/cx-radius.*cy-radius.*2\*radius/);assert.match(sun,/storage\.get\("dimensions"\)/);assert.match(sun,/storage\?\.set\("dimensions"/);
+ assert.match(sun,/cx-halfWidth.*cy-halfHeight.*2\*halfWidth.*2\*halfHeight/);assert.match(sun,/storage\.get\("dimensions"\)/);assert.match(sun,/storage\?\.set\("dimensions"/);
  assert.match(read('src/canvas/tab/view/perspective-calendar-heatmap.tsx'),/renderYearHeading=\{/);assert.doesNotMatch(read('src/canvas/tab/view/perspective-calendar-heatmap.tsx'),/CalendarHeatmapStat/);
 });

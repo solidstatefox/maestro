@@ -2,26 +2,30 @@ import { assign, createActor, setup } from "xstate";
 
 /** Only the already-decoded Record term type may activate this actor.
  * No population probe, extra server request, or repeated row scan. */
-type RecordContext = { key: string; candidates: number; selected: number; incomplete: boolean };
+type CandidateMembership = { candidate: boolean; parents: readonly string[] };
+type RecordContext = { key: string; candidates: number; membership: readonly CandidateMembership[]; selected: number; seed: number; incomplete: boolean };
 type RecordEvent =
   | { type: "RECORD_SELECTED"; key: string; termType: string }
   | { type: "LOAD"; key: string }
-  | { type: "CANDIDATES_RECEIVED"; key: string; count: number; incomplete: boolean }
+  | { type: "CANDIDATES_RECEIVED"; key: string; membership: readonly CandidateMembership[]; incomplete: boolean; initial: number }
   | { type: "CHOOSE"; key: string; index: number }
   | { type: "FAIL"; key: string }
   | { type: "RESET" };
 
-const empty = (): RecordContext => ({ key: "", candidates: 0, selected: -1, incomplete: false });
+const empty = (): RecordContext => ({ key: "", candidates: 0, membership: [], selected: -1, seed: -1, incomplete: false });
 
 export const maestroBlankNodeRecordMachine = setup({
   types: { context: {} as RecordContext, events: {} as RecordEvent },
   guards: {
     isBlankRecord: ({ event }) => event.type === "RECORD_SELECTED" && event.termType === "bnode",
     sameKey: ({ context, event }) => "key" in event && context.key === event.key,
-    hasCandidates: ({ context, event }) => event.type === "CANDIDATES_RECEIVED" &&
-      context.key === event.key && event.count > 0,
     chooseValid: ({ context, event }) => event.type === "CHOOSE" && context.key === event.key &&
-      Number.isSafeInteger(event.index) && event.index >= 0 && event.index < context.candidates,
+      Number.isSafeInteger(event.index) && event.index >= 0 && event.index < context.candidates &&
+      (event.index === context.seed || Boolean(context.membership[context.seed]?.parents.some(parent =>
+        context.membership[event.index]?.parents.includes(parent)))),
+    hasInitial: ({ context, event }) => event.type === "CANDIDATES_RECEIVED" && context.key === event.key &&
+      Number.isSafeInteger(event.initial) && event.initial >= 0 && event.initial < event.membership.length &&
+      event.membership[event.initial]?.candidate === true,
   },
 }).createMachine({
   id: "maestro-blank-node-record", initial: "inactive", context: empty,
@@ -35,33 +39,24 @@ export const maestroBlankNodeRecordMachine = setup({
   },
   states: {
     inactive: {},
-    eligible: { on: { LOAD: { guard: "sameKey", target: "loading" } } },
+    eligible: { on: { LOAD: { guard: "sameKey", target: "loading", actions: assign(({ context }) => ({ ...empty(), key: context.key })) } } },
     loading: { on: {
       CANDIDATES_RECEIVED: [
-        { guard: "hasCandidates", target: "ready", actions: assign(({ context, event }) =>
-          // A first sibling is a UI default, NOT an identity claim. Keep the
-          // user's previously chosen sibling index if still present on refresh.
-          ({ candidates: event.count, incomplete: event.incomplete,
-             selected: context.selected >= 0 && context.selected < event.count ? context.selected : 0 })) },
-        { guard: "sameKey", target: "ambiguous", actions: assign(({ event }) =>
+        { guard: "hasInitial", target: "ready", actions: assign(({ event }) =>
           event.type === "CANDIDATES_RECEIVED" ?
-            ({ candidates: event.count, incomplete: event.incomplete, selected: -1 }) : {}) },
+            ({ candidates: event.membership.length, membership: event.membership, incomplete: event.incomplete, selected: event.initial, seed: event.initial }) : {}) },
+        { guard: "sameKey", target: "failed" },
       ],
       FAIL: { guard: "sameKey", target: "failed" },
     } },
-    ambiguous: { on: {
-      LOAD: { guard: "sameKey", target: "loading" },
-      CHOOSE: { guard: "chooseValid", target: "ready", actions: assign(({ event }) =>
-        event.type === "CHOOSE" ? { selected: event.index } : {}) },
-    } },
     ready: { on: {
-      LOAD: { guard: "sameKey", target: "loading" },
+      LOAD: { guard: "sameKey", target: "loading", actions: assign(({ context }) => ({ ...empty(), key: context.key })) },
       CHOOSE: { guard: "chooseValid", actions: assign(({ event }) =>
         event.type === "CHOOSE" ? { selected: event.index } : {}) },
     } },
     // Retry after failure without changing the selected RDF term or running a
     // population preflight. The existing key still guards request ownership.
-    failed: { on: { LOAD: { guard: "sameKey", target: "loading" } } },
+    failed: { on: { LOAD: { guard: "sameKey", target: "loading", actions: assign(({ context }) => ({ ...empty(), key: context.key })) } } },
   },
 });
 
@@ -91,7 +86,7 @@ export function createBlankNodeRecordContext() {
     begin() {
       const snapshot = actor?.getSnapshot();
       if (!snapshot || !(snapshot.matches("eligible") || snapshot.matches("failed") ||
-        snapshot.matches("ready") || snapshot.matches("ambiguous"))) return false;
+        snapshot.matches("ready"))) return false;
       // Narrow the lazy actor once, so a concurrent stop/reset cannot leave
       // the closure dereferencing the nullable outer reference.
       const currentActor = actor;
@@ -99,15 +94,24 @@ export function createBlankNodeRecordContext() {
       currentActor.send({ type: "LOAD", key });
       return currentActor.getSnapshot().matches("loading");
     },
-    received(count: number, incomplete: boolean) {
-      actor?.send({ type: "CANDIDATES_RECEIVED", key, count, incomplete });
-      return actor?.getSnapshot().context.selected ?? -1;
+    received(requestKey: string, membership: readonly CandidateMembership[], incomplete: boolean, initial: number) {
+      if (requestKey !== key || !actor?.getSnapshot().matches("loading")) return -1;
+      actor.send({ type: "CANDIDATES_RECEIVED", key: requestKey, membership: membership.map(({ candidate, parents }) => ({ candidate, parents: [...parents] })), incomplete, initial });
+      const result = actor.getSnapshot();
+      return result.matches("ready") ? result.context.selected : -1;
     },
     choose(index: number) {
-      actor?.send({ type: "CHOOSE", key, index });
+      const current = actor?.getSnapshot();
+      if (!current?.matches("ready")) return false;
+      // Check the actual event before sending: a rejected event may leave the
+      // previous selected index unchanged, which is not a successful choice.
+      const event = { type: "CHOOSE" as const, key, index };
+      if (!current.can(event)) return false;
+      actor?.send(event);
       return Boolean(actor?.getSnapshot().matches("ready") && actor.getSnapshot().context.selected === index);
     },
-    fail() { actor?.send({ type: "FAIL", key }); },
+    isChosen(index: number) { return Boolean(actor?.getSnapshot().matches("ready") && actor.getSnapshot().context.selected === index); },
+    fail(requestKey: string) { actor?.send({ type: "FAIL", key: requestKey }); },
     reset() { actor?.send({ type: "RESET" }); },
     stop() { actor?.stop(); actor = null; },
   };

@@ -6,18 +6,36 @@ import { isBoundedReadOnlySparql } from "../src/lib/sparql-read-guard";
 
 const source = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("blank-node sibling tabs default to first but retain deliberate valid selection", () => {
+test("blank-node Records select automatically and only allow siblings of the initial response-local node", () => {
   const context = createBlankNodeRecordContext();
   context.select("urn:record:test", "uri");
   assert.equal(context.begin(), false, "ordinary RDF terms cannot enter bnode logic");
   context.select("urn:record:test", "bnode");
   assert.equal(context.begin(), true);
-  assert.equal(context.received(4, true), 0, "first available sibling is selected even if the result is a window");
-  assert.equal(context.choose(2), true);
+  const membership = [{candidate:true,parents:["p"]},{candidate:true,parents:["q"]},{candidate:true,parents:["p"]},{candidate:false,parents:["p"]}];
+  assert.equal(context.received("urn:record:test", membership, true, 2), 2);
+  assert.equal(context.isChosen(2), true);
+  assert.equal(context.choose(-1), false);
+  assert.equal(context.choose(4), false);
+  assert.equal(context.choose(1), false, "unrelated parent cannot be selected as sibling");
+  assert.equal(context.choose(3), true, "a proven same-response sibling is selectable");
+  assert.equal(context.choose(0), true);
   assert.equal(context.begin(), true);
-  assert.equal(context.received(4, false), 2, "user's selection persists when still available");
+  assert.equal(context.isChosen(0), false, "reload invalidates prior membership");
+  assert.equal(context.received("urn:record:test", membership, false, 1), 1);
+  assert.equal(context.choose(0), false, "new response has new seed and family");
   assert.equal(context.begin(), true);
-  assert.equal(context.received(1, true), 0, "invalid old index resets to the first returned sibling");
+  assert.equal(context.received("urn:record:test", membership.slice(0,1), true, 0), 0);
+  assert.equal(context.choose(1), false);
+  assert.equal(context.begin(), true);
+  assert.equal(context.received("urn:record:test", [], false, -1), -1);
+  assert.equal(context.choose(0), false, "an empty response has no selectable node");
+  context.select("urn:record:new", "bnode");
+  assert.equal(context.begin(), true);
+  assert.equal(context.received("urn:record:test", membership, false, 0), -1);
+  assert.equal(context.choose(0), false, "stale response cannot authorize selection");
+  context.select("urn:record:next", "uri");
+  assert.equal(context.begin(), false);
   context.stop();
 });
 

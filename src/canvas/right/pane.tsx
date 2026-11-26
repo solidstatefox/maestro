@@ -37,6 +37,7 @@ import { Separator } from "@/components/ui/separator";
 import { RecordValuePages } from "@/components/ui/record-value-pages";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
+import { materializeBlankNodeRecord } from "@/lib/bnode";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -178,7 +179,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     applyRecordAsRootValue,
     authSession,
     beginRecordHoverPreview,
-    blankNodeRecords,
+    blankNodeRecords, recordDescriptionRetrySource,
     clearTutorialPreview,
     currentFormattedRecordHtml,
     currentRecordDescriptionKey,
@@ -253,7 +254,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
     recordSelectionCleared,
     recordIdentityPending,
     setActiveBlankNodeTab,
-    chooseBlankNodeCandidate,
+    chooseBlankNodeSibling,
     setDescribedRecord,
     setExplicitBlankNodeAnchor,
     setFormattedRecordButtonsHtml,
@@ -277,7 +278,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
   // Match the Graph Server menu: a dropdown trigger and a sibling action in one ButtonGroup.
   const recordFormatButtonClass = `inline-flex items-center justify-center gap-1 rounded-md border py-1.5 text-sm font-medium disabled:cursor-wait disabled:opacity-50 ${recordFormatEnabled ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90" : "bg-background hover:bg-accent"}`;
   const recordTitleShimmer = Boolean(selectedUri && (isLoadingRecordPolicy || isFormattingRecord) && !workspace.queryExecutionCancelled);
-  const recordHeaderLabel = [selectedResult?.title, selectedGroupRecord?.title,
+  const recordHeaderLabel = selectedRecordTermType === "bnode" ? blankNodeRecords[activeBlankNodeTab]?.id ?? selectedUri : [selectedResult?.title, selectedGroupRecord?.title,
     recordUriLabelCacheRef.current.get(`${queryTree.attributes.addr ?? ""}\u0000${selectedUri}`)]
     .find(label => label?.trim() && label !== selectedUri) || toLabel(selectedUri);
   // Fullscreen is a Browse presentation, not a durable global navigation mode.
@@ -294,8 +295,9 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
   const existingKinds = new Set([...describedPropertyRows, ...describedRoleRows]
     .flatMap(item => item.values.map(value => classifyRecordValue(value.value, value.termType, value.datatype))));
   const availableRecordKinds = RECORD_VALUE_KINDS.filter(kind => existingKinds.has(kind) || kind === recordKindFilter);
-  const visibleProperties = describedPropertyRows.map(item => ({...item,values:item.values.filter(value => recordKindFilter === "all" || classifyRecordValue(value.value, value.termType, value.datatype) === recordKindFilter)})).filter(item => item.values.length > 0);
-  const visibleRoles = describedRoleRows.map(item => ({...item,values:item.values.filter(value => recordKindFilter === "all" || classifyRecordValue(value.value, value.termType, value.datatype) === recordKindFilter)})).filter(item => item.values.length > 0);
+  const blankNodeSnapshotReady = selectedRecordTermType !== "bnode" || (activeBlankNodeTab >= 0 && recordDescriptionSnapshot?.key === currentRecordDescriptionKey && Boolean(blankNodeRecords[activeBlankNodeTab]));
+  const visibleProperties = (blankNodeSnapshotReady ? describedPropertyRows : []).map(item => ({...item,values:item.values.filter(value => recordKindFilter === "all" || classifyRecordValue(value.value, value.termType, value.datatype) === recordKindFilter)})).filter(item => item.values.length > 0);
+  const visibleRoles = (blankNodeSnapshotReady ? describedRoleRows : []).map(item => ({...item,values:item.values.filter(value => recordKindFilter === "all" || classifyRecordValue(value.value, value.termType, value.datatype) === recordKindFilter)})).filter(item => item.values.length > 0);
   const [inlineWands, setInlineWands] = useState<InlineWandItem[]>([]);
   const wandPortalsRef = useRef<InlineWandItem[]>([]);
   const formattedRef = fullscreenPane ? fullscreenFormattedRef : formattedRecordContainerRef;
@@ -452,8 +454,8 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
       if (binding.termType !== "uri" && !event.shiftKey) return;
       event.preventDefault(); event.stopPropagation();
       if (binding.termType === "bnode") {
-        if (binding.direction === "property" && selectedRecordTermType === "uri") {
-          setExplicitBlankNodeAnchor({ label: binding.value, parent: selectedUri, predicate: binding.predicate });
+        if (selectedRecordTermType === "uri") {
+          setExplicitBlankNodeAnchor({ label: binding.value, parent: selectedUri, predicate: binding.predicate, direction: binding.direction === "property-of" ? "reverse" : "forward", queryXml });
           setSelectedUri(binding.value);
         }
       } else if (!event.shiftKey && binding.termType === "uri") {
@@ -467,7 +469,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
       }
     }
   }, [describedRecord, interactionMode, fullscreenPane, onRdfaAction, sessionIndex,
-      openRecordPropertyUri, selectedRecordTermType, selectedUri, setExplicitBlankNodeAnchor,
+      openRecordPropertyUri, selectedRecordTermType, selectedUri, setExplicitBlankNodeAnchor, queryXml,
       setSelectedUri, navigateResultBadge, applyRecordAsRootValue, clearTutorialPreview]);
 
   useEffect(() => {
@@ -521,8 +523,8 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                   {recordFormatEnabled && Boolean(currentFormattedRecordHtml) && formattedRecordButtonsHtml.record_title_icon && (
                     <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_title_icon }} />
                   )}
-                  {recordDescribeIncomplete && <Tooltip><TooltipTrigger render={<button type="button" onClick={() => retryMaestroComponent("record")} aria-label="Retry only this Record DESCRIBE" title="Retry only this Record DESCRIBE" className="inline-flex shrink-0 items-center rounded-sm hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"><ClockFading className="size-4" /></button>} /><TooltipContent>Virtuoso returned an incomplete DESCRIBE. Click to retry this Record without refreshing Browse.</TooltipContent></Tooltip>}
-                  {selectedUri && (fullscreenPane || sessionIndex > 0) ? <span title={selectedUri} className={`truncate ${recordTitleShimmer ? "shimmer motion-reduce:shimmer-none" : ""}`}>{recordHeaderLabel}</span> : selectedUri ? (
+                  {recordDescribeIncomplete && <Tooltip><TooltipTrigger render={<button type="button" onClick={() => retryMaestroComponent(recordDescriptionRetrySource)} aria-label="Retry only this Record DESCRIBE" title="Retry only this Record DESCRIBE" className="inline-flex shrink-0 items-center rounded-sm hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"><ClockFading className="size-4" /></button>} /><TooltipContent>Virtuoso returned an incomplete DESCRIBE. Click to retry this Record without refreshing Browse.</TooltipContent></Tooltip>}
+                  {selectedUri && (selectedRecordTermType === "bnode" || fullscreenPane || sessionIndex > 0) ? <span title={selectedRecordTermType === "bnode" ? `${recordHeaderLabel} (reconstructed Record; blank-node labels are response-local)` : selectedUri} className={`truncate ${recordTitleShimmer ? "shimmer motion-reduce:shimmer-none" : ""}`}>{recordHeaderLabel}</span> : selectedUri ? (
                     <Tooltip><TooltipTrigger render={<button
                       type="button"
                       className={`cursor-pointer text-left underline-offset-2 hover:underline ${recordTitleShimmer ? "shimmer motion-reduce:shimmer-none" : ""} ${facetHoverPreview?.kind === "record" && facetHoverPreview.uri === selectedUri ? "text-purple-700 dark:text-purple-300" : ""}`}
@@ -535,7 +537,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                   </div>
                   {!recordControlsOpen && <div className="ml-auto flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                     <Separator orientation="vertical" className="h-4 shrink-0" />
-                    <span className="truncate" title={selectedRecordGraph || "All graphs"}>{selectedRecordGraph ? toLabel(selectedRecordGraph) : "All graphs"}</span>
+                    <span className="truncate" title={selectedRecordTermType === "bnode" ? (recordGraphs[0] || "All graphs query scope") : selectedRecordGraph || "All graphs"}>{selectedRecordTermType === "bnode" ? (recordGraphs[0] ? toLabel(recordGraphs[0]) : "All graphs query scope") : selectedRecordGraph ? toLabel(selectedRecordGraph) : "All graphs"}</span>
                   </div>}
                   {selectedUri && <div className="inline-flex max-w-0 shrink-0 items-center gap-1 overflow-hidden relative -top-1 p-1 opacity-0 transition-all duration-150 group-hover/record-header:max-w-[22rem] group-hover/record-header:overflow-visible group-hover/record-header:opacity-100 focus-within:max-w-[22rem] focus-within:overflow-visible focus-within:opacity-100">
                     <CollapsibleTrigger aria-label={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} title={recordControlsOpen ? "Collapse Record controls" : "Expand Record controls"} className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground">
@@ -584,15 +586,14 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                     </DialogContent>
                   </Dialog>
                   </div>
-                  {selectedUri && <p className="min-w-0 w-full break-all text-xs leading-tight text-muted-foreground">{selectedUri}</p>}
+                  {selectedUri && <p className="min-w-0 w-full break-all text-xs leading-tight text-muted-foreground">{selectedRecordTermType === "bnode" ? recordHeaderLabel : selectedUri}</p>}
                 </div>
                 <CollapsibleContent className="px-4 pb-2">
                 {selectedUri && <div className="mt-3 flex flex-wrap items-center gap-2">
                   <div className="inline-flex min-w-0 items-stretch overflow-hidden rounded-md border text-xs">
                     <span className="inline-flex shrink-0 items-center border-r bg-muted/40 px-2 text-muted-foreground">Graphs</span>
-                    {selectedRecordTermType === "bnode" && recordGraphs.length === 1 &&
-                      queryTree.attributes.addr?.split("@", 1)[0] === recordGraphs[0] ? (
-                      <span className="inline-flex min-w-0 max-w-64 items-center px-3 py-1.5 font-medium" title={recordGraphs[0]}>{toLabel(recordGraphs[0])}</span>
+                    {selectedRecordTermType === "bnode" ? (
+                      <span className="inline-flex min-w-0 max-w-64 items-center px-3 py-1.5 font-medium" title={recordGraphs[0] || "Query scope; individual blank-node graph provenance is not known"}>{recordGraphs[0] ? toLabel(recordGraphs[0]) : "Query scope (all graphs)"}</span>
                     ) : <DropdownMenu>
                     <DropdownMenuTrigger asChild><button type="button" className="inline-flex min-w-0 max-w-64 items-center gap-1 px-3 py-1.5 hover:bg-accent" title={selectedRecordGraph || "All graphs"}>
                       <span className="truncate">{selectedRecordGraph ? toLabel(selectedRecordGraph) : "All graphs"}</span><ChevronDown className="size-3.5 shrink-0" />
@@ -608,7 +609,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                   <div className="inline-flex min-w-0 items-stretch overflow-hidden rounded-md border text-xs">
                     <span className="inline-flex shrink-0 items-center border-r bg-muted/40 px-2 text-muted-foreground">Authors</span>
                     <DropdownMenu>
-                    <DropdownMenuTrigger asChild><button type="button" disabled={!recordAuthors.length} className="inline-flex min-w-0 max-w-64 items-center gap-1 px-3 py-1.5 hover:bg-accent disabled:opacity-50" title={selectedRecordAuthor || "All authors"}>
+                    <DropdownMenuTrigger asChild><button type="button" disabled={selectedRecordTermType === "bnode" || !recordAuthors.length} className="inline-flex min-w-0 max-w-64 items-center gap-1 px-3 py-1.5 hover:bg-accent disabled:opacity-50" title={selectedRecordAuthor || "All authors"}>
                       <span className="truncate">{selectedRecordAuthor ? toLabel(recordAuthors.find((entry) => entry.graph === selectedRecordAuthor)?.author ?? selectedRecordAuthor) : "All authors"}</span><ChevronDown className="size-3.5 shrink-0" />
                     </button></DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="max-h-72 w-80 overflow-auto">
@@ -696,7 +697,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                   {formattedRecordButtonsHtml.record_button_bar && <div className="contents" dangerouslySetInnerHTML={{ __html: formattedRecordButtonsHtml.record_button_bar }} />}
                 </div>}
                 <ValidationNotice report={recordValidation} onDismiss={() => setRecordValidation(null)} />
-                {recordDescriptionError && endpointReadyForQuery && <ErrorDetails prefix="Record SELECT" error={recordDescriptionError} className="mt-2" onRetry={() => retryMaestroComponent("record")} />}
+                {recordDescriptionError && endpointReadyForQuery && <ErrorDetails prefix="Record SELECT" error={recordDescriptionError} className="mt-2" onRetry={() => retryMaestroComponent(recordDescriptionRetrySource)} />}
                 {recordFormatError && recordFormatError !== recordDescriptionError && !hasVisibleValidationWarning(recordValidation) && <ErrorDetails prefix="Record formatter" error={recordFormatError} className="mt-2" />}
                 {!isDescribing && describedRecordUri === selectedUri &&
                  recordDescriptionSnapshot?.key === currentRecordDescriptionKey && (
@@ -707,7 +708,6 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                       describedPropertyCount > 0 ? `${shortenCount(describedPropertyCount)} properties` : null,
                       describedRoleCount > 0 ? `${shortenCount(describedRoleCount)} roles` : null,
                       displayedRecord.length > 0 ? `${shortenCount(displayedRecord.length)} values` : null,
-                      selectedRecordTermType === "bnode" && blankNodeRecords.length > 0 ? `${shortenCount(blankNodeRecords.length)} sibling blank nodes` : null,
                     ].filter((part): part is string => part !== null).join(" · ")}
                   </span>
                 ) : <span />}
@@ -757,7 +757,7 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
               ) : selectedRecordTermType !== "bnode" && currentFormattedRecordHtml ? (
                 <>
                   <RecordPerformanceDebug />
-                  <div ref={formattedRef} className="maestro-record-format-surface min-h-0 w-full min-w-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
+                  <div key={currentFormattedRecordHtml} ref={formattedRef} className="maestro-record-format-surface min-h-0 w-full min-w-0 flex-1 overflow-auto" dangerouslySetInnerHTML={{ __html: currentFormattedRecordHtml }} />
                   {xsltPortals}
                   {recordServiceDom && recordServices.length > 0 && createPortal(recordServices.map((service) => (
                     <button key={service.uri} type="button" role="tab" aria-selected={recordServiceTab === service.uri}
@@ -794,20 +794,16 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
               ) : (
               <section id="maestro-record-viewer" about={selectedUri && selectedRecordTermType === "uri" ? selectedUri : undefined} className="min-h-0 flex-1 overflow-auto p-4">
                 {sessionIndex === 0 && recordSelectionCleared && !selectedUri && <p className="mb-3 text-xs text-muted-foreground">Virtual Record · properties and RDF values shared by every matching member of the active FCT result set.</p>}
-                {selectedRecordTermType === "bnode" && blankNodeRecords.length > 0 && (
+                {selectedRecordTermType === "bnode" && blankNodeSnapshotReady && blankNodeRecords.length > 1 && (
                   <div className="mb-4" aria-label="Sibling blank-node records">
-                    {activeBlankNodeTab < 0 && <p role="status" className="mb-2 text-sm text-muted-foreground">
-                      This structural path matches {recordDescribeIncomplete ? "at least " : ""}{blankNodeRecords.length} blank {blankNodeRecords.length === 1 ? "node" : "nodes"}. Their labels are response-local; select a node below to inspect it. Maestro cannot infer which was selected in a previous request.
-                    </p>}
-                    <Tabs value={activeBlankNodeTab < 0 ? "" : String(activeBlankNodeTab)} onValueChange={(value) => {
+                    <Tabs value={String(activeBlankNodeTab)} onValueChange={(value) => {
                       const index = Number(value);
                       const node = blankNodeRecords[index];
-                      if (!node) return;
-                      if (!chooseBlankNodeCandidate(index)) return;
+                      if (!node || !chooseBlankNodeSibling(index)) return;
                       setActiveBlankNodeTab(index);
                       setDescribedRecord(node.rows);
                       setRecordDescriptionPage(0);
-                      setRecordDescriptionSnapshot({ key: currentRecordDescriptionKey, uri: selectedUri, xml: node.xml, incomplete: recordDescribeIncomplete });
+                      setRecordDescriptionSnapshot({ key: currentRecordDescriptionKey, uri: selectedUri, xml: materializeBlankNodeRecord(node, recordDescribeIncomplete), incomplete: recordDescribeIncomplete });
                       setRecordValidation(null);
                       setFormattedRecordHtml("");
                     }}>
@@ -855,10 +851,10 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                                   } : {})}
                                   className="min-w-0 break-all">
                             {value.termType === "bnode" ? (
-                              item.direction === "property" && selectedRecordTermType === "uri" ?
+                              selectedRecordTermType === "uri" ?
                                 <button type="button" className="text-primary" data-maestro-shift-only="true" title="Shift-click to open the blank-node Record" onClick={(event) => {
                                   if (fullscreenPane || !event.shiftKey) return;
-                                  setExplicitBlankNodeAnchor({ label: value.value, parent: selectedUri, predicate: item.property });
+                                  setExplicitBlankNodeAnchor({ label: value.value, parent: selectedUri, predicate: item.property, direction: item.direction === "property-of" ? "reverse" : "forward", queryXml });
                                   setSelectedUri(value.value);
                                 }}>{value.value}</button> : <span title={value.value}>{value.value}</span>
                             ) : (
@@ -921,10 +917,10 @@ export function RightCanvasPanel({ workspace, sessionIndex = 0, fullscreenPane =
                                   } : {})}
                                   className="min-w-0 break-all">
                             {value.termType === "bnode" ? (
-                              item.direction === "property" && selectedRecordTermType === "uri" ?
+                              selectedRecordTermType === "uri" ?
                                 <button type="button" className="text-primary" data-maestro-shift-only="true" title="Shift-click to open the blank-node Record" onClick={(event) => {
                                   if (fullscreenPane || !event.shiftKey) return;
-                                  setExplicitBlankNodeAnchor({ label: value.value, parent: selectedUri, predicate: item.property });
+                                  setExplicitBlankNodeAnchor({ label: value.value, parent: selectedUri, predicate: item.property, direction: item.direction === "property-of" ? "reverse" : "forward", queryXml });
                                   setSelectedUri(value.value);
                                 }}>{value.value}</button> : <span title={value.value}>{value.value}</span>
                             ) : (

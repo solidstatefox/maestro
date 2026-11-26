@@ -1,4 +1,5 @@
 "use client";
+import { retryMaestroComponent } from "@/lib/maestro-component-retry";
 import { ErrorDetails } from "@/components/ui/error-details";
 
 import { useEffect, useMemo, useState } from "react";
@@ -210,7 +211,7 @@ export function AnalyzeSankey({workspace,renderer="recharts"}:{workspace:Workspa
       {base?.nodes.some(node=>node.kind==="value" && node.name==="Other values") &&
         branches.some(branch=>branch.children.length>0) && <p className="text-xs text-muted-foreground">Aggregated “Other values” buckets remain terminal; individual RDF terms are not invented for deeper traversal.</p>}
       {currentForward?.error && <ErrorDetails prefix="Sankey descendant projection" error={`${currentForward.error}. The verified first-degree chart remains available.`} />}
-      {workspace.analysisValuesError && <ErrorDetails prefix="Sankey projection" error={workspace.analysisValuesError} />}
+      {workspace.analysisValuesError && <div className="flex items-center gap-2"><ErrorDetails prefix="Sankey projection" error={workspace.analysisValuesError}/><button type="button" className="underline text-sm" onClick={()=>retryMaestroComponent("analyze-values")}>Retry</button></div>}
       {axes.length>0 && !projection && !workspace.analysisValuesError && <p role="status" className="text-sm text-muted-foreground">Loading the current page's batched FCT relationship projection…</p>}
       {data && data.nodes.length===0 && <p className="rounded-md border p-3 text-sm text-muted-foreground">None of the displayed resources possesses a value for the selected in-scope relationships.</p>}
       {data && data.nodes.length>0 && <>

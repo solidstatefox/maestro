@@ -404,7 +404,7 @@ const dbActivity = getText("db-activity");
         ? -1 : Number(columns[1].value),
     }] : [])) : [],
     describe: resultType === FCT_VIEW_TYPES.DESCRIBE ? describe : [],
-    count: (resultType === "count" || resultType === FCT_VIEW_TYPES.COUNT_DISTINCT) ? Number(rowColumns[0]?.[0]?.value ?? 0) : undefined,
+    count: (resultType === "count" || resultType === FCT_VIEW_TYPES.COUNT_DISTINCT) && /^\d+$/.test(rowColumns[0]?.[0]?.value ?? "") ? Number(rowColumns[0][0].value) : undefined,
     shortforms: Array.from(uris, ([uri, metadata]) => ({ uri, ...metadata })),
   };
 }
@@ -438,7 +438,13 @@ export function facetLoadErrorMessage(error: unknown, fallback: string): string 
 export async function readFctResponse(response: Response): Promise<ParsedFctResponse> {
   const text = await response.text();
   const data = parseFctResponse(text);
-  if (!response.ok) throw new Error(data.error || `FCT API returned HTTP ${response.status}.`);
+  if (!response.ok) {
+    if (response.status === 504 && response.headers.get("X-Maestro-Failure-Origin") === "upstream-transport") {
+      browserLog.warn("fct.response.unavailable", data.error || `FCT API returned HTTP ${response.status}.`);
+      throw new Error("No usable response was received from the graph server.");
+    }
+    throw new Error(data.error || `FCT API returned HTTP ${response.status}.`);
+  }
   if (data.error) throw new Error(data.error);
   return data;
 }

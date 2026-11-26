@@ -53,7 +53,7 @@ test('generic FCT parsing has no leftover sampled-ancestor handoff', () => {
   assert.match(response, /rdfBindingKind\(datatype\)/);
 });
 
-test('XState guards only already-decoded selected blank-node Records and explicit candidate selection', () => {
+test('XState guards only already-decoded selected blank-node Records and automatic response-local sibling selection', () => {
   const lifecycle = read('src/lib/bnode/lifecycle.ts');
   const route = read('src/app/proxy/api/fct/route.ts');
   const main = read('src/canvas/utils/workspace-controller.tsx');
@@ -62,21 +62,23 @@ test('XState guards only already-decoded selected blank-node Records and explici
   assert.doesNotMatch(lifecycle, /PAGE_RECEIVED|containsBlankNodePopulation|observedBlankNode/);
   assert.match(lifecycle, /isBlankRecord:[\s\S]*?termType === "bnode"/);
   assert.match(lifecycle, /if \(termType === "bnode"\) activeActor\(\)/);
-  assert.match(lifecycle, /event\.count > 0/);
-  assert.match(lifecycle, /selected: context\.selected >= 0 && context\.selected < event\.count \? context\.selected : 0/);
+  assert.match(lifecycle, /CANDIDATES_RECEIVED:[\s\S]*?target: "ready"[\s\S]*?selected: event.initial/);
+  assert.doesNotMatch(lifecycle, /selected: context\.selected[\s\S]*? : 0/);
   assert.match(lifecycle, /chooseValid:[\s\S]*?event\.index < context\.candidates/);
   assert.doesNotMatch(route, /createBlankNodePopulationGate|needsBlankNodeAncestry/);
   assert.match(main, /selectedRecordTermType === "bnode"[\s\S]*?blankNodeContext\.begin\(\)/);
   assert.match(pivot, /recordTermType === "bnode"[\s\S]*?own\.blankNodeContext\.begin\(\)/);
   assert.match(main, /unanchoredBlankNodeRecordQuery/);
-  assert.match(read('src/app/proxy/api/sparql/route.ts'), /unanchoredFocus/);
+  assert.match(read('src/lib/bnode/client-record.ts'), /responseScope: "request"/);
+  assert.doesNotMatch(read('src/app/proxy/api/sparql/route.ts'), /body\?\.recordBlankNodes/);
   assert.match(core, /blankNodeContext\.choose\(index\)/);
+  assert.match(lifecycle, /context\.membership\[context\.seed\]\?\.parents\.some\(parent =>/);
   assert.doesNotMatch(main, /Math\.max\(\s*0,\s*records\.findIndex/);
 });
 
 test('all modified TypeScript modules parse; generic graph marshalling delegates bnode path', () => {
   const modules = [
-    'src/lib/bnode/index.ts', 'src/lib/bnode/context.ts', 'src/lib/bnode/lifecycle.ts',
+    'src/lib/bnode/index.ts', 'src/lib/bnode/context.ts', 'src/lib/bnode/lifecycle.ts', 'src/lib/bnode/client-record.ts',
     'src/lib/bnode/dom.ts', 'src/lib/bnode/record-graphs.ts',
     'src/lib/fct-sparql-translator.ts', 'src/lib/record-graph-marshalling.ts',
     'src/app/proxy/api/fct/route.ts', 'src/canvas/utils/fct-response.ts',

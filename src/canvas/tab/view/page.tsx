@@ -146,12 +146,11 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                 </div>;
  return <GraphServerHistoryScope active={isGraphServerPerspective && workspaceTab === "view" && workspace.accessCapabilities.canUsePersonalStore} account={JSON.stringify([workspace.authSession?.graphStore,workspace.authSession?.graphPrefix,workspace.authSession?.username])} queryXml={workspace.queryXml}>
 {workspaceTab === "view" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Views">
+                {!viewProvider && selectedView && <div className="flex shrink-0 items-center justify-end border-b px-4 py-2">{viewPagination}</div>}
                 {personalKind && !viewProvider && selectedView && workspace.viewPanel !== "providers" ? <>
                   {workspace.perspectivePageReady ? <PersonalPerspectives key={selectedViewUri} active={workspace.accessCapabilities.canUsePersonalStore} kind={personalKind} provider={selectedView} queryXml={workspace.queryXml} pageRows={pageUriRows} pageKey={pageKey} onReload={workspace.refreshQuery} onBrowse={() => workspace.setWorkspaceTab("browse")} onOpenShareUrl={workspace.openPinnedShareUrl}/> : <p role="status" className="flex-1 p-4 text-sm text-muted-foreground">{workspace.searchError || "Waiting for live Results…"}</p>}
-                  <div className="flex shrink-0 justify-end border-t px-4 py-2">{viewPagination}</div>
                 </> : providerSelected && selectedRdfProvider && !viewProvider ? <>
                   {workspace.perspectivePageReady ? <PerspectiveProviderRuntime key={selectedRdfProvider.uri} provider={selectedRdfProvider} queryXml={workspace.queryXml} pageRows={pageUriRows} pageKey={pageKey} queryTree={workspace.queryTree} addr={workspace.queryTree.attributes.addr ?? ""} visibleFacetTerms={visibleFacetTerms}/> : <p role="status" className="flex-1 p-4 text-sm text-muted-foreground">{workspace.searchError || "Waiting for live Results…"}</p>}
-                  <div className="flex shrink-0 justify-end border-t px-4 py-2">{viewPagination}</div>
                 </> : <>
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-4 py-3">
                   {viewProvider ? <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="group" aria-label={`Alphabet for ${viewProvider}`}>
@@ -198,6 +197,7 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                   <GraphServerManager canMutate={workspace.accessCapabilities.canMutatePersonalStore}
                     account={JSON.stringify([workspace.authSession?.graphStore,workspace.authSession?.graphPrefix,workspace.authSession?.username])} configuredEndpoints={fctEndpoints}
                     registrationCandidate={registerCandidate}
+                    discoverySource={workspace.queryTree.attributes.addr?.split("@").slice(1).join("@")??""} discoveryRecipes={!viewDiscoveryLoading&&!viewDiscoveryError?(discoveredViews.find(item=>item.uri===selectedViewUri)?.endpointDiscoveryQueries??[]):[]} discoveryCancelled={workspace.queryExecutionCancelled}
                     onCandidateConsumed={() => setRegisterCandidate(null)}
                     onRegistryChange={() => workspace.setEndpointReloadRevision(revision => revision + 1)} />
 
@@ -227,7 +227,6 @@ export function ViewTabCanvas({ workspace }: { workspace: WorkspaceController })
                       if (approvalCurrent(originQuery, originProvider)) workspace.refreshQuery();
                     }).catch(error => toast.add({ title: "Policy approval failed", description: error instanceof Error ? error.message : "The change could not be saved.", type: "error" }));
                   }} />}
-                {!viewProvider && selectedView && <div className="flex shrink-0 items-center justify-end border-t px-4 py-2">{viewPagination}</div>}
               </>}
               </div>}
 </GraphServerHistoryScope>;

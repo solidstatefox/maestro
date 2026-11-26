@@ -5,6 +5,7 @@
  * no second queue, revision token or domain-specific lookup here.
  */
 import { cachedFetchFct, maestroQueryFetch } from "@/lib/client-query-cache";
+import { sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
 import { sparqlBindingsToXml } from "@/lib/sparql-results-xml";
 
 export type ProviderQueryRequest =
@@ -21,7 +22,7 @@ export async function executeProviderDerivedQuery(query: ProviderQueryRequest, s
       body: query.queryXml,
     });
     const xml = await response.text();
-    if (!response.ok) throw new Error(`Provider FCT query failed (HTTP ${response.status}): ${xml.slice(0, 300)}`);
+    if (!response.ok) throw new Error(`Provider FCT query failed (HTTP ${response.status}): ${sanitizeUpstreamDiagnostic(xml, Infinity)}`);
     return xml;
   }
   if (!query.addr || !query.sparql || query.sparql.length > 250000) throw new Error("A graph address and bounded SPARQL query are required.");

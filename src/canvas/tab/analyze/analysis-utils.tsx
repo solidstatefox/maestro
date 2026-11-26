@@ -1,6 +1,5 @@
 "use client";
 import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import type { ScopeValue } from "@/canvas/utils/fct-response";
 export type AnalysisDefinition = { uri: string; label: string; icon: string; stylesheet: string; order: number; pageValidationShape?: string };
 export type AnalysisCell = { values: string[]; checked: boolean; badgeStyle: CSSProperties; cellStyle: CSSProperties };
 export type AnalysisTable = { trailStyle: CSSProperties; tableStyle: CSSProperties; headerStyle: CSSProperties; cellStyle: CSSProperties; rowStyle: CSSProperties; columns: { kind: string; nodeId: string; label: string; breadcrumbStyle: CSSProperties; headerStyle: CSSProperties }[]; rows: { uri: string; label: string; cells: AnalysisCell[] }[] };
@@ -29,7 +28,6 @@ export function useAnalyzeState() {
     }
     return output as CSSProperties;
   }
-  const [analysisDefinitions, setAnalysisDefinitions] = useState<AnalysisDefinition[]>([]);
   const [selectedAnalysisUri, setSelectedAnalysisUri] = useState("");
   const [analysisTable, setAnalysisTable] = useState<AnalysisTable | null>(null);
   // Width is keyed by the real facet node / value rather than its position, so
@@ -57,13 +55,11 @@ export function useAnalyzeState() {
   const [analysisError, setAnalysisError] = useState("");
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const analysisRenderedBaseRef = useRef("");
-  const [analysisValuesState, setAnalysisValuesState] = useState<{ requestKey: string; byUri: Map<string, ScopeValue[]> } | null>(null);
-  const [analysisValuesError, setAnalysisValuesError] = useState("");
   const [compareFacet, setCompareFacet] = useState("");
   // Histogram reuses Compare Table's exact boolean cells; it is a presentation,
   // not another FCT query, XSLT template, or numeric-bin calculation.
   const [analyzeHistogram, setAnalyzeHistogram] = useState(false);
-  return { analysisDefinitions, setAnalysisDefinitions, selectedAnalysisUri, setSelectedAnalysisUri, analysisTable, setAnalysisTable, analysisColumnWidths, setAnalysisColumnWidths, analysisSelection, setAnalysisSelection, analysisError, setAnalysisError, analysisLoading, setAnalysisLoading, analysisValuesState, setAnalysisValuesState, analysisValuesError, setAnalysisValuesError, compareFacet, setCompareFacet, analyzeHistogram, setAnalyzeHistogram, analysisRenderedBaseRef, analysisPresentationStyle, beginAnalysisColumnResize };
+  return { selectedAnalysisUri, setSelectedAnalysisUri, analysisTable, setAnalysisTable, analysisColumnWidths, setAnalysisColumnWidths, analysisSelection, setAnalysisSelection, analysisError, setAnalysisError, analysisLoading, setAnalysisLoading, compareFacet, setCompareFacet, analyzeHistogram, setAnalyzeHistogram, analysisRenderedBaseRef, analysisPresentationStyle, beginAnalysisColumnResize };
 }
 
 import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip as ChartTooltip } from "recharts";

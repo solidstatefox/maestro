@@ -18,7 +18,7 @@ function Toast({ className, ...props }: React.ComponentProps<typeof ToastPrimiti
 }
 function ToastContent(props: React.ComponentProps<typeof ToastPrimitive.Content>) { return <ToastPrimitive.Content className="flex items-start gap-3 p-4" {...props} />; }
 function ToastTitle(props: React.ComponentProps<typeof ToastPrimitive.Title>) { return <ToastPrimitive.Title className="text-sm font-medium" {...props} />; }
-function ToastDescription(props: React.ComponentProps<typeof ToastPrimitive.Description>) { return <ToastPrimitive.Description className="whitespace-pre-wrap [overflow-wrap:anywhere] text-sm text-muted-foreground" {...props} />; }
+function ToastDescription(props: React.ComponentProps<typeof ToastPrimitive.Description>) { return <ToastPrimitive.Description className="max-h-[min(40vh,20rem)] overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] text-sm text-muted-foreground" {...props} />; }
 function ToastAction({ className, render = <Button variant="outline" size="sm" />, ...props }: React.ComponentProps<typeof ToastPrimitive.Action>) { return <ToastPrimitive.Action render={render} className={cn("shrink-0", className)} {...props} />; }
 function ToastClose({ className, ...props }: React.ComponentProps<typeof ToastPrimitive.Close>) { return <ToastPrimitive.Close aria-label="Close notification" render={<Button variant="ghost" size="icon-sm"><X className="size-4" /></Button>} className={cn("relative shrink-0 text-muted-foreground hover:text-foreground", className)} {...props} />; }
 function ToastIcon({ type }: { type?: string }) {

@@ -24,6 +24,7 @@ export type CompiledFctQuery = {
   offset: number;
   timeoutMs: number;
   target: string;
+  focusRelationship?: { predicate: string; direction: "forward" | "reverse" };
   graphOnly: boolean;
   countOnly: boolean;
   /** A discovery GRAPH ?g query has a data-binding pattern, not an empty body. */
@@ -1973,6 +1974,9 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
     offset,
     timeoutMs,
     target: serializeTerm(target),
+    ...(viewParent && (viewParent.name === "property" || viewParent.name === "property-of") && !viewParent.attributes.derive && iri(viewParent.attributes.iri ?? "") ? {
+      focusRelationship: { predicate: viewParent.attributes.iri, direction: viewParent.name === "property" ? "forward" as const : "reverse" as const },
+    } : {}),
     graphOnly,
     countOnly,
     ...(discoverGraph ? { graphDiscoveryHasSourcePattern } : {}),

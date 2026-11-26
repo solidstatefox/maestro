@@ -8,8 +8,9 @@
 // The root layout loads the unmodified distribution before SPA hydration.
 // Only this Maestro-owned module knows about its JavaScript API.
 import { reportRecordPerformance } from "@/lib/record-performance";
+import { readVerifiedBuildArtifact, sha256Hex } from "@/lib/verified-artifact-cache";
 type MaestroSaxonRuntime = {
-  transform?: (options: { stylesheetLocation: string; sourceText: string; destination: "serialized";
+  transform?: (options: { stylesheetInternal: object; sourceText: string; destination: "serialized";
     stylesheetParams: Record<string, string> }, mode: "async") => Promise<{ principalResult?: unknown }>;
   XPath: { evaluate: (expression: string, contextItem: null, options: { params: Record<string, string> }) => unknown };
 };
@@ -42,22 +43,32 @@ import { XMLValidator } from "fast-xml-parser";
 // Source validation and the static manifest are independently cached, not
 // bound to a query or a session. Both caches have bounded size and no RDF data.
 const validatedStylesheets = new Set<string>();
-let sefManifestPromise: Promise<{sourceSha256:string;asset:string}|null>|null = null;
+let sefManifestPromise: Promise<{sourceSha256:string;assetSha256:string;asset:string}|null>|null = null;
 let sefUnavailable = false;
-async function verifiedFirstPartySef(stylesheetText: string): Promise<string | null> {
-  if (!stylesheetText.includes('<xsl:template name="RecordResult">') || sefUnavailable) return null;
-  sefManifestPromise ??= fetch("/maestro-sef/manifest.json", { cache: "no-cache" })
-    .then(async response => response.ok ? await response.json() as {format?:number;sourceSha256?:string;asset?:string} : null)
-    .then(info => info?.format === 1 && /^\/[a-z0-9/._-]+\.json$/.test(info.asset ?? "") &&
-      /^[a-f0-9]{64}$/.test(info.sourceSha256 ?? "")
-      ? {sourceSha256:info.sourceSha256!,asset:info.asset!} : null)
+let compiledArtifact: {digest:string;promise:Promise<string>}|null=null;
+async function verifiedFirstPartySef(stylesheetText: string): Promise<object | null> {
+  if (sefUnavailable || typeof crypto?.subtle === "undefined") return null;
+  // The current manifest is trusted build metadata, never a provider-supplied
+  // executable URL. Both source and compiled bytes must match exactly.
+  sefManifestPromise ??= fetch("/maestro-sef/manifest.json", { cache: "no-cache", signal:AbortSignal.timeout(5000) })
+    .then(async response => response.ok ? await response.json() as {format?:number;sourceSha256?:string;assetSha256?:string;asset?:string} : null)
+    .then(info => info?.format === 2 && /^\/maestro-sef\/[a-z0-9._-]+\.json$/.test(info.asset ?? "") &&
+      /^[a-f0-9]{64}$/.test(info.sourceSha256 ?? "") && /^[a-f0-9]{64}$/.test(info.assetSha256 ?? "")
+      ? {sourceSha256:info.sourceSha256!,assetSha256:info.assetSha256!,asset:info.asset!} : null)
     .catch(() => null);
   const manifest = await sefManifestPromise;
-  if (!manifest) return null;
-  const bytes = new TextEncoder().encode(stylesheetText);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  const actual = [...new Uint8Array(digest)].map(v=>v.toString(16).padStart(2,"0")).join("");
-  return actual === manifest.sourceSha256 ? manifest.asset : null;
+  if (!manifest || await sha256Hex(new TextEncoder().encode(stylesheetText)) !== manifest.sourceSha256) return null;
+  if(compiledArtifact?.digest!==manifest.assetSha256){
+    const promise=readVerifiedBuildArtifact(manifest.asset,manifest.assetSha256);
+    compiledArtifact={digest:manifest.assetSha256,promise};
+  }
+  try{
+    // Parse a fresh object for SaxonJS; a transformation must not mutate the
+    // cached serialized SEF used by another invocation.
+    const parsed:unknown=JSON.parse(await compiledArtifact.promise);
+    if(!parsed||typeof parsed!=="object"||Array.isArray(parsed))throw new Error("Invalid compiled XSLT artifact.");
+    return parsed;
+  }catch{compiledArtifact=null;return null;}
 }
 
 const FORBIDDEN_FUNCTIONS = /\b(?:doc|doc-available|document|collection|uri-collection|unparsed-text(?:-lines|-available)?|json-doc|environment-variable|available-environment-variables|function-lookup|load-xquery-module|transform|resolve-uri|static-base-uri)\s*\(/i;
@@ -93,11 +104,12 @@ export async function transformWithMaestroSaxon(
   // compiling XSLT source on every warm Record. Dynamic provider stylesheets
   // remain on the existing checked, sandboxed source-XSLT implementation.
   if (saxon.transform && !sefUnavailable) {
-    const verified = await verifiedFirstPartySef(stylesheetText);
+    const verified = await verifiedFirstPartySef(stylesheetText).catch(() => null);
+    options.signal?.throwIfAborted();
     if (verified) {
       const started = performance.now();
       try {
-        const compiled = await saxon.transform({ stylesheetLocation: verified, sourceText: sourceXml,
+        const compiled = await saxon.transform({ stylesheetInternal: verified, sourceText: sourceXml,
           destination: "serialized", stylesheetParams: {
             recordUri: options.recordUri ?? "", maestroPhase: options.sandboxPhase ?? "render",
           } }, "async");

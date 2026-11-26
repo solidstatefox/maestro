@@ -23,6 +23,7 @@ function loadDiscovery(decisions, captured, fixtureRows, probeProviderPopulation
     // not a direct browser fetch that would bypass queue/clock attribution.
     fetch:async()=>{throw Error('discovery bypassed maestroQueryFetch');},
     require(name){
+      if(name==='./builtin-analyses') {const out={};vm.runInNewContext(ts.transpileModule(source('src/lib/builtin-analyses.ts'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:out});return out;}
       if(name==='@/lib/ribbon-discovery-limits') return {ribbonDiscoveryLimit:(_key,value)=>value,RIBBON_DISCOVERY_DEFAULTS:{perspectives:1000,analysis:50},readRibbonDiscoveryLimits:()=>({perspectives:1000,analysis:50})};
       if(name==='@/lib/constants/graphs') return { GRAPH:{SHACL_POLICIES:'shacl-policies',STATUS:'status',POLICY_APPROVALS:'policy-approvals',APPBAR:'appbar'}, resolveGraph:(key,base)=>base+'/'+({ 'shacl-policies':'shacl/policies',status:'status','policy-approvals':'status',appbar:'appbar'}[key]||key) };
       if(name==='@/lib/client-personal-request') return {personalAuthenticatedFetch:async(session,url,args,transport)=>{assert.equal(JSON.parse(args.body).personalRead,true);return transport(url,args);}};
@@ -40,7 +41,7 @@ function loadDiscovery(decisions, captured, fixtureRows, probeProviderPopulation
         'X-Maestro-Debug-Source':source,'X-Maestro-Debug-Component':component,
       })};
       if(name==='@/lib/personal-auth') return {loadPersonalAuthSession:async()=>({graphPrefix:'https://personal.example/u',graphStore:'https://personal.example/sparql'}),graphForPrefix:x=>x};
-      if(name==='@/lib/client-policy-approvals') return {readClientPolicyApprovals:async uris=>uris.map(uri=>({uri,status:typeof decisions === "string" ? decisions : decisions[uri]}))};
+      if(name==='@/lib/client-policy-approvals') return {readClientPolicyApprovals:async uris=>typeof decisions === "function" ? decisions(uris) : uris.map(uri=>({uri,status:typeof decisions === "string" ? decisions : decisions[uri]}))};
       if(name==='@/lib/provider-population-probe' && probeProviderPopulation) return {probeProviderPopulation};
       if(name==='@/lib/upstream-error') return {describeUpstreamError: error => String(error?.message ?? error), sanitizeUpstreamDiagnostic: text => String(text)};
       throw new Error('unexpected require: '+name);
@@ -196,3 +197,10 @@ test('Code Block and ribbon use byte-identical discovery SELECTs and the persona
   await assert.rejects(capped.discoverViews([klass],undefined,[],undefined,25),/bounded result size/);
   await assert.rejects(capped.discoverAnalyses([klass],undefined,[],25),/Sheet LIMIT/);
 });
+
+ test('Analysis approval failure is isolated to the failed batch', async()=>{
+ const rows=Array.from({length:21},(_,i)=>({uri:{value:`urn:analysis:${i}`},label:{value:`Provider ${i}`},icon:{value:'chart-radar'},stylesheet:{value:'<xsl:stylesheet/>'}}));
+ const api=loadDiscovery(uris=>{if(uris.includes('urn:analysis:0')) throw Error('approval unavailable');return uris.map(uri=>({uri,status:'Approved'}));},[],rows,undefined,true);
+ const result=await api.discoverAnalyses([klass]);
+ assert.equal(result.items.length,1); assert.equal(result.items[0].uri,'urn:analysis:20'); assert.equal(result.warnings.length,1);
+ });

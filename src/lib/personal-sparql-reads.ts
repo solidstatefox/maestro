@@ -7,6 +7,8 @@ import { maestroQueryFetch } from "@/lib/client-query-cache";
 import { personalAuthenticatedFetch } from "@/lib/client-personal-request";
 import { personalWriteEndpoint } from "@/lib/personal-endpoints";
 import { RIBBON_DISCOVERY_DEFAULTS, ribbonDiscoveryLimit } from "@/lib/ribbon-discovery-limits";
+import { BUILTIN_ANALYSIS_URIS } from "./builtin-analyses";
+import type { DiscoveryResult } from "./app-lifecycle/view-discovery";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
@@ -53,7 +55,7 @@ async function personalSelect(makeQuery: (graphs: DiscoveryGraphs) => string,
     throw new Error(`Personal provider discovery received ${kind} from /proxy/api/sparql (HTTP ${response.status} ${response.statusText}, ${contentType}): ${describeUpstreamError(error)}; upstream: ${sanitizeUpstreamDiagnostic(body)}`, { cause: error });
   }
   if (!response.ok || result.error) throw new Error(result.error || `SPARQL discovery failed (HTTP ${response.status}).`);
-  if (result.incomplete) throw new Error("Personal provider discovery returned an incomplete result.");
+  if (result.incomplete || response.headers.get("X-Maestro-Incomplete") === "true") throw new Error("Personal provider discovery returned an incomplete result.");
   if (!Array.isArray(result.results?.bindings)) throw new Error("Personal provider discovery returned no W3C SPARQL Results bindings.");
   return result.results.bindings;
 }
@@ -71,31 +73,52 @@ export function buildAnalysisDiscoverySparql(graphs: DiscoveryGraphs, classes: s
   return `PREFIX ma: <${MA}> PREFIX rdf: <${RDF}> PREFIX rdfs: <${RDFS}>
       SELECT ?uri ?label ?icon ?stylesheet ?order ?pageValidationShape WHERE {
         GRAPH <${shapes}> {
-          ?uri a ma:Analysis ; rdfs:label ?label ; ma:lucideIcon ?icon ; ma:stylesheet/rdf:value ?stylesheet .
+          ?uri a ma:Analysis, <${MUI}Provider> ; rdfs:label ?label ; ma:lucideIcon ?icon ; ma:stylesheet/rdf:value ?stylesheet .
           OPTIONAL { ?uri ma:order ?order }
           OPTIONAL { ?uri ma:pageValidationShape ?pageValidationShape }
-          OPTIONAL { ?uri <${MUI}accepts> / <${SH}class> ?target }
-          FILTER((BOUND(?target) && (${classConstraint})) || (${queryConstraint}) ||
-            (!BOUND(?target) && NOT EXISTS { ?uri <${MUI}accepts> ?queryShape . ?queryShape <${SH}class> <https://vos.openlinksw.com/owiki/wiki/VOS/VirtFacetBrowserAPIs#query> }))
+          OPTIONAL { ?uri <${MUI}accepts> / (<${SH}class>|<${SH}targetClass>) ?target }
+          FILTER((BOUND(?target) && (${classConstraint})) || (${queryConstraint}))
         }
       } ORDER BY ?order ?label LIMIT ${ribbonDiscoveryLimit("analysis",limit)}`;
 }
 
 export type AnalysisProvider = {uri: string; label: string; icon: string; stylesheet: string; order: number; pageValidationShape?: string};
 /** Preserve the original cross-graph subclass acceptance test in one SELECT. */
-export async function discoverAnalyses(classes: string[], signal?: AbortSignal, queryProviders: string[] = [], limit:number=RIBBON_DISCOVERY_DEFAULTS.analysis): Promise<AnalysisProvider[]> {
+export async function discoverAnalyses(classes: string[], signal?: AbortSignal, queryProviders: string[] = [], limit:number=RIBBON_DISCOVERY_DEFAULTS.analysis): Promise<DiscoveryResult<AnalysisProvider>> {
   const boundedLimit=ribbonDiscoveryLimit("analysis",limit);
   const rows = await personalSelect(graphs => buildAnalysisDiscoverySparql(graphs, classes, queryProviders,boundedLimit), signal);
   if(rows.length>=boundedLimit)throw new Error("Analysis discovery reached its Sheet LIMIT; eligibility may be incomplete.");
   const definitions = rows.map(row => ({uri:get(row,"uri"),label:get(row,"label"),icon:get(row,"icon"),
     stylesheet:get(row,"stylesheet"),order:Number(get(row,"order") || 100),pageValidationShape:get(row,"pageValidationShape") || undefined}))
-    .filter(row => row.uri && row.stylesheet && Number.isFinite(row.order));
-  const pageProviders = definitions.filter(row=>row.pageValidationShape);
-  if(!pageProviders.length)return definitions;
+    .filter(row => safeIri(row.uri) && !BUILTIN_ANALYSIS_URIS.has(row.uri) && row.stylesheet && Number.isFinite(row.order) && (!row.pageValidationShape || safeIri(row.pageValidationShape)));
+  // Conflicting RDF definitions must not silently select an arbitrary stylesheet.
+  const byUri = new Map<string, AnalysisProvider>();
+  const conflicts = new Set<string>();
+  for (const definition of definitions) {
+    const previous = byUri.get(definition.uri);
+    if (previous && JSON.stringify(previous) !== JSON.stringify(definition)) conflicts.add(definition.uri);
+    else byUri.set(definition.uri, definition);
+  }
+  for (const uri of conflicts) byUri.delete(uri);
+  const warnings = [...conflicts].map(uri => `Conflicting Analysis definitions: ${uri}`);
+  const eligible: AnalysisProvider[] = [];
   const {readClientPolicyApprovals}=await import("@/lib/client-policy-approvals");
-  const decisions=await readClientPolicyApprovals(pageProviders.map(row=>row.uri),signal,"urn:maestro:component:view-discover");
-  const approved=new Set(decisions.filter(row=>row.status==="Approved").map(row=>row.uri));
-  return definitions.filter(row=>!row.pageValidationShape||(safeIri(row.pageValidationShape)&&approved.has(row.uri)));
+  const candidates = [...byUri.values()];
+  // Batch, but retain successfully verified independent batches. No provider
+  // whose approval could not be read becomes eligible. Never persist grants.
+  for (let offset = 0; offset < candidates.length; offset += 20) {
+    signal?.throwIfAborted();
+    const batch = candidates.slice(offset, offset + 20);
+    try {
+      const decisions = await readClientPolicyApprovals(batch.map(row => row.uri), signal, "urn:maestro:component:view-discover");
+      const approved = new Set(decisions.filter(row => row.status === "Approved").map(row => row.uri));
+      eligible.push(...batch.filter(row => approved.has(row.uri)));
+    } catch (error) {
+      signal?.throwIfAborted();
+      warnings.push(`Approval could not be verified for ${batch.map(row => row.label || row.uri).join(", ")}: ${describeUpstreamError(error)}`);
+    }
+  }
+  return {items: eligible, warnings};
 }
 
 /** The exact candidate SELECT dispatched by discoverViews (eligibility is client-side). */

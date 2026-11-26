@@ -28,6 +28,14 @@ export function describeUpstreamError(error: unknown, fallback = "Unknown error"
     seen.add(current);
     if (current instanceof Error) {
       const withCode = current as Error & { code?: unknown; syscall?: unknown; hostname?: unknown; address?: unknown; port?: unknown };
+      // DOMException 23 is a classification, not a duration or an upstream
+      // SQL error. Keep a single useful timeout message through wrapped causes.
+      if (current.name === "TimeoutError") {
+        const timeout = "The operation timed out before the response was received";
+        if (!parts.some(part => /timed? out|aborted due to timeout/i.test(part))) parts.push(timeout);
+        current = (current as Error & { cause?: unknown }).cause;
+        continue;
+      }
       const message = current.message.trim();
       const technical = [withCode.code, withCode.syscall, withCode.hostname ?? (withCode.address ? `${withCode.address}${withCode.port ? `:${withCode.port}` : ""}` : undefined)]
         .filter((value) => value !== undefined && value !== "")

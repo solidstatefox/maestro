@@ -1,7 +1,7 @@
 /** Blank-node-only Record helpers. The caller's already-decoded RDF term
  * activates XState; no background population probe or second FCT request.
  * A structural URI anchor describes a set of candidates, never a portable
- * blank-node identifier. When the set is ambiguous the user must choose. */
+ * blank-node identifier. Record selection is a best-effort reconstruction. */
 import type { FctQueryNode, FctQueryTree } from "@/lib/fct-query";
 import type { BNodeRecordAnchor } from "./index";
 
@@ -24,13 +24,14 @@ export function boundBlankNodeAnchorFromFct(
     children = node.children;
   }
   const focus = path.at(-1);
-  if (!focus?.attributes.iri) return undefined;
+  if (!focus?.attributes.iri || focus.attributes.derive) return undefined;
   for (let depth = path.length - 1; depth >= 0; depth--) {
     const values = (depth === 0 ? query.children : path[depth - 1].children)
       .filter(node => node.name === "value");
     if (values.length !== 1) continue; // OR/multiple bindings are not one anchor.
     const value = values[0];
-    if (value.attributes.datatype !== "uri" ||
+    if (value.attributes.datatype !== "uri" || value.attributes.enabled === "false" ||
+        value.attributes.from || value.attributes.fromView ||
         (value.attributes.op && value.attributes.op !== "=") ||
         value.attributes.rangeStart || value.attributes.rangeEnd ||
         !/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(value.text ?? "")) continue;

@@ -10,6 +10,7 @@ import { Writer } from "n3";
 import { createBlankNodeLabelAllocator } from "@/lib/bnode";
 import { personalContext, selectPersonal, type PersonalContext } from "@/lib/client-personal-sparql";
 import { VFCT } from "@/lib/history-query-rdf";
+import { readShapeBatches, type ShapeRead } from "@/lib/shacl-shape-batch";
 import type { ShaclValidationReport } from "@/lib/shacl-validation-report";
 
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -22,24 +23,22 @@ const safe = (v: string) => { if (!valid(v)) throw new Error("Invalid SHACL cont
 type Cell = { type?: string; value?: string; datatype?: string; "xml:lang"?: string };
 type Row = Record<string, Cell>;
 type Triple = { subject: string; predicate: string; object: string; type: string; datatype?: string; lang?: string };
-export type ValidatedHistoryQuery = { historyId: string; queryRoot: string; report: ShaclValidationReport; queryProviders: string[] };
+export type ValidatedHistoryQuery = { historyId: string; queryRoot: string; report: ShaclValidationReport; queryProviders: string[]; providerErrors?: string[] };
 
 const toTerm = (value: Cell, bnode: (name: string) => string) => {
-  if (!value?.value) throw new Error("Incomplete SPARQL RDF term");
+  if (value?.value === undefined) throw new Error("Incomplete SPARQL RDF term");
   if (value.type === "uri") return rdf.namedNode(value.value);
   if (value.type === "bnode") return rdf.blankNode(bnode(value.value));
   return value["xml:lang"] ? rdf.literal(value.value, value["xml:lang"]) : rdf.literal(value.value, rdf.namedNode(value.datatype || `${XSD}string`));
 };
-async function shapeRows(ctx: PersonalContext, shape: string, signal: AbortSignal): Promise<Row[]> {
-  const limit = 4001;
-  const rows = await selectPersonal(`PREFIX sh: <${SH}> PREFIX rdf: <${RDF}>
-SELECT DISTINCT ?s ?p ?o WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
- ${safe(shape)} (sh:property|sh:in|sh:or|sh:and|sh:xone|sh:not|sh:node|sh:qualifiedValueShape|sh:path|sh:alternativePath|sh:inversePath|sh:zeroOrMorePath|sh:oneOrMorePath|sh:zeroOrOnePath|rdf:first|rdf:rest)* ?s .
- ?s ?p ?o .
-} } LIMIT ${limit}`, ctx, signal, "QueryContextValidation:Shapes");
-  if (rows.length === limit) throw new Error("SHACL shape exceeds the safe size; validation incomplete.");
-  if (!rows.length) throw new Error(`SHACL shape ${shape} is missing from the personal graph.`);
-  return rows as Row[];
+async function shapeRows(ctx:PersonalContext,shapes:readonly string[],signal:AbortSignal):Promise<Map<string,ShapeRead>> {
+  return readShapeBatches(resolveGraph(GRAPH.SHACL_POLICIES,ctx.base),shapes,4001,
+    (query,requestSignal)=>selectPersonal(query,ctx,requestSignal,"QueryContextValidation:Shapes"),signal);
+}
+function completeShape(rows:Map<string,ShapeRead>,shape:string):Row[]{
+  const result=rows.get(shape);
+  if(!result||!result.rows)throw result?.error??new Error(`SHACL shape ${shape} was not loaded.`);
+  return result.rows;
 }
 /** The same SHACL Core algorithm as Record: explicit focus, actual RDF graph,
  * unsupported SHACL-SPARQL fails closed, N-Triples validation report. */
@@ -125,9 +124,12 @@ SELECT DISTINCT ?shape WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.b
   const targets=await selectPersonal(targetQuery,ctx,signal,"QueryContextValidation:Targets");
   if(targets.length>=101) throw new Error("Too many query-context SHACL shapes; discovery incomplete.");
   if(!targets.length) throw new Error("No SHACL shape targets the current History query RDF. Seed the query-context shape.");
+  const targetShapes=[...new Set(targets.map(target=>target.shape?.value??""))];
+  if(targetShapes.some(shape=>!valid(shape)))throw new Error("Invalid query-context SHACL target.");
+  const loadedShapes=await shapeRows(ctx,targetShapes,signal);
   const reports:ShaclValidationReport[]=[];
-  for(const target of targets){if(signal.aborted)throw signal.reason;const shape=target.shape?.value??"";if(!valid(shape))continue;
-    reports.push(await evaluate(shape,root,await shapeRows(ctx,shape,signal),data));}
+  for(const shape of targetShapes){signal.throwIfAborted();
+    reports.push(await evaluate(shape,root,completeShape(loadedShapes,shape),data));}
   if(!reports.length) throw new Error("No usable query-context SHACL shapes were returned.");
   const report=mergeReports(reports);
   if(!report.conforms) return {historyId,queryRoot:root,report,queryProviders:[]};
@@ -135,9 +137,10 @@ SELECT DISTINCT ?shape WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.b
   // population's sh:class/targetClass matching runs separately and is UNIONED
   // with this validated candidate set by discoverViews/discoverAnalyses.
   const providerRows=await selectPersonal(`PREFIX sh: <${SH}> PREFIX mui: <${MUI}> PREFIX vfct: <${VFCT}>
-SELECT DISTINCT ?provider ?shape WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
+SELECT DISTINCT ?provider ?shape ?envelope WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}> {
  ?provider a mui:Provider ; mui:accepts ?shape .
- FILTER(
+ BIND(EXISTS { ?shape a mui:InputShape ; sh:property/sh:path ?contextPath . FILTER(?contextPath IN (mui:query, mui:focus)) } AS ?envelope)
+ FILTER(?envelope ||
    EXISTS { ?shape sh:targetClass vfct:query } ||
    EXISTS { ?shape sh:class vfct:query } ||
    EXISTS { ?shape sh:targetNode ${safe(root)} } ||
@@ -147,10 +150,38 @@ SELECT DISTINCT ?provider ?shape WHERE { GRAPH <${resolveGraph(GRAPH.SHACL_POLIC
 } } LIMIT 101`,ctx,signal,"QueryContextValidation:Providers");
   if(providerRows.length>=101) throw new Error("More than 100 query-target providers; discovery incomplete.");
   const matches:string[]=[];
-  for(const row of providerRows){if(signal.aborted)throw signal.reason;const provider=row.provider?.value??"",shape=row.shape?.value??"";
-    if(!valid(provider)||!valid(shape))continue;
-    const check=await evaluate(shape,root,await shapeRows(ctx,shape,signal),data);
-    if(check.conforms)matches.push(provider);
+  const providerErrors:string[]=[];
+  // The History RDF identifies the one actual view carrier. An input shape
+  // declaring mui:query / mui:focus is evaluated against an ephemeral envelope,
+  // not guessed from a provider URI. Nothing is written to the personal graph.
+  const viewNodes = new Set(data.filter(t => t.predicate === `${RDF}type` && t.object === `${VFCT}view`).map(t => t.subject));
+  const carriers = [...new Set(data.filter(t => t.predicate === `${VFCT}child` && viewNodes.has(t.object)).map(t => t.subject))];
+  const envelope = `${root}/provider-input`;
+  const contextData: Triple[] = [...data, {subject:envelope,predicate:`${MUI}query`,object:root,type:"uri"},
+    ...carriers.map(object => ({subject:envelope,predicate:`${MUI}focus`,object,type:"uri"}))];
+  const providerShapes=[...new Set(providerRows.map(row=>row.shape?.value??""))].filter(valid);
+  const missing=providerShapes.filter(shape=>!loadedShapes.has(shape));
+  for(const [shape,result] of await shapeRows(ctx,missing,signal))loadedShapes.set(shape,result);
+  const outcomes = new Map<string,boolean>();
+  // A provider with several applicable declared shapes must not pass because
+  // only one of those shapes happened to conform. Fail closed on its errors.
+  for(const row of providerRows){
+    signal.throwIfAborted();
+    const provider=row.provider?.value??"",shape=row.shape?.value??"";
+    if(!valid(provider))continue;
+    if(!valid(shape)){outcomes.set(provider,false);providerErrors.push(`${provider}: invalid SHACL shape identity.`);continue;}
+    try {
+      const shapeData=completeShape(loadedShapes,shape);
+      const isEnvelope = ["true","1"].includes(row.envelope?.value ?? "");
+      const check=await evaluate(shape,isEnvelope?envelope:root,shapeData,isEnvelope?contextData:data);
+      outcomes.set(provider,(outcomes.get(provider)??true) && check.complete && check.conforms);
+    } catch(error) {
+      signal.throwIfAborted(); outcomes.set(provider,false);
+      providerErrors.push(`${provider}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
-  return {historyId,queryRoot:root,report,queryProviders:[...new Set(matches)]};
+  for (const [provider,conforms] of outcomes) if (conforms) matches.push(provider);
+  signal.throwIfAborted();
+  if((await personalContext()).session!==ctx.session)throw new Error("Personal user session changed.");
+  return {historyId,queryRoot:root,report,queryProviders:matches,providerErrors};
 }

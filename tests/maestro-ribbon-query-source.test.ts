@@ -20,7 +20,8 @@ test("ribbon query sources use the current personal namespace, not Browse", () =
   assert.equal(analysis.code,buildAnalysisDiscoverySparql(target.graphs,input.analysisClasses));
   assert.match(analysis.note,/Class-only preview/);
   const providers = ["urn:contextual-provider"];
-  assert.equal(ribbonQuerySource({...input,format:"analysis-sparql",contextualProviders:providers}).code,buildAnalysisDiscoverySparql(target.graphs,input.analysisClasses,providers));
+  assert.equal(ribbonQuerySource({...input,format:"analysis-sparql",contextualProviders:providers}).code,buildAnalysisDiscoverySparql(target.graphs,input.analysisClasses));
+  assert.equal(ribbonQuerySource({...input,format:"analysis-context-sparql",contextualProviders:providers}).code,buildAnalysisDiscoverySparql(target.graphs,[],providers));
   const loggedOut = ribbonQuerySource({...input,format:"perspectives-sparql",session:null});
   assert.equal(loggedOut.addr,undefined);
 });

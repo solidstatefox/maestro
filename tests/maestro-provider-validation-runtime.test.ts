@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createMaestroProviderValidationController } from "../src/lib/app-lifecycle/provider-validation";
 import { createMaestroKindDiscoveryController, selectKinds } from "../src/lib/app-lifecycle/kind-discovery";
 import type { ProviderPageProgram } from "../src/lib/provider-page-program";
-import { isVirtuosoAnytime, anytimeResponseHeaders, upstreamDeliveryTimeoutMs } from "../src/lib/virtuoso-anytime";
+import { isVirtuosoAnytime, anytimeResponseHeaders } from "../src/lib/virtuoso-anytime";
 const wait=()=>new Promise<void>(resolve=>setTimeout(resolve,0));
 const program:ProviderPageProgram={data:{focus:[{iri:"urn:test:focus",label:"Test"}],triples:[]},message:"",description:"",radar:null};
 const report={complete:true,conforms:true,message:"ok",violations:[],unsupportedConstraints:[]};
@@ -27,5 +27,5 @@ test("Properties Kinds can be partial while Roles fails, retry does not discard 
  }finally{properties.stop();roles.stop();}
 });
 test("Anytime metadata is distinct from a hard transport timeout",()=>{
- const partial=new Response('{}',{headers:{"X-SQL-State":"S1TAT"}});assert.equal(isVirtuosoAnytime(partial),true);assert.equal(anytimeResponseHeaders(partial,true)["X-Maestro-Incomplete"],"true");assert.equal(isVirtuosoAnytime(new Response('{}',{status:504})),false);assert.equal(upstreamDeliveryTimeoutMs(10000),15000);
+ const partial=new Response('{}',{headers:{"X-SQL-State":"S1TAT"}});assert.equal(isVirtuosoAnytime(partial),true);assert.equal(anytimeResponseHeaders(partial,true)["X-Maestro-Incomplete"],"true");assert.equal(isVirtuosoAnytime(new Response('{}',{status:504})),false);assert.equal(isVirtuosoAnytime(new Response('{}',{status:206})),true);
 });

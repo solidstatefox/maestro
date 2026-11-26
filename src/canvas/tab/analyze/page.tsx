@@ -1,5 +1,6 @@
 "use client";
 import { MaestroSelect } from "@/components/ui/maestro-select";
+import { retryMaestroComponent } from "@/lib/maestro-component-retry";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { MaestroEmptyResults } from "@/components/ui/maestro-empty-results";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
@@ -37,8 +38,9 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
  const nodeAnalyticsSelected = selectedAnalysisUri===NODE_ANALYTICS_ANALYSIS_URI;
  const overviewSelected = selectedAnalysisUri===OVERVIEW_PERSPECTIVE_URI;
  const pageProvider = workspace.analysisDefinitions.find(item => item.uri === selectedAnalysisUri && item.pageValidationShape);
- const sankeySelected = selectedAnalysisUri===SANKEY_ANALYSIS_URI;
- const d3SankeySelected = selectedAnalysisUri===D3_SANKEY_ANALYSIS_URI;
+ const eligibleSelected = workspace.analysisDefinitions.some(item => item.uri === selectedAnalysisUri);
+ const sankeySelected = eligibleSelected && selectedAnalysisUri===SANKEY_ANALYSIS_URI;
+ const d3SankeySelected = eligibleSelected && selectedAnalysisUri===D3_SANKEY_ANALYSIS_URI;
  const [populationState,setPopulationState]=useState<{key:string;items:OverviewPopulation[];error:string}|null>(null);
  const populationKey=workspace.queryXml;
  useEffect(()=>{
@@ -49,9 +51,19 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
       .catch(error=>{if(!controller.signal.aborted)setPopulationState({key:populationKey,items:[],error:error instanceof Error?error.message:String(error)});});
    return ()=>controller.abort();
  },[workspaceTab,nodeAnalyticsSelected,workspace.endpointReadyForQuery,populationKey]);
+ const pagePagination = <div className="flex shrink-0 items-center justify-between gap-3 border-b bg-background px-3 py-2 text-xs">
+                  <span className="text-muted-foreground">{formatPagePosition(resultsUiPage, effectiveResultsTotalCount === null ? null : Math.max(1, Math.ceil(effectiveResultsTotalCount / resultsPageSize)))}{effectiveResultsTotalCount !== null ? ` · ${shortenCount(effectiveResultsTotalCount)} results` : " · many results"}</span>
+                  <div className="flex items-center gap-2"><label htmlFor="analyze-page-size">Per page</label>
+                    <MaestroSelect id="analyze-page-size" value={effectivePageSize} onChange={(event) => { const n = Number(event.target.value); maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(n)); setResultsPageSize(n);setResultsUiPage(0);}} className="rounded border bg-background px-2 py-1">
+                      {resultsPageSizeOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </MaestroSelect>
+                    <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={resultsUiPage===0 || isSearching} onClick={() => changeResultsPage(-1)}>Previous</button>
+                    <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={isSearching || (effectiveResultsTotalCount === null ? (results.length <= (resultsUiPage+1)*resultsPageSize && (resultsPageComplete || resultsBatchRequestPending.current)) : resultsUiPage+1 >= Math.ceil(effectiveResultsTotalCount/resultsPageSize))} onClick={() => changeResultsPage(1)}>Next</button>
+                  </div>
+                </div>;
  const populationCurrent=populationState?.key===populationKey?populationState:null;
  if(workspaceTab === "analyze" && overviewSelected) return <OverviewPerspective workspace={workspace}/>;
- if(workspaceTab === "analyze" && pageProvider) return <AnalyzePageProvider workspace={workspace} definition={pageProvider}/>;
+ if(workspaceTab === "analyze" && pageProvider) return <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{pagePagination}<AnalyzePageProvider workspace={workspace} definition={pageProvider}/></div>;
  if(workspaceTab === "analyze" && sankeySelected) return <AnalyzeSankey workspace={workspace}/>;
  if(workspaceTab === "analyze" && d3SankeySelected) return <AnalyzeSankey workspace={workspace} renderer="d3"/>;
  if(workspaceTab === "analyze" && nodeAnalyticsSelected) return <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Analyze Node Analytics canvas">
@@ -60,8 +72,10 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
      <OverviewNodeAnalytics workspace={workspace} population={populationCurrent?.items ?? []} populationLoading={!populationCurrent || !workspace.endpointReadyForQuery}/>
    </div>
  </div>;
+ if(workspaceTab === "analyze" && selectedAnalysisUri && !eligibleSelected) return <div className="p-4 text-sm text-muted-foreground" role="status">The selected Analysis is waiting for applicable, approved provider evidence. Choose a built-in analysis from the ribbon.</div>;
  return <>
 {workspaceTab === "analyze" && <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Analyze canvas">
+                {pagePagination}
                 {selectedAnalysisUri.includes("compare-table") && <div className="flex items-center gap-2 border-b px-3 py-2 text-sm">
                   <label htmlFor="maestro-compare-facet">Compare facet</label>
                   <MaestroSelect id="maestro-compare-facet" value={effectiveCompareFacet} onChange={(event) => setCompareFacet(event.target.value)} className="min-w-0 max-w-md flex-1 rounded-md border bg-background px-2 py-1">
@@ -72,10 +86,11 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                   <button type="button" className="inline-flex items-center gap-1.5 rounded border border-border/60 bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground disabled:cursor-not-allowed" title="Export (coming soon)" aria-label="Export" disabled><Download aria-hidden="true" className="size-4"/>Export</button>
                 </div>}
                 {analysisError && !isBookmarkAnalysis(selectedAnalysisUri) && <ErrorDetails prefix="Analysis" error={analysisError} className="m-3" />}
-                {analysisValuesError && <ErrorDetails prefix="Analysis facet values" error={analysisValuesError} className="m-3" />}
+                {analysisValuesError && <div className="m-3 flex items-center gap-2"><ErrorDetails prefix="Analysis facet values" error={analysisValuesError}/><button type="button" className="underline text-sm" onClick={()=>retryMaestroComponent("analyze-values")}>Retry</button></div>}
+                {!["ready","failed","timedOut","cancelled"].includes(workspace.analysisProjectionPhase) && !workspace.queryExecutionCancelled && !isBookmarkAnalysis(selectedAnalysisUri) && !analysisTable && <p role="status" className="p-3 text-xs text-muted-foreground">{workspace.analysisProjectionPhase === "loading" ? "Projecting the current Results page…" : "Waiting for the current Results page…"}</p>}
                 {analysisLoading && !analysisTable && !isBookmarkAnalysis(selectedAnalysisUri) && <p className="p-3 text-xs text-muted-foreground"><ElapsedStatus label="Building analysis" category="other" clockScope="analysis" /></p>}
                 <div className="min-h-0 flex-1 overflow-auto">
-                  {isBookmarkAnalysis(selectedAnalysisUri) && <BookmarkCharts onBrowse={() => setWorkspaceTab("browse")} queryXml={workspace.queryXml} providerUri={selectedAnalysisUri} stylesheet={workspace.analysisDefinitions.find((definition) => definition.uri === selectedAnalysisUri)?.stylesheet ?? ""} />}
+                  {eligibleSelected && isBookmarkAnalysis(selectedAnalysisUri) && <BookmarkCharts onBrowse={() => setWorkspaceTab("browse")} queryXml={workspace.queryXml} providerUri={selectedAnalysisUri} stylesheet={workspace.analysisDefinitions.find((definition) => definition.uri === selectedAnalysisUri)?.stylesheet ?? ""} />}
                   {!nodeAnalyticsSelected && analysisTable && isCompareAnalysis && analyzeHistogram && <AnalyzeHistogram histogramColumns={histogramColumns} visibleCount={analysisTable.rows.length} />}
                   {!nodeAnalyticsSelected && analysisTable && analysisTable.rows.length === 0 && <MaestroEmptyResults onBrowse={() => setWorkspaceTab("browse")} title="No analysis results" description="No records match this analysis. Try the default Browse perspective."/>}
                   {!nodeAnalyticsSelected && analysisTable && analysisTable.rows.length > 0 && !(isCompareAnalysis && analyzeHistogram) && <MaestroAnalysisDataTable
@@ -116,18 +131,9 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
                         })],
                     }))}
                   />}
-                  {!nodeAnalyticsSelected && !isBookmarkAnalysis(selectedAnalysisUri) && !analysisLoading && !analysisTable && !analysisError && <MaestroEmptyResults onBrowse={() => setWorkspaceTab("browse")} title="No analysis to display" description="Choose an analysis from the ribbon or try the default Browse perspective."/>}
+                  {!nodeAnalyticsSelected && !isBookmarkAnalysis(selectedAnalysisUri) && !analysisLoading && !analysisTable && !analysisError && !analysisValuesError && workspace.analysisProjectionPhase === "ready" && <MaestroEmptyResults onBrowse={() => setWorkspaceTab("browse")} title="No analysis to display" description="Choose an analysis from the ribbon or try the default Browse perspective."/>}
                 </div>
-                <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-3 py-2 text-xs">
-                  <span className="text-muted-foreground">{formatPagePosition(resultsUiPage, effectiveResultsTotalCount === null ? null : Math.max(1, Math.ceil(effectiveResultsTotalCount / resultsPageSize)))}{effectiveResultsTotalCount !== null ? ` · ${shortenCount(effectiveResultsTotalCount)} results` : " · many results"}</span>
-                  <div className="flex items-center gap-2"><label htmlFor="analyze-page-size">Per page</label>
-                    <MaestroSelect id="analyze-page-size" value={effectivePageSize} onChange={(event) => { const n = Number(event.target.value); maestroStorageSet(RESULTS_PAGE_SIZE_STORAGE_KEY, String(n)); setResultsPageSize(n);setResultsUiPage(0);}} className="rounded border bg-background px-2 py-1">
-                      {resultsPageSizeOptions.map((n) => <option key={n} value={n}>{n}</option>)}
-                    </MaestroSelect>
-                    <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={resultsUiPage===0 || isSearching} onClick={() => changeResultsPage(-1)}>Previous</button>
-                    <button type="button" className="rounded border px-2 py-1 disabled:opacity-40" disabled={isSearching || (effectiveResultsTotalCount === null ? (results.length <= (resultsUiPage+1)*resultsPageSize && (resultsPageComplete || resultsBatchRequestPending.current)) : resultsUiPage+1 >= Math.ceil(effectiveResultsTotalCount/resultsPageSize))} onClick={() => changeResultsPage(1)}>Next</button>
-                  </div>
-                </div>
+
               </div>}
 </>;
 }

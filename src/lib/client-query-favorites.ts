@@ -3,6 +3,7 @@
 /** Browser-owned History/Bookmarks persistence, migrated from the domain-specific
  * /service handler. The authenticated /sparql proxy remains the sole gateway and
  * enforces graph access. No independent authorization decision is made here. */
+import { bookmarkMetadataUpdate } from "@/lib/bookmark-metadata-update";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
 import { historyQueryRdf, VFCT } from "@/lib/history-query-rdf";
 import { XMLParser } from "fast-xml-parser";
@@ -220,6 +221,7 @@ async function postFavorites(request: Request, ctx: PersonalContext) {
       const tags = selectedTags ? [...new Set(valuesFor(authoritativeGraph, selectedTags.predicate))] : [];
       return json({
         found: bindings.length > 0,
+        savedBookmark,
         historyId,
         title: first(`${DCTERMS_NS}title`) || first(`${RDFS_NS}label`),
         description: first(`${DCTERMS_NS}description`),
@@ -320,6 +322,16 @@ async function postFavorites(request: Request, ctx: PersonalContext) {
         GRAPH ${graph} { ${iri(historyId)} (<${BOOKMARK_NS}recalls>|<${BOOKMARK_NS}recalls>/(<${VFCT}child>|<${VFCT}attribute>)*)? ?node .
           ?node ?predicate ?object . } }`);
       return json({ deleted: true, nextHistoryId: next?.visit?.value, queryXml: next?.queryXML?.value, stateUrl: next?.stateUrl?.value ?? "" });
+    }
+
+    if (action === "updateMetadata") {
+      if (!historyId || typeof body.title !== "string" || typeof body.description !== "string" || !Array.isArray(body.tags) || !body.tags.every(tag=>typeof tag==="string") || !(body.tagVocabulary === "skos" || body.tagVocabulary === "dcterms" || body.tagVocabulary === "scot")) return json({error:"Invalid Bookmark metadata."},{status:400});
+      const exists = `ASK WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} a <${BOOKMARK_NS}Bookmark> } }`;
+      if (!await askPersonal(exists)) return json({error:"Bookmark no longer exists."},{status:404});
+      const update=bookmarkMetadataUpdate(`${baseGraph}#bookmarks`,historyId,{title:body.title,description:body.description,tags:body.tags as string[],tagVocabulary:body.tagVocabulary});
+      await updatePersonal(update,request.signal,undefined,"HistoryBookmarks:updateMetadata",ctx.session);
+      if (!await askPersonal(exists)) return json({error:"Bookmark no longer exists."},{status:404});
+      return json({updated:true,historyId});
     }
 
     if (action === "update") {

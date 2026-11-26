@@ -275,6 +275,7 @@ test('Connect proxy returns challenge metadata and sends the actual authenticate
   const denied=()=>new Response('',{status:401,headers:{'WWW-Authenticate':'Digest realm="SPARQL", nonce="server-nonce", qop="auth"'}});
   async function run(responses,authenticated=false,stale=false,writeBody){
     const calls=[];
+    const transport=async(url,init)=>{calls.push({url,init});return responses.shift();};
     // The unused general SPARQL imports are not part of this fixed SELECT.
     const modules={};
     for(const m of source('src/app/proxy/api/sparql/route.ts').matchAll(/from\s+"([^"]+)"/g))modules[m[1]]={};
@@ -295,11 +296,10 @@ test('Connect proxy returns challenge metadata and sends the actual authenticate
       '@/lib/graph-server-target':{permittedGraphServerTarget:ep=>ep===endpoint,checkGraphServerDestination:async ep=>assert.equal(ep,endpoint)},
       '@/lib/maestro-logger':{proxyLog:()=>{},proxyFailure:(_req,_route,error)=>{throw error;}},
       '@/lib/virtuoso-anytime':moduleFrom('src/lib/virtuoso-anytime.ts'),
+      '@/lib/virtuoso-read-transport':{fetchVirtuosoRead:transport},
       '@/lib/sparql-read-guard':{isBoundedReadOnlySparql:q=>q===bootstrapQuery},
     });
-    const route=moduleFrom('src/app/proxy/api/sparql/route.ts',modules,{AbortSignal,Response,URLSearchParams,fetch:async(url,init)=>{
-      calls.push({url,init});return responses.shift();
-    }});
+    const route=moduleFrom('src/app/proxy/api/sparql/route.ts',modules,{AbortSignal,Response,URLSearchParams,fetch:transport});
     const response=await route.POST(request(authenticated,writeBody));
     return {response,calls};
   }

@@ -10,7 +10,7 @@ test('Spider is a discoverable seeded analysis provider and declares a numeric q
   assert.match(rdf,/m:breadcrumbs\/m:breadcrumb/);
   assert.match(rdf,/m:results\/m:result/);
   const host=read('src/canvas/tab/analyze/page.tsx');
-  assert.match(host,/pageProvider\) return <AnalyzePageProvider workspace=\{workspace\}/);
+  assert.match(host,/pageProvider\)[\s\S]*?pagePagination[\s\S]*?<AnalyzePageProvider workspace=\{workspace\}/);
   assert.doesNotMatch(host,/SPIDER_ANALYSIS_URI|AnalyzeSpider/);
   const ui=read('src/canvas/tab/analyze/page-provider.tsx');
   assert.match(ui,/workspace\.readyAnalysisValues/);

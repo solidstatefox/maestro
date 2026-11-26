@@ -10,6 +10,7 @@ import { addPersonalGraphServer, deletePersonalGraphServer, listPersonalGraphSer
   PERSONAL_SERVERS_CHANGED, type PersonalGraphServer } from "@/lib/client-personal-graph-servers";
 import { observeProxyFetch } from "@/lib/proxy-transport-observation";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
+import { discoverProviderEndpoints } from "@/lib/provider-endpoint-recipes";
 import type { EndpointCandidate } from "@/lib/client-endpoint-discovery";
 import { validGraphServerUrl } from "@/lib/graph-server-directory";
 import type { EndpointOption } from "@/canvas/top/appbar";
@@ -19,15 +20,27 @@ import { createMaestroViewDiscoveryController } from "@/lib/app-lifecycle/view-d
  * registry. The public FCT cards below remain a read-only view of the query.
  * XState grants the write capability, not a local 'logged in' boolean. */
 export function GraphServerManager({ canMutate, onRegistryChange,
-  account = "", configuredEndpoints = [], registrationCandidate, onCandidateConsumed }: {
+  account = "", configuredEndpoints = [], registrationCandidate, onCandidateConsumed, discoverySource = "", discoveryRecipes = [], discoveryCancelled = false }: {
   canMutate: boolean; onRegistryChange?: () => void; account?:string;
   configuredEndpoints?: readonly EndpointOption[]; registrationCandidate?: EndpointCandidate | null; onCandidateConsumed?: () => void;
+  discoverySource?:string; discoveryRecipes?:readonly string[]; discoveryCancelled?:boolean;
 }) {
   const [directory] = useState(() => createMaestroViewDiscoveryController<PersonalGraphServer>());
   const directorySnapshot = useSyncExternalStore(directory.subscribe,directory.getSnapshot,directory.getSnapshot);
   const [directoryRevision,setDirectoryRevision] = useState(0);
   const directoryKey = JSON.stringify([account,directoryRevision]);
   const items = canMutate && directorySnapshot.context.key===directoryKey ? directorySnapshot.context.items : [];
+  const [discovery]=useState(()=>createMaestroViewDiscoveryController<EndpointCandidate>());
+  const discoverySnapshot=useSyncExternalStore(discovery.subscribe,discovery.getSnapshot,discovery.getSnapshot);
+  const [discoveryRevision,setDiscoveryRevision]=useState(0);
+  const [discoveredEndpoint,setDiscoveredEndpoint]=useState("");
+  const discoveryScope=JSON.stringify([account,discoverySource,discoveryRecipes]);
+  const discoveryKey=JSON.stringify([discoveryScope,discoveryRevision]);
+  const candidates=canMutate&&!discoveryCancelled&&discoverySnapshot.context.key===discoveryKey?discoverySnapshot.context.items:[];
+  const discoveryPending=discoverySnapshot.context.key===discoveryKey&&discoverySnapshot.matches("loading");
+  useEffect(()=>{discovery.start();return()=>discovery.stop();},[discovery]);
+  useEffect(()=>{discovery.inactive();setDiscoveredEndpoint("");},[discovery,discoveryScope,canMutate,discoveryCancelled]);
+  const runDiscovery=()=>{const revision=discoveryRevision+1;setDiscoveryRevision(revision);setDiscoveredEndpoint("");discovery.discover(JSON.stringify([discoveryScope,revision]),signal=>discoverProviderEndpoints(discoverySource,discoveryRecipes,signal));};
   const [removeUri,setRemoveUri]=useState("");
   useEffect(()=>setRemoveUri(""),[account]);
   const [dialog, setDialog] = useState(false);
@@ -51,11 +64,14 @@ export function GraphServerManager({ canMutate, onRegistryChange,
   useEffect(()=>{setStoredGroups([]);resetGroup();},[account]);
   const [busy, setBusy] = useState(false);
   const [verifyCandidate, setVerifyCandidate] = useState(false);
+  const prepareCandidate=(candidate:EndpointCandidate)=>{
+    setUrl(candidate.endpoint);setLabel(candidate.title.slice(0,160));
+    setDescription([candidate.description,candidate.standards.join(", ")].filter(Boolean).join(" · ").slice(0,1024));setPersonal(false);
+    resetGroup();setVerifyCandidate(true);setDialog(true);setError("");
+  };
   useEffect(() => {
     if (!registrationCandidate || !canMutate) return;
-    setUrl(registrationCandidate.endpoint); setLabel(registrationCandidate.title.slice(0,160));
-    setDescription([registrationCandidate.description,registrationCandidate.standards.join(", ")].filter(Boolean).join(" · ").slice(0,1024)); setPersonal(false);
-    resetGroup(); setVerifyCandidate(true); setDialog(true); setError(""); onCandidateConsumed?.();
+    prepareCandidate(registrationCandidate);onCandidateConsumed?.();
   }, [registrationCandidate, canMutate]);
   const [error, setError] = useState("");
   const refresh = useCallback(async () => {setDirectoryRevision(n=>n+1);},[]);
@@ -109,6 +125,12 @@ export function GraphServerManager({ canMutate, onRegistryChange,
         <Button size="icon-sm" variant="outline" aria-label="Add graph server" title="Add graph server" onClick={() => { setVerifyCandidate(false); resetGroup(); setDialog(true); }} disabled={busy}><DatabasePlus className="size-4"/></Button>
       </>}
     </header>
+    {canMutate&&discoveryRecipes.length>0&&<div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+      <Button variant="outline" size="sm" disabled={discoveryPending||discoveryCancelled||!discoverySource} onClick={runDiscovery}>{discoveryPending?"Discovering…":"Discover endpoints"}</Button>
+      {discoveryPending&&<Button variant="outline" size="sm" onClick={()=>discovery.cancel()}>Cancel discovery</Button>}
+      {discoverySnapshot.context.key===discoveryKey&&discoverySnapshot.matches("ready")&&<><span>{candidates.length} candidates</span><MaestroSelect aria-label="Discovered endpoint" value={discoveredEndpoint} onChange={event=>setDiscoveredEndpoint(event.target.value)} className="max-w-xs rounded border bg-background px-2 py-1"><option value="">Select discovered endpoint</option>{candidates.map(candidate=><option key={candidate.endpoint} value={candidate.endpoint}>{candidate.title} · {candidate.endpoint}</option>)}</MaestroSelect><Button variant="outline" size="sm" disabled={!candidates.some(candidate=>candidate.endpoint===discoveredEndpoint)} onClick={()=>{const candidate=candidates.find(item=>item.endpoint===discoveredEndpoint);if(candidate)prepareCandidate(candidate);}}>Register</Button></>}
+      {discoverySnapshot.context.key===discoveryKey&&discoverySnapshot.context.error&&<p role="alert" className="basis-full text-destructive whitespace-pre-wrap break-all">{discoverySnapshot.context.error}</p>}
+    </div>}
     {!canMutate && <p className="mt-1 text-xs text-muted-foreground">Graph-server editing requires a ready authenticated personal store.</p>}
     {(error || directorySnapshot.context.error) && <p role="alert" className="mt-2 text-xs text-destructive">{error || directorySnapshot.context.error}</p>}
     <Dialog open={dialog && canMutate} onOpenChange={open => { if (!busy) setDialog(open); }}>

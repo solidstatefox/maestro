@@ -10,11 +10,12 @@ import type { PersonalAuthSession } from "@/lib/personal-auth";
 import type { RibbonDiscoveryLimits } from "@/lib/ribbon-discovery-limits";
 import type { ProviderKind } from "@/lib/provider-catalog-xslt";
 
-export type RibbonQueryFormat = "perspectives-sparql" | "providers-sparql" | "analysis-sparql";
+export type RibbonQueryFormat = "perspectives-sparql" | "providers-sparql" | "analysis-sparql" | "analysis-context-sparql";
 export const RIBBON_QUERY_FORMATS = [
   { value: "perspectives-sparql", label: "View > Perspectives" },
   { value: "providers-sparql", label: "View > Providers" },
-  { value: "analysis-sparql", label: "Analyze > Analysis" },
+  { value: "analysis-sparql", label: "Analyze > Analysis (classes)" },
+  { value: "analysis-context-sparql", label: "Analyze > Analysis (SHACL context)" },
 ] as const;
 export function isRibbonQueryFormat(value: string): value is RibbonQueryFormat {
   return RIBBON_QUERY_FORMATS.some(item => item.value === value);
@@ -49,7 +50,7 @@ type Input = {
 export function ribbonQuerySource(input: Input): Source {
   const { format, session, providerKind } = input;
   const filename = format === "providers-sparql" ? `view-providers-${providerKind}.sparql`
-    : format === "perspectives-sparql" ? "view-perspectives.sparql" : "analyze-analysis.sparql";
+    : format === "perspectives-sparql" ? "view-perspectives.sparql" : format === "analysis-context-sparql" ? "analyze-context-analysis.sparql" : "analyze-analysis.sparql";
   const unavailable = (note: string): Source => ({ filename, code: `# ${note.replace(/\r?\n/g, "\n# ")}`, note });
   if (!session) return unavailable("Log in to the Personal Graph Server to resolve the discovery graph and endpoint.");
   try {
@@ -67,10 +68,12 @@ export function ribbonQuerySource(input: Input): Source {
     const { graphs, addr } = personalDiscoveryTarget(session);
     if (format === "perspectives-sparql") return { filename, addr, code: buildViewDiscoverySparql(graphs,input.limits?.perspectives),
       note: "Exact Perspective candidate SELECT. Class matching, contextual SHACL, effective approval and population probes are separate browser-side eligibility steps." };
-    return { filename, addr, code: buildAnalysisDiscoverySparql(graphs, input.analysisClasses, input.contextualProviders ?? [],input.limits?.analysis),
-      note: input.contextualProviders === null
-        ? "Class-only preview: contextual SHACL has not been validated for this History visit. The actual Analysis discovery may include additional provider IRIs after validation."
-        : "Analysis discovery using the current focus classes and the last validated contextual provider IRIs for this History visit." };
+    if (format === "analysis-context-sparql") {
+      if (!input.contextualProviders?.length) return unavailable("No validated contextual provider IRIs for this History visit; the contextual SELECT is not dispatched.");
+      return { filename, addr, code: buildAnalysisDiscoverySparql(graphs, [], [...input.contextualProviders].sort(), input.limits?.analysis), note: "Exact contextual Analysis discovery SELECT. Class-based discovery is independent." };
+    }
+    return { filename, addr, code: buildAnalysisDiscoverySparql(graphs, input.analysisClasses, [], input.limits?.analysis),
+      note: input.analysisClasses.length ? "Class-only preview: exact independent class-based discovery SELECT." : "No class evidence: this SELECT is not dispatched." };
   } catch (error) {
     return unavailable(error instanceof Error ? error.message : String(error));
   }

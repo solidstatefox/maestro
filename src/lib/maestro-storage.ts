@@ -215,7 +215,8 @@ export function providerStorage(providerIri: string, accountScope: string) {
     },
     async keys(): Promise<string[]> {
       await initializeMaestroStorage();
-      return [...memory.keys()].filter(key => key.startsWith(prefix)).map(key => decodeURIComponent(key.slice(prefix.length)));
+      const keys = indexedDbAvailable ? await requestResult((await openDatabase()).transaction(STORE_NAME,"readonly").objectStore(STORE_NAME).getAllKeys()) : [...memory.keys()];
+      return keys.filter((key): key is string => typeof key === "string" && key.startsWith(prefix)).map(key => decodeURIComponent(key.slice(prefix.length)));
     },
   });
 }

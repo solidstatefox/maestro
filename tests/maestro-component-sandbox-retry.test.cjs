@@ -50,8 +50,20 @@ test('502 503 504 error actions use shadcn ButtonGroup beside Copy with callback
     ['src/canvas/left/pane-navigation.tsx', 'roles'],
     ['src/canvas/left/filter-pane.tsx', 'categories'],
     ['src/canvas/center/pane.tsx', 'results'],
-    ['src/canvas/right/pane.tsx', 'record'],
   ]) assert.ok(read(file).includes(`onRetry={() => retryMaestroComponent("${component}")}`), `${file}: ${component}`);
+  // RightCanvasPanel is shared by Browse and fullscreen Record sessions.
+  // Assert the error action uses the owner's retry source, not a global literal.
+  const record = read('src/canvas/right/pane.tsx');
+  assert.match(record, /<ErrorDetails prefix="Record SELECT"[^>]*onRetry=\{\(\) => retryMaestroComponent\(recordDescriptionRetrySource\)\}/);
+  assert.match(record, /onClick=\{\(\) => retryMaestroComponent\(recordDescriptionRetrySource\)\}/);
+  const browse = read('src/canvas/utils/workspace-controller.tsx');
+  const fullscreen = read('src/canvas/controllers/record-session-controller.tsx');
+  assert.match(browse, /recordDescriptionRetrySource: "record"/);
+  assert.match(browse, /useMaestroComponentRetry\("record"\)/);
+  assert.match(fullscreen, /recordDescriptionRetrySource: `record:\$\{session\.id\}`/);
+  assert.match(fullscreen, /useMaestroComponentRetry\(`record:\$\{session\.id\}`\)/);
+  assert.match(fullscreen, /currentRecordDescriptionKey = \[recordSelectionScope, retryRecord\]\.join/);
+  assert.match(fullscreen, /retryRevision: retryRecord/);
 });
 
 test('retry revisions are consumed by each request owner and not by the global Refresh', () => {

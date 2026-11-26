@@ -30,13 +30,15 @@ import { updateFctExecutionAddress } from "@/lib/fct-execution-address";
 import { proxyLog } from "@/lib/maestro-logger";
 import { withGraphServerSlot } from "@/lib/server-query-scheduler";
 import { virtuosoRankFailure, virtuosoAggregateFailure } from "@/lib/virtuoso-query-fallbacks";
-import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders, upstreamDeliveryTimeoutMs } from "@/lib/virtuoso-anytime";
+import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
+import { fetchVirtuosoRead } from "@/lib/virtuoso-read-transport";
 
 
 function parseResults(text: string): SparqlJsonResults | null {
   try {
     const parsed = JSON.parse(text) as SparqlJsonResults;
     if (!parsed || !parsed.head || !Array.isArray(parsed.head.vars) || !parsed.results || !Array.isArray(parsed.results.bindings)) return null;
+    if (!parsed.head.vars.every(name => typeof name === "string") || !parsed.results.bindings.every(row => row && typeof row === "object" && !Array.isArray(row) && Object.values(row).every(term => term && typeof term.type === "string" && typeof term.value === "string"))) return null;
     return parsed;
   } catch {
     return null;
@@ -121,7 +123,7 @@ async function resolveFctLabels(
     "ORDER BY STR(?s)",
   ].join("\n");
   try {
-    const result = await executeSparql(endpoint, query, undefined, timeoutMs || 20000, requestSignal);
+    const result = await executeSparql(endpoint, query, undefined, timeoutMs, requestSignal);
     if (!result.response.ok) return labels;
     const parsed = parseResults(result.text);
     if (!parsed) return labels;
@@ -192,7 +194,7 @@ async function executeSparql(endpoint: string, query: string, accept = "applicat
     const result = await withGraphServerSlot(
       endpoint, /\bCOUNT\s*\(|\bGROUP BY\b/i.test(query) ? "count" : "interactive", requestSignal,
       () => traceVirtuosoDispatch(() => withUpstreamTransport(async () => {
-      const response = await fetch(url, {
+      const response = await fetchVirtuosoRead(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -202,9 +204,7 @@ async function executeSparql(endpoint: string, query: string, accept = "applicat
       body: new URLSearchParams({ query, ...(timeoutMs >= 1000 ? { timeout: String(timeoutMs) } : {}) }).toString(),
       cache: "no-store",
       redirect: "manual",
-      signal: requestSignal
-        ? AbortSignal.any([requestSignal, AbortSignal.timeout(upstreamDeliveryTimeoutMs(timeoutMs))])
-        : AbortSignal.timeout(upstreamDeliveryTimeoutMs(timeoutMs)),
+      signal: requestSignal,
     });
       const text = await response.text();
       return { response, text, key };
@@ -312,7 +312,7 @@ function fctExecutionMetadataXml(meta: FctExecutionMetadata): string {
 function fctUpstreamMetadata(response: Response, body: string): Pick<FctExecutionMetadata, "sqlState" | "sqlMessage" | "execMilliseconds" | "execDbActivity"> {
   const anytime = isVirtuosoAnytime(response, body);
   return {
-    sqlState: anytime ? "S1TAT" : response.headers.get("X-SQL-State") ?? "",
+    sqlState: response.headers.get("X-SQL-State")?.trim() || (anytime && response.status !== 206 ? "S1TAT" : ""),
     sqlMessage: anytime ? virtuosoAnytimeMessage(response, body) : response.headers.get("X-SQL-Message") ?? "",
     execMilliseconds: response.headers.get("X-Exec-Milliseconds") ?? "",
     execDbActivity: response.headers.get("X-Exec-DB-Activity") ?? "",
@@ -967,7 +967,7 @@ async function handlePost(request: Request) {
     const responseCacheKey = queryCacheKey(
       // A Graphs response from an older query compiler must never survive
       // into the current grouped, rank-ordered Graphs pagination format.
-      compiled.graphOnly ? "fct-response-graphs-v2" : "fct-response-page-labels-v2",
+      compiled.graphOnly ? "fct-response-graphs-v2" : "fct-response-page-labels-v2-anytime-v1",
       endpoint.url,
       JSON.stringify([queryXml, view ?? null, graphOnly, countOnly, valueColumns, labelAcceptLanguage ?? ""]),
     );
@@ -1049,9 +1049,8 @@ async function handlePost(request: Request) {
         }
       }
       catch (error) {
-        if (!anytime) return fctError(error instanceof Error ? error.message : "Invalid DESCRIBE response", 502, text.slice(0, 1000));
-        proxyLog("warn", "fct.describe-anytime-no-rows", { view: compiled.view, status: response.status });
-        bindings = [];
+        // An error-only S1TAT response is not an RDF result document.
+        return fctError(error instanceof Error ? error.message : "Invalid DESCRIBE response", 502, sanitizeUpstreamDiagnostic(text, Infinity));
       }
       // Do not mistake a size-capped subgraph for a complete SHACL document.
       // No partial answer or cache entry is allowed to masquerade as source.
@@ -1060,8 +1059,8 @@ async function handlePost(request: Request) {
       if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
       // A literal Record can be returned promptly without a second network
       // query merely to decorate the subjects of its incoming Roles.
-      const labels = compiled.describeLiteral || compiled.describeExpanded ? new Map<string, string>()
-        : await resolveFctLabels(endpoint.url, bindings, labelAcceptLanguage, compiled.timeoutMs);
+      const labels = partial || compiled.describeLiteral || compiled.describeExpanded ? new Map<string, string>()
+        : await resolveFctLabels(endpoint.url, bindings, labelAcceptLanguage, compiled.timeoutMs, request.signal);
       const labelFor = (term: SparqlBindingTerm | undefined) => term?.type === "uri" ? labels.get(term.value) : undefined;
       const describeRows = bindings.map((binding) => `<fct:row>${fctColumn(binding.s, labelFor(binding.s))}${fctColumn(binding.p, labelFor(binding.p))}${fctColumn(binding.o, labelFor(binding.o))}</fct:row>`).join("");
       const describeComplete = !partial;
@@ -1081,7 +1080,7 @@ async function handlePost(request: Request) {
       // A timeout/error must not be interpreted as a negative existence test.
       let askBoolean: boolean | undefined;
       try { const result = JSON.parse(text) as { boolean?: unknown }; if (typeof result.boolean === "boolean") askBoolean = result.boolean; } catch { /* invalid upstream result */ }
-      if (partial || askBoolean === undefined) return fctError("Virtuoso did not complete the ASK preflight.", 502, text.slice(0, 1200));
+      if (partial || askBoolean === undefined) return fctError("Virtuoso did not complete the ASK preflight.", 502, sanitizeUpstreamDiagnostic(text, Infinity));
       const metadata = fctExecutionMetadataXml({
         query: compiled.query, elapsedMs, complete: true, timeoutMs: compiled.timeoutMs,
         processed: 1, limit: compiled.limit, offset: compiled.offset,
@@ -1092,10 +1091,7 @@ async function handlePost(request: Request) {
       return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", ...incompleteHeaders } });
     }
     const parsed = parseResults(text);
-    if (!parsed && !partial) return fctError("Virtuoso SPARQL endpoint returned an invalid SPARQL Results JSON document", 502, text.slice(0, 1500));
-    // An ANYTIME timeout can arrive with an error-only body and no result rows.
-    // No rows were received: do not fabricate rows or report a complete empty set.
-    if (!parsed && anytime) proxyLog("warn", "fct.anytime-no-rows", { view: compiled.view, status: response.status });
+    if (!parsed) return fctError(partial ? "No usable result set was delivered by the graph server." : "Virtuoso SPARQL endpoint returned an invalid SPARQL Results JSON document", 502, sanitizeUpstreamDiagnostic(text, Infinity));
     let bindings = parsed?.results?.bindings ?? [];
     let vars = parsed?.head?.vars ?? [];
     if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
@@ -1153,35 +1149,41 @@ async function handlePost(request: Request) {
     // exists. Virtuoso uses HTTP 206 for partial results.
     const complete = !partial;
     let datatypeEvidence: Array<{ datatype: string; originalDatatype?: string; count: number }> = [];
+    let datatypeEvidenceUnavailable = false;
     if (compiled.datatypeEvidenceQuery && !countOnly && !partial) {
-      // A separate unpaginated aggregate over the exact same FCT population.
-      // A failed probe is not a negative SHACL match; surface the error.
-      const evidenceQuery = compiled.datatypeEvidenceQuery;
-      // The datatype population is independent of the value page offset.
-      // Reuse a complete evidence query across pages, but never reuse errors,
-      // partial results, protected status scopes, or an explicit component Retry.
-      const evidenceResult = await executeSparql(executionEndpoint, evidenceQuery, undefined,
-        compiled.timeoutMs, request.signal, hasStatusConstraints || isValidate || componentRetry);
-      const evidenceAnytime = isVirtuosoAnytime(evidenceResult.response, evidenceResult.text) || evidenceResult.response.status === 206;
-      if (!evidenceResult.response.ok || evidenceAnytime) {
-        // Preserve the distinction between the successful main value-list request
-        // and this independent datatype aggregate; do not invent an upstream 502.
-        const status = evidenceResult.response.status;
-        const kind = evidenceAnytime ? "incomplete/ANYTIME" : `HTTP ${status}`;
-        return fctError(`Facet datatype evidence probe failed (${kind}). This was an auxiliary aggregate, not the main facet value list.\nProbe SPARQL (verbatim):\n${evidenceQuery}\nUpstream response (${evidenceResult.response.headers.get("content-type") ?? "unknown type"}):\n${evidenceResult.text.slice(0, 6000)}`,
-          evidenceAnytime ? 504 : status >= 400 && status < 600 ? status : 502);
+      try {
+        // A separate unpaginated aggregate over the exact same FCT population.
+        // A failed probe is not a negative SHACL match; surface the error.
+        const evidenceQuery = compiled.datatypeEvidenceQuery;
+        // The datatype population is independent of the value page offset.
+        // Reuse a complete evidence query across pages, but never reuse errors,
+        // partial results, protected status scopes, or an explicit component Retry.
+        const evidenceResult = await executeSparql(executionEndpoint, evidenceQuery, undefined,
+          compiled.timeoutMs, request.signal, hasStatusConstraints || isValidate || componentRetry);
+        const evidenceAnytime = isVirtuosoAnytime(evidenceResult.response, evidenceResult.text) || evidenceResult.response.status === 206;
+        if (!evidenceResult.response.ok || evidenceAnytime) {
+          // Preserve the distinction between the successful main value-list request
+          // and this independent datatype aggregate; do not invent an upstream 502.
+          const status = evidenceResult.response.status;
+          const kind = evidenceAnytime ? "incomplete/ANYTIME" : `HTTP ${status}`;
+          throw new Error(`Facet datatype evidence probe failed (${kind}).`);
+        }
+        const evidence = parseResults(evidenceResult.text);
+        if (!evidence) throw new Error("Facet datatype evidence probe returned invalid SPARQL Results JSON.");
+        if (!hasStatusConstraints && !isValidate && !componentRetry && evidenceResult.response.status === 200)
+          setQueryCache(evidenceResult.key, evidenceResult.text);
+        datatypeEvidence = (evidence.results?.bindings ?? []).flatMap(row => {
+          const datatype = row.datatype?.value;
+          const originalDatatype = row.originalDatatype?.value;
+          const count = Number(row.ct?.value ?? "0");
+          return typeof datatype === "string" && validProjectionIri(datatype) && Number.isFinite(count) && count > 0
+            ? [{ datatype, originalDatatype: originalDatatype && validProjectionIri(originalDatatype) ? originalDatatype : undefined, count }] : [];
+        });
+      } catch (error) {
+        request.signal.throwIfAborted();
+        datatypeEvidenceUnavailable = true;
+        proxyLog("warn", "fct.datatype-evidence-unavailable", { message: describeUpstreamError(error) });
       }
-      const evidence = parseResults(evidenceResult.text);
-      if (!evidence) return fctError(`Facet datatype evidence probe returned invalid SPARQL Results JSON.\nProbe SPARQL:\n${evidenceQuery}\nRaw upstream body:\n${evidenceResult.text.slice(0, 6000)}`, 502);
-      if (!hasStatusConstraints && !isValidate && !componentRetry && evidenceResult.response.status === 200)
-        setQueryCache(evidenceResult.key, evidenceResult.text);
-      datatypeEvidence = (evidence.results?.bindings ?? []).flatMap(row => {
-        const datatype = row.datatype?.value;
-        const originalDatatype = row.originalDatatype?.value;
-        const count = Number(row.ct?.value ?? "0");
-        return typeof datatype === "string" && validProjectionIri(datatype) && Number.isFinite(count) && count > 0
-          ? [{ datatype, originalDatatype: originalDatatype && validProjectionIri(originalDatatype) ? originalDatatype : undefined, count }] : [];
-      });
     }
     const xml = fctResponseXml({
       datatypeEvidence,
@@ -1192,15 +1194,19 @@ async function handlePost(request: Request) {
       }),
       bindings, vars, elapsedMs: Date.now() - startedAt, complete, timeoutMs: compiled.timeoutMs, graphOnly, countOnly, labels,
       badgeColumns: compiled.badgeColumns,
-      sqlState: anytime ? "S1TAT" : sqlState,
+      sqlState: sqlState || (anytime && response.status !== 206 ? "S1TAT" : ""),
       sqlMessage: anytime ? virtuosoAnytimeMessage(response, text) : sqlMessage,
       execMilliseconds,
       execDbActivity,
     });
-    if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+    if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial && !datatypeEvidenceUnavailable && !countFreeFallback && !unorderedFallback) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", "X-Maestro-Cache": "MISS", ...(unorderedFallback ? { "X-Maestro-Ordering-Fallback": "true" } : {}),
-      ...(countFreeFallback ? { "X-Maestro-Count-Fallback": "unavailable" } : {}), ...incompleteHeaders } });
+      ...(countFreeFallback ? { "X-Maestro-Count-Fallback": "unavailable" } : {}), ...(datatypeEvidenceUnavailable ? { "X-Maestro-Enrichment-Unavailable": "datatype-evidence" } : {}), ...incompleteHeaders } });
   } catch (error) {
+    if (request.signal.aborted) {
+      proxyLog("debug", "fct.POST.cancelled", { stage });
+      return fctError("Query cancelled", 499, undefined, "cancelled");
+    }
     proxyLog("error", "fct.POST.failed", { stage, err: error, message: describeUpstreamError(error) });
     const message = describeUpstreamError(error, "Failed to compile or execute the FCT query as SPARQL.");
     const origin = request.signal.aborted ? "cancelled" : error instanceof UpstreamTransportError ? "upstream-transport" : "proxy";

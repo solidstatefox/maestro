@@ -52,16 +52,17 @@ test('Browse separators use centered stable hit targets and do not steal adjacen
 
 test('XState observables and live Results requests deduplicate unchanged input', () => {
   const operations = source('src/lib/app-lifecycle/operations.ts');
-  const discovery = source('src/lib/app-lifecycle/analyze-discovery.ts');
+  const discovery = source('src/lib/app-lifecycle/view-discovery.ts');
   const workspace = source('src/canvas/utils/workspace-controller.tsx');
   assert.match(operations, /snapshot\.graph\.key !== event\.key \|\| snapshot\.graph\.phase !== phase/);
-  assert.match(discovery, /!snapshot\.matches\("inactive"\)/);
-  assert.match(discovery, /snapshot\.context\.key === key/);
+  assert.match(discovery, /context\.key !== event\.key/);
+  assert.match(discovery, /RETRY: \{ target: "loading"/);
   assert.match(workspace, /const viewRenderInputKey = JSON\.stringify/);
   assert.match(workspace, /selectedView\?\.stylesheet, viewRenderInputKey, isSearching, operations\.execution\.queryPhase, perspectiveActive, viewDiscoveryLoading, committedResultsOperation,operationQueryKey,operations\.snapshot\.query\.globallyCancelled\]/);
   assert.match(workspace, /useEffect\(\(\) => \{\s*if \(operations\.controller\.getSnapshot\(\)\.query\.globallyCancelled\) return;\s*if \(!genericPerspectiveActive \|\| !selectedView\)/);
   assert.match(workspace, /resultsRequestXml, resultsQueryHasStatuses/);
   assert.match(workspace, /before\.phase !== "readyToExecute"/);
   assert.match(source("src/lib/app-lifecycle/provider-catalog.ts"), /CATALOG_EXECUTE: \{ guard: \(\{ context, event \}\) => context\.key !== event\.key/);
-  assert.match(workspace, /setAnalysisDefinitions\(previous => previous\.length \? \[\] : previous\)/);
+  assert.match(workspace, /const analysisDefinitions = useMemo\(\(\) => \[\.\.\.BUILTIN_ANALYSES/);
+  assert.doesNotMatch(workspace, /setAnalysisDefinitions\(/);
 });

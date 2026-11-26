@@ -29,7 +29,10 @@ test('fullscreen Record click-capture blocks Browse property mutation and suppor
   assert.match(fullscreen, /picked\.kind === "value" && picked\.statement\.value/);
   assert.match(fullscreen, /intent: "pivot", kind: "value"/);
   assert.doesNotMatch(fullscreen, /openRecordPropertyUri\(|navigateResultBadge\(|applyRecordAsRootValue\(/);
-  assert.match(pane, /selectedUri && \(fullscreenPane \|\| sessionIndex > 0\)/);
+  // Fullscreen and successor sessions keep a non-interactive title; blank
+  // nodes also must not be offered as stable root URI values.
+  assert.match(pane, /selectedUri && \(selectedRecordTermType === "bnode" \|\| fullscreenPane \|\| sessionIndex > 0\) \? <span/);
+  assert.match(pane, /onClick=\{\(\) => \{ if \(selectedRecordTermType !== "bnode"\) \{ clearTutorialPreview\(\); applyRecordAsRootValue\(selectedUri\); \} \}\}/);
   assert.match(pane, /if \(!fullscreenPane\) openRecordPropertyUri\(item\.property\)/);
 });
 

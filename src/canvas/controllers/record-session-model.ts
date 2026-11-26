@@ -32,6 +32,8 @@ export type RecordSessionDescriptor = {
   id: string;
   identity: RecordSessionIdentity;
   via?: RecordSessionEdge;
+  /** Actual chosen label in this session response, never a query binding. */
+  bnodeDisplayValue?: string;
 };
 
 export type RecordSessionsSnapshot = {
@@ -94,6 +96,18 @@ export class RecordSessionsController {
     this.sessions.push(next);
     this.visibleStart = Math.max(0, this.sessions.length - 3);
     return next;
+  }
+
+  /** A different response-local Record cannot keep successors belonging to
+   * the previously chosen candidate. The original pivot statement remains
+   * unchanged for structural reconstruction and highlighting. */
+  observeBlankNodeSelection(id: string, label: string): boolean {
+    const index = this.sessions.findIndex(session => session.id === id);
+    const current = this.sessions[index];
+    if (index < 1 || current?.identity.termType !== "bnode" || (current.bnodeDisplayValue ?? "") === label) return false;
+    this.disposeAfter(index);
+    this.sessions[index] = { ...current, bnodeDisplayValue: label };
+    return true;
   }
 
   registerRequest(id: string, controller: AbortController): () => void {

@@ -114,9 +114,9 @@ export function blankNodeRecordListValuesQuery(
 }
 
 /** Reuse the existing FCT path to retrieve response-local candidate blank nodes.
- * There is no cross-request identity without a URI anchor; always require
- * explicit candidate selection, even if a page currently contains one. */
-export function unanchoredBlankNodeRecordQuery(sourceXml: string, limit: number): string {
+ * The Record view automatically chooses a presentation within the bounded
+ * reconstruction; the response-local labels are not cross-request identities. */
+export function unanchoredBlankNodeRecordQuery(sourceXml: string, limit: number, offset?: number): string {
   const doc = new DOMParser().parseFromString(snapshotFctQueryXml(sourceXml, "data"), "application/xml");
   if (doc.querySelector("parsererror")) throw new Error("Invalid Results FCT XML.");
   const view = Array.from(doc.getElementsByTagName("*")).find(node => node.localName === "view");
@@ -128,9 +128,8 @@ export function unanchoredBlankNodeRecordQuery(sourceXml: string, limit: number)
     ? Math.min(limit, pageLimit) : limit;
   view.setAttribute("type", FCT_VIEW_TYPES.LIST_VALUES);
   view.setAttribute("limit", String(boundedLimit));
+  if (offset !== undefined) view.setAttribute("offset", String(Math.max(0, Math.floor(offset))));
   view.removeAttribute("badges");
-  view.removeAttribute("sort");
-  doc.documentElement.setAttribute("order", "no");
   return new XMLSerializer().serializeToString(doc);
 }
 

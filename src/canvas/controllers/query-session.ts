@@ -12,7 +12,7 @@ export function useQuerySessionState() {
   // Diagnostic only. The XState query actor owns the terminal failure phase;
   // this message lets the shell offer recovery without exposing raw query XML.
   const [urlRestoreError, setUrlRestoreError] = useState("");
-  const [querySourceFormat, setQuerySourceFormat] = useState<"xml" | "sparql" | "alphabet-xml" | "alphabet-sparql" | "list-values-xml" | "list-values-sparql" | "response" | "perspectives-sparql" | "providers-sparql" | "analysis-sparql">("xml");
+  const [querySourceFormat, setQuerySourceFormat] = useState<"xml" | "sparql" | "alphabet-xml" | "alphabet-sparql" | "list-values-xml" | "list-values-sparql" | "response" | "perspectives-sparql" | "providers-sparql" | "analysis-sparql" | "analysis-context-sparql">("xml");
   const [sparqlQuery, setSparqlQuery] = useState("");
   const [sparqlExecutionAddr, setSparqlExecutionAddr] = useState("");
   const [breadcrumbTrail, setBreadcrumbTrail] = useState<

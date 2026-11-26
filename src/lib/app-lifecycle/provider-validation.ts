@@ -1,7 +1,6 @@
 "use client";
 import { assign, createActor, fromPromise, setup } from "xstate";
 import type { ShaclValidationReport } from "../shacl-validation-report";
-import { QUERY_OPERATION_WATCHDOG_MS } from "../virtuoso-anytime";
 import type { ProviderPolicyRows } from "../client-provider-validation";
 import type { ProviderPageProgram } from "../provider-page-program";
 
@@ -25,8 +24,8 @@ export const maestroProviderValidationMachine=setup({
   preparing:{invoke:{src:"prepare",input:({context})=>context.input!,onDone:[
    {guard:({event})=>event.output.data.focus.length===0,target:"empty",actions:assign(({event})=>({program:event.output,input:null}))},
    {target:"loadingPolicy",actions:assign(({event})=>({program:event.output}))},
-  ],onError:{target:"failed",actions:assign(({event})=>({error:message(event.error),input:null}))}},after:{30000:{target:"timedOut",actions:assign({error:"Provider page preparation timed out.",input:null})}}},
-  loadingPolicy:{invoke:{src:"loadPolicy",input:({context})=>context.input!,onDone:{target:"validating",actions:assign(({event})=>({policy:event.output}))},onError:{target:"failed",actions:assign(({event})=>({error:message(event.error),input:null}))}},after:{[QUERY_OPERATION_WATCHDOG_MS]:{target:"timedOut",actions:assign({error:"Provider policy retrieval exceeded the local liveness watchdog.",input:null})}}},
+  ],onError:{target:"failed",actions:assign(({event})=>({error:message(event.error),input:null}))}}},
+  loadingPolicy:{invoke:{src:"loadPolicy",input:({context})=>context.input!,onDone:{target:"validating",actions:assign(({event})=>({policy:event.output}))},onError:{target:"failed",actions:assign(({event})=>({error:message(event.error),input:null}))}}},
   validating:{invoke:{src:"validateData",input:({context})=>({run:context.input!,program:context.program!,policy:context.policy}),onDone:[
    {guard:({event})=>event.output.complete&&event.output.conforms,target:"ready",actions:assign(({event})=>({report:event.output,input:null,policy:[]}))},
    {target:"invalid",actions:assign(({event})=>({report:event.output,input:null,policy:[]}))},

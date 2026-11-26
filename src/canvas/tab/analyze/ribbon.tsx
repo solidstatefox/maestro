@@ -6,12 +6,10 @@ import { OVERVIEW_PERSPECTIVE_URI } from "@/lib/overview-metrics";
 type AnalysisDefinition = { uri: string; label: string; icon: string };
 // Only built-in Maestro Analyze resources live before the separator.
 // Every other discovered provider is external, irrespective of URI or label.
-const NATIVE_ANALYZE_URIS = new Set([
-  "gttp://ggg.maestro.ecosys/analyze/table",
-  "gttp://ggg.maestro.ecosys/analyze/compare-table",
-]);
+import { BUILTIN_ANALYSES, BUILTIN_ANALYSIS_URIS as NATIVE_ANALYZE_URIS, COMPARE_TABLE_URI } from "@/lib/builtin-analyses";
 export interface AnalyzeRibbonProps {
   analysisDefinitions: AnalysisDefinition[];
+  discoveryPhase?: string; discoveryError?: string; discoveryWaiting?: string; onRetryDiscovery?: () => void;
   selectedAnalysisUri: string;
   analyzeHistogram: boolean;
   isCompareAnalysis: boolean;
@@ -20,14 +18,14 @@ export interface AnalyzeRibbonProps {
   onSelectAnalysis: (uri: string) => void;
   onSelectHistogram: (uri: string) => void;
 }
-export function AnalyzeRibbon({ analysisDefinitions, selectedAnalysisUri, analyzeHistogram, isCompareAnalysis, firstBreadcrumbLabel, firstResultTitle, onSelectAnalysis, onSelectHistogram }: AnalyzeRibbonProps) {
+export function AnalyzeRibbon({ analysisDefinitions, selectedAnalysisUri, analyzeHistogram, isCompareAnalysis, firstBreadcrumbLabel, firstResultTitle, onSelectAnalysis, onSelectHistogram, discoveryPhase, discoveryError, discoveryWaiting, onRetryDiscovery }: AnalyzeRibbonProps) {
   return <div className="flex min-h-[78px] flex-wrap items-center gap-3 bg-background px-4 py-2" role="toolbar" aria-label="Analyze presentations">
           <button type="button" aria-pressed={selectedAnalysisUri===OVERVIEW_PERSPECTIVE_URI && !analyzeHistogram}
             onClick={()=>onSelectAnalysis(OVERVIEW_PERSPECTIVE_URI)}
             className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${selectedAnalysisUri===OVERVIEW_PERSPECTIVE_URI && !analyzeHistogram ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
             <ChartNoAxesCombined className="size-7" strokeWidth={1} aria-hidden="true"/>Overview
           </button>
-          {analysisDefinitions.filter((definition) => NATIVE_ANALYZE_URIS.has(definition.uri)).map((definition) => {
+          {BUILTIN_ANALYSES.map((definition) => {
             const active = selectedAnalysisUri === definition.uri && !analyzeHistogram;
             const Icon = definition.icon === "table-properties" ? TableProperties : definition.icon === "chart-column" ? ChartColumn : definition.icon === "chart-pie" ? ChartPie : Table2;
             return <Tooltip key={definition.uri} disableHoverablePopup={false}>
@@ -41,14 +39,14 @@ export function AnalyzeRibbon({ analysisDefinitions, selectedAnalysisUri, analyz
                   <table className="w-full border-collapse text-[10px]"><thead><tr><th className="border p-1 text-left">Result</th><th className="border p-1 text-left">{definition.icon === "table-properties" ? "Value A" : (firstBreadcrumbLabel || "Property")}</th><th className="border p-1 text-left">{definition.icon === "table-properties" ? "Value B" : "Property 2"}</th></tr></thead><tbody>
                   <tr><td className="border p-1">{firstResultTitle ?? "Resource"}</td><td className="border p-1">{definition.icon === "table-properties" ? "✓" : "Value"}</td><td className="border p-1">—</td></tr></tbody></table>
                 </div>}
-                <p className="mt-2 text-xs text-muted-foreground">Choose this SHACL-discovered analysis.</p>
+                <p className="mt-2 text-xs text-muted-foreground">Choose this built-in analysis.</p>
               </TooltipContent>
             </Tooltip>;
           })}
-          {analysisDefinitions.some((definition) => definition.uri.includes("compare-table")) && (
+          {(
             <Tooltip>
               <TooltipTrigger render={<button type="button" aria-pressed={isCompareAnalysis && analyzeHistogram}
-                onClick={() => { const compare = analysisDefinitions.find((definition) => definition.uri.includes("compare-table")); if (compare) { onSelectHistogram(compare.uri); } }}
+                onClick={() => onSelectHistogram(COMPARE_TABLE_URI)}
                 className={`flex min-w-24 cursor-pointer flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors ${isCompareAnalysis && analyzeHistogram ? "bg-sky-100 font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
                 <ChartColumn className="size-7" strokeWidth={1} aria-hidden="true"/>Histogram
               </button>} />
@@ -73,5 +71,10 @@ export function AnalyzeRibbon({ analysisDefinitions, selectedAnalysisUri, analyz
             </Tooltip>;
           })}
 
+          {discoveryPhase && discoveryPhase !== "inactive" && (discoveryPhase !== "ready" || discoveryWaiting || discoveryError) && <div role="status" className="max-w-72 space-y-1 text-xs text-muted-foreground">
+            <div>{discoveryWaiting || (discoveryPhase === "loading" ? "Discovering Analysis providers…" : `Provider discovery: ${discoveryPhase}`)}</div>
+            {discoveryError && <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words">{discoveryError}</pre>}
+            {["failed", "partial", "timedOut", "waiting"].includes(discoveryPhase) && <button type="button" className="underline" onClick={onRetryDiscovery}>Retry discovery</button>}
+          </div>}
         </div>;
 }

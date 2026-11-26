@@ -26,12 +26,11 @@ test('upstream transport wrapper preserves cause without confusing cancellation'
  await assert.rejects(m.withUpstreamTransport(async()=>{throw cause;}),e=>e instanceof m.UpstreamTransportError && e.cause===cause);
  const c=new AbortController();c.abort();await assert.rejects(m.withUpstreamTransport(async()=>{throw cause;},c.signal),e=>e===cause);
 });
-test('personal facet queue residence is not the upstream execution deadline',()=>{
- const m=load('src/lib/personal-facet-deadline.ts',{'./maestro-query-execution-clock':{}});
- assert.equal(m.personalFacetDeadlineReason(0,60000,20000),null);
- assert.equal(m.personalFacetDeadlineReason(20000,65000,20000),null);
- assert.match(m.personalFacetDeadlineReason(50000,65000,20000),/no Anytime response received/);
- assert.match(m.personalFacetDeadlineReason(0,320000,20000),/queue/);
+test('personal facet cancellation remains owner-scoped and no transport grace timer aborts live rows',()=>{
+ const source=read('src/canvas/left/filter.tsx');
+ assert.doesNotMatch(source,/watchPersonalFacetDeadline|stopDeadline|timeoutReason/);
+ assert.match(source,/signal: controller\.signal/);
+ assert.match(source,/controller\.abort\(\)/);
 });
 test('DCAT discovery enriches only the bound Results page and never contacts candidates',async()=>{
  const calls=[];

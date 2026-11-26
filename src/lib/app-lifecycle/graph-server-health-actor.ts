@@ -40,6 +40,8 @@ const machine = setup({ types: { context: {} as Ledger, events: {} as HealthEven
       }),
     },
     QUERY_REPORTED: { actions: assign(({context,event})=>{
+      // This event represents anonymous query traffic; authenticated final outcomes use STATUS_REPLACED.
+      if(event.status===401)return {};
       const prior=context.queryEvidence[event.id]??{};
       const priorScope=Math.max(-1,...Object.values(prior).map(item=>item.scope));
       if(event.scope<priorScope)return {};
@@ -70,6 +72,8 @@ const machine = setup({ types: { context: {} as Ledger, events: {} as HealthEven
     },
     PROBE_REPORTED: {
       actions: assign(({ context, event }) => {
+        // The health probe is anonymous: its 401 is an authentication challenge, not terminal rejection.
+        if (event.status.status === 401) return {};
         if ((context.lastTransportFailure[event.status.id] ?? 0) > event.startedAt) return {};
         const current = context.statuses[event.status.id];
         if(["ok", "probe-error"].includes(event.status.state) && unresolved(context.queryEvidence,event.status.id))return {};

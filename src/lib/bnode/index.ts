@@ -21,16 +21,15 @@
  *    Only a selected term with kind "bnode" activates the XState Record gate.
  *    There is NO population preflight, extra SELECT, or ancestry projection
  *    added to normal URI/literal FCT queries.
- * 2. For a selected blank node, reuse an existing exact URI binding from the
- *    live FCT property path as an anchor when available. No URI is guessed
- *    from badges, labels, or sample projections.
- * 3. Recompile the same FCT path as a list-values query. The SPARQL Record
- *    builder binds the blank-node focus within ONE SPARQL response and gathers
- *    outgoing Properties/incoming Roles in that same response; bnode labels
- *    never cross request boundaries as purported stable identifiers.
- * 4. If the path is not URI-anchored, use its existing Results scope/page as
- *    a set of candidates and require explicit user choice. Never silently
- *    select a first match or claim cross-request identity.
+ * 2. Use a known immediate URI parent when available from the live FCT path
+ *    or the selected original Result row. Never treat a distant ancestor,
+ *    a later enrichment response, or a blank-node label as that parent.
+ * 3. Recompile the FCT path as a bounded seed window. The inverse focus edge
+ *    identifies actual immediate parents without expanding sibling groups.
+ *    Outgoing Properties and incoming Roles share the same response identity.
+ * 4. Restore the original automatic Record presentation: prefer a matching
+ *    label, otherwise open the first reconstructed node. This is not proof
+ *    of cross-request identity. Show only same-response sibling tabs.
  * 5. XState guards begin, candidate receipt, and selection; query identity,
  *    cancellation, and Record session isolation use the existing workflows.
  *
@@ -60,8 +59,8 @@
  * reproducible *selection*, not necessarily a globally unique b-node ID.
  * Maestro groups candidate nodes returned in ONE response and does not
  * claim that their local labels survive later queries. Unanchored Results
- * paths retain the original page, but candidate choice is explicitly needed
- * even if that page returns only one blank node. No URI or label is invented.
+ * paths retain the original page. The automatic choice is best-effort; the
+ * Record header identifies the actual returned node. No URI is invented.
  *
  * DISTINCT FROM RDF SOURCE EXPANSION
  * ----------------------------------
@@ -85,7 +84,65 @@ export type RecordValueTerm = {
   datatype?: string;
   lang?: string;
 };
-export type BlankNodeRecord = { id: string; rows: RecordValueTerm[]; xml: string };
+export type BlankNodeRecord = { id: string; rows: RecordValueTerm[]; parents: string[]; candidate: boolean };
+/** Parent keys are meaningful only within this exact response. Graph-scoped
+ * edges also carry the graph IRI. Never merge distinct parent groups. */
+// Response arrays are immutable after parsing. Weak ownership permits collection
+// when the Record session releases its response; no durable bnode cache.
+const EMPTY_BNODE_INDICES: number[] = [];
+const responseIndexes = new WeakMap<readonly BlankNodeRecord[], { candidates: number[]; parents: Map<string, number[]> }>();
+function blankNodeResponseIndex(records: readonly BlankNodeRecord[]) {
+  const existing = responseIndexes.get(records);
+  if (existing) return existing;
+  const candidates: number[] = [], parents = new Map<string, number[]>();
+  records.forEach((record, index) => {
+    if (record.candidate) candidates.push(index);
+    for (const parent of record.parents) {
+      let indices = parents.get(parent);
+      if (!indices) { indices = []; parents.set(parent, indices); }
+      indices.push(index);
+    }
+  });
+  const result = { candidates, parents };
+  responseIndexes.set(records, result);
+  return result;
+}
+export function blankNodeCandidateIndices(records: readonly BlankNodeRecord[]): number[] {
+  return blankNodeResponseIndex(records).candidates;
+}
+export function blankNodeSiblingIndices(records: readonly BlankNodeRecord[], parent: string): number[] {
+  return parent ? blankNodeResponseIndex(records).parents.get(parent) ?? EMPTY_BNODE_INDICES : EMPTY_BNODE_INDICES;
+}
+/** Restore the original automatic Record selection. A label comparison is
+ * a presentation preference, never proof of identity across responses. Only
+ * membership from this exact response determines the sibling tab population.
+ * Do not include unrelated reconstructed nodes as siblings. */
+export function initialBlankNodeFamily(records: readonly BlankNodeRecord[], requestedLabel: string): {
+  records: BlankNodeRecord[]; index: number;
+} {
+  const label = blankNodeDisplayLabel(requestedLabel);
+  const seed = records.find(record => record.candidate && record.id === label) ?? records.find(record => record.candidate);
+  if (!seed) return { records: [], index: -1 };
+  const parents = new Set(seed.parents);
+  const family = records.filter(record => record === seed || record.parents.some(parent => parents.has(parent)));
+  return { records: family, index: family.indexOf(seed) };
+}
+/** Only a URI parent may be carried into a later request. A nonportable
+ * parent causes a fresh structural reconstruction and explicit reselection. */
+export type BlankNodeExpansion = ({ kind: "uri"; parent: string; graph?: string } | { kind: "reconstruct" }) & { page?: number };
+export function blankNodeExpansionForParent(key: string): BlankNodeExpansion {
+  const [kind, parent, , , graph] = JSON.parse(key) as string[];
+  return kind === "uri" && safeBlankNodeIri(parent) && !isBlankNodeLabel(parent)
+    ? { kind: "uri", parent, ...(graph && safeBlankNodeIri(graph) ? { graph } : {}) }
+    : { kind: "reconstruct" };
+}
+function safeBlankNodeIri(value: string): boolean {
+  return typeof value === "string" && /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|^`\\]+$/.test(value);
+}
+export function blankNodeParentLabel(key: string): string {
+  const [, value, datatype, lang, graph] = JSON.parse(key) as string[];
+  return `${value}${lang ? ` @${lang}` : datatype ? ` (${datatype})` : ""}${graph ? ` · ${graph}` : ""}`;
+}
 export type BNodeScope = {
   queryXml: string;
   graphAddress: string;
@@ -141,6 +198,24 @@ export function resolveBlankNodeAnchor(
   return parent && role ? { parent, predicate: role.property } : null;
 }
 
+/** Restore the old URI-parent shortcut only when an ORIGINAL Result row
+ * contains a typed URI on the exact inverse focus edge. Cached/enriched
+ * badge values are deliberately not inputs. A valid parent anchors a family,
+ * not a unique blank-node identity. No new Results projection is required. */
+export function blankNodeParentFromResultColumns(
+  columns: readonly { value: string; termType?: string; attributes?: Record<string, string> }[] | undefined,
+  focus: { predicate: string; direction: "forward" | "reverse"; depth: number },
+): BNodeRecordAnchor | undefined {
+  const inverse = focus.direction === "forward" ? "reverse" : "forward";
+  const parents = new Set((columns ?? []).filter(column =>
+    column.attributes?.property === focus.predicate &&
+    (column.attributes?.direction === "reverse" ? "reverse" : "forward") === inverse &&
+    column.termType === "uri" && safeBlankNodeIri(column.value) && !isBlankNodeLabel(column.value)
+  ).map(column => column.value));
+  if (parents.size !== 1) return undefined;
+  return { parent: [...parents][0], predicate: focus.predicate, direction: focus.direction, depth: focus.depth };
+}
+
 /** The persisted key needs FCT scope; the label is deliberately excluded. */
 export function blankNodeContextKey(scope: BNodeScope): string {
   return JSON.stringify([scope.queryXml, scope.graphAddress, scope.parent ?? "", scope.predicate ?? ""]);
@@ -163,7 +238,11 @@ export function createBlankNodeLabelAllocator(prefix: string): (label: string) =
 
 export type SparqlBlankNodeRecordOptions = {
   compiledSelect: string;
+  focusRelationship?: { predicate: string; direction: "forward" | "reverse" };
   graphs: readonly string[];
+  immediateParent?: string;
+  expansion?: BlankNodeExpansion;
+  windowLimit: number;
   preferredLanguage: string;
   limit: number;
 };
@@ -174,7 +253,7 @@ export type SparqlBlankNodeRecordOptions = {
  * The caller validates its FCT query/IRI inputs before invoking this builder.
  */
 export function buildBlankNodeRecordSparql({
-  compiledSelect, graphs, preferredLanguage, limit,
+  compiledSelect, focusRelationship, graphs, immediateParent, expansion, windowLimit, preferredLanguage, limit,
 }: SparqlBlankNodeRecordOptions): string {
   const compiledText = compiledSelect.trim();
   const preambleMatch = compiledText.match(/^((?:(?:DEFINE|PREFIX|BASE)\s+[^\n]*\n)*)/i);
@@ -193,23 +272,60 @@ export function buildBlankNodeRecordSparql({
   const languageFilter = preferredLanguage === "all"
     ? "true"
     : `!isLiteral(?object) || DATATYPE(?object) != <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> || LANGMATCHES(LANG(?object), ${JSON.stringify(preferredLanguage)})`;
-  return `${preamble}SELECT ?node ?direction ?predicate ?object WHERE {
-        { ${innerSelect} }
-        BIND(?c1 AS ?node)
-        FILTER(isBlank(?node))
-        OPTIONAL {
-          {
-            ${outgoingPattern}
-            FILTER(${languageFilter})
-            BIND("property" AS ?direction)
-          }
-          UNION
-          {
-            ${incomingPattern}
-            BIND("property-of" AS ?direction)
-          }
-        }
-      } LIMIT ${limit}`;
+  const edge = focusRelationship && safeBlankNodeIri(focusRelationship.predicate) ? focusRelationship : undefined;
+  if (immediateParent && (!edge || !safeBlankNodeIri(immediateParent) || isBlankNodeLabel(immediateParent))) {
+    throw new Error("Invalid immediate blank-node parent binding.");
+  }
+  if (expansion && !edge) throw new Error("Sibling exploration requires a focus relationship.");
+  if (expansion?.kind === "uri" && (!safeBlankNodeIri(expansion.parent) || isBlankNodeLabel(expansion.parent) ||
+    (expansion.graph && !safeBlankNodeIri(expansion.graph)))) throw new Error("Invalid sibling parent binding.");
+  if (!Number.isSafeInteger(windowLimit) || windowLimit < 1 ||
+      !Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid blank-node response bounds.");
+  const page = expansion?.page ?? 0;
+  if (!Number.isSafeInteger(page) || page < 0 || page > 10000 || !Number.isSafeInteger(page * windowLimit)) throw new Error("Invalid sibling window page.");
+  if (graphs.some(graph => !safeBlankNodeIri(graph))) throw new Error("Invalid blank-node graph scope.");
+  const p = edge ? `<${edge.predicate}>` : "";
+  const relation = (child: string) => edge?.direction === "forward" ? `?parent ${p} ${child} .` : `${child} ${p} ?parent .`;
+  const parentGraphs = expansion?.kind === "uri" && expansion.graph ? [expansion.graph] : graphs;
+  const scoped = (pattern: string) => parentGraphs.length
+    ? `VALUES ?parentGraph { ${parentGraphs.map(graph => `<${graph}>`).join(" ")} } GRAPH ?parentGraph { ${pattern} }`
+    : pattern;
+  const boundParent = expansion?.kind === "uri" ? expansion.parent : immediateParent;
+  const parentValues = boundParent ? `VALUES ?parent { <${boundParent}> } ` : "";
+  const seed = `{ ${innerSelect} } BIND(?c1 AS ?node) FILTER(isBlank(?node))`;
+  // Initial candidate request only identifies parents. A UNION branch keeps
+  // membership rows separate from description rows (no parent × triple join).
+  // Descriptions remain in the same response as the candidate IDs because
+  // SPARQL supplies no portable identity for a later individual-node fetch.
+  const description = `{ ${outgoingPattern} FILTER(${languageFilter}) BIND("property" AS ?direction) }
+    UNION { ${incomingPattern} BIND("property-of" AS ?direction) }`;
+  let population = seed;
+  let branches = description;
+  if (!expansion && edge) branches += ` UNION { ${parentValues}${scoped(relation("?node"))} }`;
+  if (expansion?.kind === "uri") {
+    // Do not re-run the potentially expensive original FCT population for a
+    // selected portable immediate parent. Bound the sibling window upstream.
+    population = `{ SELECT DISTINCT ?node ?parent ?parentGraph WHERE {
+      ${parentValues}${scoped(relation("?node"))} FILTER(isBlank(?node))
+    } LIMIT ${windowLimit} OFFSET ${page * windowLimit} }`;
+  } else if (expansion?.kind === "reconstruct") {
+    // A bnode parent cannot be carried across requests. Reconstruct a fresh
+    // bounded set of actual parent groups and require a new explicit choice.
+    // Limit parent/node pairs BEFORE retrieving any Properties or Roles.
+    population = `{ SELECT DISTINCT ?node ?parent ?parentGraph WHERE {
+      { SELECT DISTINCT ?parent ?parentGraph WHERE {
+        { ${innerSelect} } BIND(?c1 AS ?seed) FILTER(isBlank(?seed))
+        ${parentValues}${scoped(relation("?seed"))}
+      } LIMIT ${windowLimit} }
+      ${scoped(relation("?node"))} FILTER(isBlank(?node))
+    } LIMIT ${windowLimit} OFFSET ${page * windowLimit} }`;
+  }
+  return `${preamble}SELECT ?node ?direction ?predicate ?object ?parent ?parentGraph ?candidate WHERE {
+    ${population}
+    BIND(1 AS ?candidate)
+    OPTIONAL { ${branches} }
+  } LIMIT ${limit}`;
+
 }
 
 export type SparqlBinding = {
@@ -220,6 +336,9 @@ export type SparqlBinding = {
 };
 export type BNodeRecordBinding = {
   node?: SparqlBinding;
+  parent?: SparqlBinding;
+  parentGraph?: SparqlBinding;
+  candidate?: SparqlBinding;
   direction?: SparqlBinding;
   predicate?: SparqlBinding;
   object?: SparqlBinding;
@@ -233,34 +352,36 @@ function xmlEscape(value: string): string {
  * Keep sibling tabs and normalized XML snapshots within the SAME SELECT
  * response. Never run another query using the returned _: labels.
  */
-export function parseBlankNodeRecordBindings(
-  bindings: readonly BNodeRecordBinding[], incomplete: boolean,
-): BlankNodeRecord[] {
-  const siblings = new Map<string, { rows: RecordValueTerm[]; triples: string[] }>();
+export function parseBlankNodeRecordBindings(bindings: readonly BNodeRecordBinding[]): BlankNodeRecord[] {
+  const groups = new Map<string, { rows: Map<string, RecordValueTerm>; parents: Set<string>; candidate: boolean }>();
   for (const binding of bindings) {
-    const { node, predicate, object } = binding;
+    const { node, predicate, object, parent } = binding;
     if (!node || node.type !== "bnode" || !node.value) continue;
     const id = blankNodeDisplayLabel(node.value);
-    const group = siblings.get(id) ?? { rows: [], triples: [] };
-    if (!predicate?.value || !object) { siblings.set(id, group); continue; }
-    const direction: RecordValueTerm["direction"] = binding.direction?.value === "property-of" ? "property-of" : "property";
-    const termType: RdfTermKind = object.type === "uri" ? "uri" : object.type === "bnode" ? "bnode" : "literal";
+    let group = groups.get(id);
+    if (!group) { group = { rows: new Map(), parents: new Set(), candidate: false }; groups.set(id, group); }
+    if (binding.candidate?.value === "1") group.candidate = true;
+    if (parent) group.parents.add(JSON.stringify([rdfBindingKind(parent.type), parent.type === "bnode" ? blankNodeDisplayLabel(parent.value) : parent.value, parent.datatype ?? "", parent["xml:lang"] ?? "", binding.parentGraph?.value ?? ""]));
+    if (!predicate?.value || !object) continue;
+    const direction = binding.direction?.value === "property-of" ? "property-of" : "property";
+    const termType = rdfBindingKind(object.type);
     const value = termType === "bnode" ? blankNodeDisplayLabel(object.value) : object.value;
-    group.rows.push({ property: predicate.value, value, direction, termType,
-      ...(object.datatype ? { datatype: object.datatype } : {}),
-      ...(object["xml:lang"] ? { lang: object["xml:lang"] } : {}) });
-    const attrs = ` termType="${termType}"${object.datatype ? ` datatype="${xmlEscape(object.datatype)}"` : ""}${object["xml:lang"] ? ` xml:lang="${xmlEscape(object["xml:lang"])}"` : ""}`;
-    group.triples.push(`<fct:row direction="${direction}"><fct:column termType="bnode">${xmlEscape(id)}</fct:column><fct:column termType="uri">${xmlEscape(predicate.value)}</fct:column><fct:column${attrs}>${xmlEscape(value)}</fct:column></fct:row>`);
-    siblings.set(id, group);
+    const key = JSON.stringify([direction, predicate.value, termType, value, object.datatype ?? "", object["xml:lang"] ?? ""]);
+    if (!group.rows.has(key)) group.rows.set(key, { property: predicate.value, value, direction, termType,
+      ...(object.datatype ? { datatype: object.datatype } : {}), ...(object["xml:lang"] ? { lang: object["xml:lang"] } : {}) });
   }
+  return Array.from(groups, ([id, group]) => ({ id, parents: [...group.parents], candidate: group.candidate, rows: [...group.rows.values()] }));
+}
+
+/** Serialize only the Record explicitly chosen from this exact response. */
+export function materializeBlankNodeRecord(record: BlankNodeRecord, incomplete: boolean): string {
   const ns = "http://openlinksw.com/services/facets/1.0/";
-  return Array.from(siblings, ([id, group]) => ({
-    id,
-    rows: [...new Map(group.rows.map((row) => [
-      [row.direction, row.property, row.value, row.termType, row.datatype ?? "", row.lang ?? ""].join("\u0000"), row,
-    ])).values()],
-    xml: `<fct:facets xmlns:fct="${ns}"><fct:complete>${incomplete ? "no" : "yes"}</fct:complete><fct:result type="describe">${group.triples.join("")}</fct:result></fct:facets>`,
-  }));
+  const subject = xmlEscape(record.id);
+  const triples = record.rows.map(row => {
+    const attrs = ` termType="${row.termType}"${row.datatype ? ` datatype="${xmlEscape(row.datatype)}"` : ""}${row.lang ? ` xml:lang="${xmlEscape(row.lang)}"` : ""}`;
+    return `<fct:row direction="${row.direction}"><fct:column termType="bnode">${subject}</fct:column><fct:column termType="uri">${xmlEscape(row.property)}</fct:column><fct:column${attrs}>${xmlEscape(row.value)}</fct:column></fct:row>`;
+  });
+  return `<fct:facets xmlns:fct="${ns}"><fct:complete>${incomplete ? "no" : "yes"}</fct:complete><fct:result type="describe">${triples.join("")}</fct:result></fct:facets>`;
 }
 
 

@@ -200,12 +200,13 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle,stora
       if(width>0 && height>0 && original.width>0 && [x,y,width,height].every(Number.isFinite)) {
         const pad=8;
         const cx=original.x+original.width/2, cy=original.y+original.height/2;
-        const radius=Math.max(Math.abs(x-cx),Math.abs(x+width-cx),Math.abs(y-cy),Math.abs(y+height-cy))+pad;
-        svg.setAttribute("viewBox",`${cx-radius} ${cy-radius} ${2*radius} ${2*radius}`);
+        const halfWidth=Math.max(Math.abs(x-cx),Math.abs(x+width-cx))+pad;
+        const halfHeight=Math.max(Math.abs(y-cy),Math.abs(y+height-cy))+pad;
+        svg.setAttribute("viewBox",`${cx-halfWidth} ${cy-halfHeight} ${2*halfWidth} ${2*halfHeight}`);
         svg.removeAttribute("width"); svg.removeAttribute("height");
         svg.setAttribute("preserveAspectRatio","xMidYMid meet");
-        svg.style.width="100%"; svg.style.height="auto"; svg.style.aspectRatio="1 / 1";
-        setNaturalWidth(420*(2*radius)/original.width);
+        svg.style.width="100%"; svg.style.height="auto"; svg.style.aspectRatio=`${2*halfWidth} / ${2*halfHeight}`;
+        setNaturalWidth(420*(2*halfWidth)/original.width);
       }
     } catch { /* Non-SVG or unmeasurable provider output retains its native size. */ }
   },[result.key,result.html,result.error,labelStyle,dimensionStorageReady]);

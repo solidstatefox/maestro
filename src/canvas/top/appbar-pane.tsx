@@ -1,6 +1,7 @@
 "use client";
 import { MaestroSelect } from "@/components/ui/maestro-select";
 import { currentBootstrapButtons, emptyBootstrapButtons, subscribeBootstrapButtons } from "@/lib/client-auth-bootstrap";
+import { createBookmarkMetadataController, EDIT_BOOKMARK_REQUEST, BOOKMARK_METADATA_UPDATED } from "@/lib/app-lifecycle/bookmark-metadata";
 import { clientQueryFavorites } from "@/lib/client-query-favorites";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -454,6 +455,28 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     pulsingGreen:"bg-emerald-500 animate-pulse motion-reduce:animate-none",
     pulsingAmber:"bg-amber-500 animate-pulse motion-reduce:animate-none"}[workspace.accessCapabilities.userSignal];
   const personalAuthBadgeLabel = workspace.accessCapabilities.userSignalLabel;
+  const [metadataController]=useState(createBookmarkMetadataController);
+  const metadataSnapshot=useSyncExternalStore(metadataController.subscribe,metadataController.getSnapshot,metadataController.getSnapshot);
+  const editingMetadata=!metadataSnapshot.matches("closed");
+  const metadataBusy=metadataSnapshot.matches("reading")||metadataSnapshot.matches("saving");
+  const metadataEditable=metadataSnapshot.matches("editing");
+  const editMetadata=metadataSnapshot.context.metadata;
+  const dialogBusy=bookmarkSaving||metadataBusy;
+  useEffect(()=>{metadataController.start();return()=>metadataController.stop();},[metadataController]);
+  useEffect(()=>{
+    const open=(event:Event)=>{
+      const id=(event as CustomEvent<{id:string}>).detail?.id;
+      if(id&&workspace.accessCapabilities.canMutatePersonalStore&&!bookmarkDialogOpen&&!bookmarkOpening&&!queryExecutionCancelled)metadataController.send({type:"OPEN",id});
+    };
+    window.addEventListener(EDIT_BOOKMARK_REQUEST,open);return()=>window.removeEventListener(EDIT_BOOKMARK_REQUEST,open);
+  },[metadataController,workspace.accessCapabilities.canMutatePersonalStore,bookmarkDialogOpen,bookmarkOpening,queryExecutionCancelled]);
+  useEffect(()=>{metadataController.send({type:"CLOSE"});},[metadataController,authSession,workspace.accessCapabilities.canMutatePersonalStore,queryExecutionCancelled]);
+  useEffect(()=>{
+    if(!metadataSnapshot.matches("updated"))return;
+    window.dispatchEvent(new CustomEvent(BOOKMARK_METADATA_UPDATED,{detail:{id:metadataSnapshot.context.id}}));
+    toast.add({title:"Bookmark updated",type:"success"});metadataController.send({type:"CLOSE"});
+  },[metadataSnapshot,metadataController]);
+  const closeBookmarkDialog=()=>{if(dialogBusy)return;if(editingMetadata)metadataController.send({type:"CLOSE"});else setBookmarkDialogOpen(false);};
   const showCancel = !queryExecutionCancelled && (pendingQueryCount > 0 || queryActivityPending);
   const liveServer = (queryTree.attributes.addr ?? "").split("@").slice(1).join("@");
   const activeGraphServer = fctEndpoints.find(endpoint => liveServer &&
@@ -666,19 +689,19 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   <DropdownMenuItem disabled={!workspace.accessCapabilities.canUsePersonalStore} onSelect={() => {
                     workspace.navigateWorkspaceTab("view"); setCentralTab("results");
                   }}>View{workspaceTab === "view" ? " ✓" : ""}{viewBadge}</DropdownMenuItem>
-                  <DropdownMenuItem disabled={!workspace.accessCapabilities.canUsePersonalStore} onSelect={() => { workspace.navigateWorkspaceTab("analyze"); setCentralTab("results"); }}>Analyze{workspaceTab === "analyze" ? " ✓" : ""}</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => { workspace.navigateWorkspaceTab("analyze"); setCentralTab("results"); }}>Analyze{workspaceTab === "analyze" ? " ✓" : ""}</DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem disabled>Publish (coming soon)</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            </div> : <Tabs value={workspaceTab} onValueChange={(tab) => { if (tab === "browse" || ((tab === "view" || tab === "analyze") && workspace.accessCapabilities.canUsePersonalStore)) { workspace.navigateWorkspaceTab(tab); if (tab !== "browse") setCentralTab("results");
+            </div> : <Tabs value={workspaceTab} onValueChange={(tab) => { if (tab === "browse" || tab === "analyze" || (tab === "view" && workspace.accessCapabilities.canUsePersonalStore)) { workspace.navigateWorkspaceTab(tab); if (tab !== "browse") setCentralTab("results");
                } }} className="shrink-0" aria-label="Maestro ribbon">
               <TabsList aria-label="Maestro ribbon tabs" className="cursor-default">
                 <TabsTrigger value="browse" className="cursor-pointer">Browse</TabsTrigger>
                 <ViewDiagnosticsHover enabled={workspace.accessCapabilities.canUsePersonalStore}>
                   <TabsTrigger value="view" disabled={!workspace.accessCapabilities.canUsePersonalStore} className={workspace.accessCapabilities.canUsePersonalStore ? "cursor-pointer" : "cursor-default"}>View{viewBadge}</TabsTrigger>
                 </ViewDiagnosticsHover>
-                <TabsTrigger value="analyze" disabled={!workspace.accessCapabilities.canUsePersonalStore} className={workspace.accessCapabilities.canUsePersonalStore ? "cursor-pointer" : "cursor-default"}>Analyze</TabsTrigger>
+                <TabsTrigger value="analyze" className="cursor-pointer">Analyze</TabsTrigger>
                 <Tooltip><TooltipTrigger render={<TabsTrigger value="publish" disabled className="cursor-default">Publish</TabsTrigger>} /><TooltipContent>Coming soon</TooltipContent></Tooltip>
               </TabsList>
             </Tabs>}
@@ -695,7 +718,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
               type="button" variant="outline" size="icon"
               aria-pressed={isQueryBookmarked}
               id="maestro-bookmark-button"
-              disabled={bookmarkOpening}
+              disabled={bookmarkOpening || editingMetadata || bookmarkDialogOpen}
               aria-label={bookmarkOpening ? "Opening bookmark dialog" : isQueryBookmarked ? "Remove this query bookmark" : "Bookmark this query"}
               className={`text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:text-amber-500 ${bookmarkBounce && policyBookmarkVisible && !isQueryBookmarked ? "animate-bounce !border-amber-400 text-amber-500" : ""}`}
               onClick={async () => {
@@ -784,17 +807,18 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
         )}
         </div>
         )}
-        <Dialog open={workspace.accessCapabilities.canUsePersonalStore && bookmarkDialogOpen} onOpenChange={(open) => { if (!bookmarkSaving) setBookmarkDialogOpen(open); }}>
+        <Dialog open={workspace.accessCapabilities.canUsePersonalStore && (bookmarkDialogOpen || editingMetadata)} onOpenChange={(open) => { if (!open) closeBookmarkDialog(); }}>
             <DialogContent className="max-w-lg p-5" showCloseButton={false}>
               <div className="mb-4 flex items-start justify-between gap-4">
                 <DialogHeader>
-                  <DialogTitle id="maestro-bookmark-dialog-title">Edit History bookmark</DialogTitle>
-                  <DialogDescription>Edit the title, description, and optional tags for this History item.</DialogDescription>
+                  <DialogTitle id="maestro-bookmark-dialog-title">{editingMetadata ? "Edit Bookmark" : "Edit History bookmark"}</DialogTitle>
+                  <DialogDescription>{editingMetadata ? "Update the saved Bookmark metadata without changing its query." : "Edit the title, description, and optional tags for this History item."}</DialogDescription>
                 </DialogHeader>
-                <Button type="button" variant="ghost" size="icon" aria-label="Close bookmark dialog" disabled={bookmarkSaving} onClick={() => setBookmarkDialogOpen(false)}><X className="size-4" /></Button>
+                <Button type="button" variant="ghost" size="icon" aria-label="Close bookmark dialog" disabled={dialogBusy} onClick={closeBookmarkDialog}><X className="size-4" /></Button>
               </div>
               <form className="flex flex-col gap-4" onSubmit={async (event) => {
                 event.preventDefault();
+                if(editingMetadata){metadataController.send({type:"SAVE"});return;}
                 setBookmarkSaving(true);
                 try {
                   // Serialize against pending query visits so a save never races
@@ -838,30 +862,34 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   setBookmarkSaving(false);
                 }
               }}>
+                {editingMetadata && metadataSnapshot.context.error && <ErrorDetails error={metadataSnapshot.context.error}/>}
+                {metadataBusy && <ElapsedStatus label={metadataSnapshot.matches("reading") ? "Loading Bookmark metadata" : "Updating Bookmark"} category="other"/>}
+                <fieldset disabled={editingMetadata ? !metadataEditable : bookmarkSaving} className="flex flex-col gap-4">
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="maestro-bookmark-title">Title</Label>
-                  <input id="maestro-bookmark-title" ref={bookmarkTitleInputRef} value={bookmarkTitle} onChange={(event) => setBookmarkTitle(event.target.value)} maxLength={300} required className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                  <input id="maestro-bookmark-title" ref={bookmarkTitleInputRef} value={editingMetadata?editMetadata.title:bookmarkTitle} onChange={(event) => editingMetadata?metadataController.send({type:"CHANGE",metadata:{...editMetadata,title:event.target.value}}):setBookmarkTitle(event.target.value)} maxLength={300} required className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="maestro-bookmark-description">Description</Label>
-                  <textarea id="maestro-bookmark-description" value={bookmarkDescription} onChange={(event) => setBookmarkDescription(event.target.value)} maxLength={5000} rows={3} placeholder="Describe what this query finds or why you saved it" className="min-h-20 rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                  <textarea id="maestro-bookmark-description" value={editingMetadata?editMetadata.description:bookmarkDescription} onChange={(event) => editingMetadata?metadataController.send({type:"CHANGE",metadata:{...editMetadata,description:event.target.value}}):setBookmarkDescription(event.target.value)} maxLength={5000} rows={3} placeholder="Describe what this query finds or why you saved it" className="min-h-20 rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="maestro-bookmark-tags">Tags</Label>
-                  <input id="maestro-bookmark-tags" value={bookmarkTags} onChange={(event) => setBookmarkTags(event.target.value)} maxLength={2000} placeholder="linked data, publications, people" className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                  <input id="maestro-bookmark-tags" value={editingMetadata?editMetadata.tags.join(","):bookmarkTags} onChange={(event) => editingMetadata?metadataController.send({type:"CHANGE",metadata:{...editMetadata,tags:event.target.value.split(/[,;\n]/u)}}):setBookmarkTags(event.target.value)} maxLength={2000} placeholder="linked data, publications, people" className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                   <p className="text-xs text-muted-foreground">Separate tags with commas, semicolons, or new lines.</p>
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="maestro-bookmark-tag-vocabulary">Tag vocabulary</Label>
-                  <MaestroSelect id="maestro-bookmark-tag-vocabulary" value={bookmarkTagVocabulary} onChange={(event) => setBookmarkTagVocabulary(event.target.value as "skos" | "dcterms" | "scot")} className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <MaestroSelect id="maestro-bookmark-tag-vocabulary" value={editingMetadata?editMetadata.tagVocabulary:bookmarkTagVocabulary} onChange={(event) => editingMetadata?metadataController.send({type:"CHANGE",metadata:{...editMetadata,tagVocabulary:event.target.value as "skos"|"dcterms"|"scot"}}):setBookmarkTagVocabulary(event.target.value as "skos" | "dcterms" | "scot")} className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     <option value="skos">SKOS concept — skos:Concept / skos:prefLabel</option>
                     <option value="dcterms">Dublin Core subject — dcterms:subject literal</option>
                     <option value="scot">SCOT tag — scot:Tag / scot:has_tag</option>
                   </MaestroSelect>
                 </div>
+                </fieldset>
                 <div className="flex justify-end gap-2 pt-1">
-                  <Button type="button" variant="outline" disabled={bookmarkSaving} onClick={() => setBookmarkDialogOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={bookmarkSaving}>{bookmarkSaving ? <ElapsedStatus label="Updating…" category="other" /> : "Update bookmark"}</Button>
+                  <Button type="button" variant="outline" disabled={dialogBusy} onClick={closeBookmarkDialog}>Cancel</Button>
+                  <Button type="submit" disabled={dialogBusy || (editingMetadata && !metadataEditable)}>{dialogBusy ? <ElapsedStatus label="Updating…" category="other" /> : editingMetadata ? "Update" : "Update bookmark"}</Button>
                 </div>
               </form>
             </DialogContent>

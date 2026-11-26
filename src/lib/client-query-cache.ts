@@ -148,7 +148,9 @@ export function computeClientCacheKey(url: string, init?: RequestInit): string |
     // The FCT route now emits authoritative page labels for text and list
     // results. A new cache namespace avoids replaying pre-fix URI-only cards
     // from IndexedDB after logout/login (without clearing unrelated user data).
-    const responseRevision = url.includes("/proxy/api/fct") ? "fct-labels-v4::anytime-v1::" : "public-v4::anytime-v1::";
+    // The counted LIST projection also changes FCT response semantics; do not
+    // replay pre-fix grouped rows under the same XML cache key.
+    const responseRevision = url.includes("/proxy/api/fct") ? "fct-labels-v4::anytime-v1::counted-population-v1::" : "public-v4::anytime-v1::";
     return `POST::${responseRevision}${url}::lang=${language}::timeout=${headers.get("x-maestro-query-timeout-ms") ?? ""}::${bodyStr}`;
   }
   return null;

@@ -967,7 +967,8 @@ async function handlePost(request: Request) {
     const responseCacheKey = queryCacheKey(
       // A Graphs response from an older query compiler must never survive
       // into the current grouped, rank-ordered Graphs pagination format.
-      compiled.graphOnly ? "fct-response-graphs-v2" : "fct-response-page-labels-v2-anytime-v1",
+      // Counted LIST also changes its projection without changing FCT XML.
+      compiled.graphOnly ? "fct-response-graphs-v2" : "fct-response-page-labels-v2-anytime-v1-counted-population-v1",
       endpoint.url,
       JSON.stringify([queryXml, view ?? null, graphOnly, countOnly, valueColumns, labelAcceptLanguage ?? ""]),
     );

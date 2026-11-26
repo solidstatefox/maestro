@@ -1938,32 +1938,65 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
         throw new Error("Invalid countAncestor: expected an ancestor of the counted LIST view.");
       subjectTerm = path[path.length - 1 - distance];
     }
-    query = buildStatusSelect({
-      directives,
-      distinct: !isCountSorted,
-      projections: [
-        { expression: termExpr(target), as: variable("c1") },
-        ...(isCountSorted ? [{ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(subjectTerm) }, as: variable("ct") } as SparqlProjection] : []),
-      ],
-      where: valueLanguageWhere,
-      ...(isCountSorted
-        ? {
-            groupBy: [termExpr(target)],
-            ...(shouldOrder
-              ? {
-                  orderBy: [
-                    { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(subjectTerm) }, direction: "DESC" as const },
-                    { expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const },
-                  ],
-                }
+    const valueProjection: SparqlProjection = { expression: termExpr(target), as: variable("c1") };
+    if (view === FCT_VIEW_TYPES.LIST && isCountSorted) {
+      // Start from the same DISTINCT value projection and scoped population as
+      // Results, adding only the counted membership term. Deduplicate pairs
+      // before aggregation; never alias a grouped RDF term in the aggregate
+      // SELECT (the reported Virtuoso response repeated a single label).
+      // The counted term is the existing focus/ancestor of the facet path.
+      const value = variable("c1");
+      const count = variable("ct");
+      const population: SparqlSelectQuery = {
+        kind: "select", directives: [], distinct: true,
+        projections: [valueProjection, { expression: termExpr(subjectTerm) }],
+        // Federation and Status constraints belong INSIDE the population.
+        where: statusScope(valueLanguageWhere),
+      };
+      query = buildSelectQuery({
+        directives,
+        projections: [
+          { expression: termExpr(value) },
+          { expression: { kind: "aggregate", name: "COUNT", distinct: false,
+            expression: termExpr({ kind: "raw-term", value: "*" }) }, as: count },
+        ],
+        where: [{ kind: "subquery", query: population }],
+        groupBy: [termExpr(value)],
+        // The root Order results switch still controls sorting, never counting.
+        orderBy: shouldOrder ? [
+          { expression: termExpr(count), direction: "DESC" },
+          { expression: { kind: "function", name: "STR", args: [termExpr(value)] }, direction: "ASC" },
+        ] : undefined,
+        limit, offset,
+      });
+    } else {
+      query = buildStatusSelect({
+        directives,
+        distinct: !isCountSorted,
+        projections: [
+          valueProjection,
+          ...(isCountSorted ? [{ expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(subjectTerm) }, as: variable("ct") } as SparqlProjection] : []),
+        ],
+        where: valueLanguageWhere,
+        ...(isCountSorted
+          ? {
+              groupBy: [termExpr(target)],
+              ...(shouldOrder
+                ? {
+                    orderBy: [
+                      { expression: { kind: "aggregate", name: "COUNT", distinct: true, expression: termExpr(subjectTerm) }, direction: "DESC" as const },
+                      { expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" as const },
+                    ],
+                  }
+                : {}),
+            }
+          : shouldOrder
+              ? { orderBy: [entityRankOrder(target)] }
               : {}),
-          }
-        : shouldOrder
-            ? { orderBy: [entityRankOrder(target)] }
-            : {}),
-      limit,
-      offset,
-    });
+        limit,
+        offset,
+      });
+    }
   } else {
     query = buildStatusSelect({ directives, distinct: true, projections: [{ expression: termExpr(target), as: variable("c1") }], where: scopedWhere, orderBy: shouldOrder ? [{ expression: { kind: "function", name: "STR", args: [termExpr(target)] }, direction: "ASC" }] : undefined, limit, offset });
   }

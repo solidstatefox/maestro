@@ -135,8 +135,9 @@ test("CORDIS Personal and Group By share a counted LIST with the original Projec
   assert.doesNotMatch(xml,/<a\b|\bgroup=|transportedGroupTarget/);
   const {query}=compileFctXmlToSparql(xml);
   assert.match(query,/\(\?s4 AS \?c1\)/);
-  assert.match(query,/COUNT\(DISTINCT \?s1\) AS \?ct/i);
-  assert.match(query,/GROUP BY \?s4/);
+  assert.match(query,/SELECT DISTINCT \(\?s4 AS \?c1\)\s+\?s1\b/);
+  assert.match(query,/^SELECT \?c1\s+\(COUNT\(\*\) AS \?ct\)/);
+  assert.match(query,/GROUP BY \?c1/);
   assert.ok(query.includes(classificationValue));
   const groupedLive=structuredClone(tree);find(groupedLive,"a9").attributes.group="true";
   find(groupedLive,"a2").attributes.limit="30";
@@ -154,8 +155,9 @@ test("Nested focus counts the focus resource and not the root or terminal parent
   const personal=createPersonalFacetValuesQuery(tree,terminal,"forward",{limit:100,offset:0},undefined,"a8");
   const query=compileFctXmlToSparql(serializeFctQuery(personal)).query;
   assert.match(query,/\(\?s5 AS \?c1\)/);
-  assert.match(query,/COUNT\(DISTINCT \?s2\) AS \?ct/i);
-  assert.match(query,/GROUP BY \?s5/);
+  assert.match(query,/SELECT DISTINCT \(\?s5 AS \?c1\)\s+\?s2\b/);
+  assert.match(query,/^SELECT \?c1\s+\(COUNT\(\*\) AS \?ct\)/);
+  assert.match(query,/GROUP BY \?c1/);
   assert.throws(()=>compileFctXmlToSparql(serializeFctQuery(setQueryViewAttributes(personal,{countAncestor:"99"}))),/countAncestor/);
 });
 
@@ -163,8 +165,9 @@ test("LIST_COUNT still compiles its original raw-row aggregate and normal groupe
   const tree=source();
   const ordinary=createPersonalFacetValuesQuery(tree,classification,"forward",{limit:100,offset:0});
   const query=compileFctXmlToSparql(serializeFctQuery(ordinary)).query;
-  assert.match(query,/COUNT\(DISTINCT \?s1\) AS \?ct/i);
-  assert.match(query,/GROUP BY \?s2/);
+  assert.match(query,/SELECT DISTINCT \(\?s2 AS \?c1\)\s+\?s1\b/);
+  assert.match(query,/^SELECT \?c1\s+\(COUNT\(\*\) AS \?ct\)/);
+  assert.match(query,/GROUP BY \?c1/);
   const listCount=compileFctXmlToSparql(serializeFctQuery(setQueryViewAttributes(ordinary,{type:"list-count",sort:"count"}))).query;
   assert.match(listCount,/COUNT\(\*\) AS \?n/i);
   assert.doesNotMatch(listCount,/COUNT\(DISTINCT/);

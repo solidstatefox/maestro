@@ -210,6 +210,7 @@ test('URL load and Connect invoke the same restoration and graph hydration routi
       withSessionInitializationLock:(_signal,fn)=>fn(),readSessionHydration:async()=>({snapshot,bootstrapBindings}),commitSessionSnapshot:async(_session,value)=>{calls.push('commit');snapshot=value;},restoredDigestSession:()=>stored?session:null,
       ensureDigestSession:async(_input,_signal,_status,query)=>{assert.equal(query,seedQuery);calls.push('ensure');stored=true;return seedBindings;},disconnectDigestSession:()=>{},subscribeDigestSessionChanges:()=>()=>{},requestDigestPersistence:()=>{}},
     '@/lib/personal-initialization':init,
+    '@/lib/login-connection-error':moduleFrom('src/lib/login-connection-error.ts'),
     '@/lib/client-graph-seed':{preparePersonalSeed:async()=>{calls.push('prepare');return {query:seedQuery};},seedPersonalGraphs:async(_signal,plan,rows)=>{calls.push('seed');if(plan)assert.equal(rows,seedBindings);if(failed)throw Error('seed failed');return {revision:'seed1',changedGraphs:changed?['policies']:[]};}},
     '@/lib/client-auth-bootstrap':{authBootstrapSelect:()=>bootstrapQuery,hydrateAuthBootstrap:(_session,bindings)=>{assert.equal(bindings,bootstrapBindings);calls.push('hydrate');},refreshAuthBootstrap:async()=>{calls.push('bootstrap');return bootstrapBindings;}},
     '@/lib/client-kinds':{loadMaestroKinds:async()=>{calls.push('kinds');},resetMaestroKinds:()=>{},currentSessionKinds:()=>[{id:'x',pattern:'x'}],restoreSessionKinds:()=>calls.push('restore kinds')},

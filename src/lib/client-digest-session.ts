@@ -101,10 +101,10 @@ export async function ensureDigestSession(input:{username:string;graphStore:stri
       [DIGEST_SESSION_HEADER]:DIGEST_SESSION_SCHEME+encodeURIComponent(JSON.stringify(identity))},
     body:JSON.stringify({operation:"auth-probe",query:seedQuery})});
   signal.throwIfAborted();
-  if(challenge.status!==401){onHttpStatus?.(challenge.status);throw new Error(`Personal SPARQL authentication failed (HTTP ${challenge.status}).`);}
+  if(challenge.status!==401){onHttpStatus?.(challenge.status);throw new Error(`Could not obtain the personal SPARQL Digest challenge (HTTP ${challenge.status}). Check that the graph server and authentication endpoint are available.`);}
   const metadata=await challenge.json().catch(()=>null);
   const record=parseDigestSession({...metadata,...identity});
-  if(!record || record.nc<1){onHttpStatus?.(401);throw new Error("Personal SPARQL authentication failed (HTTP 401): invalid Digest challenge.");}
+  if(!record || record.nc<1){onHttpStatus?.(401);throw new Error("The personal graph server did not return a supported SPARQL Digest challenge (HTTP 401).");}
   signal.throwIfAborted();
   const endpoint=digestEndpoint(record);
   const addr=`${record.graphPrefix.replace(/\/+$/, "")}/query@${endpoint}`;
@@ -117,7 +117,9 @@ export async function ensureDigestSession(input:{username:string;graphStore:stri
   const response=await pending;
   signal.throwIfAborted();
   onHttpStatus?.(response.status);
-  if(!response.ok)throw new Error(`Personal SPARQL authentication failed (HTTP ${response.status}).`);
+  if(!response.ok)throw new Error(response.status===401 || response.status===403
+    ? `Personal SPARQL authentication was rejected (HTTP ${response.status}). Check your credentials and access permissions.`
+    : `Personal SPARQL connection failed (HTTP ${response.status}). Check graph server availability and try again.`);
   const parsed=await response.json() as {results?:{bindings?:PersonalRows};incomplete?:boolean};
   if(parsed.incomplete || !Array.isArray(parsed.results?.bindings))throw new Error("Authentication seed digest query returned invalid SPARQL Results JSON.");
   const bindings=parsed.results.bindings;

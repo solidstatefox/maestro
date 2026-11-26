@@ -12,6 +12,7 @@ import type { FormEvent } from "react";
 import { graphForPrefix, personalWriteEndpoint, type AuthType, type PersonalAuthSession } from "@/lib/personal-auth";
 import { preparePersonalSeed, seedPersonalGraphs, type SeedPlan } from "@/lib/client-graph-seed";
 import type { PersonalRows } from "@/lib/client-personal-sparql";
+import { loginConnectionMessage } from "@/lib/login-connection-error";
 import { hydratePersonalHttpOutcome } from "@/lib/personal-session-hint";
 
 /** Existing login dialog and XState user-session interfaces. */
@@ -115,7 +116,8 @@ export function createAuthenticationActions(deps: AuthenticationActionDependenci
       }catch(error){
         if(isCurrentPersonalInitialization(attempt)){
           deps.setAuthRestoreComplete(true);
-          deps.setLoginError(error instanceof Error?error.message:"Personal connection failed.");
+          const message=await loginConnectionMessage(error,attempt.signal);
+          if(isCurrentPersonalInitialization(attempt))deps.setLoginError(message);
         }
       }finally{if(isCurrentPersonalInitialization(attempt))deps.setLoginTesting(false);}
     },

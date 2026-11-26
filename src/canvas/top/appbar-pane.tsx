@@ -1145,7 +1145,6 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                           autoComplete="current-password"
                           value={loginPassword}
                           onChange={(e) => setLoginPassword(e.target.value)}
-                          placeholder="••••••••"
                           required={loginTab === "sparql-auth"}
                           className="pr-10"
                         />

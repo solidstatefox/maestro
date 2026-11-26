@@ -170,46 +170,85 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle,stora
   useLayoutEffect(()=>{
     const root=surfaceRef.current;
     if(!root || result.error)return;
-    root.querySelectorAll<SVGGElement>("[data-facet-label-style]").forEach(group=>{
-      group.style.display=group.getAttribute("data-facet-label-style")===labelStyle ? "inline" : "none";
-    });
-    const svg=root.querySelector<SVGSVGElement>("svg");
-    if(!svg)return;
-    // SVG geometry, not the outermost radius, determines occupied space.
-    const native=svg.viewBox.baseVal;
-    const original=originalViews.current.get(svg)??{x:native.x,y:native.y,width:native.width,height:native.height};
-    originalViews.current.set(svg,original);
-    try {
-      const fallback=svg.getBBox();
-      const inverse=svg.getScreenCTM()?.inverse();
-      const points: DOMPoint[]=[];
-      if(inverse) for(const element of svg.querySelectorAll<SVGGraphicsElement>("path[data-facet-value], circle, text")) {
-        const styleGroup=element.closest("[data-facet-label-style]");
-        if(element.closest("defs") || (styleGroup && styleGroup.getAttribute("data-facet-label-style")!==labelStyle)) continue;
-        const matrix=element.getScreenCTM();
-        if(!matrix || getComputedStyle(element).display==="none" || getComputedStyle(element).visibility==="hidden") continue;
-        const bounds=element.getBBox();
-        if(bounds.width<=0 || bounds.height<=0) continue;
-        const local=inverse.multiply(matrix);
-        for(const px of [bounds.x,bounds.x+bounds.width]) for(const py of [bounds.y,bounds.y+bounds.height])
-          points.push(new DOMPoint(px,py).matrixTransform(local));
+    let disposed=false, scheduled=0, warned=false;
+    const measure=()=>{
+      if(disposed || !root.isConnected)return;
+      root.querySelectorAll<SVGGElement>("[data-facet-label-style]").forEach(group=>{
+        group.style.display=group.getAttribute("data-facet-label-style")===labelStyle ? "inline" : "none";
+      });
+      const svg=root.querySelector<SVGSVGElement>("svg");
+      if(!svg || svg.getBoundingClientRect().width<=0)return;
+      const native=svg.viewBox.baseVal;
+      const original=originalViews.current.get(svg)??{x:native.x,y:native.y,width:native.width,height:native.height};
+      originalViews.current.set(svg,original);
+      try {
+        // Convert actual visible geometry to SVG user units. Neither saved
+        // frame dimensions nor the provider's original viewBox sets padding.
+        const inverse=svg.getScreenCTM()?.inverse();
+        if(!inverse)return;
+        const points: DOMPoint[]=[];
+        const elements=svg.querySelectorAll<SVGGraphicsElement>("path[data-facet-value], circle, text");
+        for(const element of elements) {
+          const styleGroup=element.closest("[data-facet-label-style]");
+          if(element.closest("defs") || (styleGroup && styleGroup.getAttribute("data-facet-label-style")!==labelStyle)) continue;
+          const style=getComputedStyle(element);
+          if(style.display==="none" || style.visibility==="hidden")continue;
+          try {
+            const matrix=element.getScreenCTM();
+            if(!matrix)continue;
+            const bounds=element.getBBox();
+            if(bounds.width<=0 || bounds.height<=0)continue;
+            const stroke=style.stroke==="none" ? 0 : Math.max(0,parseFloat(style.strokeWidth)||0)/2;
+            const local=inverse.multiply(matrix);
+            for(const px of [bounds.x-stroke,bounds.x+bounds.width+stroke]) for(const py of [bounds.y-stroke,bounds.y+bounds.height+stroke])
+              points.push(new DOMPoint(px,py).matrixTransform(local));
+          } catch { /* A temporarily unmeasurable label must not hide all sectors. */ }
+        }
+        if(!points.length && elements.length)return; // hidden or not yet laid out
+        const fallback=points.length?null:svg.getBBox();
+        const x=points.length?Math.min(...points.map(p=>p.x)):fallback!.x;
+        const y=points.length?Math.min(...points.map(p=>p.y)):fallback!.y;
+        const width=points.length?Math.max(...points.map(p=>p.x))-x:fallback!.width;
+        const height=points.length?Math.max(...points.map(p=>p.y))-y:fallback!.height;
+        if(width>0 && height>0 && [x,y,width,height].every(Number.isFinite)) {
+          const pad=8;
+          const cx=x+width/2, cy=y+height/2;
+          const halfWidth=width/2+pad, halfHeight=height/2+pad;
+          // Round out sub-pixel floating-point noise so observer callbacks
+          // converge even as the screen matrix changes during a drag.
+          const view=[cx-halfWidth,cy-halfHeight,2*halfWidth,2*halfHeight].map(v=>Math.round(v*1000)/1000).join(" ");
+          if(svg.getAttribute("viewBox")!==view)svg.setAttribute("viewBox",view);
+          if(svg.hasAttribute("width"))svg.removeAttribute("width");
+          if(svg.hasAttribute("height"))svg.removeAttribute("height");
+          if(svg.getAttribute("preserveAspectRatio")!=="xMidYMid meet")svg.setAttribute("preserveAspectRatio","xMidYMid meet");
+          svg.style.width="100%"; svg.style.height="auto"; svg.style.maxWidth="100%"; svg.style.maxHeight="none";
+          svg.style.aspectRatio=`${Math.round(2*halfWidth*1000)/1000} / ${Math.round(2*halfHeight*1000)/1000}`;
+          if(original.width>0)setNaturalWidth(Math.round(420*(2*halfWidth)/original.width));
+        }
+      } catch(error) {
+        if(!warned){warned=true;browserLog.warn("facet-presentation.bounds.unavailable",error);}
       }
-      const x=points.length?Math.min(...points.map(p=>p.x)):fallback.x;
-      const y=points.length?Math.min(...points.map(p=>p.y)):fallback.y;
-      const width=points.length?Math.max(...points.map(p=>p.x))-x:fallback.width;
-      const height=points.length?Math.max(...points.map(p=>p.y))-y:fallback.height;
-      if(width>0 && height>0 && original.width>0 && [x,y,width,height].every(Number.isFinite)) {
-        const pad=8;
-        const cx=original.x+original.width/2, cy=original.y+original.height/2;
-        const halfWidth=Math.max(Math.abs(x-cx),Math.abs(x+width-cx))+pad;
-        const halfHeight=Math.max(Math.abs(y-cy),Math.abs(y+height-cy))+pad;
-        svg.setAttribute("viewBox",`${cx-halfWidth} ${cy-halfHeight} ${2*halfWidth} ${2*halfHeight}`);
-        svg.removeAttribute("width"); svg.removeAttribute("height");
-        svg.setAttribute("preserveAspectRatio","xMidYMid meet");
-        svg.style.width="100%"; svg.style.height="auto"; svg.style.aspectRatio=`${2*halfWidth} / ${2*halfHeight}`;
-        setNaturalWidth(420*(2*halfWidth)/original.width);
-      }
-    } catch { /* Non-SVG or unmeasurable provider output retains its native size. */ }
+    };
+    const schedule=()=>{
+      if(disposed || scheduled)return;
+      scheduled=requestAnimationFrame(()=>{scheduled=0;measure();});
+    };
+    measure();
+    // React may replace the provider DOM; saved size, pane resizing, and font
+    // loading can also change geometry after the first layout effect.
+    const resizeObserver=typeof ResizeObserver!=="undefined"?new ResizeObserver(schedule):null;
+    resizeObserver?.observe(root);
+    const mutationObserver=new MutationObserver(schedule);
+    mutationObserver.observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:["viewBox","width","height"]});
+    const fonts=document.fonts;
+    fonts?.addEventListener("loadingdone",schedule);
+    void fonts?.ready.then(schedule).catch(()=>{});
+    return ()=>{
+      disposed=true;
+      if(scheduled)cancelAnimationFrame(scheduled);
+      resizeObserver?.disconnect();mutationObserver.disconnect();
+      fonts?.removeEventListener("loadingdone",schedule);
+    };
   },[result.key,result.html,result.error,labelStyle,dimensionStorageReady]);
   useEffect(()=>{
     if(!resizeActive)return;

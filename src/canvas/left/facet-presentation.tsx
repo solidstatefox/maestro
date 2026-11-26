@@ -96,7 +96,7 @@ type Item = {uri:string;label:string;count:number;selected:boolean};
 type FacetNode = {item:{uri:string;count:number;label?:string};children:FacetNode[]};
 const escapeXml = (value:string) => value.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;");
 const ALLOWED = new Set(["div","span","p","button","svg","g","path","circle","text","textpath","defs","title"]);
-const ATTRS = new Set(["class","role","aria-label","aria-checked","tabindex","viewbox","width","height","d","cx","cy","r","fill","stroke","stroke-width","x","y","font-size","font-weight","text-anchor","pointer-events","data-facet-value","id","href","startoffset","data-facet-label-style","data-facet-lineage","transform","display","overflow","type","data-facet-action"]);
+const ATTRS = new Set(["class","role","aria-label","aria-checked","tabindex","viewbox","width","height","d","cx","cy","r","fill","stroke","stroke-width","stroke-linejoin","x","y","font-size","font-weight","text-anchor","pointer-events","data-facet-value","id","href","startoffset","data-facet-label-style","data-facet-lineage","transform","display","overflow","type","data-facet-action"]);
 /** Only inert, allowlisted SVG/HTML survives provider output. Event handlers and URL attributes do not. */
 function sanitizeMarkup(raw:string):string {
   const doc = new DOMParser().parseFromString(raw,"text/html");
@@ -121,6 +121,7 @@ function sanitizeMarkup(raw:string):string {
           (name==="id" && (child.localName.toLowerCase()!=="path" || !/^maestro-sunburst-label-(?:pct-)?[a-zA-Z0-9_-]+$/.test(attr.value))) ||
           (name==="href" && (child.localName.toLowerCase()!=="textpath" || !/^#maestro-sunburst-label-(?:pct-)?[a-zA-Z0-9_-]+$/.test(attr.value))) ||
           (name==="startoffset" && (child.localName.toLowerCase()!=="textpath" || attr.value!=="50%")) ||
+          (name==="stroke-linejoin" && (child.localName.toLowerCase()!=="path" || attr.value!=="round")) ||
           (name==="pointer-events" && attr.value!=="none") || (name==="data-facet-value" && !validIri(attr.value)) ||
           (name==="d" && !/^[MmLlHhVvCcSsQqTtAaZz0-9.,+\-\sEe]+$/.test(attr.value)) ||
           (["fill","stroke"].includes(name) && !/^(?:none|currentColor|var\(--background\)|hsl\([0-9.]+ [0-9.]+% [0-9.]+%\))$/.test(attr.value))) child.removeAttribute(attr.name);

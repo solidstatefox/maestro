@@ -100,7 +100,10 @@
     <xsl:variable name="lineage" select="string-join(ancestor-or-self::node ! generate-id(.), ' ')"/>
     <xsl:variable name="inner" select="38 + ($depth - 1) * ($outer-radius - 38) div $max-depth"/>
     <xsl:variable name="outer" select="38 + $depth * ($outer-radius - 38) div $max-depth"/>
-    <xsl:variable name="last" select="$start + max((0.0001,$span - 0.006))"/>
+    <!-- Reserve at most 10% of a narrow sector for the separator; never
+         subtract a fixed gap larger than the sector itself. -->
+    <xsl:variable name="extent" select="$span - min((0.006, $span div 10))"/>
+    <xsl:variable name="last" select="$start + $extent"/>
     <xsl:variable name="large" select="if ($last - $start &gt; math:pi()) then 1 else 0"/>
     <!-- All descendants inherit their root's color family; hierarchy levels
          shift lightness, while sibling variations remain distinguishable. -->
@@ -119,16 +122,35 @@
       $stagger-direction * min(($span div 3, if ($near-parent) then 0.13 else 0.045))"/>
     <xsl:variable name="radial-mid" select="$sector-mid + $stagger"/>
     <xsl:if test="not($labels-only)">
+    <!-- Limit the separator using the narrowest chord and ring thickness.
+         Inset the stroke centerline at both radii and both angular edges;
+         round joins keep the stroke within this sector, never over a neighbor.
+         Use half the previous centered width per edge so two normal
+         neighboring sectors retain the previous total separator width. -->
+    <xsl:variable name="chord" select="2 * $inner * math:sin(min(($extent, math:pi())) div 2)"/>
+    <xsl:variable name="border-budget" select="min(((if (@selected='true') then 3 else 2.5) div 2, $chord div 4, ($outer - $inner) div 4))"/>
+    <xsl:variable name="border" select="if ($border-budget lt 0.15) then 0 else $border-budget"/>
+    <xsl:variable name="half-border" select="$border div 2"/>
+    <xsl:variable name="paint-inner" select="$inner + $half-border"/>
+    <xsl:variable name="paint-outer" select="$outer - $half-border"/>
+    <xsl:variable name="inner-inset" select="math:asin($half-border div $paint-inner)"/>
+    <xsl:variable name="outer-inset" select="math:asin($half-border div $paint-outer)"/>
+    <xsl:variable name="inner-start" select="$start + $inner-inset"/>
+    <xsl:variable name="inner-end" select="$last - $inner-inset"/>
+    <xsl:variable name="outer-start" select="$start + $outer-inset"/>
+    <xsl:variable name="outer-end" select="$last - $outer-inset"/>
+    <xsl:variable name="inner-large" select="if ($inner-end - $inner-start gt math:pi()) then 1 else 0"/>
+    <xsl:variable name="outer-large" select="if ($outer-end - $outer-start gt math:pi()) then 1 else 0"/>
     <path data-facet-value="{@uri}" data-facet-lineage="{$lineage}" role="checkbox" tabindex="0" aria-checked="{@selected}"
       aria-label="{concat(@label, ', ', @count, ' results, ', format-number(100 * $span div (2 * math:pi()),'0.#'), '% of chart')}"
       class="cursor-default transition-opacity hover:opacity-75 focus:outline-none"
       fill="{concat('hsl(',format-number($hue,'0.###'),' 70% ',format-number($lightness,'0'),'%)')}"
-      stroke="{if(@selected='true')then 'currentColor' else 'var(--background)'}"
-      stroke-width="{if(@selected='true')then '3' else '2.5'}"
-      d="{concat('M ',160+$outer*math:sin($start),' ',160-$outer*math:cos($start),
-        ' A ',$outer,' ',$outer,' 0 ',$large,' 1 ',160+$outer*math:sin($last),' ',160-$outer*math:cos($last),
-        ' L ',160+$inner*math:sin($last),' ',160-$inner*math:cos($last),
-        ' A ',$inner,' ',$inner,' 0 ',$large,' 0 ',160+$inner*math:sin($start),' ',160-$inner*math:cos($start),' Z')}">
+      stroke="{if ($border eq 0) then 'none' else if (@selected='true') then 'currentColor' else 'var(--background)'}"
+      stroke-width="{$border}" stroke-linejoin="round"
+      d="{concat('M ',160+$paint-outer*math:sin($outer-start),' ',160-$paint-outer*math:cos($outer-start),
+        ' A ',$paint-outer,' ',$paint-outer,' 0 ',$outer-large,' 1 ',160+$paint-outer*math:sin($outer-end),' ',160-$paint-outer*math:cos($outer-end),
+        ' L ',160+$paint-inner*math:sin($inner-end),' ',160-$paint-inner*math:cos($inner-end),
+        ' A ',$paint-inner,' ',$paint-inner,' 0 ',$inner-large,' 0 ',160+$paint-inner*math:sin($inner-start),' ',160-$paint-inner*math:cos($inner-start),' Z')}">
     </path>
     </xsl:if>
     <xsl:if test="$labels-only">

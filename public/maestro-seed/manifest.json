@@ -192,12 +192,12 @@
   {
     "file": "sunburst-chartkit/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "8f8e609665cca9f6a69d7d7e11161059ad82645e4f117c551664942f2165105a.json"
+    "asset": "6a6017a4e5278fee8c05b63757b079f7f5957b7627fcd21b405f3a79e26427d5.json"
   },
   {
     "file": "sunburst/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "b344bb34f40496d5c0d6c580d484a4aaf312a793f14b58660566fc076b42ef64.json"
+    "asset": "952e8c1a7771cfe85abde5ca2ce903247b743cb3bfcb5b53d2f61d0dee0cc22a.json"
   },
   {
     "file": "tag-cloud/provider.ttl",

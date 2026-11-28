@@ -1,0 +1,8 @@
+# Use identical text bytes across Windows, Linux, and macOS.
+# RDF seed digests and source-level regression tests depend on stable LF endings.
+* text=auto eol=lf
+
+# Keep native endings for Windows launcher scripts.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

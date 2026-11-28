@@ -2,7 +2,6 @@
 import { clientQueryFavorites } from "@/lib/client-query-favorites";
 
 import { parseFctQueryXml, readGraphServerFromQueryXml, readShareableUiState, copyRibbonUrlParams, type ShareableUiState } from "@/canvas/utils/query-controller";
-import { serializeFctQuery } from "@/lib/fct-query-api";
 import { proxyDebugHeaders } from "@/lib/proxy-debug";
 import { toast } from "@/components/ui/toast";
 
@@ -14,7 +13,6 @@ export function createHistoryActionRestorer({
   historyVisitIdRef,
   clearPendingHistoryVisit,
   setRootSearchExpanded,
-  setHistoryBookmarkId,
   setHistoryActionMenu,
 }: {
   synchronizeFctEndpointSelection: (serverUri: string) => Promise<void>;
@@ -23,7 +21,6 @@ export function createHistoryActionRestorer({
   historyVisitIdRef: { current: string };
   clearPendingHistoryVisit: () => void;
   setRootSearchExpanded: (value: boolean) => void;
-  setHistoryBookmarkId: (value: string) => void;
   setHistoryActionMenu: (value: "backward" | "forward" | null) => void;
 }): (historyId: string) => Promise<void> {
   return async function restoreHistoryActionItem(historyId: string): Promise<void> {
@@ -39,15 +36,13 @@ export function createHistoryActionRestorer({
       await synchronizeFctEndpointSelection(serverId);
       const savedUrl = payload.stateUrl ? new URL(payload.stateUrl, window.location.href) : null;
       const restoredUiState = savedUrl ? readShareableUiState(savedUrl.search) : null;
-      historyVisitQueryRef.current = serializeFctQuery(tree);
-      historyVisitIdRef.current = historyId;
       clearPendingHistoryVisit();
       setRootSearchExpanded(false);
       restoreQueryAndUiState(payload.queryXml, restoredUiState, historyId);
-      setHistoryBookmarkId(historyId);
       const params = new URLSearchParams(window.location.search);
       params.set("q", payload.queryXml);
-      params.set("history", historyId);
+      if (historyVisitIdRef.current === historyId && historyVisitQueryRef.current.trim() === payload.queryXml.trim()) params.set("history", historyId);
+      else params.delete("history");
       if (savedUrl) copyRibbonUrlParams(savedUrl.searchParams, params);
       window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
       setHistoryActionMenu(null);

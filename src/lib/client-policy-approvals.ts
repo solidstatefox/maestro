@@ -2,6 +2,7 @@
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
+import type { MaestroQueryScope } from "./app-lifecycle/query-view-ownership";
 import type { ProviderKind } from "@/lib/provider-catalog-xslt";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
@@ -13,7 +14,7 @@ export type ClientApproval = {uri:string;status:"Approved"|"Pending"|null;catego
  * A provider is Approved by a direct status assertion OR a version-matched
  * grant from any currently Approved curator. No inferred triples are written.
  * This lookup is browser-side; graph-server ACLs enforce protected writes. */
-export async function readClientPolicyApprovals(uris: string[], signal?: AbortSignal, requestSource = "ProviderApprovalLookup"): Promise<ClientApproval[]> {
+export async function readClientPolicyApprovals(uris: string[], signal?: AbortSignal, requestSource = "ProviderApprovalLookup", scope?: MaestroQueryScope): Promise<ClientApproval[]> {
   const distinct = [...new Set(uris)];
   if (distinct.some(uri => !validIri(uri)) || distinct.length > 500) throw new Error("Invalid policy identifiers.");
   if (!distinct.length) return [];
@@ -48,7 +49,7 @@ export async function readClientPolicyApprovals(uris: string[], signal?: AbortSi
         }
         BIND(true AS ?curated)
       }
-    }`,ctx,signal,requestSource);
+    }`,ctx,signal,requestSource,"view",scope ?? {tab:"personal",ribbon:"session"});
     for (const uri of batch) {
       const matches = rows.filter(row => row.policy?.value===uri);
       const present = (key:string) => matches.some(row => ["true","1"].includes(row[key]?.value ?? ""));

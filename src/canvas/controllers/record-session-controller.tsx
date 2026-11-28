@@ -190,7 +190,7 @@ export function useRecordPivotWorkspace(
         const graphs = await loadCompleteRecordGraphList(projection, async (pageXml) => {
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store", signal: request.signal,
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-fct", "RecordGraphs") },
+            headers: {"x-maestro-view-tab": "record", "x-maestro-view-ribbon": "session",  "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-fct", "RecordGraphs") },
             body: JSON.stringify({ queryXml: pageXml }),
           });
           const raw = await response.text();

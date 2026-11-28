@@ -1,4 +1,5 @@
 "use client";
+import { runActorQuery } from "./actor-query-authority";
 import { assign, createActor, fromPromise, setup } from "xstate";
 import { validateCurrentHistoryQuery, type ValidatedHistoryQuery } from "@/lib/client-query-shacl";
 
@@ -10,7 +11,7 @@ const empty=():Context=>({key:"",output:null,error:"",historyId:"",queryXml:""})
 export const maestroQueryContextMachine=setup({
   types:{context:{} as Context,events:{} as Event},
   actors:{check:fromPromise(async ({input,signal}:{input:{historyId:string;queryXml:string};signal:AbortSignal})=>
-    validateCurrentHistoryQuery(input.historyId,input.queryXml,signal))},
+    runActorQuery("query-context",signal,owned=>validateCurrentHistoryQuery(input.historyId,input.queryXml,owned)))},
 }).createMachine({
   id:"maestro-query-context",initial:"idle",context:empty,
   on:{CLEAR:{target:".idle",actions:assign(empty)},VALIDATE:{guard:({context,event})=>context.key!==event.key,target:".validating",reenter:true,actions:assign(({event})=>

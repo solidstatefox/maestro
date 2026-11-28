@@ -34,7 +34,9 @@ test('A saved explicit FCT addr is authoritative, absent addr follows existing s
   assert.match(block, /validGraphServerUrl\(\(prepared\.attributes\.addr \?\? ""\)\.split\("@"\)/);
   assert.match(block, /restoreQueryAndUiState\(preparedXml, restored\)/);
   assert.match(block, /const tab = restored\?\.workspaceTab \?\? "browse"/);
-  assert.match(block, /setWorkspaceTab\(tab\)/);
+  assert.match(block, /const restored = admitSavedUiState\(readShareableUiState\(destination\.search\), preparedXml\)/);
+  assert.match(block, /if \(!restored\?\.workspaceTab\) setWorkspaceTab\("browse"\)/);
+  assert.doesNotMatch(block, /setWorkspaceTab\(tab\)|navigateWorkspaceTab\(tab\)/);
 });
 
 test('Graph-server menu label, checkmark, status and spinner observe the live addr, not an old preference', () => {

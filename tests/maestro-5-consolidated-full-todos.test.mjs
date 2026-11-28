@@ -55,7 +55,7 @@ test('Personal Extract action and four visible tray actions inherit the accepted
 test('Status joins independent ODS and remote reads and shows real remote query provenance', () => {
   const client=read('src/lib/fct-client.ts');
   const widget=read('src/canvas/left/status-widget.tsx');
-  assert.match(client,/selectPersonal\(countQuery, ctx, signal, "status-facet-count"\)/);
+  assert.match(client,/selectPersonal\(countQuery, ctx, signal, "status-facet-count",\s*"view",\s*\{tab:"shared",ribbon:"query"\}\)/);
   assert.match(client,/compileFctXmlToSparql\(fctQuery/);
   assert.match(client,/cachedFetchFct\("\/proxy\/api\/sparql"/);
   assert.match(client,/fctListStatusClone\(liveXml, sourceAddr\)/);

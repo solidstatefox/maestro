@@ -47,7 +47,7 @@ export function PropertyUsageWidget({ tree, direction, limit, endpointReady, onN
         const countXml = countSourceXml.replace(/(<view\b[^>]*\btype=")[^"]+"/, `$1${FCT_VIEW_TYPES.COUNT_DISTINCT}"`);
         const response = await maestroQueryFetch("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "x-maestro-view-tab": "shared", "x-maestro-view-ribbon": "query" },
           body: JSON.stringify({ queryXml: countXml }),
         });
         if (!response.ok) return;
@@ -77,7 +77,7 @@ export function PropertyUsageWidget({ tree, direction, limit, endpointReady, onN
         const load = async (xml: string) => {
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store",
-            headers: {
+            headers: {"x-maestro-view-tab": "shared", "x-maestro-view-ribbon": "query", 
               "Content-Type": "text/xml; charset=utf-8",
               "x-maestro-debug-source": "facet-load",
               "x-maestro-debug-component": `property-usage-${direction}`,

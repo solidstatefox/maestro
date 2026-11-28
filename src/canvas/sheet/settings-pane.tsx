@@ -2,6 +2,7 @@
 
 import { MaestroSelect } from "@/components/ui/maestro-select";
 import { MaestroDebugSettings } from "@/canvas/sheet/debug-settings";
+import { ProviderProperties } from "@/canvas/sheet/provider-properties";
 import { RESULTS_BATCH_SIZE_OPTIONS, LEFT_WIDGET_LIMIT_KEYS, LEFT_WIDGET_LIMIT_OPTIONS, LEFT_WIDGET_LIMIT_LABELS, CENTER_PANEL_LIMIT_STORAGE_KEY, CENTER_GROUP_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_STORAGE_KEY, RIGHT_PANEL_PAGE_LIMIT_STORAGE_KEY, RIGHT_PANEL_DESCRIBE_LIMIT_OPTIONS, RIGHT_PANEL_PAGE_LIMIT_OPTIONS } from "@/canvas/sheet/settings";
 
 import { getLocalStorageUsageBytes, formatStorageBytes } from "@/canvas/sheet/settings";
@@ -312,6 +313,7 @@ export function SettingsPane({ workspace }: { workspace: SettingsPaneWorkspace }
             <div className="flex flex-col gap-4 px-4 pb-4">
               <BrowsePaneOrderControl />
               <MaestroDebugSettings active={controlsSheetOpen} />
+              <ProviderProperties active={controlsSheetOpen} />
 
               {workspace.accessCapabilities.canUsePersonalStore && authSession && (
               <div className="flex flex-col gap-3 rounded-md border p-3">

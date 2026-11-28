@@ -1,5 +1,7 @@
+import { actorQueryAllowed, getActorQueryAuthority, type QueryActorOwner } from "./app-lifecycle/actor-query-authority";
 import { observeProxyFetch, stopProxyQueryGeneration, resumeProxyQueryGeneration } from "@/lib/proxy-transport-observation";
 import { requireSparqlAttribution } from "@/lib/sparql-request-attribution";
+import { maestroOffstageError, type MaestroQueryScope, type MaestroQueryViewCoordinator } from "@/lib/app-lifecycle/query-view-ownership";
 import { maestroLanguageHeader } from "./maestro-language";
 import { readMaestroConcurrency } from "./maestro-concurrency";
 import { maestroQueryClockScope } from "./maestro-query-execution-clock";
@@ -235,8 +237,55 @@ export async function clearClientQueryCache(): Promise<void> {
 /** In-flight Maestro query operations, shared by query listeners and the Refresh/Abort control. */
 const pendingQueryControllers = new Set<AbortController>();
 export type PendingMaestroQuery = { id: number; label: string; state: "preparing" | "queued" | "active";
-  queueIndex: number; serverQueueIndex?: number; queueServer?: string; serverQueueLane?: "light" | "heavy"; serverQueueLaneIndex?: number; serverQueueLaneNumber?: number; serverQueueLanePosition?: number; proxyDispatchConfirmed?: boolean };
+  queueIndex: number; workspaceId: string; viewOwnerKey: string; actorOwner?: QueryActorOwner; serverQueueIndex?: number; queueServer?: string; serverQueueLane?: "light" | "heavy"; serverQueueLaneIndex?: number; serverQueueLaneNumber?: number; serverQueueLanePosition?: number; proxyDispatchConfirmed?: boolean };
 const pendingQueryDetails = new Map<AbortController, PendingMaestroQuery>();
+/** The scheduler is shared, but authority belongs to one XState supervisor
+ * per mounted workspace. A query MUST name its view and ribbon explicitly.
+ * Debug labels are diagnostics only: they confer no ability to execute. */
+const queryWorkspaces = new Map<string, MaestroQueryViewCoordinator>();
+export function registerMaestroQueryWorkspace(workspaceId: string, controller: MaestroQueryViewCoordinator): () => void {
+  if (!workspaceId || queryWorkspaces.has(workspaceId)) throw new Error("Duplicate or missing Maestro query workspace");
+  queryWorkspaces.set(workspaceId, controller);
+  const unsubscribe = controller.subscribe(() => {
+    // Stop only independently owned requests whose zone has just been left.
+    // The actor's own signal still controls same-zone query/session changes.
+    for (const [request, detail] of pendingQueryDetails) {
+      if (detail.workspaceId === workspaceId && detail.actorOwner &&
+        (controller.getSnapshot().context.cancelled || !actorQueryAllowed(detail.actorOwner, controller.getSelection()))) request.abort();
+    }
+    notifyPendingQueries();
+  });
+  notifyPendingQueries();
+  return () => {
+    unsubscribe();
+    if (queryWorkspaces.get(workspaceId) === controller) {
+      for (const [request, detail] of pendingQueryDetails) {
+        if (detail.workspaceId === workspaceId && detail.actorOwner) request.abort();
+      }
+      queryWorkspaces.delete(workspaceId);
+    }
+    notifyPendingQueries();
+  };
+}
+function queryWorkspace(headers?: HeadersInit): { workspaceId: string; controller: MaestroQueryViewCoordinator } | null {
+  const id = new Headers(headers).get("x-maestro-workspace-id") ?? "";
+  if (id) { const controller = queryWorkspaces.get(id); return controller ? { workspaceId: id, controller } : null; }
+  // A single rendered Maestro workspace is the ordinary SPA case. If several
+  // workspaces coexist, callers MUST supply their explicit workspace ID.
+  if (queryWorkspaces.size !== 1) return null;
+  const [workspaceId, controller] = queryWorkspaces.entries().next().value!;
+  return { workspaceId, controller };
+}
+function declaredViewScope(headers?: HeadersInit): MaestroQueryScope | null {
+  const values = new Headers(headers);
+  const tab = values.get("x-maestro-view-tab");
+  const ribbon = values.get("x-maestro-view-ribbon");
+  if (tab === "shared" && ribbon === "query") return {tab,ribbon};
+  if ((tab === "record" || tab === "personal") && ribbon === "session") return {tab,ribbon};
+  if (tab === "browse" && (ribbon === null || ribbon === "browse")) return { tab, ribbon: "browse" };
+  if ((tab === "view" || tab === "analyze") && ribbon) return { tab, ribbon };
+  return null;
+}
 // Link the public request signal to its tracked controller so dispatch status
 // reflects the existing browser scheduler without creating a second queue.
 const pendingQueryOwnerBySignal = new WeakMap<AbortSignal, AbortController>();
@@ -247,7 +296,7 @@ const pendingQueryDetailListeners = new Set<(queries: PendingMaestroQuery[]) => 
 let lastPendingDetails: PendingMaestroQuery[] = [];
 function pendingDetailsEqual(a: readonly PendingMaestroQuery[], b: readonly PendingMaestroQuery[]): boolean {
   return a.length === b.length && a.every((item, index) =>
-    item.id === b[index].id && item.label === b[index].label && item.state === b[index].state && item.queueIndex === b[index].queueIndex && item.serverQueueIndex === b[index].serverQueueIndex && item.queueServer === b[index].queueServer &&
+    item.id === b[index].id && item.label === b[index].label && item.workspaceId === b[index].workspaceId && item.viewOwnerKey === b[index].viewOwnerKey && item.actorOwner === b[index].actorOwner && item.state === b[index].state && item.queueIndex === b[index].queueIndex && item.serverQueueIndex === b[index].serverQueueIndex && item.queueServer === b[index].queueServer &&
     item.serverQueueLane === b[index].serverQueueLane && item.serverQueueLaneIndex === b[index].serverQueueLaneIndex &&
     item.serverQueueLaneNumber === b[index].serverQueueLaneNumber && item.serverQueueLanePosition === b[index].serverQueueLanePosition &&
     item.proxyDispatchConfirmed === b[index].proxyDispatchConfirmed);
@@ -255,7 +304,10 @@ function pendingDetailsEqual(a: readonly PendingMaestroQuery[], b: readonly Pend
 /** Render the authoritative scheduler's waiting order, not registration order.
  * Active/pre-dispatch entries have no queue position and follow the queued rows. */
 function orderedPendingQueryDetails(): PendingMaestroQuery[] {
-  return [...pendingQueryDetails.values()].sort((a, b) => {
+  return [...pendingQueryDetails.values()].filter(query => {
+    const workspace = queryWorkspaces.get(query.workspaceId);
+    return workspace && (query.actorOwner ? actorQueryAllowed(query.actorOwner, workspace.getSelection()) : workspace.ownsPendingKey(query.viewOwnerKey)) && !workspace.getSnapshot().context.cancelled;
+  }).sort((a, b) => {
     // Sort by *reported* stage then its own reported index; do not turn this
     // presentation order into a fictitious combined queue position.
     const stage = (item: PendingMaestroQuery) => item.serverQueueIndex && item.serverQueueIndex > 0 ? 0
@@ -300,7 +352,7 @@ let queryPipelineStopped = false;
 const pendingQueryListeners = new Set<(count: number) => void>();
 let lastPendingQueryCount = 0;
 function notifyPendingQueries() {
-  const count = pendingQueryControllers.size;
+  const count = orderedPendingQueryDetails().length;
   if (count !== lastPendingQueryCount) {
     lastPendingQueryCount = count;
     for (const listener of pendingQueryListeners) listener(count);
@@ -309,7 +361,7 @@ function notifyPendingQueries() {
 }
 export function subscribePendingMaestroQueries(listener: (count: number) => void): () => void {
   pendingQueryListeners.add(listener);
-  listener(pendingQueryControllers.size);
+  listener(orderedPendingQueryDetails().length);
   return () => { pendingQueryListeners.delete(listener); };
 }
 export function abortPendingMaestroQueries(): void {
@@ -332,37 +384,78 @@ export function abortPendingMaestroQueries(): void {
     notifyPendingQueries();
   }
 }
+/** A semantic FCT change must not discard an unrelated authenticated History
+ * write or session action. The queue retains its real capacity and ordering. */
+export function abortQueryScopedMaestroQueries(): void {
+  schedulerTearingDown = true;
+  try {
+    for (const [controller, detail] of pendingQueryDetails) {
+      if (detail.viewOwnerKey === "personal:session" || detail.actorOwner === "bookmark-metadata" || detail.actorOwner === "personal-directory") continue;
+      controller.abort();
+    }
+  } finally { schedulerTearingDown = false; refreshPendingQueueIndexes(); notifyPendingQueries(); dispatchScheduledRequests(); }
+}
 /** Cancel without altering loaded results; do not allow delayed effect timers to restart queries. */
 export function stopPendingMaestroQueries(): void {
   queryPipelineStopped = true;
+  for (const workspace of queryWorkspaces.values()) workspace.cancel();
   stopProxyQueryGeneration();
   abortPendingMaestroQueries();
 }
 /** Called at the beginning of a genuinely new query pipeline. */
 export function resumePendingMaestroQueries(): void {
   queryPipelineStopped = false;
+  for (const workspace of queryWorkspaces.values()) workspace.resume();
   resumeProxyQueryGeneration();
 }
+/** A caller proposes work; only the foreground XState child can invoke it.
+ * Pending registration, scheduler admission and network fetch occur INSIDE
+ * that child. Exiting the view stops the child and its AbortSignals. */
 async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
-  operation: (signal: AbortSignal) => Promise<T>, label = "Query"): Promise<T> {
-  if (queryPipelineStopped) throw new DOMException("Query execution stopped", "AbortError");
-  const controller = new AbortController();
-  const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-  pendingQueryControllers.add(controller);
-  pendingQueryOwnerBySignal.set(combinedSignal, controller);
-  pendingQueryDetails.set(controller, { id: ++nextPendingQueryId, label, state: "preparing", queueIndex: 0 });
-  notifyPendingQueries();
-  try {
-    const result = await operation(combinedSignal);
-    if (combinedSignal.aborted) throw new DOMException("Maestro query aborted", "AbortError");
-    return result;
-  } finally {
-    pendingQueryOwnerBySignal.delete(combinedSignal);
-    pendingQueryControllers.delete(controller);
-    pendingQueryDetails.delete(controller);
-    refreshPendingQueueIndexes();
-    notifyPendingQueries();
+  operation: (signal: AbortSignal) => Promise<T>, label = "Query", headers?: HeadersInit, body?: BodyInit | null): Promise<T> {
+  if (queryPipelineStopped) throw maestroOffstageError();
+  const workspace = queryWorkspace(headers);
+  const scope = declaredViewScope(headers);
+  const actorOwner = getActorQueryAuthority(signal);
+  if (!workspace || (!scope && !actorOwner)) throw new DOMException("Query has no explicit active XState workspace/view authority", "AbortError");
+  if (actorOwner && (!actorQueryAllowed(actorOwner, workspace.controller.getSelection()) || workspace.controller.getSnapshot().context.cancelled)) throw maestroOffstageError();
+  let explicitMutation = false;
+  if (actorOwner && actorOwner !== "bookmark-metadata" && typeof body === "string") {
+    let payload: { update?: unknown; personalWrite?: boolean } | undefined;
+    try { payload = JSON.parse(body); } catch { /* ordinary non-JSON query */ }
+    if (payload?.update !== undefined || payload?.personalWrite) {
+      // An independent read actor may request a separate, explicitly declared
+      // personal mutation. The personal-session worker, not the read lease,
+      // owns that transport. Its caller signal still cancels the request.
+      if (scope?.tab !== "personal" || scope.ribbon !== "session") throw new Error("This XState query actor owns reads only.");
+      explicitMutation = true;
+    }
   }
+  const run = async (actorSignal: AbortSignal, ownerKey: string) => {
+    if (queryPipelineStopped) throw maestroOffstageError();
+    const controller = new AbortController();
+    const combinedSignal = AbortSignal.any([actorSignal, controller.signal]);
+    combinedSignal.throwIfAborted();
+    pendingQueryControllers.add(controller);
+    pendingQueryOwnerBySignal.set(combinedSignal, controller);
+    pendingQueryDetails.set(controller, { id: ++nextPendingQueryId, label, workspaceId: workspace.workspaceId,
+      viewOwnerKey: ownerKey, ...(actorOwner && !explicitMutation ? { actorOwner } : {}), state: "preparing", queueIndex: 0 });
+    notifyPendingQueries();
+    try {
+      const result = await operation(combinedSignal);
+      combinedSignal.throwIfAborted();
+      return result;
+    } finally {
+      pendingQueryOwnerBySignal.delete(combinedSignal);
+      pendingQueryControllers.delete(controller);
+      pendingQueryDetails.delete(controller);
+      refreshPendingQueueIndexes();
+      notifyPendingQueries();
+    }
+  };
+  if (actorOwner && signal && !explicitMutation) return run(signal, `actor:${actorOwner}`);
+  const ownerKey = scope!.tab === "browse" && scope!.ribbon === "browse" ? "browse" : `${scope!.tab}:${scope!.ribbon}`;
+  return workspace.controller.execute(scope!, actorSignal => run(actorSignal, ownerKey), signal);
 }
 
 /**
@@ -725,7 +818,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
 /** Track query requests so a live FCT change or user Abort cancels outstanding work. */
 export function maestroQueryFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   requireSparqlAttribution(input, init);
-  return trackMaestroQuery(init?.signal, (signal) => maestroQueryFetchImpl(input, { ...init, signal }), labelMaestroRequest(input, init));
+  return trackMaestroQuery(init?.signal, (signal) => maestroQueryFetchImpl(input, { ...init, signal }), labelMaestroRequest(input, init), init?.headers, init?.body);
 }
 export function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   requireSparqlAttribution(input, init);
@@ -741,5 +834,5 @@ export function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Pr
       body.includes('"selectEndpointId"') || body.includes('"selectEndpointUrl"') || body.includes('"health"')) {
     return cachedFetchFctImpl(input, init);
   }
-  return trackMaestroQuery(init?.signal, (signal) => cachedFetchFctImpl(input, { ...init, signal }), labelMaestroRequest(input, init));
+  return trackMaestroQuery(init?.signal, (signal) => cachedFetchFctImpl(input, { ...init, signal }), labelMaestroRequest(input, init), init?.headers, init?.body);
 }

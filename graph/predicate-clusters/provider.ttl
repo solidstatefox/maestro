@@ -1,0 +1,50 @@
+@prefix mui: <gttp://ggg.maestro.ecosys/ns/ui#> .
+@prefix ma: <gttp://ggg.maestro.ecosys/ns/analyze#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# The current History query has a normal live view. The three analytical
+# views are derived independently, and only after this provider is approved.
+# No properties-view validator, page validator, or predicate-specific SHACL gate.
+<gttp://ggg.maestro.ecosys/analyze/predicate-clusters>
+  a mui:Provider, ma:Analysis, sh:NodeShape ;
+  rdfs:label "Predicate Clusters"@en ;
+  ma:lucideIcon "network" ; ma:order 7 ;
+  mui:accepts <gttp://ggg.maestro.ecosys/analyze/predicate-clusters/input> ;
+  mui:widget <gttp://ggg.maestro.ecosys/analyze/predicate-clusters/widget> ;
+  ma:stylesheet <gttp://ggg.maestro.ecosys/analyze/predicate-clusters#xslt> .
+
+<gttp://ggg.maestro.ecosys/analyze/predicate-clusters/input> a mui:InputShape, sh:NodeShape ;
+  sh:property [ sh:path mui:query ; sh:minCount 1 ; sh:maxCount 1 ] ;
+  sh:property [ sh:path mui:focus ; sh:minCount 1 ; sh:maxCount 1 ] .
+
+<gttp://ggg.maestro.ecosys/analyze/predicate-clusters/widget> a mui:AnalysisWidget ;
+  rdfs:label "Ranked predicate list and cluster tabs"@en ;
+  rdfs:comment "The three first-class FCT projections are properties-rank, properties-cluster and clusters; no Browse mutation."@en .
+
+<gttp://ggg.maestro.ecosys/analyze/predicate-clusters#xslt> rdf:value """<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fct="http://openlinksw.com/services/facets/1.0" xmlns:m="gttp://ggg.maestro.ecosys/ns/xslt/context#" exclude-result-prefixes="fct m">
+  <xsl:output method="xml" omit-xml-declaration="yes"/>
+  <xsl:mode name="project" on-no-match="shallow-copy"/>
+  <xsl:template match="/m:context">
+    <analysis kind="predicate-clusters" renderer="predicate-clusters"><queries>
+      <xsl:variable name="source-query" select="m:query/fct:query"/>
+      <xsl:for-each select="('properties-rank', 'properties-cluster', 'clusters')">
+        <xsl:variable name="kind" select="."/>
+        <query view-type="{$kind}">
+          <xsl:apply-templates select="$source-query" mode="project">
+            <xsl:with-param name="kind" tunnel="yes" select="$kind"/>
+          </xsl:apply-templates>
+        </query>
+      </xsl:for-each>
+    </queries></analysis>
+  </xsl:template>
+  <xsl:template match="fct:view" mode="project">
+    <xsl:param name="kind" tunnel="yes"/>
+    <xsl:copy><xsl:copy-of select="@* except (@type, @limit, @offset)"/>
+      <xsl:attribute name="type" select="$kind"/>
+      <xsl:attribute name="limit">200</xsl:attribute>
+      <xsl:attribute name="offset">0</xsl:attribute>
+    </xsl:copy>
+  </xsl:template>
+</xsl:stylesheet>""" .

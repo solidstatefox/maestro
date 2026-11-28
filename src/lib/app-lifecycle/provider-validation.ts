@@ -1,4 +1,5 @@
 "use client";
+import { runActorQuery } from "./actor-query-authority";
 import { assign, createActor, fromPromise, setup } from "xstate";
 import type { ShaclValidationReport } from "../shacl-validation-report";
 import type { ProviderPolicyRows } from "../client-provider-validation";
@@ -13,7 +14,7 @@ export const maestroProviderValidationMachine=setup({
  types:{context:{} as Context,events:{} as Event},
  actors:{
   prepare:fromPromise(async({input,signal}:{input:ProviderValidationInput;signal:AbortSignal})=>input.prepare(signal)),
-  loadPolicy:fromPromise(async({input,signal}:{input:ProviderValidationInput;signal:AbortSignal})=>input.load(signal)),
+  loadPolicy:fromPromise(async({input,signal}:{input:ProviderValidationInput;signal:AbortSignal})=>runActorQuery("provider-policy",signal,input.load)),
   validateData:fromPromise(async({input,signal}:{input:{run:ProviderValidationInput;program:ProviderPageProgram;policy:ProviderPolicyRows};signal:AbortSignal})=>input.run.validate(input.program,input.policy,signal)),
  },
 }).createMachine({

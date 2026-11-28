@@ -2,7 +2,7 @@
 /** The same RDF -> XState adapter is used in the browser for curator and
  * Record controls. Use the existing authenticated personal SPARQL transport;
  * reads use /sparql; updates use the authentication mode selected at login. */
-import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
+import { personalContext, selectPersonal, type PersonalTransportAuthority } from "@/lib/client-personal-sparql";
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 import { compileStatusMachines, statusMachineRows, statusMachineSelect, type CompiledStatusMachine } from "@/lib/status-machine-runtime";
 
@@ -14,13 +14,14 @@ export function primeClientStatusMachines(addr: string, base: string, machines: 
   cache.set(`${addr}\u0000${graph}`, machines);
 }
 
-export async function loadClientStatusMachines(signal?: AbortSignal): Promise<CompiledStatusMachine[]> {
+export async function loadClientStatusMachines(signal?: AbortSignal, authority: PersonalTransportAuthority = "view"): Promise<CompiledStatusMachine[]> {
+  if (authority === "personal-initialization" && !signal) throw new Error("State-machine initialization requires its XState signal.");
   const ctx = await personalContext();
   const graph = resolveGraph(GRAPH.STATE_MACHINES, ctx.base);
   const key = `${ctx.addr}\u0000${graph}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const rows = await selectPersonal(statusMachineSelect(graph), ctx, signal,"status-machine-client:loadClientStatusMachines");
+  const rows = await selectPersonal(statusMachineSelect(graph), ctx, signal,"status-machine-client:loadClientStatusMachines",authority,{tab:"personal",ribbon:"session"});
   const machines = compileStatusMachines(statusMachineRows(rows));
   if (cache.size > 16) cache.clear();
   cache.set(key, machines);

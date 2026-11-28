@@ -21,7 +21,10 @@ test('Return restores the exact source tab instead of forcing Browse', () => {
   assert.match(w, /if \(!restored \|\| restored\.workspaceTab === "browse"\)/);
   assert.match(w, /Sheet's Show actions enter an actual, SHACL-discovered Perspective/);
   assert.match(w, /if \(workspaceTab === "browse"\) operations\.controller\.send\(\{/);
-  assert.match(w, /setViewPanel\("perspectives"\)/);
+  // History/Bookmarks uses one XState transition; Return uses restored share state.
+  assert.match(w, /navigateQueryView\(\{ tab: "view", viewProvider: null, viewPanel: "perspectives",\s*selectedViewUri: includeFavorites/);
+  assert.match(w, /if \(!restoreQueryAndUiState\(xml, restored\)\) return false;/);
+  assert.match(w, /if \(!restored \|\| restored\.workspaceTab === "browse"\)/);
   assert.doesNotMatch(w, /type: "CONTEXT_REPLACED"/);
   const appbar = read('src/canvas/top/appbar-pane.tsx');
   assert.match(appbar, /returnButtonVisible &&/);

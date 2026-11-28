@@ -207,11 +207,13 @@ export function providerStorage(providerIri: string, accountScope: string) {
       await initializeMaestroStorage();
       await persistValue(fullKey(key), value);
       memory.set(fullKey(key), value);
+      notifyProviderStorageChange({providerIri, accountScope, key});
     },
     async remove(key: string): Promise<void> {
       await initializeMaestroStorage();
       await persistValue(fullKey(key), undefined);
       memory.delete(fullKey(key));
+      notifyProviderStorageChange({providerIri, accountScope, key});
     },
     async keys(): Promise<string[]> {
       await initializeMaestroStorage();
@@ -219,4 +221,56 @@ export function providerStorage(providerIri: string, accountScope: string) {
       return keys.filter((key): key is string => typeof key === "string" && key.startsWith(prefix)).map(key => decodeURIComponent(key.slice(prefix.length)));
     },
   });
+}
+
+
+/** Enumerate every provider cubby through the same namespace API used by providers.
+ * The Sheet never opens IndexedDB or parses provider keys itself. */
+export type ProviderStorageProperty = {
+  providerIri: string; accountScope: string; key: string; value: string;
+};
+
+export async function listProviderStorageProperties(): Promise<ProviderStorageProperty[]> {
+  await initializeMaestroStorage();
+  let values: Array<[string, string]>;
+  if (indexedDbAvailable) {
+    const db = await openDatabase();
+    const store = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME);
+    // IndexedDB range scan: never read unrelated query/session cache values.
+    values = await new Promise<Array<[string, string]>>((resolve, reject) => {
+      const entries: Array<[string, string]> = [];
+      const cursorRequest = store.openCursor(IDBKeyRange.bound("provider:", "provider:\uffff"));
+      cursorRequest.onerror = () => reject(cursorRequest.error ?? new Error("Provider cubby scan failed."));
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (!cursor) { resolve(entries); return; }
+        if (typeof cursor.key === "string" && typeof cursor.value === "string") entries.push([cursor.key, cursor.value]);
+        cursor.continue();
+      };
+    });
+  } else values = [...memory.entries()];
+  const properties: ProviderStorageProperty[] = [];
+  for (const [fullKey, value] of values) {
+    const match = /^provider:([^:]+):([^:]+):(.*)$/.exec(fullKey);
+    if (!match) continue;
+    try {
+      properties.push({ accountScope: decodeURIComponent(match[1]),
+        providerIri: decodeURIComponent(match[2]), key: decodeURIComponent(match[3]), value });
+    } catch { /* not a key created through providerStorage */ }
+  }
+  return properties.sort((a,b) => a.accountScope.localeCompare(b.accountScope) ||
+    a.providerIri.localeCompare(b.providerIri) || a.key.localeCompare(b.key));
+}
+
+export type ProviderStorageChange = { providerIri: string; accountScope: string; key: string };
+const providerStorageListeners = new Set<(change: ProviderStorageChange) => void>();
+export function subscribeProviderStorageChanges(listener: (change: ProviderStorageChange) => void): () => void {
+  providerStorageListeners.add(listener);
+  return () => { providerStorageListeners.delete(listener); };
+}
+function notifyProviderStorageChange(change: ProviderStorageChange): void {
+  for (const listener of providerStorageListeners) {
+    try { listener(change); }
+    catch (cause) { browserLog.warn("storage.provider.change-listener", cause); }
+  }
 }

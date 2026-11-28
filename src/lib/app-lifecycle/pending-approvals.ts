@@ -3,6 +3,7 @@
  * set, effective-approval lookup, request cancellation, and badge lifecycle.
  * SHACL applicability is established by the existing caller's discovery
  * workflow; this actor NEVER treats mere catalog membership as a match. */
+import { runActorQuery } from "./actor-query-authority";
 import { assign, createActor, fromPromise, setup } from "xstate";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
 import { readClientPolicyApprovals, type ClientApproval } from "@/lib/client-policy-approvals";
@@ -40,7 +41,7 @@ function register(context:Context,event:Extract<Event,{type:"MATCH"}>):Context {
 const machine=setup({
   types:{context:{} as Context,events:{} as Event},
   actors:{check:fromPromise(async ({input,signal}:{input:{uris:string[]};signal:AbortSignal})=>
-    readClientPolicyApprovals(input.uris,signal))},
+    runActorQuery("pending-approvals",signal,owned=>readClientPolicyApprovals(input.uris,owned)))},
 }).createMachine({
   id:"maestro-view-pending-approvals",initial:"idle",context:empty,
   on:{

@@ -25,7 +25,7 @@ check('Tag cloud shows an explicit loading/empty state', 'src/canvas/left/person
 check('Spider validates raw values then normalizes each axis', 'graph/spider/provider.ttl', /p:finite/, /min\(\$values\)/, /<cell raw=/);
 check('Spider radial axis uses percent; tooltips display actual numeric values', 'src/canvas/tab/analyze/page-provider.tsx', /domain=\{\[0, 100\]\}/, /raw_\$\{String\(item\.dataKey\)\}/);
 check('View badge uses approval count from XState', 'src/canvas/top/appbar-pane.tsx', /selectPendingApprovalBadge/, /pendingBadge\.total/);
-check('Saved View selection is preserved in share URL', 'src/canvas/utils/workspace-controller.tsx', /params\.set\("ribbonButton"/, /setSelectedViewUri\(restored\.selectedViewUri\)/);
+check('Saved View selection is preserved in share URL', 'src/canvas/utils/workspace-controller.tsx', /params\.set\("ribbonButton"/, /restoredViewSelection\.selectedViewUri = restored\.selectedViewUri/, /navigateQueryView\(restoredViewSelection\)/);
 check('Configure Properties and Roles inspectors expose six actual XML/SPARQL tabs and execute read-only SPARQL',
   'src/canvas/left/configure-pane.tsx',
   /function configureKindsInspectorTabs\(tree: FctQueryTree, direction: "property" \| "role"\)/,

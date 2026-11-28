@@ -43,7 +43,7 @@ export async function readClientProviderDiagnostics(signal?: AbortSignal): Promi
         UNION { ?report sh:result/sh:focusNode ?uri }
       } }
       OPTIONAL { GRAPH <${approvalGraph}> { ?uri mui:lastRequestComponent ?component } }
-    } ORDER BY ?kind ?label ?uri LIMIT 500`, ctx, signal,"client-provider-diagnostics:readClientProviderDiagnostics");
+    } ORDER BY ?kind ?label ?uri LIMIT 500`, ctx, signal,"client-provider-diagnostics:readClientProviderDiagnostics","view",{tab:"personal",ribbon:"session"});
   const result = new Map<string, ProviderDiagnostic>();
   for (const row of rows) {
     const uri = row.uri?.value ?? "";

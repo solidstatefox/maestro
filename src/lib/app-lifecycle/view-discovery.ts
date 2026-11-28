@@ -1,3 +1,4 @@
+import { runActorQuery, type QueryActorOwner } from "./actor-query-authority";
 import { assign, createActor, fromPromise, setup } from "xstate";
 import type { DiscoveredViewProvider } from "@/lib/personal-sparql-reads";
 
@@ -9,10 +10,10 @@ const blank = <T>(): Context<T> => ({ key: "", items: [], error: "", execute: nu
 /** Shared invocation contract: same-key observations do not restart work;
  * explicit retry is the only same-key rearm. No wall clock competes with the
  * scheduler's execution budget. Transport timeouts are terminal outcomes. */
-export function makeDiscoveryMachine<T>(id: string) { return setup({
+export function makeDiscoveryMachine<T>(id: string, owner?: QueryActorOwner) { return setup({
   types: { context: {} as Context<T>, events: {} as DiscoveryEvent<T> },
   actors: { load: fromPromise(async ({ input, signal }: { input: { key: string; execute: DiscoveryExecutor<T> }; signal: AbortSignal }) => {
-    const result = await input.execute(signal);
+    const result = owner ? await runActorQuery(owner, signal, input.execute) : await input.execute(signal);
     signal.throwIfAborted();
     return { key: input.key, ...(Array.isArray(result) ? { items: result, warnings: [] } : result) };
   }) },
@@ -43,9 +44,9 @@ export function makeDiscoveryMachine<T>(id: string) { return setup({
     cancelled: {},
   },
 }); }
-export const maestroViewDiscoveryMachine = makeDiscoveryMachine<DiscoveredViewProvider>("maestro-view-discovery");
-export function createMaestroViewDiscoveryController<T = DiscoveredViewProvider>(id = "maestro-view-discovery") {
-  const machine = makeDiscoveryMachine<T>(id);
+export const maestroViewDiscoveryMachine = makeDiscoveryMachine<DiscoveredViewProvider>("maestro-view-discovery", "perspective-discovery");
+export function createMaestroViewDiscoveryController<T = DiscoveredViewProvider>(id = "maestro-view-discovery", owner?: QueryActorOwner) {
+  const machine = makeDiscoveryMachine<T>(id, owner);
   const create = () => createActor(machine);
   let actor: ReturnType<typeof create> | null = null;
   let snapshot = create().getSnapshot();

@@ -21,5 +21,5 @@ export async function deletePerspectiveEntries(kind: keyof typeof TYPES, ids: st
   const update = `DELETE { GRAPH <${graph}> { ?entry ?predicate ?object } }
 WHERE { VALUES ?entry { ${unique.map(item => `<${item}>`).join(" ")} }
   GRAPH <${graph}> { ?entry a <${TYPES[kind]}> ; ?predicate ?object . } }`;
-  await updatePersonal(update,signal,undefined,"perspective-delete:deletePerspectiveEntries");
+  await updatePersonal(update,signal,undefined,"perspective-delete:deletePerspectiveEntries",undefined,"view",{tab:"personal",ribbon:"session"});
 }

@@ -49,7 +49,7 @@ test('credential rejection and cancellation do not run a reachability probe',asy
   const during=new AbortController();
   assert.equal(await loginConnectionMessage(chunkError,during.signal,async()=>{during.abort();throw Error('abort');}),'Connection cancelled.');
   const controller=read('src/canvas/controllers/authentication.ts');
-  assert.match(controller,/await loginConnectionMessage\(error,attempt.signal\);\s*if\(isCurrentPersonalInitialization\(attempt\)\)deps.setLoginError\(message\)/);
+  assert.match(controller,/await loginConnectionMessage\(error,attempt.signal\);\s*if\(!attempt.signal.aborted\)deps.setLoginError\(message\)/);
 });
 test('password is genuinely empty without fake masking, and retains password-manager support',()=>{
   const ui=read('src/canvas/top/appbar-pane.tsx');
@@ -75,26 +75,26 @@ class Point {
   constructor(x,y){Object.assign(this,{x,y});}
   matrixTransform(m){return new Point(this.x*m.scale+m.x,this.y*m.scale+m.y);}
 }
-function fixture(native,frameWidth){
+function fixture(native,frameWidth,wedgeBounds={x:90,y:90,width:140,height:140}){
   const group={getAttribute:()=> 'radial',style:{}};
   const attrs=new Map([['viewBox',native.join(' ')],['width','800'],['height','800']]);
   const current=()=>{const [x,y,width,height]=attrs.get('viewBox').split(' ').map(Number);return {x,y,width,height};};
-  let brokenLabel=false;
+  let brokenLabel=false, bboxReads=0, labelDrift=0;
   const svg={style:{},viewBox:{get baseVal(){return current();}},getAttribute:k=>attrs.get(k),setAttribute:(k,v)=>attrs.set(k,v),
     hasAttribute:k=>attrs.has(k),removeAttribute:k=>attrs.delete(k),getBoundingClientRect:()=>({width:frameWidth}),
     getScreenCTM:()=>{const v=current();return new Matrix(frameWidth/v.width,-v.x*frameWidth/v.width,-v.y*frameWidth/v.width);},
     getBBox:()=>{throw Error('native fallback not required for a measurable chart');}};
   const element=(bounds,kind)=>({closest:q=>q==='[data-facet-label-style]'&&kind==='radial'?group:null,
-    getScreenCTM:()=>svg.getScreenCTM().multiply(new Matrix(2.5)),getBBox:()=>{if(kind==='label'&&brokenLabel)throw Error('font not ready');return bounds;},
+    getScreenCTM:()=>svg.getScreenCTM().multiply(new Matrix(2.5)),getBBox:()=>{bboxReads++;if(kind==='label'&&brokenLabel)throw Error('font not ready');return kind==='label' ? {...bounds,x:bounds.x+labelDrift} : bounds;},
     computed:{display:'inline',visibility:'visible',stroke:kind==='wedge'?'red':'none',strokeWidth:'2'}});
-  svg.querySelectorAll=()=>[element({x:90,y:90,width:140,height:140},'wedge'),element({x:110,y:155,width:100,height:10},'label'),element({x:-100,y:-100,width:900,height:900},'radial')];
-  return {svg,group,attrs,setWidth:w=>frameWidth=w,breakLabel:()=>brokenLabel=true};
+  svg.querySelectorAll=()=>[element(wedgeBounds,'wedge'),element({x:110,y:155,width:100,height:10},'label'),element({x:-100,y:-100,width:900,height:900},'radial')];
+  return {svg,group,attrs,setWidth:w=>frameWidth=w,breakLabel:()=>brokenLabel=true,shiftLabel:v=>labelDrift=v,bboxReads:()=>bboxReads};
 }
 function mount(chart){
-  let frame=chart, resize,mutate,raf, font, width, disconnected=0;
+  let frame=chart, resize,mutate,raf, font, width, disconnected=0, mutationOptions;
   const root={isConnected:true,querySelectorAll:()=>[frame.group],querySelector:()=>frame.svg};
   class RO {constructor(cb){resize=cb;}observe(){}disconnect(){disconnected++;}}
-  class MO {constructor(cb){mutate=cb;}observe(){}disconnect(){disconnected++;}}
+  class MO {constructor(cb){mutate=cb;}observe(_root,options){mutationOptions=options;}disconnect(){disconnected++;}}
   const globals={surfaceRef:{current:root},result:{error:''},labelStyle:'arc',originalViews:{current:new WeakMap()},setNaturalWidth:v=>width=v,
     DOMPoint:Point,getComputedStyle:e=>e.computed,ResizeObserver:RO,MutationObserver:MO,
     requestAnimationFrame:cb=>{raf=cb;return 1;},cancelAnimationFrame:()=>{raf=null;},
@@ -102,7 +102,7 @@ function mount(chart){
     browserLog:{warn:()=>assert.fail('unexpected measurement failure')}};
   const cleanup=moduleFrom(`module.exports=${effect}`,globals)();
   const flush=()=>{const cb=raf;raf=null;cb?.();};
-  return {cleanup,resize:()=>{resize();flush();},font:()=>{font();flush();},replace:next=>{frame=next;mutate();flush();},width:()=>width,disconnected:()=>disconnected};
+  return {cleanup,resize:()=>{resize();flush();},font:()=>{font();flush();},replace:next=>{frame=next;mutate();flush();},width:()=>width,disconnected:()=>disconnected,mutationOptions:()=>mutationOptions};
 }
 test('saved frame width and old oversized native viewBox do not determine SVG padding',()=>{
   const a=fixture([0,0,800,800],443), b=fixture([190,190,420,420],266);
@@ -122,4 +122,46 @@ test('replacement DOM and a temporarily unmeasurable label are reconciled withou
   assert.equal(next.attrs.get('viewBox'),'214.5 214.5 371 371');
   mounted.font();assert.equal(next.attrs.get('viewBox'),'214.5 214.5 371 371');
   mounted.cleanup();assert.equal(mounted.disconnected(),2);
+});
+
+test('arc bounds settle after one measure instead of following their own resize notifications',()=>{
+  const chart=fixture([0,0,800,800],443);
+  const mounted=mount(chart);
+  const initialReads=chart.bboxReads();
+  assert.ok(initialReads>0,'first measure reads label bounds');
+  // Updating viewBox and aspect ratio triggers resize observer notifications.
+  // Those notifications must NOT read arc textPath boxes again: doing so can
+  // generate an oscillating viewBox and visible vibration in Chrome.
+  for(let i=0;i<12;i++) mounted.resize();
+  assert.equal(chart.bboxReads(),initialReads);
+  assert.equal(chart.attrs.get('viewBox'),'214.5 214.5 371 371');
+  assert.deepEqual(JSON.parse(JSON.stringify(mounted.mutationOptions())),{childList:true,subtree:true},
+    'do not observe viewBox, width or height attributes written by measurement');
+  mounted.font();
+  assert.ok(chart.bboxReads()>initialReads,'font readiness must still force a new measurement');
+  mounted.cleanup();
+});
+
+// Arc labels are asymmetrical: the frame must stay centered on the chart's
+// authored circular origin, not the changing painted-text bounding box.
+test('asymmetric arc geometry produces a tight rectangular frame centered on the sunburst',()=>{
+  const chart=fixture([0,0,800,800],443,{x:90,y:100,width:120,height:150});
+  const mounted=mount(chart);
+  const [x,y,w,h]=chart.attrs.get('viewBox').split(' ').map(Number);
+  assert.equal(x+w/2,400);
+  assert.equal(y+h/2,400);
+  assert.equal(w,371);
+  assert.equal(h,471);
+  assert.notEqual(w,h,'frame follows actual horizontal and vertical extents');
+  mounted.cleanup();
+});
+test('tiny arc label shifts after font readiness cannot induce resize-box quiver',()=>{
+  const chart=fixture([0,0,800,800],443,{x:125,y:125,width:80,height:80});
+  const mounted=mount(chart);
+  const stable=chart.attrs.get('viewBox');
+  for(const dx of [0.12,-0.13,0.15,-0.17,0.1,0]){
+    chart.shiftLabel(dx);mounted.font();
+    assert.equal(chart.attrs.get('viewBox'),stable);
+  }
+  mounted.cleanup();
 });

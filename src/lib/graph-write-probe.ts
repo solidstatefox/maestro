@@ -8,7 +8,7 @@ export async function probeGraphWriteAccess(graph: string): Promise<{access: boo
   if (!/^https?:\/\/[^\s<>"{}|^`\\]+$/i.test(graph)) return { access: false, error: "Invalid graph IRI" };
   const id = crypto.randomUUID();
   const triple = `<urn:uuid:${id}> <urn:uuid:${crypto.randomUUID()}> <urn:uuid:${crypto.randomUUID()}>`;
-  const execute = (update:string)=>updatePersonal(update,undefined,undefined,"graph-write-probe:execute");
+  const execute = (update:string)=>updatePersonal(update,undefined,undefined,"graph-write-probe:execute",undefined,"view",{tab:"personal",ribbon:"session"});
   try { await execute(`INSERT DATA { GRAPH <${graph}> { ${triple} } }`); }
   catch (error) { return { access: false, error: error instanceof Error ? error.message : "Insert denied" }; }
   try { await execute(`DELETE DATA { GRAPH <${graph}> { ${triple} } }`); }

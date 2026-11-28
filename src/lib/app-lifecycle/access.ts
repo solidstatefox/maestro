@@ -1,3 +1,4 @@
+import { runActorQuery } from "./actor-query-authority";
 import { assign, createActor, fromPromise, setup } from "xstate";
 
 /** Phase B: authoritative UI access state. No credentials or RDF data are stored
@@ -19,6 +20,7 @@ export type AccessContext = {
   challengeResponsePending: boolean;
   initializationPulse: boolean;
   policyStage: "unavailable" | "seeding" | "verifying" | "ready" | "failed";
+  policyAttemptId: number;
   policyError: string;
   /** Last completed protected HTTP request, separate from graph-policy readiness. */
   authState: "unknown" | "success" | "rejected" | "degraded";
@@ -33,13 +35,13 @@ export type AccessEvent =
   | { type: "SESSION_OBSERVED"; restored: boolean; sessionKey: string }
   | { type: "QUERY_CHANGED"; queryKey: string }
   | { type: "AUTH_STATUS_OBSERVED"; sessionKey: string; state: "success" | "rejected" | "degraded"; status: number | null; at: number }
-  | { type: "POLICY_STATUS_OBSERVED"; sessionKey: string; stage: "seeding" | "verifying" | "ready" | "failed"; error?: string }
+  | { type: "POLICY_STATUS_OBSERVED"; sessionKey: string; stage: "seeding" | "verifying" | "ready" | "failed"; error?: string; attemptId?: number }
   | { type: "BOOKMARK_CHECK_REQUESTED"; queryKey: string; sessionKey: string; execute: BookmarkCheckExecutor }
   | { type: "BOOKMARK_CONFIRMED"; queryKey: string; bookmarkId: string }
   | { type: "BOOKMARK_REVOKED"; queryKey: string };
 
 const initialContext: AccessContext = {
-  sessionKey: "", queryKey: "", bookmark: "unavailable", bookmarkId: "", verificationPending: false, bookmarkExecutor: null, loginPending: false, challengeResponsePending: false, initializationPulse: false, policyStage: "unavailable", policyError: "", authState: "unknown", authResponseStatus: null, authResponseAt: 0, proxyTransport: "unknown",
+  sessionKey: "", queryKey: "", bookmark: "unavailable", bookmarkId: "", verificationPending: false, bookmarkExecutor: null, loginPending: false, challengeResponsePending: false, initializationPulse: false, policyStage: "unavailable", policyAttemptId: 0, policyError: "", authState: "unknown", authResponseStatus: null, authResponseAt: 0, proxyTransport: "unknown",
 };
 /** A pure context updater, not a reusable XState action. XState infers the
  * precise SESSION_OBSERVED event type at each assign(...) call site. */
@@ -50,7 +52,7 @@ const updateObservedSession = (
   const sessionKey = event.restored ? event.sessionKey : "";
   if (sessionKey === context.sessionKey) return {};
   return { sessionKey, bookmark: sessionKey ? "checking" : "unavailable", bookmarkId: "", verificationPending: false, bookmarkExecutor: null,
-    policyStage: sessionKey ? "verifying" : "unavailable", policyError: "",
+    policyStage: sessionKey ? "verifying" : "unavailable", policyAttemptId: 0, policyError: "",
     initializationPulse: Boolean(sessionKey && !context.sessionKey && context.initializationPulse),
     // Carry the successful Connect response into the newly observed session;
     // this is an HTTP observation, never a grant of personal-store readiness.
@@ -65,7 +67,7 @@ export const maestroAccessMachine = setup({
     checkBookmark: fromPromise(async ({input, signal}: { input: {
       sessionKey: string; queryKey: string; execute: BookmarkCheckExecutor | null;
     }; signal: AbortSignal }) => input.execute
-      ? { sessionKey: input.sessionKey, queryKey: input.queryKey, ...(await input.execute(signal)) }
+      ? { sessionKey: input.sessionKey, queryKey: input.queryKey, ...(await runActorQuery("bookmark-verification",signal,input.execute)) }
       : null),
   },
 }).createMachine({
@@ -92,8 +94,12 @@ export const maestroAccessMachine = setup({
     },
     POLICY_STATUS_OBSERVED: {
       guard: ({ context, event }) => Boolean(context.sessionKey) && context.sessionKey === event.sessionKey &&
-        (context.policyStage !== "ready" || event.stage === "ready"),
-      actions: assign(({ context, event }) => ({ policyStage: event.stage, policyError: event.error ?? "", initializationPulse: event.stage === "ready" || event.stage === "failed" ? false : context.initializationPulse })),
+        (event.attemptId === undefined
+          ? (context.policyStage !== "ready" || event.stage === "ready")
+          : (event.attemptId > context.policyAttemptId ||
+             (event.attemptId === context.policyAttemptId &&
+              (context.policyStage !== "ready" || event.stage === "ready")))),
+      actions: assign(({ context, event }) => ({ policyStage: event.stage, policyAttemptId: event.attemptId ?? context.policyAttemptId, policyError: event.error ?? "", initializationPulse: event.stage === "ready" || event.stage === "failed" ? false : context.initializationPulse })),
     },
     QUERY_CHANGED: [
       // Reentering signedIn stops the previous invoked verifier immediately.

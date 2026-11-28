@@ -37,7 +37,7 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
   // Discovery results belong to their exact FCT/History scope. A provider
   // approved for the previous query must not be offered for a different query
   // while its own SHACL validation is pending.
-  const [personalDiscovery] = useState(() => createMaestroViewDiscoveryController<ClientPerspective>());
+  const [personalDiscovery] = useState(() => createMaestroViewDiscoveryController<ClientPerspective>("maestro-personal-perspective-discovery", "personal-perspective-discovery"));
   const personalSnapshot = useSyncExternalStore(personalDiscovery.subscribe, personalDiscovery.getSnapshot, personalDiscovery.getSnapshot);
   useEffect(() => { personalDiscovery.start(); return () => personalDiscovery.stop(); }, [personalDiscovery]);
   const classKey = useMemo(() => [...new Set(queryClassUris)].sort().join("\n"), [queryClassUris]);
@@ -53,8 +53,8 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
     if (!hasPersonalPerspective) { personalDiscovery.inactive(); return; }
     personalDiscovery.discover(discoveryKey, signal => discoverMatchedClientPerspectives(
       classKey ? classKey.split("\n") : [], queryXml, triggerUri, historyUri, signal,
-      contextualKey ? contextualKey.split("\n") : []));
-  }, [personalDiscovery, classKey, contextualKey, queryXml, triggerUri, historyUri, discoveryKey, viewPanel, viewDiscoveryLoading, hasPersonalPerspective]);
+      contextualKey ? contextualKey.split("\n") : [], selectedViewUri));
+  }, [personalDiscovery, classKey, contextualKey, queryXml, triggerUri, historyUri, discoveryKey, viewPanel, viewDiscoveryLoading, hasPersonalPerspective, selectedViewUri]);
   const personalDiscoveryError = personalSnapshot.context.key === discoveryKey && personalSnapshot.matches("failed") ? personalSnapshot.context.error : "";
   // Render only providers supplied by the exact-scope eligibility gate.
   const visibleViews = [...new Map(discoveredViews.map(view => [view.uri, view])).values()];

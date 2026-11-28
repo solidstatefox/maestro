@@ -3,6 +3,7 @@
 /** Browser-owned History/Bookmarks persistence, migrated from the domain-specific
  * /service handler. The authenticated /sparql proxy remains the sole gateway and
  * enforces graph access. No independent authorization decision is made here. */
+import { inheritActorQueryAuthority } from "./app-lifecycle/actor-query-authority";
 import { bookmarkMetadataUpdate } from "@/lib/bookmark-metadata-update";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
 import { historyQueryRdf, VFCT } from "@/lib/history-query-rdf";
@@ -89,9 +90,9 @@ async function postFavorites(request: Request, ctx: PersonalContext) {
     const historyAction = `${VFCT_NS}historyAction`;
     const historyType = `${VFCT_NS}QueryHistoryVisit`;
 
-    const queryPersonal = async (q: string) => selectResult(await selectPersonal(q, ctx, request.signal,request.headers.get("x-maestro-debug-source") || `HistoryBookmarks:${action || "query"}`));
-    const writePersonal = (u: string) => updatePersonal(u, request.signal,undefined,request.headers.get("x-maestro-debug-source") || `HistoryBookmarks:${action || "query"}`);
-    const askPersonal = async (q: string) => (await selectPersonal(askAsSelect(q), ctx, request.signal,request.headers.get("x-maestro-debug-source") || `HistoryBookmarks:${action || "query"}`)).length > 0;
+    const queryPersonal = async (q: string) => selectResult(await selectPersonal(q, ctx, request.signal,request.headers.get("x-maestro-debug-source") || `HistoryBookmarks:${action || "query"}`,"view",{tab:"personal",ribbon:"session"}));
+    const writePersonal = (u: string) => updatePersonal(u, request.signal,undefined,request.headers.get("x-maestro-debug-source") || `HistoryBookmarks:${action || "query"}`,ctx.session,"view",{tab:"personal",ribbon:"session"});
+    const askPersonal = async (q: string) => (await selectPersonal(askAsSelect(q), ctx, request.signal,request.headers.get("x-maestro-debug-source") || `HistoryBookmarks:${action || "query"}`,"view",{tab:"personal",ribbon:"session"})).length > 0;
 
     // History requests have their own validation; only actions that actually
     // carry a query require serialized FCT XML.
@@ -329,7 +330,7 @@ async function postFavorites(request: Request, ctx: PersonalContext) {
       const exists = `ASK WHERE { GRAPH ${bookmarkGraph} { ${iri(historyId)} a <${BOOKMARK_NS}Bookmark> } }`;
       if (!await askPersonal(exists)) return json({error:"Bookmark no longer exists."},{status:404});
       const update=bookmarkMetadataUpdate(`${baseGraph}#bookmarks`,historyId,{title:body.title,description:body.description,tags:body.tags as string[],tagVocabulary:body.tagVocabulary});
-      await updatePersonal(update,request.signal,undefined,"HistoryBookmarks:updateMetadata",ctx.session);
+      await updatePersonal(update,request.signal,undefined,"HistoryBookmarks:updateMetadata",ctx.session,"view",{tab:"personal",ribbon:"session"});
       if (!await askPersonal(exists)) return json({error:"Bookmark no longer exists."},{status:404});
       return json({updated:true,historyId});
     }
@@ -619,7 +620,7 @@ async function getFavorites(request: Request, ctx: PersonalContext) {
   try {
     const baseGraph = ctx.base;
     const query = `PREFIX rdf: <${RDF_NS}> PREFIX rdfs: <${RDFS_NS}> PREFIX dcterms: <${DCTERMS_NS}> PREFIX a: <${ANNOTATION_NS}> PREFIX b: <${BOOKMARK_NS}> PREFIX vfct: <${VFCT_NS}> PREFIX sioc: <${SIOC_NS}> PREFIX schema: <${SCHEMA_NS}> SELECT DISTINCT ?bookmark ?title ?description ?created ?queryXML ?shareUrl WHERE { GRAPH <${baseGraph}#bookmarks> { { ?bookmark rdf:type b:Bookmark } UNION { ?bookmark rdf:type sioc:Item } UNION { ?bookmark rdf:type vfct:QueryBookmark } OPTIONAL { ?bookmark dcterms:title ?dcTitle } OPTIONAL { ?bookmark rdfs:label ?standardTitle } OPTIONAL { ?bookmark vfct:label ?legacyTitle } BIND(COALESCE(?dcTitle, ?standardTitle, ?legacyTitle, STR(?bookmark)) AS ?title) OPTIONAL { ?bookmark dcterms:description ?description } OPTIONAL { ?bookmark a:created ?annoteaCreated } OPTIONAL { ?bookmark dcterms:created ?dctermsCreated } OPTIONAL { ?bookmark dcterms:date ?dctermsDate } OPTIONAL { ?bookmark vfct:created ?legacyCreated } BIND(COALESCE(?annoteaCreated, ?dctermsCreated, ?dctermsDate, ?legacyCreated) AS ?created) OPTIONAL { ?bookmark schema:url ?bookmarkUrl } { ?bookmark b:recalls ?query . ?query rdf:value ?queryXML . OPTIONAL { ?query schema:url ?queryUrl } } UNION { ?bookmark dcterms:references ?query . ?query rdf:value ?queryXML . OPTIONAL { ?query schema:url ?queryUrl } } UNION { ?bookmark vfct:savedQuery ?legacyQuery . ?legacyQuery vfct:queryXML ?queryXML . } BIND(COALESCE(?bookmarkUrl, ?queryUrl) AS ?shareUrl) } } ORDER BY DESC(?created) ?title`;
-    const result = selectResult(await selectPersonal(query, ctx, request.signal,request.headers.get("x-maestro-debug-source") || "HistoryBookmarks:List"));
+    const result = selectResult(await selectPersonal(query, ctx, request.signal,request.headers.get("x-maestro-debug-source") || "HistoryBookmarks:List","view",{tab:"personal",ribbon:"session"}));
     const favorites = (result.results?.bindings ?? []).map((row: Record<string, { value?: string }>) => ({
       uri: row.bookmark?.value ?? "",
       title: row.title?.value ?? row.bookmark?.value ?? "Saved query",
@@ -648,6 +649,7 @@ export async function clientQueryFavorites(init: RequestInit = {}): Promise<Resp
       body: init.method?.toUpperCase() === "GET" ? undefined : init.body,
       signal: init.signal,
     });
+    inheritActorQueryAuthority(init.signal, request.signal);
     return request.method === "GET" ? await getFavorites(request, ctx) : await postFavorites(request, ctx);
   } catch (error) {
     if (init.signal?.aborted) throw error;

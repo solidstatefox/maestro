@@ -78,7 +78,7 @@ async function approved(ctx:PersonalContext,rulesGraph:string,provider:string,si
   const matches=await selectPersonal(`SELECT ?isProvider ?approved WHERE {
     GRAPH ${iri(rulesGraph)} { ${iri(provider)} a <${MUI}Provider> . BIND(true AS ?isProvider) }
     OPTIONAL { GRAPH <${resolveGraph(GRAPH.STATUS, ctx.base)}> { ${iri(provider)} <${MUI}status> <${MUI}Approved> . BIND(true AS ?approved) } }
-  } LIMIT 2`,ctx,signal,"client-otc-runner:approved");
+  } LIMIT 2`,ctx,signal,"client-otc-runner:approved","view",{tab:"personal",ribbon:"session"});
   if(!matches.length)throw new Error("Selected OTC transcoder is not a provider in the requested rules graph.");
   if(matches.some(row=>row.approved?.value==="true"||row.approved?.value==="1"))return;
   const effective=await readClientPolicyApprovals([provider],signal);
@@ -93,7 +93,7 @@ SELECT ?rule ?ask ?select ?target ?survey ?template ?assumption ?validator WHERE
  ?rule otc:select ?select ; otc:query ?survey ; otc:template ?template .
  OPTIONAL { ?rule otc:ask ?ask } OPTIONAL { ?rule otc:target ?target }
  OPTIONAL { ?rule otc:assume ?assumption }
- } } LIMIT 100`,ctx,signal,"client-otc-runner:rules");
+ } } LIMIT 100`,ctx,signal,"client-otc-runner:rules","view",{tab:"personal",ribbon:"session"});
   const map=new Map<string,Rule>();
   for(const row of rows){const id=row.rule?.value;if(!id||!row.select?.value||!row.survey?.value||!row.template?.value)continue;
     let item=map.get(id);if(!item){item={id,select:row.select.value,query:row.survey.value,template:row.template.value,
@@ -113,7 +113,7 @@ SELECT ?class ?property ?path ?minCount ?datatype ?nodeKind ?minLength ?hasValue
  OPTIONAL { ?property sh:minCount ?minCount } OPTIONAL { ?property sh:datatype ?datatype }
  OPTIONAL { ?property sh:nodeKind ?nodeKind } OPTIONAL { ?property sh:minLength ?minLength }
  OPTIONAL { ?property sh:hasValue ?hasValue } } }
-} LIMIT 100`,ctx,signal,"client-otc-runner:shape");
+} LIMIT 100`,ctx,signal,"client-otc-runner:shape","view",{tab:"personal",ribbon:"session"});
   if(!rows.length)throw new Error(`SHACL shape ${shapeUri} is missing.`);
   const classes=new Set<string>(),constraints=new Map<string,Constraint>();
   for(const row of rows){const classIri=row.class?.value;if(classIri)classes.add(classIri);
@@ -233,7 +233,7 @@ async function survey(rule:Rule,row:Row,transcoder:string,activity:AssistantActi
   log.status="success";return result;
 }
 async function writeTriples(graph:string,triples:ClientRdfTriple[],signal?:AbortSignal){
-  for(let i=0;i<triples.length;i+=120){check(signal);await updatePersonal(clientRdfInsert(graph,triples.slice(i,i+120)),signal,undefined,"client-otc-runner:writeTriples");}
+  for(let i=0;i<triples.length;i+=120){check(signal);await updatePersonal(clientRdfInsert(graph,triples.slice(i,i+120)),signal,undefined,"client-otc-runner:writeTriples",undefined,"view",{tab:"personal",ribbon:"session"});}
 }
 
 /** Two-stage maximum: only validated rows call the LLM. All status approvals
@@ -327,14 +327,14 @@ export async function runClientTranscoder(input:ClientOtcOptions):Promise<Client
     if(!triples.length)return {ok:true,published:false,reason:"No eligible or SHACL-valid input rows.",trace,successors,activity};
     if(dryRun)return {ok:true,published:false,dryRun:true,runGraph,tripleCount:triples.length,
       turtle:trace.flatMap(t=>t.turtle).join("\n\n"),trace,successors,activity};
-    if(await personalExists(`GRAPH ${iri(runGraph)} { ?s ?p ?o }`,ctx,signal,"client-otc-runner:runClientTranscoder"))throw new Error("OTC destination graph already exists.");
+    if(await personalExists(`GRAPH ${iri(runGraph)} { ?s ?p ?o }`,ctx,signal,"client-otc-runner:runClientTranscoder",{tab:"personal",ribbon:"session"}))throw new Error("OTC destination graph already exists.");
     await writeTriples(runGraph,triples,signal);
-    if(!await personalExists(`GRAPH ${iri(runGraph)} { ?s ?p ?o }`,ctx,signal,"client-otc-runner:runClientTranscoder"))throw new Error("OTC output was not visible after publication.");
+    if(!await personalExists(`GRAPH ${iri(runGraph)} { ?s ?p ?o }`,ctx,signal,"client-otc-runner:runClientTranscoder",{tab:"personal",ribbon:"session"}))throw new Error("OTC output was not visible after publication.");
     return {ok:true,published:true,runGraph,tripleCount:triples.length,
       turtle:trace.flatMap(t=>t.turtle).join("\n\n"),trace,successors,activity};
   }finally{
     for(const graph of staging.reverse()){
-      try{progress({step:"cleanup",status:"running",detail:"Removing temporary OTC graph"});await updatePersonal(`CLEAR GRAPH ${iri(graph)}`,undefined,undefined,"client-otc-runner:runClientTranscoder");
+      try{progress({step:"cleanup",status:"running",detail:"Removing temporary OTC graph"});await updatePersonal(`CLEAR GRAPH ${iri(graph)}`,undefined,undefined,"client-otc-runner:runClientTranscoder",undefined,"view",{tab:"personal",ribbon:"session"});
         progress({step:"cleanup",status:"success",detail:"Temporary OTC graph removed"});}
       catch(error){progress({step:"cleanup",status:"error",detail:`Could not remove temporary OTC graph. Clean up manually: ${error instanceof Error ? error.message : String(error)}`});}
     }

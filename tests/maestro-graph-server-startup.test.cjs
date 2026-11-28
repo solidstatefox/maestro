@@ -153,6 +153,10 @@ test('startup commits explicit q or locally repaired addr before URL synchroniza
   assert.ok(parseAt >= 0 && fallbackAt > parseAt && serializeAt > fallbackAt && restoreAt > serializeAt && verifiedAt > restoreAt && readyAt > verifiedAt);
   assert.match(boot, /setUrlRestoreError\(message\)/); // failure must settle, not hang
   assert.doesNotMatch(boot, /if \(needsAddress|await\s|initializeMaestroStorage\(|authRestoreComplete|setSelectedEndpointId\(|window\.history\.replaceState|searchParams\.set\("q"\)/);
+  // URL FCT restoration remains synchronous and unaffected by authentication.
+  // The one admission check reads the original address bar only after Browse
+  // XState becomes foreground, with no pending target saved in the controller.
+  assert.match(controller, /const decision = decideRestoredViewEntry\(/);
   assert.match(boot, /\}, \[\]\);/);
 
   assert.match(urlSync, /useLayoutEffect\(\(\) => \{\s*if \(!urlStateInitialized\) return;/);

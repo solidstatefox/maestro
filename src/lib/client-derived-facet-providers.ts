@@ -30,7 +30,7 @@ export async function discoverApprovedRegexDerivations(property: string,
         ?field mui:resultPredicate ?resultIri ; rdfs:label ?fieldLabel .
         OPTIONAL { ?field mui:capture ?capture }
       }
-    } ORDER BY ?provider ?capture LIMIT 100`, ctx, signal,"client-derived-facet-providers:discoverApprovedRegexDerivations");
+    } ORDER BY ?provider ?capture LIMIT 100`, ctx, signal,"client-derived-facet-providers:discoverApprovedRegexDerivations","view",{tab:"shared",ribbon:"query"});
   const candidates = [...new Set(rows.map(row => row.provider?.value || "").filter(validIri))];
   if (!candidates.length) return [];
   const approved = new Set((await readClientPolicyApprovals(candidates, signal))

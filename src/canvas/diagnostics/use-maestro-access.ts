@@ -3,17 +3,20 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "@/components/ui/toast";
 import type { PersonalAuthSession } from "@/lib/personal-auth";
-import { loadClientStatusMachines } from "@/lib/status-machine-client";
-import { machineForTarget } from "@/lib/status-machine-runtime";
 import { createMaestroAccessController } from "@/lib/app-lifecycle/access";
 import { lastProxyTransportObservation, PROXY_TRANSPORT_EVENT } from "@/lib/proxy-transport-observation";
 import { lastPersonalHttpOutcome, PERSONAL_AUTH_OUTCOME } from "@/lib/personal-session-hint";
+import type { PersonalInitializationController } from "@/lib/app-lifecycle/personal-initialization-machine";
 
 /** The session resolver is the authentication authority. XState owns all UI
  * gates and bookmark verification; credentials never enter machine context. */
-export function useMaestroAccess(session: PersonalAuthSession | null, restored: boolean, policiesReady = true, seedError = "") {
+export function useMaestroAccess(session: PersonalAuthSession | null, restored: boolean, policiesReady: boolean, seedError: string, initialization: PersonalInitializationController) {
   const [controller] = useState(createMaestroAccessController);
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const initializationSnapshot = useSyncExternalStore(initialization.subscribe, initialization.getSnapshot, initialization.getSnapshot);
+  const loginTesting = initializationSnapshot.matches("running") && initializationSnapshot.context.request?.purpose === "connect";
+  const connectError = initializationSnapshot.matches("failed") && initializationSnapshot.context.request?.purpose === "connect"
+    ? initializationSnapshot.context.error : "";
   const lastNotifiedStageRef = useRef<{sessionKey:string;stage:string;error:string}>({sessionKey:"",stage:"",error:""});
   // An auth session with freshly rotated credentials is distinct even if its
   // public store URI/user name is unchanged. Do not store credentials in XState.
@@ -31,8 +34,18 @@ export function useMaestroAccess(session: PersonalAuthSession | null, restored: 
     : "";
   useLayoutEffect(() => {
     controller.start();
-    return () => controller.stop();
-  }, [controller]);
+    // Observe the invoked Connect lifecycle synchronously. An HTTP challenge
+    // may arrive before a React render; access must already know it is pending.
+    const observeConnect = () => {
+      const current = initialization.getSnapshot();
+      const pending = current.matches("running") && current.context.request?.purpose === "connect";
+      if (controller.getSnapshot().context.loginPending !== pending)
+        controller.send({ type: "LOGIN_ACTIVITY", pending });
+    };
+    const unsubscribe = initialization.subscribe(observeConnect);
+    observeConnect();
+    return () => { unsubscribe(); controller.stop(); };
+  }, [controller, initialization]);
   useEffect(() => {
     const observe = () => { const latest=lastProxyTransportObservation(); if(latest)controller.send({type:"PROXY_TRANSPORT_OBSERVED",state:latest.state}); };
     observe();window.addEventListener(PROXY_TRANSPORT_EVENT,observe);
@@ -57,42 +70,21 @@ export function useMaestroAccess(session: PersonalAuthSession | null, restored: 
     window.addEventListener(PERSONAL_AUTH_OUTCOME, onResponse);
     return () => { active = false; window.removeEventListener(PERSONAL_AUTH_OUTCOME, onResponse); };
   }, [controller, session, sessionKey]);
-  useLayoutEffect(() => {
+  // XState owns seeding, bootstrap AND state-machine verification. Access
+  // observes its completed attempt, not an independently spawned React task.
+  // The attempt id prevents a late result from an older retry unlocking gates.
+  useEffect(() => {
     if (!sessionKey) return;
-    if (seedError) {
-      controller.send({ type: "POLICY_STATUS_OBSERVED", sessionKey, stage: "failed", error: seedError });
-      return;
-    }
-    if (!policiesReady) {
-      controller.send({ type: "POLICY_STATUS_OBSERVED", sessionKey, stage: "seeding" });
-      return;
-    }
-    // On browser restore, verification must not be confused with a fresh
-    // login or silently trigger graph reseeding. The current personal graph
-    // must actually contain a provider before policy-dependent Providers run.
-    const abort = new AbortController();
-    controller.send({ type: "POLICY_STATUS_OBSERVED", sessionKey, stage: "verifying" });
-    void (async () => {
-      try {
-        // One arbitrary mui:Provider is NOT evidence that /graph has been
-        // seeded. The Status/approval policies are needed for write controls;
-        // read-only provider catalog discovery remains independently usable.
-        const machines = await loadClientStatusMachines(abort.signal);
-        for (const target of [
-          "http://www.w3.org/2000/01/rdf-schema#Resource",
-          "gttp://ggg.maestro.ecosys/ns/ui#Provider",
-          "gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy",
-          "gttp://ggg.maestro.ecosys/ns/ui#CurationProvider",
-        ]) machineForTarget(machines, target);
-        if (!abort.signal.aborted) controller.send({ type: "POLICY_STATUS_OBSERVED", sessionKey,
-          stage: "ready", error: "" });
-      } catch (error) {
-        if (!abort.signal.aborted) controller.send({ type: "POLICY_STATUS_OBSERVED", sessionKey,
-          stage: "failed", error: error instanceof Error ? error.message : "Could not verify policy providers." });
-      }
-    })();
-    return () => abort.abort();
-  }, [controller, sessionKey, policiesReady, seedError]);
+    const init=initializationSnapshot.context;
+    const attemptId=init.request?.attemptId ?? 0;
+    const stage=seedError || init.stage === "failed" ? "failed"
+      : init.stage === "ready" && policiesReady ? "ready"
+      : "seeding";
+    controller.send({ type: "POLICY_STATUS_OBSERVED", sessionKey, attemptId, stage,
+      error: stage === "failed" ? (seedError || init.error || "Personal initialization failed.") : "" });
+  }, [controller, sessionKey, policiesReady, seedError,
+    initializationSnapshot.context.request?.attemptId, initializationSnapshot.context.stage,
+    initializationSnapshot.context.error]);
   // No seed-completion success toast: only a verified XState transition
   // is allowed to report final readiness. Distinct attempt/session scope
   // avoids duplicated Strict Mode notifications and misleading stale toasts.
@@ -111,5 +103,5 @@ export function useMaestroAccess(session: PersonalAuthSession | null, restored: 
       }
     }
   }, [sessionKey, snapshot.context.sessionKey, snapshot.context.policyStage, snapshot.context.policyError]);
-  return { controller, snapshot, sessionKey };
+  return { controller, snapshot, sessionKey, loginTesting, connectError };
 }

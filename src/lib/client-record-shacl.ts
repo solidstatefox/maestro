@@ -103,7 +103,7 @@ SELECT DISTINCT ?s ?p ?o WHERE {
     ?s ?p ?o .
   }
 } LIMIT ${max + 1}`;
-  const rows = await selectPersonal(sparql, ctx, signal,"client-record-shacl:readClientShaclShapeTriples") as BindingRow[];
+  const rows = await selectPersonal(sparql, ctx, signal,"client-record-shacl:readClientShaclShapeTriples","view",{tab:"record",ribbon:"session"}) as BindingRow[];
   if (!rows.length) throw new Error(`SHACL shape ${shapeUri} is missing or inaccessible in ${shapesGraph}.`);
   if (rows.length > max) throw new Error("SHACL shape exceeds the 5000-triple validation limit.");
   return rows;

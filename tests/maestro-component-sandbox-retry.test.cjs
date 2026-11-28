@@ -43,7 +43,7 @@ test('502 503 504 error actions use shadcn ButtonGroup beside Copy with callback
   assert.match(error, /function isRetryableGatewayError/);
   assert.match(error, /\(\?:502\|503\|504\)/);
   assert.match(error, /<ButtonGroup aria-label="Error actions"/);
-  assert.match(error, /onRetry && isRetryableGatewayError\(error\)/);
+  assert.match(error, /onRetry && \(iconOnly \|\| isRetryableGatewayError\(error\)\)/);
   assert.match(error, /onClick=\{onRetry\}/);
   for (const [file, component] of [
     ['src/canvas/left/pane-navigation.tsx', 'properties'],

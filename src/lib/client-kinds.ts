@@ -12,7 +12,7 @@ import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
  * their mui:pattern literals once into Maestro's native TypeScript Kind model,
  * and apply the patterns to the active FCT query only later.
  */
-import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
+import { personalContext, selectPersonal, type PersonalTransportAuthority } from "@/lib/client-personal-sparql";
 import { hydrateMaestroKinds, clearMaestroKinds } from "@/lib/maestro-kinds";
 
 const MUI = "gttp://ggg.maestro.ecosys/ns/ui#";
@@ -28,7 +28,8 @@ export function restoreSessionKinds(addr:string,base:string,entries:{id:string;p
 let generation = 0;
 const inFlight = new Map<string, Promise<void>>();
 
-export async function loadMaestroKinds(signal?: AbortSignal): Promise<void> {
+export async function loadMaestroKinds(signal?: AbortSignal, authority: PersonalTransportAuthority = "view"): Promise<void> {
+  if (authority === "personal-initialization" && !signal) throw new Error("Kinds initialization requires its XState signal.");
   const ctx = await personalContext();
   const key = `${ctx.addr}\u0000${ctx.base}`;
   if (loadedSessionKey === key) return;
@@ -47,7 +48,7 @@ export async function loadMaestroKinds(signal?: AbortSignal): Promise<void> {
         OPTIONAL { ?kind ${iri(`${MUI}pattern`)} ?pattern . }
       }
     } ORDER BY ?provider ?kind ?pattern`;
-    const rows = await selectPersonal(query, ctx, signal,"client-kinds:loadMaestroKinds");
+    const rows = await selectPersonal(query, ctx, signal,"client-kinds:loadMaestroKinds",authority,{tab:"personal",ribbon:"session"});
     if (signal?.aborted || currentGeneration !== generation) return;
     const entries = rows.flatMap((row) => {
       if (row.provider?.type !== "uri" || row.kind?.type !== "uri") return [];

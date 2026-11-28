@@ -144,7 +144,7 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
       try {
         const response = await maestroQueryFetch("/proxy/api/sparql", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: {"x-maestro-debug-source":"urn:maestro:component:TemporalFacet:Domain","x-maestro-debug-component":"TemporalFacet:Domain", "Content-Type": "application/json", "X-Maestro-Query-Label": `TemporalFacet:domain:${provider.property}` },
+          headers: {"x-maestro-view-tab": "shared", "x-maestro-view-ribbon": "query", "x-maestro-debug-source":"urn:maestro:component:TemporalFacet:Domain","x-maestro-debug-component":"TemporalFacet:Domain", "Content-Type": "application/json", "X-Maestro-Query-Label": `TemporalFacet:domain:${provider.property}` },
           body: JSON.stringify({ facetValueCount: { ...domainRequest, sparql: domainRequest.query, temporalDomain: true } }),
         });
         const data = await response.json() as { error?: string; incomplete?: boolean; min?: string | null; max?: string | null };
@@ -193,7 +193,7 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
       try {
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "text/xml; charset=utf-8", "X-Maestro-Query-Label": `TemporalFacet:${provider.property}` }, body: query,
+          headers: {"x-maestro-view-tab": "shared", "x-maestro-view-ribbon": "query",  "Content-Type": "text/xml; charset=utf-8", "X-Maestro-Query-Label": `TemporalFacet:${provider.property}` }, body: query,
         });
         if (!response.ok) throw new Error(`Calendar query returned HTTP ${response.status}: ${(await response.text()).slice(0,300)}`);
         const data = await readFctResponse(response);

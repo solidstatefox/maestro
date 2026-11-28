@@ -24,10 +24,19 @@ export function moveBrowsePane(order: BrowsePaneOrder, source: BrowsePane, targe
   next.splice(targetIndex, 0, source);
   return next;
 }
-/** View/Analyze keep their original two-panel composition. */
-const NON_BROWSE_ORDER: BrowsePaneOrder = ["filters", "results"];
+/** In View/Analyze, Filters keeps its Sheet position and width. Results
+ * occupies the combined widths of the other two physical Sheet columns. */
 export function activeBrowsePaneOrder(order: BrowsePaneOrder, browse: boolean): BrowsePaneOrder {
-  return browse ? order : NON_BROWSE_ORDER;
+  if (browse) return order;
+  const valid = isBrowsePaneOrder(order) ? order : DEFAULT_BROWSE_PANE_ORDER;
+  return valid.indexOf("filters") === 0 ? ["filters", "results"] : ["results", "filters"];
+}
+export function compactBrowsePaneSizes(sizes: BrowsePaneSizes, order: BrowsePaneOrder): readonly [number, number] {
+  const valid = isBrowsePaneOrder(order) ? order : DEFAULT_BROWSE_PANE_ORDER;
+  const filterIndex = valid.indexOf("filters");
+  const filterWidth = sizes[filterIndex];
+  const resultWidth = sizes.reduce((sum, size) => sum + size, 0) - filterWidth;
+  return filterIndex === 0 ? [filterWidth, resultWidth] : [resultWidth, filterWidth];
 }
 
 export const BROWSE_PANE_SIZES_STORAGE_KEY = "maestro-browse-pane-sizes";

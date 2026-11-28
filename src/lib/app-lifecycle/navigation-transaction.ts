@@ -1,3 +1,4 @@
+import { runActorQuery } from "./actor-query-authority";
 import { assign, createActor, fromPromise, setup } from "xstate";
 
 /** Navigation is one abortable transaction. All awaits must check signal before
@@ -9,7 +10,7 @@ const empty = (): Context => ({ key: "", job: null, error: "" });
 export const maestroNavigationTransactionMachine = setup({
   types: { context: {} as Context, events: {} as Event },
   actors: { execute: fromPromise(async ({ input, signal }: { input: { key: string; job: NavigationJob }; signal: AbortSignal }) => {
-    await input.job(signal);
+    await runActorQuery("history-navigation",signal,input.job);
     return input.key;
   }) },
 }).createMachine({

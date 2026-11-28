@@ -1,4 +1,4 @@
-import { FCT_VIEW_TYPES, isFctViewType, type FctViewType } from "./fct-view-types";
+import { FCT_VIEW_TYPES, isFctViewType, MAX_PREDICATE_ANALYSIS_CANDIDATES, DEFAULT_PREDICATE_ANALYSIS_CANDIDATES, MAX_PREDICATE_ANALYSIS_INCIDENCE_ROWS, DEFAULT_PREDICATE_ANALYSIS_INCIDENCE_ROWS, type FctViewType, predicateRankAlgorithm, type PredicateRankAlgorithm } from "./fct-view-types";
 import { isBlankNodeTerm, bnodeDescribeBounds, RDF_REST_IRI } from "./bnode";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { normalizeFctValue } from "./fct-value-policy";
@@ -16,6 +16,13 @@ type XmlNode = {
   children: XmlNode[];
 };
 
+/** Internal compiler pass; never supplied in FCT XML or exposed as another view. */
+/** Structural ranking and clustering use the original incidence stream.
+ * FUR has independent population, coverage and value-frequency projections.
+ * No projection serializes discovered predicate IRIs into VALUES. */
+export type PredicateAnalysisStage = { kind: "incidence" | "coverage" | "value-counts"; offset: number; limit: number }
+  | { kind: "population" };
+
 export type FctSparqlView = FctViewType;
 export type CompiledFctQuery = {
   query: string;
@@ -23,6 +30,9 @@ export type CompiledFctQuery = {
   limit: number;
   offset: number;
   timeoutMs: number;
+  maxPredicateCandidates?: number;
+  maxPredicateIncidenceRows?: number;
+  predicateRankAlgorithm?: PredicateRankAlgorithm;
   target: string;
   focusRelationship?: { predicate: string; direction: "forward" | "reverse" };
   graphOnly: boolean;
@@ -837,7 +847,7 @@ export type FctFederationContext = {
   providerOtcGraph?: string;
 };
 
-export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false, discoverGraph: boolean | "first" = false, countFreeFacet = false, federation?: FctFederationContext, preferredLanguage = effectiveMaestroLanguage(), statusCandidateIris?: readonly string[]): CompiledFctQuery {
+export function compileFctXmlToSparql(xml: string, requestedView?: string, graphOnly = false, countOnly = false, discoverGraph: boolean | "first" = false, countFreeFacet = false, federation?: FctFederationContext, preferredLanguage = effectiveMaestroLanguage(), statusCandidateIris?: readonly string[], predicateAnalysisStage?: PredicateAnalysisStage): CompiledFctQuery {
   if (!xml.trim()) throw new Error("The FCT query XML is empty.");
   const validation = XMLValidator.validate(xml);
   if (validation !== true) {
@@ -877,6 +887,14 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
     throw new Error(`The '${rawView}' view is not supported by the SPARQL translator.`);
   }
   const view: FctSparqlView = rawView;
+  const predicateAnalysisView = view === FCT_VIEW_TYPES.PROPERTIES_RANK ||
+    view === FCT_VIEW_TYPES.PROPERTIES_CLUSTER || view === FCT_VIEW_TYPES.CLUSTERS;
+  const rankingAlgorithm = view === FCT_VIEW_TYPES.PROPERTIES_RANK
+    ? predicateRankAlgorithm(viewNode?.attributes.algorithm) : undefined;
+  if (predicateAnalysisStage && !predicateAnalysisView)
+    throw new Error("Predicate analytical stages require one of the three predicate analytics views.");
+  if (predicateAnalysisStage && predicateAnalysisStage.kind !== "incidence" && rankingAlgorithm !== "fur")
+    throw new Error("Facet Utility statistics require the FUR ranking algorithm.");
   // Column selection reads view-plane <a> references alongside the view.
   // Only merge-values omits those focus-scope facets from population WHERE;
   // list-values retains every relationship as an ordinary FCT selector.
@@ -949,6 +967,21 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   };
   const limit = parsePage(viewNode?.attributes.limit, 30, Number.MAX_SAFE_INTEGER) || 30;
   const offset = parsePage(viewNode?.attributes.offset, 0, Number.MAX_SAFE_INTEGER);
+  // The view's candidate ceiling is independent of output paging and is
+  // supplied by its provider through FCT XML, never by a server IndexedDB read.
+  const requestedCandidateLimit = viewNode?.attributes["max-candidates"];
+  const maxPredicateCandidates = predicateAnalysisView
+    ? Number(requestedCandidateLimit ?? DEFAULT_PREDICATE_ANALYSIS_CANDIDATES)
+    : undefined;
+  if (predicateAnalysisView && (!Number.isSafeInteger(maxPredicateCandidates) ||
+    maxPredicateCandidates! < 1 || maxPredicateCandidates! > MAX_PREDICATE_ANALYSIS_CANDIDATES))
+    throw new Error(`Predicate analytics max-candidates must be an integer from 1 to ${MAX_PREDICATE_ANALYSIS_CANDIDATES}.`);
+  const maxPredicateIncidenceRows = predicateAnalysisView
+    ? Number(viewNode?.attributes["max-incidence-rows"] ?? DEFAULT_PREDICATE_ANALYSIS_INCIDENCE_ROWS)
+    : undefined;
+  if (predicateAnalysisView && (!Number.isSafeInteger(maxPredicateIncidenceRows) ||
+    maxPredicateIncidenceRows! < 1 || maxPredicateIncidenceRows! > MAX_PREDICATE_ANALYSIS_INCIDENCE_ROWS))
+    throw new Error(`Predicate analytics max-incidence-rows must be an integer from 1 to ${MAX_PREDICATE_ANALYSIS_INCIDENCE_ROWS}.`);
   const timeoutRaw = Number(root.attributes.timeout ?? 0);
   const timeoutMs = Number.isSafeInteger(timeoutRaw) && timeoutRaw >= 0 ? timeoutRaw : 0;
   const orderAttr = (root.attributes.order ?? root.attributes["order-results"] ?? viewNode?.attributes.order ?? "").trim().toLowerCase();
@@ -1073,7 +1106,8 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
 const viewSuppliesTriple =
   view === FCT_VIEW_TYPES.PROPERTIES ||
   view === FCT_VIEW_TYPES.PROPERTIES_IN ||
-  view === FCT_VIEW_TYPES.CLASSES;
+  view === FCT_VIEW_TYPES.CLASSES ||
+  predicateAnalysisView;
 
 if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
   // A root-bound URI may have *only incoming* links. A triple pattern in
@@ -1529,6 +1563,57 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
           : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)];
     }
     query = buildStatusSelect({ directives, projections: [countProjection(counted)], where: countWhere });
+  } else if (predicateAnalysisView) {
+    // Keep the original incidence projection for structural ranking and AHC.
+    // FUR needs the full focus population and exact value-count frequencies.
+    const stage = predicateAnalysisStage ?? {kind: rankingAlgorithm === "fur" ? "value-counts" as const : "incidence" as const, offset: 0, limit: 500};
+    const property = variable("maestroPredicate");
+    const object = variable("maestroPropertyObject");
+    const facetWhere = scopeWith([
+      {kind:"triple",subject:target,predicate:property,object},
+      {kind:"filter",expression:binary("!=",termExpr(property),termExpr(iriTerm(RDF_TYPE)))},
+      ...preferredValueLanguageFilter(object,viewNode,viewParent,preferredLanguage),
+      ...viewValueFilter(viewNode?.attributes,object),
+    ]);
+    if (stage.kind === "population") {
+      query = buildStatusSelect({ directives, projections: [countProjection(target)], where: scopedWhere });
+    } else {
+      const { offset: incidenceOffset, limit: incidenceLimit } = stage;
+      if (!Number.isSafeInteger(incidenceOffset) || incidenceOffset < 0 ||
+          !Number.isSafeInteger(incidenceLimit) || incidenceLimit < 1 || incidenceLimit > 1000 ||
+          !Number.isSafeInteger(incidenceOffset + incidenceLimit))
+        throw new Error("Invalid predicate incidence page bounds.");
+      if (stage.kind === "coverage") {
+        query = buildStatusSelect({ directives,
+          projections: [{expression:termExpr(property)}, countProjection(target)],
+          where: facetWhere, groupBy:[termExpr(property)],
+          orderBy:[{expression:termExpr(property),direction:"ASC"}],
+          limit:incidenceLimit, offset:incidenceOffset,
+        });
+      } else if (stage.kind === "value-counts") {
+        // Inner grouping preserves RDF value identity at the endpoint. The outer
+        // histogram returns only (predicate, facet count, number of values).
+        // No lexical values or response-local blank-node labels cross pages.
+        const n = variable("n");
+        const groupedValues: SparqlSelectQuery = {kind:"select",directives:[],
+          projections:[{expression:termExpr(property)},countProjection(target)],
+          where:statusScope(facetWhere),groupBy:[termExpr(property),termExpr(object)]};
+        query = buildSelectQuery({directives,
+          projections:[{expression:termExpr(property)}, {expression:termExpr(n)},
+            {expression:{kind:"aggregate",name:"COUNT",distinct:false,expression:termExpr({kind:"raw-term",value:"*"})},as:variable("frequency")}],
+          where:[{kind:"subquery",query:groupedValues}],groupBy:[termExpr(property),termExpr(n)],
+          orderBy:[{expression:termExpr(property),direction:"ASC"},{expression:termExpr(n),direction:"ASC"}],
+          limit:incidenceLimit,offset:incidenceOffset,
+        });
+      } else {
+        query = buildStatusSelect({ directives, distinct: true,
+          projections: [{expression:termExpr(target)}, {expression:termExpr(property)}],
+          where:facetWhere,
+          orderBy:[{expression:termExpr(target),direction:"ASC"},{expression:termExpr(property),direction:"ASC"}],
+          limit:incidenceLimit, offset:incidenceOffset,
+        });
+      }
+    }
   } else if (view === FCT_VIEW_TYPES.PROPERTIES || view === FCT_VIEW_TYPES.CLASSES || view === FCT_VIEW_TYPES.PROPERTIES_IN) {
     const facet = variable(view === FCT_VIEW_TYPES.CLASSES ? "c" : "p");
     const sampleClasses = view === FCT_VIEW_TYPES.CLASSES && ["yes", "true", "1"].includes((viewNode?.attributes.sample ?? "").trim().toLowerCase());
@@ -2006,6 +2091,8 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
     limit,
     offset,
     timeoutMs,
+    ...(predicateAnalysisView ? { maxPredicateCandidates, maxPredicateIncidenceRows } : {}),
+    ...(rankingAlgorithm ? { predicateRankAlgorithm: rankingAlgorithm } : {}),
     target: serializeTerm(target),
     ...(viewParent && (viewParent.name === "property" || viewParent.name === "property-of") && !viewParent.attributes.derive && iri(viewParent.attributes.iri ?? "") ? {
       focusRelationship: { predicate: viewParent.attributes.iri, direction: viewParent.name === "property" ? "forward" as const : "reverse" as const },

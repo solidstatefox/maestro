@@ -73,8 +73,8 @@ test('Status uses read-only ODS+remote operations while preserving provenance an
   const client=read('src/lib/fct-client.ts');
   // The final request identity routes the Status reads through the proxy
   // dispatch clock; it does not change their read-only SPARQL semantics.
-  assert.match(client,/selectPersonal\(countQuery, ctx, signal, "status-facet-count"\)/);
-  assert.match(client,/selectPersonal\(query, ctx, signal, "status-facet-personal"\)/);
+  assert.match(client,/selectPersonal\(countQuery, ctx, signal, "status-facet-count",\s*"view",\s*\{tab:"shared",ribbon:"query"\}\)/);
+  assert.match(client,/selectPersonal\(query, ctx, signal, "status-facet-personal",\s*"view",\s*\{tab:"shared",ribbon:"query"\}\)/);
   assert.match(client,/compileFctXmlToSparql\(fctQuery/);
   assert.match(client,/\"\/proxy\/api\/sparql\"/);
   assert.match(client,/fctListStatusClone\(liveXml, sourceAddr\)/);

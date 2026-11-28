@@ -29,7 +29,7 @@ export async function importOtcRdf(graph: string, extension: string, content: st
     }));
     const update = clientRdfInsert(graph, part);
     if (update.length > 1_950_000) throw new Error("An OTC RDF batch cannot fit in a bounded SPARQL Update.");
-    await updatePersonal(update, signal,undefined,"client-otc-import:importOtcRdf");
+    await updatePersonal(update, signal,undefined,"client-otc-import:importOtcRdf",undefined,"view",{tab:"personal",ribbon:"session"});
   }
   return triples.length;
 }
@@ -53,7 +53,7 @@ export async function importOtcTurtle(graph: string, content: string, signal?: A
     const part=triples.slice(offset,offset+120).map(t=>({
       subject:skolemize(t.subject), predicate:t.predicate, object:skolemize(t.object),
     }));
-    await updatePersonal(clientRdfInsert(graph,part), signal,undefined,"client-otc-import:importOtcTurtle");
+    await updatePersonal(clientRdfInsert(graph,part), signal,undefined,"client-otc-import:importOtcTurtle",undefined,"view",{tab:"personal",ribbon:"session"});
   }
   return triples.length;
 }

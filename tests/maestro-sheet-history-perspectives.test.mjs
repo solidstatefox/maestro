@@ -14,9 +14,9 @@ test("Sheet's Show and Show Bookmarks keep their respective History FCT scopes a
   assert.match(section, /http:\/\/www\.w3\.org\/2002\/01\/bookmark#Bookmark/);
   assert.match(section, /#QueryHistoryVisit/);
   assert.match(section, /restoreQueryAndUiState\(historyQueryXml, null\)/);
-  assert.match(section, /setWorkspaceTab\("view"\)/);
-  assert.match(section, /setViewPanel\("perspectives"\)/);
-  assert.match(section, /setSelectedViewUri\(includeFavorites \? PERSONAL_PERSPECTIVE_URI\.bookmarks : PERSONAL_PERSPECTIVE_URI\.history\)/);
+  // Both selection fields and tab are committed in one workspace XState event.
+  assert.match(section, /navigateQueryView\(\{ tab: "view", viewProvider: null, viewPanel: "perspectives",\s*selectedViewUri: includeFavorites \? PERSONAL_PERSPECTIVE_URI\.bookmarks : PERSONAL_PERSPECTIVE_URI\.history \}\)/);
+  assert.doesNotMatch(section, /setWorkspaceTab\("view"\)|setViewPanel\("perspectives"\)|setSelectedViewUri\(includeFavorites/);
   assert.match(ids, /bookmarks: "gttp:\/\/ggg\.maestro\.ecosys\/shacl\/provider\/bookmarks-perspective"/);
   assert.match(ids, /history: "gttp:\/\/ggg\.maestro\.ecosys\/shacl\/provider\/history-perspective"/);
   assert.doesNotMatch(section, /CONTEXT_RETURNED|setWorkspaceTab\("browse"\)|setViewPanel\("trail"\)/);

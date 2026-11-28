@@ -18,6 +18,8 @@ test('browser indexes stay browser-local and proxy lane addresses come only from
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,"../src/lib/sparql-request-attribution.ts"),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:attribution.exports,Headers,Request,URL,require:id=>{assert.equal(id,'./proxy-transport-observation');return observation;}});
   const mocks = {
     "@/lib/sparql-request-attribution":attribution.exports,
+    "@/lib/app-lifecycle/query-view-ownership":require('./maestro-view-query-test-shim.cjs'),
+    "./app-lifecycle/actor-query-authority":require("./actor-query-authority-test-loader.cjs"),
     "@/lib/proxy-transport-observation":observation,
     '@/lib/client-personal-request': { withPersonalProxyCredentials: async (_url,init)=>({init,authenticated:false}) },
     '@/lib/personal-session-hint': { observePersonalAuthResponse: response => response },
@@ -36,8 +38,10 @@ test('browser indexes stay browser-local and proxy lane addresses come only from
     Map,Set,WeakMap,Promise,JSON,TextDecoder,TextEncoder
   });
   const client=mod.exports;let pending=[];
+  const workspace=require('./maestro-view-query-test-shim.cjs').createMaestroQueryViewCoordinator();
+  workspace.start();client.registerMaestroQueryWorkspace('test-workspace',workspace);
   client.subscribePendingMaestroQueryDetails(xs=>{pending=xs.map(x=>({...x}))});
-  const send=(label)=>client.maestroQueryFetch('/proxy/api/sparql',{method:'POST',body:'ASK {}',headers:{'x-maestro-debug-source':`urn:maestro:component:${label}`,'x-maestro-debug-component':label}});
+  const send=(label)=>client.maestroQueryFetch('/proxy/api/sparql',{method:'POST',body:'ASK {}',headers:{'x-maestro-debug-source':`urn:maestro:component:${label}`,'x-maestro-debug-component':label,'x-maestro-view-tab':'browse'}});
   const first=send('first'),second=send('second'),third=send('count-third');
   for(let i=0;i<7;i++)await Promise.resolve();
   assert.equal(pending.find(x=>x.label==='second').queueIndex,1);

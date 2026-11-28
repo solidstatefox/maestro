@@ -4,6 +4,7 @@ import { attributedSparqlFetch } from "@/lib/sparql-request-attribution";
  * currently displayed results page. All filters, path bindings and graph
  * address are retained by changing only the view's projection/pagination. */
 import { fctRead } from "@/lib/fct-client";
+import { NODE_ANALYTICS_ANALYSIS_URI } from "@/lib/overview-analytics-ids";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { splitCompiledSelect } from "@/lib/provider-fct-context";
 
@@ -31,7 +32,7 @@ export function cloneOverviewPopulationQuery(queryXml: string, limit = OVERVIEW_
 }
 
 export async function readOverviewPopulation(queryXml: string, signal: AbortSignal): Promise<OverviewPopulation[]> {
-  const response = await fctRead(cloneOverviewPopulationQuery(queryXml), signal);
+  const response = await fctRead(cloneOverviewPopulationQuery(queryXml), signal, { tab: "analyze", ribbon: NODE_ANALYTICS_ANALYSIS_URI });
   return [...new Map(response.results.filter(row => validUri(row.uri) && row.termType !== "literal" && row.termType !== "bnode")
     .map(row => [row.uri, {uri: row.uri, label: row.title || row.uri}] as const)).values()];
 }

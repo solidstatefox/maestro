@@ -90,7 +90,7 @@ export async function discoverClientPerspectives(classes: string[], signal?: Abo
  * Record's rdf:type against the live graph before writing provenance. */
 export async function discoverMatchedClientPerspectives(
   classes: string[], queryXml: string, record: string, history?: string, signal?: AbortSignal,
-  queryProviders: string[] = [],
+  queryProviders: string[] = [], selectedPerspectiveUri = "",
 ): Promise<ClientPerspective[]> {
   const requested = [...new Set(classes.filter(safe))].slice(0,100);
   const contextual = [...new Set(queryProviders.filter(safe))].slice(0, 100);
@@ -134,7 +134,7 @@ export async function discoverMatchedClientPerspectives(
             ${validGraph ? `GRAPH <${graph}> { ${pattern} }` : pattern}
             FILTER(?recordClass IN (${requested.map(uri => `<${uri}>`).join(", ")})) }`;
           const response=await maestroQueryFetch("/proxy/api/sparql",{method:"POST",credentials:"same-origin",cache:"no-store",signal,
-            headers:{"Content-Type":"application/json","x-maestro-debug-source":"urn:maestro:component:view-discover","x-maestro-debug-component":"view-perspectives:record-match"},body:JSON.stringify({addr:address,query})});
+            headers:{"x-maestro-view-tab": "view", "x-maestro-view-ribbon": `perspectives:${selectedPerspectiveUri || "default"}`, "Content-Type":"application/json","x-maestro-debug-source":"urn:maestro:component:view-discover","x-maestro-debug-component":"view-perspectives:record-match"},body:JSON.stringify({addr:address,query})});
           if(response.ok){
             const data = await response.json() as {results?:{bindings?:Array<{provider?:{value?:string}}>}};
             const matched = new Set((data.results?.bindings??[]).map(row=>row.provider?.value??"").filter(Boolean));

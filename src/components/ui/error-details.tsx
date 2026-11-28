@@ -33,7 +33,7 @@ export function isRetryableGatewayError(error: string): boolean {
 /** Shared error affordance: compact label, full diagnostic popover, and copy/check feedback.
  * Render in the same place as an existing inline error; errors remain selectable and accessible.
  */
-export function ErrorDetails({ error, prefix, className, onRetry, verbatim = false }: { error: string; prefix?: string; className?: string; onRetry?: () => void; verbatim?: boolean }) {
+export function ErrorDetails({ error, prefix, className, onRetry, verbatim = false, iconOnly = false }: { error: string; prefix?: string; className?: string; onRetry?: () => void; verbatim?: boolean; iconOnly?: boolean }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => { setCopied(false); }, [error]);
   if (!error) return null;
@@ -50,7 +50,7 @@ export function ErrorDetails({ error, prefix, className, onRetry, verbatim = fal
     <Popover.Trigger aria-label={`Error details: ${prefix ? `${prefix}: ` : ""}${summary}`}
       className={cn("inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-left text-xs text-destructive hover:bg-destructive/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring", className)}>
       <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
-      <span className="truncate">{prefix ? `${prefix}: ` : ""}{summary}</span>
+      {!iconOnly && <span className="truncate">{prefix ? `${prefix}: ` : ""}{summary}</span>}
     </Popover.Trigger>
     <Popover.Portal>
       <Popover.Positioner side="top" align="start" sideOffset={6} className="z-[220]">
@@ -63,7 +63,7 @@ export function ErrorDetails({ error, prefix, className, onRetry, verbatim = fal
                 {copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
                 {copied ? "Copied" : "Copy"}
               </Button>
-              {onRetry && isRetryableGatewayError(error) && <Button type="button" variant="outline" size="xs"
+              {onRetry && (iconOnly || isRetryableGatewayError(error)) && <Button type="button" variant="outline" size="xs"
                 onClick={onRetry} title="Retry this component only" aria-label="Retry this component only">
                 <RotateCw className="size-3.5" aria-hidden="true" />Retry
               </Button>}

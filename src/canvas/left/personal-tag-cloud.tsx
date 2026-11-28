@@ -35,7 +35,7 @@ export function PersonalTagCloud({ property, values, tree, selected, enabled, bu
     void (async () => {
       try {
         const response = await cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", "X-Maestro-Query-Label": "TagCloud:cooccurring-values" },
+          headers: {"x-maestro-view-tab": "shared", "x-maestro-view-ribbon": "query",  "Content-Type": "text/xml; charset=utf-8", "X-Maestro-Query-Label": "TagCloud:cooccurring-values" },
           body: projectionXml, signal: controller.signal });
         const data = await readFctResponse(response);
         if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);

@@ -33,9 +33,9 @@ export async function loadClientPolicyTemplate(template: string, signal?: AbortS
           ?enrichmentTemplate (rdf:value|mui:templateContent) ?enrichmentXslt }
       }
     } LIMIT 50`;
-  const rows = await selectPersonal(query, ctx, signal,"client-policy-template:loadClientPolicyTemplate");
+  const rows = await selectPersonal(query, ctx, signal,"client-policy-template:loadClientPolicyTemplate","view",{tab:"record",ribbon:"session"});
   const actors = [...new Set(rows.flatMap(row => [row.policy?.value ?? "", row.provider?.value ?? ""]).filter(validIri))];
-  const approvals = await readClientPolicyApprovals(actors, signal);
+  const approvals = await readClientPolicyApprovals(actors, signal,"RecordTemplateApprovalLookup",{tab:"record",ribbon:"session"});
   const approved = new Set(approvals.filter(entry => entry.status === "Approved").map(entry => entry.uri));
   const selected = rows.find(row => approved.has(row.policy?.value ?? "") && approved.has(row.provider?.value ?? ""));
   const templateXslt = selected?.templateXslt?.value ?? "";

@@ -150,6 +150,11 @@
     "asset": "669b8b10c85b966c502297d1ea7dd5ddb6f7e91cafe9e04ec360057f7bfd9934.json"
   },
   {
+    "file": "predicate-clusters/provider.ttl",
+    "destination": "shacl-policies",
+    "asset": "5b476a273784b4f67a122e24c2429143a07f16982a4188b3994b8107e0d5de0d.json"
+  },
+  {
     "file": "rdfs/maestro-history-bookmark-schema.ttl",
     "destination": "ontology-cache",
     "asset": "1723a157aa1ec0f2f05dfb9511294e127ccdc2d3d9741d4a4edb58eee8d2eaa0.json"
@@ -172,36 +177,36 @@
   {
     "file": "rdfs/maestro-ui-ontology.ttl",
     "destination": "ontology-cache",
-    "asset": "aff69593f92869ac5b72b8a92aaa55b6c5df5b4a7462fb1c4bf70b3c2a1e05f6.json"
+    "asset": "1827b26c32fea88057db1d5a1188921d218721060554a9eddd9f76c20ce1ce71.json"
   },
   {
     "file": "sankey-d3/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "d8d9e44b493395ed6c8be736ff1a9bbb6e046318bb3989f6567c61c8a3a72870.json"
+    "asset": "e6182e3971457791e470ebb410fb62dd672cad1de57f266c44ea74670895d215.json"
   },
   {
     "file": "sankey/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "510481d81c56c0e173320187523af13b5f94b1e1a6e73daf6465b087fc968b97.json"
+    "asset": "d378b650ca81a3348072ecb08cd2b4bf86cc7eb04caa2eabacd41b99d7606672.json"
   },
   {
     "file": "spider/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "959f053e90fd1b1627f921dd1c1d2f379b1105c392f8bd2a8ca40eaf524bb51d.json"
+    "asset": "41710520d067b45027d2d93549a8f2e825c8a4e00e2696342f2ac9a4b034e8ff.json"
   },
   {
     "file": "sunburst-chartkit/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "6a6017a4e5278fee8c05b63757b079f7f5957b7627fcd21b405f3a79e26427d5.json"
+    "asset": "a18fe5f8e5e69cb7f82124e32675d7c894da18574b68ce147e13e1ceeea23ea6.json"
   },
   {
     "file": "sunburst/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "952e8c1a7771cfe85abde5ca2ce903247b743cb3bfcb5b53d2f61d0dee0cc22a.json"
+    "asset": "8b91a107273add0b793a67148521f320a98cc239c61ddebd162959a6e337c679.json"
   },
   {
     "file": "tag-cloud/provider.ttl",
     "destination": "shacl-policies",
-    "asset": "10d6fde2414b2785c086b6f4e2d453ed8eb7e02b1104f7495282145929750dc9.json"
+    "asset": "7c08b217746d1025073d21ef390ec3012a55eb8a9af8b9bd4fdf3bd20e4d9c8a.json"
   }
 ]

@@ -12,7 +12,7 @@ export function discoveryLaneEvent<T>(observation:DiscoveryObservation<T>,lane:"
   return scope.waiting?{type:"WAIT",key:scope.key,reason:scope.waiting}:{type:"DISCOVER",key:scope.key,execute:scope.execute};
 }
 export function createProviderDiscoverySupervisor<T>(id:string){
-  const lane=makeDiscoveryMachine<T>(`${id}-lane`);
+  const lane=makeDiscoveryMachine<T>(`${id}-lane`, "analysis-discovery");
   type LaneSnapshot=SnapshotFrom<typeof lane>;
   type Context={population:LaneSnapshot;contextual:LaneSnapshot};
   type Event={type:"OBSERVE";observation:DiscoveryObservation<T>}|{type:"CANCEL"}|{type:"RETRY"};

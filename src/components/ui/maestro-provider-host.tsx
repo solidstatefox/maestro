@@ -27,7 +27,7 @@ export function MaestroProviderHost({ providerUri, componentUrn, stylesheet, que
     if (!target) return () => controller.abort();
     if (!approved) { target.replaceChildren(); return () => controller.abort(); }
     installMaestroProviderBridge();
-    registerMaestroProviderMount(componentUrn, controller.signal);
+    registerMaestroProviderMount(componentUrn, controller.signal, {tab:"view",ribbon:`perspectives:${providerUri}`});
     void transformProviderXslt(stylesheet, {
       queryXml, describeXml, resultXml, componentUrn, metadata, facetValues,
     }, controller.signal).then(markup => {

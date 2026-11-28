@@ -59,7 +59,7 @@ export function useFacetPresentation({direction, predicate, enabled, approvalRev
               OPTIONAL { ?provider mui:icon ?icon }
               OPTIONAL { ?provider mui:requestsClassTree ?requestsClassTree }
             }
-          } LIMIT 50`, ctx, controller.signal,"facet-presentation:useFacetPresentation");
+          } LIMIT 50`, ctx, controller.signal,"facet-presentation:useFacetPresentation","view",{tab:"shared",ribbon:"query"});
         const candidates = rows.map(row => ({uri:row.provider?.value??"",label:row.label?.value??"Facet view",
           icon:row.icon?.value??"chart-pie",stylesheet:row.stylesheet?.value??"",
           requestsClassTree:row.requestsClassTree?.value==="true"}))
@@ -171,13 +171,23 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle,stora
     const root=surfaceRef.current;
     if(!root || result.error)return;
     let disposed=false, scheduled=0, warned=false;
-    const measure=()=>{
+    // Arc textPath bounding boxes can shift slightly when the SVG's own viewBox
+    // changes. ResizeObserver sees the resulting layout change, so measuring
+    // again in response to that resize creates a viewBox/width feedback loop.
+    // The chart is authored in fixed SVG user coordinates: a frame resize only
+    // scales those coordinates and does not require a new geometry calculation.
+    let settledSvg: SVGSVGElement | null = null;
+    let settledView: { svg: SVGSVGElement; x: number; y: number; width: number; height: number } | null = null;
+    let lastNaturalWidth: number | null = null;
+    let pendingForce=false;
+    const measure=(force=false)=>{
       if(disposed || !root.isConnected)return;
       root.querySelectorAll<SVGGElement>("[data-facet-label-style]").forEach(group=>{
         group.style.display=group.getAttribute("data-facet-label-style")===labelStyle ? "inline" : "none";
       });
       const svg=root.querySelector<SVGSVGElement>("svg");
       if(!svg || svg.getBoundingClientRect().width<=0)return;
+      if(!force && settledSvg===svg)return;
       const native=svg.viewBox.baseVal;
       const original=originalViews.current.get(svg)??{x:native.x,y:native.y,width:native.width,height:native.height};
       originalViews.current.set(svg,original);
@@ -211,43 +221,77 @@ export function FacetPresentationSurface({presentation,items,tree,onToggle,stora
         const width=points.length?Math.max(...points.map(p=>p.x))-x:fallback!.width;
         const height=points.length?Math.max(...points.map(p=>p.y))-y:fallback!.height;
         if(width>0 && height>0 && [x,y,width,height].every(Number.isFinite)) {
+          // The provider authors its sunburst around the ORIGINAL SVG center.
+          // Bounding-box centering drifts when asymmetric arc textPath labels
+          // change their extents, making the chart quiver relative to its frame.
+          // This is the smallest center-anchored rectangle containing the paint.
           const pad=8;
-          const cx=x+width/2, cy=y+height/2;
-          const halfWidth=width/2+pad, halfHeight=height/2+pad;
-          // Round out sub-pixel floating-point noise so observer callbacks
-          // converge even as the screen matrix changes during a drag.
-          const view=[cx-halfWidth,cy-halfHeight,2*halfWidth,2*halfHeight].map(v=>Math.round(v*1000)/1000).join(" ");
+          const cx=original.x+original.width/2, cy=original.y+original.height/2;
+          const halfWidth=Math.max(Math.abs(x-cx),Math.abs(x+width-cx))+pad;
+          const halfHeight=Math.max(Math.abs(y-cy),Math.abs(y+height-cy))+pad;
+          const proposed={svg,x:cx-halfWidth,y:cy-halfHeight,width:2*halfWidth,height:2*halfHeight};
+          // Arc glyph measurements can vary by fractions of a user unit after
+          // font readiness or a harmless DOM notification. Avoid reapplying a
+          // different viewBox for changes below one unit; real mode/font changes
+          // still recompute the full geometry.
+          const previous=settledView?.svg===svg ? settledView : null;
+          const stable=previous && ["x","y","width","height"].every(field=>
+            Math.abs(previous[field as "x"|"y"|"width"|"height"]-proposed[field as "x"|"y"|"width"|"height"])<1);
+          const bounds=stable ? previous : proposed;
+          const view=[bounds.x,bounds.y,bounds.width,bounds.height].map(v=>Math.round(v*1000)/1000).join(" ");
           if(svg.getAttribute("viewBox")!==view)svg.setAttribute("viewBox",view);
+          settledView=bounds;
           if(svg.hasAttribute("width"))svg.removeAttribute("width");
           if(svg.hasAttribute("height"))svg.removeAttribute("height");
           if(svg.getAttribute("preserveAspectRatio")!=="xMidYMid meet")svg.setAttribute("preserveAspectRatio","xMidYMid meet");
           svg.style.width="100%"; svg.style.height="auto"; svg.style.maxWidth="100%"; svg.style.maxHeight="none";
-          svg.style.aspectRatio=`${Math.round(2*halfWidth*1000)/1000} / ${Math.round(2*halfHeight*1000)/1000}`;
-          if(original.width>0)setNaturalWidth(Math.round(420*(2*halfWidth)/original.width));
+          const aspectRatio=`${Math.round(bounds.width*1000)/1000} / ${Math.round(bounds.height*1000)/1000}`;
+          if(svg.style.aspectRatio!==aspectRatio)svg.style.aspectRatio=aspectRatio;
+          if(original.width>0){
+            const nextNaturalWidth=Math.round(420*bounds.width/original.width);
+            if(lastNaturalWidth===null || Math.abs(nextNaturalWidth-lastNaturalWidth)>1){
+              lastNaturalWidth=nextNaturalWidth;
+              setNaturalWidth(nextNaturalWidth);
+            }
+          }
+          settledSvg=svg;
         }
       } catch(error) {
         if(!warned){warned=true;browserLog.warn("facet-presentation.bounds.unavailable",error);}
       }
     };
-    const schedule=()=>{
-      if(disposed || scheduled)return;
-      scheduled=requestAnimationFrame(()=>{scheduled=0;measure();});
+    const schedule=(force=false)=>{
+      if(disposed)return;
+      pendingForce ||= force;
+      if(scheduled)return;
+      scheduled=requestAnimationFrame(()=>{
+        scheduled=0;
+        const forced=pendingForce;
+        pendingForce=false;
+        measure(forced);
+      });
     };
-    measure();
-    // React may replace the provider DOM; saved size, pane resizing, and font
-    // loading can also change geometry after the first layout effect.
-    const resizeObserver=typeof ResizeObserver!=="undefined"?new ResizeObserver(schedule):null;
+    measure(true);
+    // Wait for a previously hidden chart to gain size, but do not remeasure
+    // an already settled SVG when its own updated aspect ratio resizes root.
+    const resizeObserver=typeof ResizeObserver!=="undefined"
+      ? new ResizeObserver(()=>{
+          if(root.querySelector("svg")!==settledSvg)schedule(true);
+        }) : null;
     resizeObserver?.observe(root);
-    const mutationObserver=new MutationObserver(schedule);
-    mutationObserver.observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:["viewBox","width","height"]});
+    // React may replace the rendered provider DOM. Observing our own viewBox,
+    // width, and height writes would create a perpetual arc-label feedback loop.
+    const mutationObserver=new MutationObserver(()=>schedule(true));
+    mutationObserver.observe(root,{childList:true,subtree:true});
     const fonts=document.fonts;
-    fonts?.addEventListener("loadingdone",schedule);
-    void fonts?.ready.then(schedule).catch(()=>{});
+    const onFontLoaded=()=>schedule(true);
+    fonts?.addEventListener("loadingdone",onFontLoaded);
+    void fonts?.ready.then(onFontLoaded).catch(()=>{});
     return ()=>{
       disposed=true;
       if(scheduled)cancelAnimationFrame(scheduled);
       resizeObserver?.disconnect();mutationObserver.disconnect();
-      fonts?.removeEventListener("loadingdone",schedule);
+      fonts?.removeEventListener("loadingdone",onFontLoaded);
     };
   },[result.key,result.html,result.error,labelStyle,dimensionStorageReady]);
   useEffect(()=>{

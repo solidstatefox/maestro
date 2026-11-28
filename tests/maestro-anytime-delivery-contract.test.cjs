@@ -78,12 +78,16 @@ for(const kind of ['fct','sparql'])test(`${kind} route waits for queue admission
 test('ordinary browser reads have no queue-plus-delivery watchdog',async()=>{
  const source=read('src/lib/client-query-cache.ts');let release,networkSignal,queued;const m=load(source,{
   '@/lib/proxy-transport-observation':{observeProxyFetch:async(_input,init)=>{networkSignal=init.signal;return new Promise(r=>release=r);},stopProxyQueryGeneration(){},resumeProxyQueryGeneration(){}},
-  '@/lib/sparql-request-attribution':{requireSparqlAttribution(){}}, './maestro-language':{maestroLanguageHeader:()=> 'en'},
+  '@/lib/sparql-request-attribution':{requireSparqlAttribution(){}},
+  '@/lib/app-lifecycle/query-view-ownership':require('./maestro-view-query-test-shim.cjs'),
+    "./app-lifecycle/actor-query-authority":require("./actor-query-authority-test-loader.cjs"), './maestro-language':{maestroLanguageHeader:()=> 'en'},
   './maestro-concurrency':{readMaestroConcurrency:()=>({proxyConnections:1})},'./maestro-query-execution-clock':{maestroQueryClockScope:()=>null},
   './client-query-events':{subscribeMaestroQueryEvents:async(_id,_scope,_signal,notify)=>{queued=notify;return {close(){}}}},
   './maestro-incomplete-results':{setMaestroIncompleteResults(){}},'./maestro-query-timeouts':{configuredTimeoutMs:()=>1000,applyFctQueryTimeout:(_s,x)=>x}
  },{crypto:require('node:crypto').webcrypto,AbortSignal:{any:AbortSignal.any,timeout(){throw Error('local read watchdog armed');}}});
- const owner=new AbortController();const promise=m.maestroQueryFetch('/proxy/api/sparql',{method:'POST',body:'SELECT * WHERE {}',signal:owner.signal});
+ const workspace=require('./maestro-view-query-test-shim.cjs').createMaestroQueryViewCoordinator();
+ workspace.start();m.registerMaestroQueryWorkspace('test-workspace',workspace);
+ const owner=new AbortController();const promise=m.maestroQueryFetch('/proxy/api/sparql',{method:'POST',body:'SELECT * WHERE {}',signal:owner.signal,headers:{'x-maestro-view-tab':'browse'}});
  for(let i=0;i<12&&!release;i++)await Promise.resolve();assert.ok(release);queued(0,'https://example.org/sparql','light',0,0,0);assert.equal(networkSignal.aborted,false);
  release(new Response(body,{headers:{'X-Maestro-Incomplete':'true'}}));assert.equal(await (await promise).text(),body);
 });
@@ -92,7 +96,9 @@ test('invalid result documents cannot be turned into successful invented rows',(
  const parse=load(extracted(fct,'function parseResults(','\nconst VIRTRDF_LABEL')+'\nmodule.exports.parse=parseResults;').parse;
  assert.equal(parse('S1TAT error without rows'),null);assert.equal(parse('{"head":{"vars":["c1"]},"results":{"bindings":[null]}}'),null);assert.equal(parse(body).results.bindings.length,1);
  assert.doesNotMatch(sparql,/parseSparqlResults\(responseText\) \?\? \(incomplete \?/);
- assert.match(fct,/if \(!parsed\) return fctError\(partial \? "No usable result set/);
+ assert.match(fct,/if \(!parsed\) return fctUpstreamFailure\("fct-json", response, text, activeQuery, executionEndpoint/);
+  assert.match(fct,/partial \? "No usable result set delivered by Virtuoso" : "Invalid SPARQL Results JSON returned by Virtuoso"/);
+  assert.doesNotMatch(fct,/if \(!parsed\) return fctError\(/);
  assert.match(sparql,/if \(!parsed\) \{\s*return NextResponse.json\(\{ error: "No usable SPARQL result/);
 });
 test('optional datatype probe failure preserves successful primary rows and forbids caching missing evidence',async()=>{

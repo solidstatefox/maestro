@@ -5,6 +5,7 @@
  * no second queue, revision token or domain-specific lookup here.
  */
 import { cachedFetchFct, maestroQueryFetch } from "@/lib/client-query-cache";
+import type { MaestroQueryScope } from "@/lib/app-lifecycle/query-view-ownership";
 import { sanitizeUpstreamDiagnostic } from "@/lib/upstream-error";
 import { sparqlBindingsToXml } from "@/lib/sparql-results-xml";
 
@@ -13,12 +14,13 @@ export type ProviderQueryRequest =
   | { kind: "sparql"; addr: string; sparql: string };
 
 export { sparqlBindingsToXml } from "@/lib/sparql-results-xml";
-export async function executeProviderDerivedQuery(query: ProviderQueryRequest, signal?: AbortSignal): Promise<string> {
+export async function executeProviderDerivedQuery(query: ProviderQueryRequest, signal?: AbortSignal, scope?: MaestroQueryScope): Promise<string> {
+  if (!scope) throw new DOMException("Provider has no owning XState view", "AbortError");
   if (query.kind === "fct") {
     if (!query.queryXml || query.queryXml.length > 200000) throw new Error("A bounded derived FCT query is required.");
     const response = await cachedFetchFct("/proxy/api/fct", {
       method: "POST", cache: "no-store", signal,
-      headers: { "Content-Type": "text/xml; charset=utf-8", "X-Maestro-Query-Label": "XSLTProvider" },
+      headers: {"x-maestro-view-tab": scope.tab, "x-maestro-view-ribbon": scope.ribbon,  "Content-Type": "text/xml; charset=utf-8", "X-Maestro-Query-Label": "XSLTProvider" },
       body: query.queryXml,
     });
     const xml = await response.text();
@@ -27,7 +29,7 @@ export async function executeProviderDerivedQuery(query: ProviderQueryRequest, s
   }
   if (!query.addr || !query.sparql || query.sparql.length > 250000) throw new Error("A graph address and bounded SPARQL query are required.");
   const response = await maestroQueryFetch("/proxy/api/sparql", {
-    method: "POST", cache: "no-store", signal, headers: {"x-maestro-debug-source":"urn:maestro:component:ProviderQueryExecutor","x-maestro-debug-component":"ProviderQueryExecutor", "Content-Type": "application/json" },
+    method: "POST", cache: "no-store", signal, headers: {"x-maestro-view-tab": scope.tab, "x-maestro-view-ribbon": scope.ribbon, "x-maestro-debug-source":"urn:maestro:component:ProviderQueryExecutor","x-maestro-debug-component":"ProviderQueryExecutor", "Content-Type": "application/json" },
     body: JSON.stringify({ addr: query.addr, resultsQuery: { sparql: query.sparql } }),
   });
   const result = await response.json() as {

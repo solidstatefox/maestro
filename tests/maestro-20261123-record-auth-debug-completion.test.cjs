@@ -69,7 +69,7 @@ test('Personal auth persists completed HTTP status, while Digest and XState rema
   const compiled = ts.transpileModule(accessSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   vm.runInNewContext(compiled, {
     module: moduleHolder, exports: moduleHolder.exports,
-    require: id => id === 'xstate' ? require('xstate') : require(id),
+    require: id => id === './actor-query-authority' ? require('./actor-query-authority-test-loader.cjs') : require(id),
     AbortController, Promise, Map, Set,
   }, { filename: 'src/lib/app-lifecycle/access.ts' });
   const { createMaestroAccessActor, selectMaestroCapabilities } = moduleHolder.exports;

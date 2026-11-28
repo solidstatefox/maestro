@@ -28,8 +28,8 @@ export async function requestClientRecordPolicy(input:ClientRecordPolicyInput,si
       throw new Error("Record URI, SHACL shape, and bounded DESCRIBE triples are required.");
     const matches=await selectPersonal(`PREFIX mui: <${MUI}> SELECT DISTINCT ?policy WHERE {
       GRAPH ${shapes} { ?policy a mui:ClassPolicy ; mui:recordShape <${input.recordShape}> }
-    } LIMIT 40`,ctx,signal,"client-record-policies:requestClientRecordPolicy");
-    const approvals=await readClientPolicyApprovals(matches.map(row=>row.policy?.value??"").filter(safe),signal);
+    } LIMIT 40`,ctx,signal,"client-record-policies:requestClientRecordPolicy","view",{tab:"record",ribbon:"session"});
+    const approvals=await readClientPolicyApprovals(matches.map(row=>row.policy?.value??"").filter(safe),signal,"RecordPolicyApprovalLookup",{tab:"record",ribbon:"session"});
     if(!approvals.some(row=>row.status==="Approved"))throw new Error("This SHACL policy has not been Approved.");
     return {report:await validateClientShaclRecord(input.recordShape,input.recordUri,input.triples,signal)};
   }
@@ -48,7 +48,7 @@ export async function requestClientRecordPolicy(input:ClientRecordPolicyInput,si
         OPTIONAL { ?template rdfs:label ?templateLabel }
       }
     } } ORDER BY LCASE(STR(?policyLabel)) LCASE(STR(?templateLabel)) LIMIT 100`;
-  const rows=await selectPersonal(query,ctx,signal,"client-record-policies:requestClientRecordPolicy");
+  const rows=await selectPersonal(query,ctx,signal,"client-record-policies:requestClientRecordPolicy","view",{tab:"record",ribbon:"session"});
   const grouped=new Map<string,{uri:string;label:string;recordShape:string;matchedClasses:string[];templates:{uri:string;label:string;provider:string}[]}>();
   for(const row of rows){
     const uri=row.policy?.value??"",recordShape=row.recordShape?.value??"";
@@ -77,7 +77,7 @@ export async function requestClientRecordPolicy(input:ClientRecordPolicyInput,si
       ...(safe(input.historyUri)?{history:input.historyUri}:{}),
     },signal);
   }
-  const approved=new Set((await readClientPolicyApprovals(policyUris,signal)).filter(item=>item.status==="Approved").map(item=>item.uri));
+  const approved=new Set((await readClientPolicyApprovals(policyUris,signal,"RecordPolicyApprovalLookup",{tab:"record",ribbon:"session"})).filter(item=>item.status==="Approved").map(item=>item.uri));
   const policies:ClientRecordPolicy[]=discovered.filter(item=>approved.has(item.uri)).map(item=>({
     uri:item.uri,label:item.label,recordShape:item.recordShape,matchedClasses:item.matchedClasses,
     templates:item.templates.filter(t=>approved.has(t.provider)).map(({uri,label})=>({uri,label})),

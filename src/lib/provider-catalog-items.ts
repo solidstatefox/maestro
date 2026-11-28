@@ -34,14 +34,14 @@ export async function providerItemsFromFct(
 ): Promise<ProviderCatalogItem[]> {
   // Read-only FCT provider membership and metadata must never depend on an
   // approval machine, bookmarked-query Status projection or provenance read.
-  const records = await fctProjectPage(queryXml, uris, meta, signal, false);
+  const records = await fctProjectPage(queryXml, uris, meta, signal, false, false, {tab:"view",ribbon:`providers:${providerKind}`});
   // Provider *items* come exclusively from FCT. Approval is independent
   // client-policy metadata: a listed provider is effectively Approved only
   // while a current curator is Approved for its implementation digest.
   let approvals = new Map<string,"Approved" | "Pending" | null>();
   if (bookmarked && uris.length) {
     try {
-      const entries = await readClientPolicyApprovals(uris.slice(0,500), signal);
+      const entries = await readClientPolicyApprovals(uris.slice(0,500), signal, "ProviderApprovalLookup", {tab:"view",ribbon:`providers:${providerKind}`});
       approvals = new Map(entries.map(entry=>[entry.uri,entry.status]));
     } catch (error) {
       if (signal?.aborted) throw error;

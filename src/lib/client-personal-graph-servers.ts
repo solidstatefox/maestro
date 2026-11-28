@@ -2,7 +2,7 @@
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 /** Personal graph-server registry: browser-owned RDF/SPARQL, separate from the
  * statically reseeded /graph and from the public courtesy endpoints. */
-import { personalContext, selectPersonal, updatePersonal } from "@/lib/client-personal-sparql";
+import { personalContext, selectPersonal, updatePersonal, type PersonalTransportAuthority } from "@/lib/client-personal-sparql";
 import { readSessionHydration, updateSessionSnapshot } from "@/lib/client-digest-session";
 import { personalReadEndpoint } from "@/lib/personal-auth";
 import { validGraphServerUrl } from "@/lib/graph-server-directory";
@@ -37,7 +37,7 @@ export async function listPersonalGraphServerGroups(signal?: AbortSignal): Promi
   const ctx=await personalContext();const names=graphNames(ctx.base);
   const rows=await selectPersonal(`SELECT DISTINCT ?group ?label WHERE { GRAPH ${iri(names.graph)} {
     ?group ${iri(RDF_TYPE)} ${iri(SKOS_COLLECTION)} ; ${iri(RDFS_LABEL)} ?label .
-  } } ORDER BY ?label`,ctx,signal,"client-personal-graph-servers:groups");
+  } } ORDER BY ?label`,ctx,signal,"client-personal-graph-servers:groups","view",{tab:"personal",ribbon:"session"});
   const groups=new Set(["Graph Servers","Personal Servers"]);
   for(const row of rows){try{groups.add(normalizeGraphServerGroup(row.label?.value??""));}catch{/* invalid label */}}
   return [...groups];
@@ -58,7 +58,7 @@ async function insertServer(url: string, label: string, description: string, isP
   if(expectedSession && ctx.session!==expectedSession)throw new Error("Personal user session changed.");
   const names = graphNames(ctx.base), subject = nodeFor(ctx.base, checkUrl(url));
   const group = normalizeGraphServerGroup(groupName);
-  const candidates=await selectPersonal(`SELECT DISTINCT ?group WHERE { GRAPH ${iri(names.graph)} { ?group ${iri(RDF_TYPE)} ${iri(SKOS_COLLECTION)} ; ${iri(RDFS_LABEL)} ?name . FILTER(STR(?name)=${literal(group)}) FILTER(isIRI(?group)) } } ORDER BY ?group`,ctx,undefined,"client-personal-graph-servers:resolveGroup");
+  const candidates=await selectPersonal(`SELECT DISTINCT ?group WHERE { GRAPH ${iri(names.graph)} { ?group ${iri(RDF_TYPE)} ${iri(SKOS_COLLECTION)} ; ${iri(RDFS_LABEL)} ?name . FILTER(STR(?name)=${literal(group)}) FILTER(isIRI(?group)) } } ORDER BY ?group`,ctx,undefined,"client-personal-graph-servers:resolveGroup","view",{tab:"personal",ribbon:"session"});
   const existingGroups=[...new Set(candidates.map(row=>row.group?.value).filter((value):value is string=>typeof value==="string" && /^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(value)))];
   if(existingGroups.length>1)throw new Error("More than one RDF group has this name. Choose a unique group name.");
   const groupUri=existingGroups[0]??groupSubject(ctx.base,group);
@@ -72,7 +72,7 @@ async function insertServer(url: string, label: string, description: string, isP
       ${iri(SCHEMA_URL)} ${iri(url)} ; ${iri(RDFS_LABEL)} ${literal(label.trim())} ;
       ${iri(SCHEMA_DESCRIPTION)} ${literal(description.trim())} ;
       ${iri(DCT_PART)} ${iri(groupUri)} .
-  } }`,undefined,undefined,"client-personal-graph-servers:insertServer",ctx.session);
+  } }`,undefined,undefined,"client-personal-graph-servers:insertServer",ctx.session,"view",{tab:"personal",ribbon:"session"});
   await refreshPersonalGraphServers(ctx.session);
   notify(); return subject;
 }
@@ -97,7 +97,7 @@ export async function ensureLoggedInPersonalServer(): Promise<string> {
       const names = graphNames(ctx.base);
       await updatePersonal(`INSERT DATA { GRAPH ${iri(names.graph)} {
         ${iri(existing.uri)} ${iri(RDF_TYPE)} ${iri(PERSONAL_SERVER_TYPE)} .
-      } }`,undefined,undefined,"client-personal-graph-servers:ensureLoggedInPersonalServer");
+      } }`,undefined,undefined,"client-personal-graph-servers:ensureLoggedInPersonalServer",undefined,"view",{tab:"personal",ribbon:"session"});
       await refreshPersonalGraphServers(ctx.session);
       notify();
     }
@@ -105,11 +105,12 @@ export async function ensureLoggedInPersonalServer(): Promise<string> {
   }
   return insertServer(url, "Personal SPARQL", "Authenticated personal graph server", true);
 }
-export async function listPersonalGraphServers(signal?: AbortSignal): Promise<PersonalGraphServer[]> {
+export async function listPersonalGraphServers(signal?: AbortSignal,authority: PersonalTransportAuthority = "view"): Promise<PersonalGraphServer[]> {
+  if (authority === "personal-initialization" && !signal) throw new Error("Personal directory initialization requires its XState signal.");
   const ctx=await personalContext();
   const saved=await readSessionHydration(ctx.session);
   signal?.throwIfAborted();
-  return saved.snapshot ? saved.snapshot.servers : fetchPersonalGraphServers(ctx,signal);
+  return saved.snapshot ? saved.snapshot.servers : fetchPersonalGraphServers(ctx,signal,authority);
 }
 async function refreshPersonalGraphServers(session:Awaited<ReturnType<typeof personalContext>>["session"]):Promise<void>{
   const ctx=await personalContext();
@@ -117,7 +118,7 @@ async function refreshPersonalGraphServers(session:Awaited<ReturnType<typeof per
   const servers=await fetchPersonalGraphServers(ctx);
   await updateSessionSnapshot(session,{servers});
 }
-async function fetchPersonalGraphServers(ctx:Awaited<ReturnType<typeof personalContext>>,signal?:AbortSignal):Promise<PersonalGraphServer[]> {
+async function fetchPersonalGraphServers(ctx:Awaited<ReturnType<typeof personalContext>>,signal?:AbortSignal,authority:PersonalTransportAuthority="view"):Promise<PersonalGraphServer[]> {
   const names = graphNames(ctx.base);
   const rows = await selectPersonal(`SELECT DISTINCT ?server ?url ?label ?description ?type ?group ?groupLabel WHERE { GRAPH ${iri(names.graph)} {
     ?server ${iri(RDF_TYPE)} ${iri(SCHEMA_ENTRYPOINT)} ; ${iri(SCHEMA_URL)} ?url .
@@ -125,7 +126,7 @@ async function fetchPersonalGraphServers(ctx:Awaited<ReturnType<typeof personalC
     OPTIONAL { ?server ${iri(SCHEMA_DESCRIPTION)} ?description }
     OPTIONAL { ?server ${iri(RDF_TYPE)} ?type . FILTER(?type = ${iri(PERSONAL_SERVER_TYPE)}) }
     OPTIONAL { ?server ${iri(DCT_PART)} ?group . ?group ${iri(RDFS_LABEL)} ?groupLabel }
-  } } ORDER BY ?label ?server ?group LIMIT 500`, ctx, signal, "urn:maestro:component:graph-servers");
+  } } ORDER BY ?label ?server ?group LIMIT 500`, ctx, signal, "urn:maestro:component:graph-servers",authority,{tab:"personal",ribbon:"session"});
   const deduplicated = new Map<string, PersonalGraphServer>();
   for (const row of rows) {
     const uri = row.server?.value ?? "", url = validGraphServerUrl(row.url?.value ?? "");
@@ -145,7 +146,7 @@ export async function deletePersonalGraphServer(subject: string): Promise<void> 
   const ctx = await personalContext(); const names = graphNames(ctx.base);
   if (!subject.startsWith(`${resolveGraph(GRAPH.GRAPH_SERVERS, ctx.base)}#endpoint-`) || subject.length > 4096 || /[<>\s]/.test(subject))
     throw new Error("Only graph servers added to the active personal store can be deleted.");
-  await updatePersonal(`DELETE WHERE { GRAPH ${iri(names.graph)} { ${iri(subject)} ?predicate ?object } }`,undefined,undefined,"client-personal-graph-servers:deletePersonalGraphServer");
+  await updatePersonal(`DELETE WHERE { GRAPH ${iri(names.graph)} { ${iri(subject)} ?predicate ?object } }`,undefined,undefined,"client-personal-graph-servers:deletePersonalGraphServer",undefined,"view",{tab:"personal",ribbon:"session"});
   await refreshPersonalGraphServers(ctx.session);
   notify();
 }

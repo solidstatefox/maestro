@@ -58,7 +58,7 @@ export async function changeApprovals(uris: string[], status: "Approved" | "Pend
     } LIMIT 5000`;
   const ctx=await personalContext();
   if(ctx.session!==auth)throw new Error("Personal user session changed.");
-  const rows=await selectPersonal(query,ctx,signal,"approval-update:changeApprovals");
+  const rows=await selectPersonal(query,ctx,signal,"approval-update:changeApprovals","view",{tab:"personal",ribbon:"session"});
   const updates:string[]=[];
   const escapeLiteral=(s:string)=>JSON.stringify(s);
   for(const uri of resources){
@@ -93,9 +93,9 @@ export async function changeApprovals(uris: string[], status: "Approved" | "Pend
   // a rejected multi-statement request otherwise prevents FSM approval entirely.
   for (const update of updates) {
     if((await personalContext()).session!==auth)throw new Error("Personal user session changed.");
-    await updatePersonal(update,signal,bookmarkedQueryXml,"approval-update:changeApprovals");
+    await updatePersonal(update,signal,bookmarkedQueryXml,"approval-update:changeApprovals",undefined,"view",{tab:"personal",ribbon:"session"});
   }
-  const changed=await selectPersonal(`SELECT ?resource ?status WHERE { VALUES ?resource { ${values} } GRAPH <${graph}> { ?resource <${STATUS_MUI}status> ?status } }`,ctx,signal,"approval-update:changeApprovals");
+  const changed=await selectPersonal(`SELECT ?resource ?status WHERE { VALUES ?resource { ${values} } GRAPH <${graph}> { ?resource <${STATUS_MUI}status> ?status } }`,ctx,signal,"approval-update:changeApprovals","view",{tab:"personal",ribbon:"session"});
   const saved=await readSessionHydration(auth);
   if(saved.snapshot){
     await updateSessionSnapshot(auth,snapshot=>({bindings:[...snapshot.bindings.filter(row=>row.section?.value!=="status" || !resources.includes(row.resource?.value??"")),

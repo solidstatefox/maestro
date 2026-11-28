@@ -7,12 +7,17 @@ import { describeUpstreamError, sanitizeUpstreamDiagnostic } from "@/lib/upstrea
 import { personalAuthenticatedFetch } from "@/lib/client-personal-request";
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 import { inspectPersonalUpdateGraphs } from "@/lib/personal-update-graph-guard";
+import type { MaestroQueryScope } from "./app-lifecycle/query-view-ownership";
 import { maestroQueryFetch } from "@/lib/client-query-cache";
 /** Personal-store transport observations update the existing graph-server dropdown.
  * No credentials, query text, or response body is broadcast. */
 export { PERSONAL_SPARQL_HEALTH_EVENT, signalPersonalHealth } from "./personal-sparql-health";
 export type PersonalRows = Array<Record<string, {type?:string;value?:string;datatype?:string}>>;
 export type PersonalContext = {session:PersonalAuthSession;base:string;addr:string};
+/** Explicit caller authority. Initialization is owned by the session XState
+ * actor, not a foreground Browse/View/Analyze query. It must carry that
+ * actor's cancellation signal and may not borrow a view token. */
+export type PersonalTransportAuthority = "view" | "personal-initialization";
 export async function personalContext():Promise<PersonalContext> {
   const session = await loadPersonalAuthSession();
   if(!session?.graphStore||!session.graphPrefix)
@@ -21,16 +26,21 @@ export async function personalContext():Promise<PersonalContext> {
   const endpoint=personalWriteEndpoint(session);
   return {session,base,addr:`${base}@${endpoint}`};
 }
-async function perform(input:{query?:string;update?:string;addr?:string;bookmarkQueryXml?:string;personalRead?:boolean;personalWrite?:boolean},signal:AbortSignal|undefined, requestSource:string, expectedSession?:PersonalAuthSession):Promise<Record<string,unknown>> {
+async function perform(input:{query?:string;update?:string;addr?:string;bookmarkQueryXml?:string;personalRead?:boolean;personalWrite?:boolean},signal:AbortSignal|undefined, requestSource:string, expectedSession?:PersonalAuthSession, authority:PersonalTransportAuthority="view", scope?: MaestroQueryScope):Promise<Record<string,unknown>> {
+  if (authority === "personal-initialization") {
+    if (!signal) throw new Error("Personal initialization requires its XState cancellation signal.");
+    signal.throwIfAborted();
+  }
   const ctx=await personalContext();
   if(expectedSession && ctx.session!==expectedSession)throw new Error("Personal user session changed.");
   const address=input.addr??ctx.addr;
   const response=await personalAuthenticatedFetch(ctx.session,"/proxy/api/sparql",{
     method:"POST",cache:"no-store",credentials:"same-origin",signal,
     headers:{"Content-Type":"application/json","Accept":"application/json",
+      ...(scope ? {"x-maestro-view-tab":scope.tab,"x-maestro-view-ribbon":scope.ribbon} : {}),
       ...{"x-maestro-debug-source":requestSource.startsWith("urn:") ? requestSource : `urn:maestro:component:${requestSource}`,"x-maestro-debug-component":requestSource}},
     body:JSON.stringify({...input,addr:input.addr??ctx.addr}),
-  },requestSource.includes("graph-server-status-history") ? observeProxyFetch : maestroQueryFetch);
+  },authority === "personal-initialization" || requestSource.includes("graph-server-status-history") ? observeProxyFetch : maestroQueryFetch);
   // A successful personal SELECT/UPDATE is fresh evidence of availability;
   // a gateway 5xx contradicts a previously green probe. Ordinary query
   // errors (4xx) do not imply the endpoint itself is unavailable.
@@ -54,16 +64,16 @@ async function perform(input:{query?:string;update?:string;addr?:string;bookmark
   if(data.incomplete===true||response.headers.get("X-Maestro-Incomplete")==="true")throw new Error("Personal SPARQL query returned an incomplete result.");
   return data;
 }
-export async function selectPersonal(query:string,ctx:PersonalContext,signal:AbortSignal|undefined, requestSource:string):Promise<PersonalRows>{
+export async function selectPersonal(query:string,ctx:PersonalContext,signal:AbortSignal|undefined, requestSource:string,authority:PersonalTransportAuthority="view", scope?: MaestroQueryScope):Promise<PersonalRows>{
   if(!query||query.length>100_000)throw new Error("Invalid personal SPARQL SELECT length.");
   // Explicitly select the authenticated personal READ transport. Generic
   // graph-server queries do not carry a login's Authorization header.
-  const data=await perform({addr:ctx.addr,query,personalRead:true},signal,requestSource,ctx.session);
+  const data=await perform({addr:ctx.addr,query,personalRead:true},signal,requestSource,ctx.session,authority,scope);
   if(!Array.isArray((data.results as {bindings?:unknown}|undefined)?.bindings))
     throw new Error("Personal SPARQL did not return SELECT bindings.");
   return (data.results as {bindings:PersonalRows}).bindings;
 }
-export async function updatePersonal(update:string,signal:AbortSignal|undefined,bookmarkQueryXml:string|undefined,requestSource:string,expectedSession?:PersonalAuthSession):Promise<void>{
+export async function updatePersonal(update:string,signal:AbortSignal|undefined,bookmarkQueryXml:string|undefined,requestSource:string,expectedSession?:PersonalAuthSession,authority:PersonalTransportAuthority="view",scope?:MaestroQueryScope):Promise<void>{
   const max=/^INSERT\s+DATA\s*\{/i.test(update.trim())?2_000_000:100_000;
   if(!update||update.length>max)throw new Error("Invalid personal SPARQL update length.");
   const ctx=await personalContext();
@@ -75,9 +85,9 @@ export async function updatePersonal(update:string,signal:AbortSignal|undefined,
   }
   signal?.throwIfAborted();
   if((await personalContext()).session!==ctx.session)throw new Error("Personal user session changed.");
-  await perform({addr:ctx.addr,update,personalWrite:true,...(bookmarkQueryXml?{bookmarkQueryXml}:{})},signal,requestSource,ctx.session);
+  await perform({addr:ctx.addr,update,personalWrite:true,...(bookmarkQueryXml?{bookmarkQueryXml}:{})},signal,requestSource,ctx.session,authority,scope);
 }
-export async function personalExists(pattern:string,ctx:PersonalContext,signal:AbortSignal|undefined,requestSource:string):Promise<boolean>{
-  const rows=await selectPersonal(`SELECT ?match WHERE { ${pattern} BIND(true AS ?match) } LIMIT 1`,ctx,signal,requestSource);
+export async function personalExists(pattern:string,ctx:PersonalContext,signal:AbortSignal|undefined,requestSource:string,scope?:MaestroQueryScope):Promise<boolean>{
+  const rows=await selectPersonal(`SELECT ?match WHERE { ${pattern} BIND(true AS ?match) } LIMIT 1`,ctx,signal,requestSource,"view",scope);
   return rows.length>0;
 }

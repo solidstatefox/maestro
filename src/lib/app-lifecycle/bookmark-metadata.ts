@@ -1,4 +1,5 @@
 "use client";
+import { runActorQuery } from "./actor-query-authority";
 import { assign, createActor, fromPromise, setup } from "xstate";
 import type { BookmarkMetadata } from "../bookmark-metadata-update";
 import { clientQueryFavorites } from "../client-query-favorites";
@@ -14,8 +15,8 @@ async function request(body:object,signal:AbortSignal){
  const data=await response.json();if(!response.ok)throw new Error(data.error??`HTTP ${response.status}`);return data;
 }
 export const bookmarkMetadataMachine=setup({types:{context:{} as Context,events:{} as Event},actors:{
- read:fromPromise(async({input,signal}:{input:string;signal:AbortSignal}):Promise<BookmarkMetadata>=>{const data=await request({action:"read",historyId:input},signal);if(!data.savedBookmark)throw new Error("Bookmark no longer exists.");return {title:data.title||input,description:data.description??"",tags:data.tags??[],tagVocabulary:data.tagVocabulary??"skos"};}),
- write:fromPromise(async({input,signal}:{input:Context;signal:AbortSignal})=>{const data=await request({action:"updateMetadata",historyId:input.id,...input.metadata},signal);if(!data.updated||data.historyId!==input.id)throw new Error("Bookmark update was not confirmed.");}),
+ read:fromPromise(async({input,signal}:{input:string;signal:AbortSignal}):Promise<BookmarkMetadata>=>{const data=await runActorQuery("bookmark-metadata",signal,owned=>request({action:"read",historyId:input},owned));if(!data.savedBookmark)throw new Error("Bookmark no longer exists.");return {title:data.title||input,description:data.description??"",tags:data.tags??[],tagVocabulary:data.tagVocabulary??"skos"};}),
+ write:fromPromise(async({input,signal}:{input:Context;signal:AbortSignal})=>{const data=await runActorQuery("bookmark-metadata",signal,owned=>request({action:"updateMetadata",historyId:input.id,...input.metadata},owned));if(!data.updated||data.historyId!==input.id)throw new Error("Bookmark update was not confirmed.");}),
 }}).createMachine({id:"bookmark-metadata",initial:"closed",context:initial,on:{CLOSE:{target:".closed",actions:assign(initial)}},states:{
  closed:{on:{OPEN:{target:"reading",actions:assign(({event})=>({...initial(),id:event.id}))}}},
  reading:{invoke:{src:"read",input:({context})=>context.id,onDone:{target:"editing",actions:assign(({event})=>({metadata:event.output,error:""}))},onError:{target:"readFailed",actions:assign(({event})=>({error:failure(event.error)}))}}},

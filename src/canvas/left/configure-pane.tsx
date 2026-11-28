@@ -39,7 +39,7 @@ import { serializeFctQuery } from "@/lib/fct-query-api";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Bot, SquarePlus, SquareX, SquareCheck, Split, Code2, RotateCw } from "lucide-react";
+import { Bot, SquarePlus, SquareX, SquareCheck, Split, Code2 } from "lucide-react";
 import { shortenCount } from "@/lib/utils";
 import { formatPagePosition } from "@/canvas/utils/pagination";
 
@@ -263,7 +263,7 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
   const propertyKindSnapshot = useSyncExternalStore(propertyKindController.subscribe, propertyKindController.getSnapshot, propertyKindController.getSnapshot);
   const roleKindSnapshot = useSyncExternalStore(roleKindController.subscribe, roleKindController.getSnapshot, roleKindController.getSnapshot);
   const kindScopeXml = serializeFctQuery(queryTree);
-  const kindKey = defaultLeftTab === "facets" && !workspace.queryExecutionCancelled ? `${kindScopeXml}::patterns-${kindsRevision}::refresh-${workspace.queryRefreshRevision}` : "";
+  const kindKey = workspace.sharedExecutionReady && defaultLeftTab === "facets" && !workspace.queryExecutionCancelled ? `${kindScopeXml}::patterns-${kindsRevision}::refresh-${workspace.queryRefreshRevision}` : "";
   const propertyKindKey = kindKey ? `${kindKey}::property::retry-${kindRetry.property}` : "";
   const roleKindKey = kindKey ? `${kindKey}::role::retry-${kindRetry.role}` : "";
   const propertyKindState = selectKinds(propertyKindSnapshot, propertyKindKey);
@@ -285,7 +285,7 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
       async function run(query: string): Promise<{results?:{bindings?:Array<{maestroKind?:{value?:string}}>}; boolean?:boolean; incomplete?:boolean}> {
         const response = await maestroQueryFetch("/proxy/api/sparql", {
           method: "POST", signal, cache: "no-store",
-          headers: { "Content-Type":"application/json", "X-Maestro-Query-Label":`Configure:Kinds:${direction}`, ...proxyDebugHeaders("Configure:Kinds",`ConfigureKind:${direction}`),
+          headers: {"x-maestro-view-tab": "shared", "x-maestro-view-ribbon": "query",  "Content-Type":"application/json", "X-Maestro-Query-Label":`Configure:Kinds:${direction}`, ...proxyDebugHeaders("Configure:Kinds",`ConfigureKind:${direction}`),
             "X-Maestro-Clock-Component":clockScope, ...(retry ? {"X-Maestro-Component-Retry":"1"} : {}),
             ...(timeoutMs ? {"X-Maestro-Query-Timeout-Ms":String(timeoutMs)} : {}) },
           body:JSON.stringify({addr:address,query}),
@@ -498,13 +498,9 @@ let items: { key: string; label: string; count: number; example?: FacetItem["exa
                             </div>
                             {(group === "Properties" || group === "Roles") && checkingKinds && <span role="status" className="shrink-0 text-xs text-white/90"><ElapsedStatus label="Kinds" category="kinds" clockScope={`component:kinds:${direction}`} /></span>}
                             {(group === "Properties" || group === "Roles") && kindState.error && !checkingKinds &&
-                              <span className="inline-flex items-center gap-1 rounded border border-white/40 px-1.5 py-0.5" style={{ backgroundColor: CONFIGURE_HEADER_BACKGROUND_COLOR }} data-kind-error="true">
-                                <ErrorDetails prefix="Kinds unavailable" error={kindState.error} />
-                                {completeFacetButton(facetButtonFactory(<RotateCw className="size-3.5" aria-hidden="true" />), {
-                                  className: "inline-flex items-center justify-center rounded text-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
-                                  "aria-label": `Retry ${group} Kinds discovery`, title: "Retry Kinds discovery",
-                                  onClick: retryKinds,
-                                })}
+                              <span className="inline-flex shrink-0 items-center" data-kind-error="true">
+                                <ErrorDetails prefix="Kinds unavailable" error={kindState.error} iconOnly onRetry={retryKinds} />
+
                               </span>}
                             {(group === "Properties" || group === "Roles") && kindState.partial && !checkingKinds && <button type="button" onClick={retryKinds} className="text-xs text-white underline" title="Anytime returned positive matches only; retry for complete availability">Incomplete · Retry</button>}
                             {(group === "Properties" || group === "Roles") && kindState.ready && !checkingKinds && <MaestroSelect

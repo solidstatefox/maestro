@@ -5,6 +5,9 @@ export const FCT_VIEW_TYPES = {
   TEXT: "text",
   PROPERTIES: "properties",
   PROPERTIES_IN: "properties-in",
+  PROPERTIES_RANK: "properties-rank",
+  PROPERTIES_CLUSTER: "properties-cluster",
+  CLUSTERS: "clusters",
   CLASSES: "classes",
   LIST: "list",
   LIST_SUBJECTS: "list-subjects",
@@ -33,4 +36,24 @@ export const FCT_VIEW_TYPE_VALUES: readonly FctViewType[] = Object.values(FCT_VI
 
 export function isFctViewType(value: string): value is FctViewType {
   return FCT_VIEW_TYPE_VALUES.some((type) => type === value);
+}
+
+/** Maximum number of complete predicates admitted to one scoped analytics run. */
+export const DEFAULT_PREDICATE_ANALYSIS_CANDIDATES = 200;
+/** Safety ceiling for user-selected analytical populations; distinct from view pagination. */
+export const MAX_PREDICATE_ANALYSIS_CANDIDATES = 1000;
+
+/** Maximum complete subject/predicate incidence rows per predicate analysis.
+ * This is a work budget, not an implicit sample size: exceeding it fails closed. */
+export const DEFAULT_PREDICATE_ANALYSIS_INCIDENCE_ROWS = 50000;
+export const MAX_PREDICATE_ANALYSIS_INCIDENCE_ROWS = 500000;
+
+/** Ranking is independent of shared-subject clustering. */
+export const PREDICATE_RANK_ALGORITHMS = ["fur", "structural"] as const;
+export type PredicateRankAlgorithm = (typeof PREDICATE_RANK_ALGORITHMS)[number];
+export const DEFAULT_PREDICATE_RANK_ALGORITHM: PredicateRankAlgorithm = "fur";
+export function predicateRankAlgorithm(value: string | undefined): PredicateRankAlgorithm {
+  if (value === undefined) return DEFAULT_PREDICATE_RANK_ALGORITHM;
+  if (value === "fur" || value === "structural") return value;
+  throw new Error("Predicate ranking algorithm must be fur or structural.");
 }

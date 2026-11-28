@@ -91,7 +91,7 @@ test('composition uses one resizable group and no full-workspace skeleton switch
   assert.match(workspace, /<RightCanvasPanel workspace=\{workspace\} \/>/);
   // An anchor from the prior Browse scope must be checked against the current
   // authoritative tree before its Personal listener mounts on Bookmarks/History.
-  assert.match(workspace, /urlStateInitialized && endpointReadyForQuery && personalWidgets\.filter\(\(widget\) =>/);
+  assert.match(workspace, /urlStateInitialized && workspace\.sharedExecutionReady && endpointReadyForQuery && personalWidgets\.filter\(\(widget\) =>/);
   assert.match(workspace, /activeTransportedFacets\(queryTree\)/);
   assert.match(workspace, /sameTransportedFacetIdentity\(candidate, widget\.anchor\)/);
   assert.doesNotMatch(workspace, /hop === widget\.anchor\?\.path\[index\]/);

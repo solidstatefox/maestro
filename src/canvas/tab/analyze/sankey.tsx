@@ -107,7 +107,7 @@ export function AnalyzeSankey({workspace,renderer="recharts"}:{workspace:Workspa
                     ...(term.datatype?{datatype:term.datatype}:{}),...(term.lang?{lang:term.lang}:{})})));
                 const response=await cachedFetchFct("/proxy/api/fct",{
                   method:"POST",cache:"no-store",signal:controller.signal,
-                  headers:{"Content-Type":"text/xml; charset=utf-8"},
+                  headers:{"Content-Type":"text/xml; charset=utf-8", "x-maestro-view-tab":"analyze", "x-maestro-view-ribbon":workspace.selectedAnalysisUri},
                   body:projectionQueryXml,
                 });
                 const xml=await response.text();

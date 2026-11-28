@@ -39,5 +39,6 @@
   "eu-data/record-shapes.ttl": "shacl-policies",
   "eu-data/eurio-validation.ttl": "shacl-policies",
   "eu-data/dcat-ap-3-0-0/shapes.ttl": "shacl-policies",
-  "eu-data/dcat-ap-3-0-0/range.ttl": "shacl-policies"
+  "eu-data/dcat-ap-3-0-0/range.ttl": "shacl-policies",
+  "predicate-clusters/provider.ttl": "shacl-policies"
 }

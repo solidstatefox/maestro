@@ -3,6 +3,8 @@
 import type { WorkspaceController } from "@/canvas/utils/workspace-controller";
 
 export type ConfigurePaneWorkspace = Pick<WorkspaceController,
+  | "workspaceTab"
+  | "sharedExecutionReady"
   | "queryExecutionCancelled"
   | "queryRefreshRevision"
   | "commitConfigureFacetChanges"
@@ -545,6 +547,7 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "graphText"
   | "groupBatchSize"
   | "handleFetchProfile"
+  | "cancelPersonalInitialization"
   | "handleRetryPersonalInitialization"
   | "handleLoginSubmit"
   | "handleTestConnection"
@@ -652,7 +655,6 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "setLoginPassword"
   | "setLoginShowPassword"
   | "setLoginTab"
-  | "setLoginTesting"
   | "setLoginUsername"
   | "setLoginWebIdUri"
   | "setOrderResults"

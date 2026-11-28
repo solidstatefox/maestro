@@ -75,7 +75,7 @@ test('XState gates every Sheet clear action, including an open confirmation dial
   const access=read('src/lib/app-lifecycle/access.ts');
   const sheet=read('src/canvas/sheet/settings-pane.tsx');
   const workspace=read('src/canvas/workspace.tsx');
-  const auth=read('src/canvas/utils/workspace-controller.tsx');
+  const auth=read('src/canvas/diagnostics/use-maestro-access.ts');
   assert.match(access,/LOGIN_ACTIVITY: \{ actions: assign/);
   assert.match(access,/canClearCaches: !snapshot.context.loginPending/);
   assert.match(access,/policyStage !== "seeding"/);
@@ -84,8 +84,11 @@ test('XState gates every Sheet clear action, including an open confirmation dial
   assert.match(sheet,/disabled=\{!accessCapabilities.canClearCaches\}/);
   assert.match(workspace,/selectMaestroCapabilities\(workspace.accessController.getSnapshot\(\)\).canClearCaches/);
   assert.match(workspace,/event.preventDefault\(\)/);
-  // Check the XState event rather than the callback's parameter spelling.
-  assert.match(auth,/setLoginTesting:\s*\([^\n]+?=>\s*\{[^\n]*?accessController\.send\(\s*\{\s*type:\s*"LOGIN_ACTIVITY",\s*pending:\s*next\s*\}\s*\)/);
+  // Connect status is derived from the existing actor, including cancellation.
+  assert.match(auth,/initialization\.subscribe\(observeConnect\)/);
+  assert.match(auth,/controller\.send\(\{ type: "LOGIN_ACTIVITY", pending \}\)/);
+  assert.match(auth,/initializationSnapshot\.matches\("running"\).*purpose === "connect"/);
+
 });
 
 test('Login uses one Connecting control, navigation has one joined outline seam, root clips border corners',()=>{

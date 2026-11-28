@@ -31,7 +31,7 @@ export async function readRecordGraphAuthors(
   // A root FCT list-values focus, not the Browse query's selection: graph IRIs
   // are the resources whose authorship triples we need to project.
   const xml = `<query xmlns="http://openlinksw.com/services/facets/1.0" addr="${xmlEscape(`${ALL_GRAPHS}@${addr.slice(at + 1).trim()}`)}"><view type="list" limit="${selected.length}" offset="0"/></query>`;
-  const records = await fctProjectPage(xml, selected, PROJECTIONS, signal);
+  const records = await fctProjectPage(xml, selected, PROJECTIONS, signal, false, false, {tab:"record",ribbon:"session"});
   const authors: RecordGraphAuthor[] = [];
   const seen = new Set<string>();
   for (const record of records) {

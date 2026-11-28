@@ -778,7 +778,7 @@ export function MaestroWorkspace() {
           <Progress className="h-full rounded-none bg-muted" value={endpointChecksTotal > 0 ? (endpointChecksCompleted / endpointChecksTotal) * 100 : 0} indeterminate={endpointChecksTotal === 0 || endpointChecksCompleted === 0} aria-label="FCT endpoint check progress" />
         </div>
       )}
-      {urlStateInitialized && endpointReadyForQuery && personalWidgets.filter((widget) => {
+      {urlStateInitialized && workspace.sharedExecutionReady && endpointReadyForQuery && personalWidgets.filter((widget) => {
         if (!widget.anchor) return true;
         // The previous Browse widgets can survive for one render after a ribbon
         // replaces the FCT tree. Never mount an alias listener for a stale path.
@@ -831,7 +831,7 @@ export function MaestroWorkspace() {
                   const targetGraph = rdfTargetGraph.trim();
                   if (!/^[a-z][a-z0-9+.-]*:[^\s<>"{}|^`\\]+$/i.test(targetGraph)) throw new Error("Invalid RDF target graph IRI.");
                   const update = `LOAD <${sourceUrl.href}> INTO GRAPH <${targetGraph}>`;
-                  await updatePersonal(update,undefined,undefined,"rdf-load");
+                  await updatePersonal(update,undefined,undefined,"rdf-load",undefined,"view",{tab:"personal",ribbon:"session"});
                   toast.add({ title: "RDF load completed", description: `Loaded ${sourceUrl.href} into ${targetGraph}.`, type: "success" });
                 } catch (error) {
                   toast.add({ title: "RDF load failed", description: error instanceof Error ? error.message : "RDF load failed.", type: "error" });
@@ -917,6 +917,17 @@ export function MaestroWorkspace() {
 
 
 
+      <AlertDialog open={Boolean(workspace.restoredViewFallback)} onOpenChange={open => { if (!open) workspace.dismissRestoredViewFallback(); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Saved View or Analysis unavailable</AlertDialogTitle>
+            <AlertDialogDescription>{workspace.restoredViewFallback}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={workspace.dismissRestoredViewFallback}>Browse</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="shrink-0">
         {workspaceRibbon}
 

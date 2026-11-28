@@ -30,7 +30,10 @@ export function useMaestroOperations(facts: {
     controller.start();
     return () => controller.stop();
   }, [controller]);
-  useLayoutEffect(() => {
+  // Observations are post-commit effects: publishing an external-store snapshot
+  // synchronously from a layout effect can recursively force React commits.
+  // XState still owns all execution gates and immediate explicit cancellation.
+  useEffect(() => {
     controller.send({ type: "GRAPH_OBSERVED", key: facts.graphKey, registryReady: facts.graphRegistryReady,
       selected: facts.graphSelected, ready: facts.graphReady, failed: facts.graphFailed });
     controller.send({ type: "QUERY_OBSERVED", key: facts.queryKey, hydrated: facts.queryHydrated, graphReady: facts.querySourceReady });

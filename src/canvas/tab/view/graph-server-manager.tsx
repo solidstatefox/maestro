@@ -25,7 +25,7 @@ export function GraphServerManager({ canMutate, onRegistryChange,
   configuredEndpoints?: readonly EndpointOption[]; registrationCandidate?: EndpointCandidate | null; onCandidateConsumed?: () => void;
   discoverySource?:string; discoveryRecipes?:readonly string[]; discoveryCancelled?:boolean;
 }) {
-  const [directory] = useState(() => createMaestroViewDiscoveryController<PersonalGraphServer>());
+  const [directory] = useState(() => createMaestroViewDiscoveryController<PersonalGraphServer>("maestro-personal-directory", "personal-directory"));
   const directorySnapshot = useSyncExternalStore(directory.subscribe,directory.getSnapshot,directory.getSnapshot);
   const [directoryRevision,setDirectoryRevision] = useState(0);
   const directoryKey = JSON.stringify([account,directoryRevision]);

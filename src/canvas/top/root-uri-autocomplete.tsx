@@ -38,7 +38,7 @@ export function RootUriAutocomplete({ value, addr, propertyUris, gateState, susp
           if (!query) return {results: { bindings: [] as Array<{uri?: {type?: string;value?: string};label?: {value?: string};type?:{type?:string;value?:string}}> }};
           const response = await maestroQueryFetch("/proxy/api/sparql", {
             method: "POST", signal: requestSignal, cache: "no-store",
-            headers: {"x-maestro-debug-source":"urn:maestro:component:Root:Autocomplete","x-maestro-debug-component":"Root:Autocomplete","Content-Type":"application/json", "X-Maestro-Query-Label":"Root:Autocomplete",
+            headers: {"x-maestro-view-tab": "shared", "x-maestro-view-ribbon": "query", "x-maestro-debug-source":"urn:maestro:component:Root:Autocomplete","x-maestro-debug-component":"Root:Autocomplete","Content-Type":"application/json", "X-Maestro-Query-Label":"Root:Autocomplete",
               "x-maestro-query-timeout-ms": String(settings.timeoutSeconds * 1000)},
             body: JSON.stringify({addr,query,requestClass:"autocomplete"}),
           });

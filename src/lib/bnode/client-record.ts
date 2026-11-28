@@ -56,7 +56,7 @@ export async function loadBlankNodeRecord(input: Input): Promise<Result> {
         controller.signal.throwIfAborted();
         const response = await cachedFetchFct("/proxy/api/sparql", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-blank-node", "RecordDescription"),
+          headers: {"x-maestro-view-tab": "record", "x-maestro-view-ribbon": "session",  "Content-Type": "application/json", ...proxyDebugHeaders("record-blank-node", "RecordDescription"),
             ...(input.retryRevision ? { "X-Maestro-Component-Retry": "1" } : {}) },
           body: JSON.stringify({ addr, query: actualQuery, responseScope: "request", maxResponseBytes }),
         });

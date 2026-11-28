@@ -81,7 +81,7 @@ export function compactDatasetLabels(row:GraphServerRow):string {
 /** Only DCAT-capable populations require additional FCT projection. Ordinary
  * EntryPoint cards keep their existing registry lookup and zero extra reads. */
 export async function projectGraphServerPage(liveXml:string,page:readonly GraphServerPageItem[],registry:readonly EndpointOption[],dcat:boolean,signal:AbortSignal):Promise<GraphServerRow[]> {
-  const records=dcat?await fctProjectPage(liveXml,page.map(row=>row.uri),projections,signal):[];
+  const records=dcat?await fctProjectPage(liveXml,page.map(row=>row.uri),projections,signal,false,false,{tab:"view",ribbon:"perspectives:gttp://ggg.maestro.ecosys/shacl/provider/entrypoint"}):[];
   signal.throwIfAborted();
   const rows=normalizeGraphServerPage(page,records,registry,dcat);
   // Only label dataset IRIs reached from this page, with an exact URI join.
@@ -89,7 +89,7 @@ export async function projectGraphServerPage(liveXml:string,page:readonly GraphS
   const datasets=distinct(rows.flatMap(row=>row.datasets.slice(0,visibleDatasetLimit)));
   if(datasets.length){
     let labels:ProjectedRecord[]=[];
-    try {labels=await fctProjectPage(liveXml,datasets,datasetLabelProjections,signal);}
+    try {labels=await fctProjectPage(liveXml,datasets,datasetLabelProjections,signal,false,false,{tab:"view",ribbon:"perspectives:gttp://ggg.maestro.ecosys/shacl/provider/entrypoint"});}
     catch {signal.throwIfAborted(); /* Optional label enrichment: keep the page. */}
     const byUri=new Map(labels.map(record=>[record.uri,record]));
     for(const row of rows)row.datasetLabels=row.datasets.slice(0,visibleDatasetLimit).map(uri=>{

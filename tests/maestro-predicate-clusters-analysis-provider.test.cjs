@@ -103,3 +103,27 @@ test('rank selection uses InputGroup and separate cancellable XState invocation,
   assert.match(route,/upstream.response.status !== 200/);
   assert.match(route,/accum.result\(cutoff, structuralRankOnly\)/);
 });
+
+
+test('Property synonyms belongs exclusively to the approved Analyze provider and uses its selected ranked predicate',()=>{
+ const component=read('src/canvas/tab/analyze/predicate-clusters.tsx');
+ const synset=read('src/canvas/tab/analyze/property-synset.tsx');
+ assert.doesNotMatch(read('src/canvas/left/filter-pane.tsx'),/PropertySynsetButton/);
+ assert.ok(!fs.existsSync(path.join(root,'src/canvas/left/property-synset.tsx')));
+ assert.match(component,/<PropertySynsetButton tree=\{workspace.queryTree\} predicate=\{result\?\.ranks.some/);
+ assert.match(synset,/synsetTreeForRankedProperty\(props.tree,props.predicate\)/);
+ assert.equal((synset.match(/"x-maestro-view-tab":"analyze","x-maestro-view-ribbon":PREDICATE_CLUSTERS_ANALYSIS_URI/g)||[]).length,2);
+ assert.match(synset,/searchController.stop\(\)/);
+ assert.match(synset,/searchController.cancel\(\)/);
+});
+test('analysis inspector uses actual traced reads and the existing hover tray and CodeBlock',()=>{
+ const ui=read('src/canvas/tab/analyze/predicate-clusters.tsx');
+ const syn=read('src/canvas/tab/analyze/property-synset.tsx');
+ const inspector=read('src/canvas/tab/analyze/predicate-query-inspector.tsx');
+ const route=read('src/app/proxy/api/fct/route.ts');
+ assert.match(ui,/group\/header/);assert.match(ui,/<PredicateQueryTray entries=\{analyzerTrace\}/);
+ assert.match(syn,/analyticalFctError\(response.status,raw/);
+ assert.match(inspector,/<LeftWidgetButtonTray/);assert.match(inspector,/<CodeBlock/);
+ for(const phase of ['synset-version','synset-bi-probe','synset-candidate-budget','synset-rule-budget','synset-scoring'])assert.ok(route.includes(phase));
+ assert.match(route,/deadline expired during/);assert.match(route,/predicateAnalyticsUpstreamFailure\(\{phase,response:upstream.response,body:upstream.text/);
+});

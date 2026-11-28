@@ -6,6 +6,7 @@ export const FCT_VIEW_TYPES = {
   PROPERTIES: "properties",
   PROPERTIES_IN: "properties-in",
   PROPERTIES_RANK: "properties-rank",
+  PROPERTIES_SYNSET: "properties-synset",
   PROPERTIES_CLUSTER: "properties-cluster",
   CLUSTERS: "clusters",
   CLASSES: "classes",
@@ -28,6 +29,16 @@ export const FCT_VIEW_TYPES = {
   DESCRIBE: "describe",
   GRAPHS: "graphs",
 } as const;
+
+/** An explicit view timeout is a Virtuoso execution budget in milliseconds.
+ * Omit the attribute to inherit the Sheet/query default. */
+export function parseFctViewTimeout(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const timeout = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(timeout) || timeout < 1000 || timeout > 2147483647)
+    throw new Error("FCT view timeout must be an integer from 1000 to 2147483647 milliseconds.");
+  return timeout;
+}
 
 /** A view type is always derived from the canonical constants. */
 export type FctViewType = (typeof FCT_VIEW_TYPES)[keyof typeof FCT_VIEW_TYPES];
@@ -56,4 +67,13 @@ export function predicateRankAlgorithm(value: string | undefined): PredicateRank
   if (value === undefined) return DEFAULT_PREDICATE_RANK_ALGORITHM;
   if (value === "fur" || value === "structural") return value;
   throw new Error("Predicate ranking algorithm must be fur or structural.");
+}
+
+/** Synset scoring is independent of predicate ranking and clustering. */
+export const PREDICATE_SYNSET_ALGORITHMS = ["relation-agreement", "rulealign"] as const;
+export type PredicateSynsetAlgorithm = (typeof PREDICATE_SYNSET_ALGORITHMS)[number];
+export function predicateSynsetAlgorithm(value: string | undefined): PredicateSynsetAlgorithm {
+  if (value === undefined || value === "relation-agreement") return "relation-agreement";
+  if (value === "rulealign") return value;
+  throw new Error("Property synset algorithm must be relation-agreement or rulealign.");
 }

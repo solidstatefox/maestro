@@ -1,4 +1,5 @@
 "use client";
+import { useFacetProviderRendered } from "@/canvas/diagnostics/facet-provider-progress";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { useProviderWidgetLifecycle } from "@/canvas/diagnostics/use-provider-widget-lifecycle";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -55,6 +56,8 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
   }, [tree, property, provider]);
   const [domain, setDomain] = useState<[number, number] | null>(null);
   const [domainKey, setDomainKey] = useState("");
+  const [settledDomainKey, setSettledDomainKey] = useState("");
+  const scopeKey = `${tree.attributes.addr}\u0000${query}`;
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<[number, number] | null>(null);
@@ -73,8 +76,8 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
     // scope is being measured. The slider is disabled until the new scope is
     // confirmed; no stale bound can be committed to the live query.
     resetMaestroQueryExecutionScope(`component:numeric:${property}`);
-    setLoading(true); setDraft(null); setEditingBound(null); setError("");
-    if (!query) { setError("Numeric domain is unavailable for this FCT query scope."); setLoading(false); return () => controller.abort(); }
+    setLoading(true); setDraft(null); setEditingBound(null); setError(""); setSettledDomainKey("");
+    if (!query) { setError("Numeric domain is unavailable for this FCT query scope."); setLoading(false); setSettledDomainKey(scopeKey); return () => controller.abort(); }
     void (async () => {
       try {
         const response = await maestroQueryFetch("/proxy/api/sparql", {
@@ -97,15 +100,15 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
       } catch (reason) {
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Numeric domain unavailable");
       } finally {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) { setLoading(false); setSettledDomainKey(scopeKey); }
       }
     })();
     return () => controller.abort();
   }, [query, tree.attributes.addr]);
-  const scopeKey = `${tree.attributes.addr}\u0000${query}`;
   const domainIsCurrent = Boolean(domain && domainKey === scopeKey);
   const canRetainDomain = Boolean(domain && domainKey.startsWith(`${tree.attributes.addr}\u0000`));
   const refreshing = !domainIsCurrent || loading;
+  useFacetProviderRendered(!loading && settledDomainKey === scopeKey);
   // Never display one graph server's numeric domain as another server's domain.
   if (!domain || !canRetainDomain) return error ? <ErrorDetails prefix="Numeric facet" error={error} /> :
     <div data-provider-phase={widgetPhase} className="flex h-56 w-[104px] shrink-0 flex-col items-center gap-3 overflow-hidden border-r pr-2 text-[10px] leading-tight" aria-label="Loading numeric facet domain">

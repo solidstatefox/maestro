@@ -208,3 +208,37 @@ svg[data-maestro-icon] { stroke-width: var(--maestro-icon-stroke-width); }
 .maestro-record-format-surface #maestro-record-viewer {
   box-sizing: border-box; width: 100% !important; min-width: 0 !important; max-width: 100% !important;
 }
+
+/* The stable progress wrapper owns the color fade. Changing the XState glyph
+   every 150 ms must not restart this independent 3.6-second spectrum. */
+.maestro-facet-provider-spectrum {
+  --spectrum-red: #b91c1c;
+  --spectrum-orange: #c2410c;
+  --spectrum-yellow: #a16207;
+  --spectrum-green: #15803d;
+  --spectrum-cyan: #0e7490;
+  --spectrum-blue: #1d4ed8;
+  --spectrum-violet: #7e22ce;
+  animation: maestro-facet-provider-spectrum 3600ms linear infinite;
+}
+.dark .maestro-facet-provider-spectrum {
+  --spectrum-red: #fca5a5;
+  --spectrum-orange: #fdba74;
+  --spectrum-yellow: #fde047;
+  --spectrum-green: #86efac;
+  --spectrum-cyan: #67e8f9;
+  --spectrum-blue: #93c5fd;
+  --spectrum-violet: #d8b4fe;
+}
+@keyframes maestro-facet-provider-spectrum {
+  0%, 100% { color: var(--spectrum-red); }
+  14.2857% { color: var(--spectrum-orange); }
+  28.5714% { color: var(--spectrum-yellow); }
+  42.8571% { color: var(--spectrum-green); }
+  57.1429% { color: var(--spectrum-cyan); }
+  71.4286% { color: var(--spectrum-blue); }
+  85.7143% { color: var(--spectrum-violet); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .maestro-facet-provider-spectrum { animation: none; }
+}

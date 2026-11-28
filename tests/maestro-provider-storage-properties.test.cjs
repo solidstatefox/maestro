@@ -27,7 +27,7 @@ test('provider owns its cubby values and projects one common detached timeout/ca
  assert.match(src,/storage\.get\(key\)/);
  assert.match(src,/timeoutMs: 120000, maxCandidates: 500/);
  assert.match(src,/maxIncidenceRows: 50000/);
- assert.match(src,/query\.setAttribute\("timeout", String\(settings\.timeoutMs\)\)/);
+ assert.match(src,/views\[0\]\.setAttribute\("timeout", String\(settings\.timeoutMs\)\)/);
  assert.match(src,/views\[0\]\.setAttribute\("max-candidates", String\(settings\.maxCandidates\)\)/);
  assert.match(src,/views\[0\]\.setAttribute\("limit", String\(settings\.maxCandidates\)\)/);
  assert.match(src,/subscribeProviderStorageChanges/);

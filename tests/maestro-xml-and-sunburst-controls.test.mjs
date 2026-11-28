@@ -53,7 +53,18 @@ test('sunbursts keep hover highlight without scaling, hand cursor or native SVG 
   assert.match(host, /element\.style\.opacity=inBranch/);
   assert.match(host, /<div ref=\{tooltipRef\} role="tooltip"/);
   assert.match(host, /positionTooltip\(event\.clientX,event\.clientY\)/);
-  assert.doesNotMatch(host, /scale\(1\.045\)|style\.transform=|<Tooltip open=/);
+  // Frame-only translation anchors the opposite edge during a resize drag;
+  // it is not a transform on the hovered wedge. Allow only the exact frame
+  // reset and translation assignments, keeping the ban on all other transforms.
+  const withoutFrameTranslation = host
+    .replace(/\b(?:frame|frameRef\.current)\.style\.transform\s*=\s*"none";/g, '')
+    .replace(/\bframe\.style\.transform\s*=\s*`translate\(\$\{dx\}px, \$\{dy\}px\)`;/g, '');
+  assert.doesNotMatch(withoutFrameTranslation, /scale\(1\.045\)|style\.transform\s*=|<Tooltip open=/);
+  const hoverStart=host.indexOf('const highlightLineage=');
+  const hoverEnd=host.indexOf('const provider=presentation.provider;',hoverStart);
+  assert.ok(hoverStart>=0 && hoverEnd>hoverStart);
+  const hoverLogic=host.slice(hoverStart,hoverEnd);
+  assert.doesNotMatch(hoverLogic, /style\.transform|changeFrame\s*\(|applyFrame\s*\(|setFrameBounds\s*\(|resizeDrag\.current/);
   for (const path of ['graph/sunburst/provider.ttl','graph/sunburst-chartkit/provider.ttl']) {
     const ttl=read(path);
     assert.match(ttl, /aria-label="\{concat\(@label/);

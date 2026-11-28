@@ -1,5 +1,7 @@
 /** Per-widget upstream query timeouts; 0 inherits the query/server default. */
 import { maestroStorageGet, maestroStorageSet } from "./maestro-storage";
+import { XMLParser } from "fast-xml-parser";
+import { parseFctViewTimeout } from "./fct-view-types";
 
 export const MAESTRO_TIMEOUT_CATEGORIES = [
   { key: "results", label: "Results" },
@@ -73,14 +75,47 @@ export function timeoutCategoryForSource(source: string): MaestroTimeoutCategory
 export function configuredTimeoutMs(source: string): number {
   return (active[timeoutCategoryForSource(source)] ?? 0) * 1000;
 }
-/** Modify only the transmitted XML, not the live query. */
-export function applyFctQueryTimeout(source: string, body: string): string {
-  const timeout = configuredTimeoutMs(source);
-  if (!timeout || !/<query\b/i.test(body)) return body;
-  return body.replace(/<query\b([^>]*?)>/i, (_whole, attrs: string) => {
-    const next = /\btimeout\s*=\s*["'][^"']*["']/i.test(attrs)
-      ? attrs.replace(/\btimeout\s*=\s*["'][^"']*["']/i, `timeout="${timeout}"`)
-      : `${attrs} timeout="${timeout}"`;
-    return `<query${next}>`;
-  });
+// Use the same namespace and attribute handling as the FCT compiler. A
+// textual search could mistake a comment or an escaped literal for a view.
+const timeoutParser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: false,
+  attributeNamePrefix: "@_", textNodeName: "#text", parseTagValue: false, trimValues: false });
+function findView(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  for (const [name, children] of Object.entries(value)) {
+    if (name.startsWith("@_") || name === "#text") continue;
+    for (const child of Array.isArray(children) ? children : [children]) {
+      if (name === "view") return child && typeof child === "object" ? child as Record<string, unknown> : {};
+      const found = findView(child);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+/** Resolve once, before dispatch and cache-key calculation. Only wire XML
+ * is rewritten. Explicit view timeouts outrank the Sheet, even Set all. */
+export function resolveFctRequestTimeout(source: string, body: string): { body: string; timeoutMs?: number } {
+  try {
+    const json = body.trimStart().startsWith("{") ? JSON.parse(body) as Record<string, unknown> : undefined;
+    const xml = json ? json.queryXml : body;
+    if (typeof xml !== "string") return { body };
+    const document = timeoutParser.parse(xml) as Record<string, unknown>;
+    if (!document.query || typeof document.query !== "object") return { body };
+    const raw = findView(document.query)?.["@_timeout"];
+    const explicit = parseFctViewTimeout(raw === undefined ? undefined : String(raw));
+    if (explicit !== undefined) return { body, timeoutMs: explicit };
+    const timeoutMs = configuredTimeoutMs(source);
+    if (!timeoutMs) return { body };
+    const nextXml = xml.replace(/<query\b([^>]*?)>/i, (_whole, attrs: string) => {
+      const next = /\btimeout\s*=\s*["'][^"']*["']/i.test(attrs)
+        ? attrs.replace(/\btimeout\s*=\s*["'][^"']*["']/i, `timeout="${timeoutMs}"`)
+        : `${attrs} timeout="${timeoutMs}"`;
+      return `<query${next}>`;
+    });
+    return { body: json ? JSON.stringify({ ...json, queryXml: nextXml }) : nextXml, timeoutMs };
+  } catch {
+    // Leave malformed XML/JSON and invalid explicit timeouts intact so the
+    // FCT route can report the actual validation error, not mask it with Sheet.
+    return { body };
+  }
 }

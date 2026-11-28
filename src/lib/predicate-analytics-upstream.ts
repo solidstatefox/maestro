@@ -31,7 +31,7 @@ function xml(value: unknown): string {
 // Preserve all ordinary Virtuoso diagnostic/response headers, while excluding
 // authentication/session secrets and hop-by-hop transport internals.
 const privateHeader = /^(?:set-cookie|set-cookie2|authorization|proxy-authorization|proxy-authenticate|www-authenticate|x-api-key|x-auth-token|x-access-token|x-maestro-iteracompute-key|connection|transfer-encoding|keep-alive|trailer|upgrade)$/i;
-export type PredicateUpstreamPhase = "incidence" | "value-counts" | "candidates" | "counts" | "population" | "overlaps" | "fct" | "fct-json" | "ask" | "describe" | "describe-expanded";
+export type PredicateUpstreamPhase = "synset" | "synset-version" | "synset-bi-probe" | "synset-candidate-budget" | "synset-rule-budget" | "synset-scoring" | "incidence" | "value-counts" | "candidates" | "counts" | "population" | "overlaps" | "fct" | "fct-json" | "ask" | "describe" | "describe-expanded";
 export type PredicateUpstreamFailure = {
   phase: PredicateUpstreamPhase; response: Response; body: string; query: string; endpoint: string;
   proxyStatus?: number; explanation?: string;

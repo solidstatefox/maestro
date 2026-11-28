@@ -17,6 +17,7 @@ function harness(){
   const mock={
     "@/lib/sparql-request-attribution":attribution.exports,
     "@/lib/app-lifecycle/query-view-ownership":require('./maestro-view-query-test-shim.cjs'),
+    "./query-queue-observation":require("./query-queue-observation-test-loader.cjs"),
     "./app-lifecycle/actor-query-authority":require("./actor-query-authority-test-loader.cjs"),
     "@/lib/proxy-transport-observation":observation,
     '@/lib/client-personal-request': { withPersonalProxyCredentials: async (_url,init)=>({init,authenticated:false}) },
@@ -27,7 +28,7 @@ function harness(){
     './client-query-events': {subscribeMaestroQueryEvents: async () => ({close(){}})},
     './maestro-incomplete-results': {setMaestroIncompleteResults:()=>{}},
      './virtuoso-anytime': (()=>{const mod={exports:{}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/lib/virtuoso-anytime.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:mod.exports});return mod.exports;})(),
-    './maestro-query-timeouts': {applyFctQueryTimeout:(source,xml)=>xml,configuredTimeoutMs:()=>0},
+    './maestro-query-timeouts': {resolveFctRequestTimeout:(_source,body)=>({body}),configuredTimeoutMs:()=>0},
   };
   const mod={exports:{}};
   vm.runInNewContext(code, {
@@ -199,4 +200,38 @@ test('shared facet queue survives tab switches while foreground and session life
  cache.abortQueryScopedMaestroQueries();assert.equal(latest.length,1);
  holds[1].resolve(new Response('history',{status:200}));await history;
  assert.equal(latest.length,0);
+});
+
+
+test('facet provider observation fires at real queue admission before dispatch, not at authority registration',async()=>{
+  const {cache,holds,controller}=harness();
+  const {observeQueryQueueAdmission,inheritQueryQueueObservation}=require('./query-queue-observation-test-loader.cjs');
+  const provider=new AbortController(),auth=new AbortController(),seen=[];
+  const close=observeQueryQueueAdmission(provider.signal,()=>seen.push(holds.length));
+  // Model the real authentication signal composition boundary.
+  inheritQueryQueueObservation(provider.signal,auth.signal);
+  const send=(label,signal)=>cache.maestroQueryFetch('/proxy/api/sparql',{
+    method:'POST',body:'SELECT * WHERE {}',signal,headers:{'x-maestro-view-tab':'browse',
+      'x-maestro-debug-source':`urn:maestro:component:${label}`,'x-maestro-debug-component':label}
+  });
+  const first=send('foreground');
+  for(let i=0;i<18;i++)await Promise.resolve();
+  assert.equal(holds.length,1);
+  const waiting=send('facet-provider',auth.signal);
+  assert.deepEqual(seen,[],'proposed work has not yet entered the browser queue');
+  for(let i=0;i<18;i++)await Promise.resolve();
+  assert.deepEqual(seen,[1],'observed exactly once while another request holds the only slot');
+  assert.equal(holds.length,1);
+  holds[0].resolve(new Response('done',{status:200}));await first;
+  for(let i=0;i<18;i++)await Promise.resolve();
+  assert.equal(holds.length,2);holds[1].resolve(new Response('done',{status:200}));await waiting;
+  const again=send('facet-provider-approval',auth.signal);
+  for(let i=0;i<18;i++)await Promise.resolve();
+  assert.deepEqual(seen,[1],'multi-query discovery retains one admission latch');
+  holds[2].resolve(new Response('done',{status:200}));await again;close();
+  controller.cancel();
+  const rejected=new AbortController();let falselyAdmitted=false;
+  observeQueryQueueAdmission(rejected.signal,()=>{falselyAdmitted=true});
+  await assert.rejects(send('not-admitted',rejected.signal),/abort|inactive|offstage|cancel/i);
+  assert.equal(falselyAdmitted,false);
 });

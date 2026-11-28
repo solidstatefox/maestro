@@ -17,10 +17,11 @@ const valid=(value:string)=>value.length>0&&value.length<4096&&/^[a-z][a-z0-9+.-
 type Input={properties:string[];queryXml:string;datatypeEvidence:Record<string,string[]>};
 type NumericEntry=NumericProviderMatch & {shape:string};
 const unique=<T,>(values:T[])=>[...new Set(values)];
+export function facetProviderDiscoveryProperties(properties: string[]): string[] { return unique(properties.filter(valid)).slice(0,200); }
 export async function discoverClientFacetProviders(
   input:Input, signal?:AbortSignal, onTags?: (approvedTags: TagProviderMatch[]) => void,
 ):Promise<ProviderMatches>{
-  const properties=unique(input.properties.filter(valid)).slice(0,200);
+  const properties=facetProviderDiscoveryProperties(input.properties);
   if(!properties.length)return {temporal:[],numeric:[],tags:[]};
   const ctx=await personalContext(),graph=`${resolveGraph(GRAPH.SHACL_POLICIES, ctx.base)}`,ontology=`${resolveGraph(GRAPH.ONTOLOGY_CACHE, ctx.base)}`;
   const values=properties.map(value=>`<${value}>`).join(" ");

@@ -53,3 +53,7 @@ test("blocked-entry alert uses Base UI shadcn modal and Browse in its footer, ne
   assert.match(shell, /<AlertDialogFooter>\s*<AlertDialogAction onClick=\{workspace\.dismissRestoredViewFallback\}>Browse<\/AlertDialogAction>\s*<\/AlertDialogFooter>/);
   assert.doesNotMatch(shell, /Continue browsing|Copy original URL|waitingForSelectedView|Browse facets are paused while this view is active/);
 });
+test('shared AlertDialog footer is a full-width muted, separated action region',()=>{
+ const source=fs.readFileSync(path.join(root,'src/components/ui/alert-dialog.tsx'),'utf8');
+ assert.match(source,/data-slot="alert-dialog-footer"[^\n]*-mx-6 -mb-6[^\n]*border-t bg-muted\/50 px-6 py-4/);
+});

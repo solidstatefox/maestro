@@ -28,6 +28,7 @@ type DiscoveryContext = {
   validatedKey: string;
   validatedEvidenceKey: string;
   error: string;
+  tagsResolved: boolean;
 };
 export type ProviderDiscoveryEvent =
   | { type: "DISCOVERY_INACTIVE" }
@@ -36,7 +37,7 @@ export type ProviderDiscoveryEvent =
   | { type: "DISCOVERY_TAGS_RESOLVED"; requestKey: string; tags: TagProviderMatch[] }
   | { type: "DISCOVERY_FAILED"; requestKey: string; error: string };
 const empty: DiscoveryContext = {
-  requestKey: "", applicabilityKey: "", matches: noMatches(), validatedKey: "", validatedEvidenceKey: "", error: "",
+  requestKey: "", applicabilityKey: "", matches: noMatches(), validatedKey: "", validatedEvidenceKey: "", error: "", tagsResolved: false,
 };
 function compatibleEvidence(currentKey: string, validatedKey: string): boolean {
   const current = JSON.parse(currentKey) as Record<string, string[]>;
@@ -78,7 +79,7 @@ export const maestroProviderDiscoveryMachine = setup({
       matches: context.validatedKey === event.applicabilityKey ? context.matches : noMatches(),
       validatedKey: context.validatedKey === event.applicabilityKey ? context.validatedKey : "",
       validatedEvidenceKey: context.validatedKey === event.applicabilityKey ? context.validatedEvidenceKey : "",
-      error: "",
+      error: "", tagsResolved: false,
     })) },
     // Tag clouds depend on the selected predicate and provider approval, not
     // numeric/date datatype probing. Publish them independently while optional
@@ -87,7 +88,7 @@ export const maestroProviderDiscoveryMachine = setup({
       guard: ({ context, event }) => context.requestKey === event.requestKey,
       actions: assign(({ context, event }) => ({
         matches: { ...context.matches, tags: event.tags },
-        validatedKey: context.applicabilityKey,
+        validatedKey: context.applicabilityKey, tagsResolved: true,
       })),
     },
     DISCOVERY_RESOLVED: [

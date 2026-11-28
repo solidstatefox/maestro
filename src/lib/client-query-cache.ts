@@ -1,3 +1,4 @@
+import { inheritQueryQueueObservation, observeAdmittedQuery } from "./query-queue-observation";
 import { actorQueryAllowed, getActorQueryAuthority, type QueryActorOwner } from "./app-lifecycle/actor-query-authority";
 import { observeProxyFetch, stopProxyQueryGeneration, resumeProxyQueryGeneration } from "@/lib/proxy-transport-observation";
 import { requireSparqlAttribution } from "@/lib/sparql-request-attribution";
@@ -7,7 +8,7 @@ import { readMaestroConcurrency } from "./maestro-concurrency";
 import { maestroQueryClockScope } from "./maestro-query-execution-clock";
 import { subscribeMaestroQueryEvents } from "./client-query-events";
 import { setMaestroIncompleteResults } from "./maestro-incomplete-results";
-import { applyFctQueryTimeout, configuredTimeoutMs } from "./maestro-query-timeouts";
+import { resolveFctRequestTimeout, configuredTimeoutMs } from "./maestro-query-timeouts";
 /**
  * Client-side query cache persisted to IndexedDB.
  * Duplicates proxy cache on the client to avoid eating network bandwidth,
@@ -152,7 +153,8 @@ export function computeClientCacheKey(url: string, init?: RequestInit): string |
     // from IndexedDB after logout/login (without clearing unrelated user data).
     // The counted LIST projection also changes FCT response semantics; do not
     // replay pre-fix grouped rows under the same XML cache key.
-    const responseRevision = url.includes("/proxy/api/fct") ? "fct-labels-v4::anytime-v1::counted-population-v1::" : "public-v4::anytime-v1::";
+    const predicateTrace = url.includes("/proxy/api/fct") && /<(?:[\w.-]+:)?view\b[^>]*\btype\s*=\s*\\?["'](?:properties-rank|properties-cluster|clusters|properties-synset)\\?["']/i.test(bodyStr);
+    const responseRevision = url.includes("/proxy/api/fct") ? "fct-labels-v4::anytime-v1::counted-population-v1::" + (predicateTrace ? "predicate-query-trace-v1::" : "") : "public-v4::anytime-v1::";
     return `POST::${responseRevision}${url}::lang=${language}::timeout=${headers.get("x-maestro-query-timeout-ms") ?? ""}::${bodyStr}`;
   }
   return null;
@@ -436,6 +438,7 @@ async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
     const controller = new AbortController();
     const combinedSignal = AbortSignal.any([actorSignal, controller.signal]);
     combinedSignal.throwIfAborted();
+    inheritQueryQueueObservation(signal, combinedSignal);
     pendingQueryControllers.add(controller);
     pendingQueryOwnerBySignal.set(combinedSignal, controller);
     pendingQueryDetails.set(controller, { id: ++nextPendingQueryId, label, workspaceId: workspace.workspaceId,
@@ -619,6 +622,7 @@ function scheduledGraphFetch(input: RequestInfo | URL, init?: RequestInit): Prom
       if (tracked && tracked.state === "preparing")
         pendingQueryDetails.set(owner, { ...tracked, state: "queued" });
     }
+    observeAdmittedQuery(init?.signal);
     refreshPendingQueueIndexes();
     dispatchScheduledRequests();
   });
@@ -711,27 +715,18 @@ async function maestroQueryFetchImpl(input: RequestInfo | URL, init?: RequestIni
   const headers = new Headers(init?.headers);
   headers.set("x-maestro-language", maestroLanguageHeader());
   const source = [headers.get("x-maestro-debug-source") || "", headers.get("x-maestro-debug-component") || ""].join(" ");
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method === "POST" && url.includes("/proxy/api/fct") && typeof init?.body === "string") {
+    const resolved = resolveFctRequestTimeout(source, init.body);
+    if (resolved.timeoutMs !== undefined) headers.set("x-maestro-query-timeout-ms", String(resolved.timeoutMs));
+    return monitoredProxyFetch(input, { ...init, body: resolved.body, headers });
+  }
   const timeoutMs = configuredTimeoutMs(source);
   if (!timeoutMs) return monitoredProxyFetch(input, { ...init, headers });
   if (!headers.has("x-maestro-query-timeout-ms")) headers.set("x-maestro-query-timeout-ms", String(timeoutMs));
-  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-  const method = (init?.method ?? "GET").toUpperCase();
   if (method === "POST" && /\/proxy\/api\/(?:fct|sparql)(?:[/?]|$)/.test(url)) {
-    // Virtuoso owns its SQL execution budget. The browser queue and proxy
-    // delivery do not have a competing deadline. Preserve the owner signal.
-    if (url.includes("/proxy/api/fct") && typeof init?.body === "string") {
-      let body = init.body;
-      if (body.trimStart().startsWith("{")) {
-        try {
-          const parsed = JSON.parse(body) as Record<string, unknown>;
-          if (typeof parsed.queryXml === "string") {
-            parsed.queryXml = applyFctQueryTimeout(source, parsed.queryXml);
-            body = JSON.stringify(parsed);
-          }
-        } catch { /* unmodified body is validated by FCT route */ }
-      } else body = applyFctQueryTimeout(source, body);
-      return monitoredProxyFetch(input, { ...init, body, headers });
-    }
+    // Virtuoso owns its SQL execution budget. Preserve the owner signal.
     return monitoredProxyFetch(input, { ...init, headers });
   }
   const signal = init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
@@ -755,22 +750,15 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
   if (urlStr.includes("/proxy/api/fct")) requestHeaders.set("x-maestro-concurrency", JSON.stringify(readMaestroConcurrency()));
   requestHeaders.set("x-maestro-language", maestroLanguageHeader());
   const debugSource = [requestHeaders.get("x-maestro-debug-source") || "", requestHeaders.get("x-maestro-debug-component") || ""].join(" ");
-  const timeoutMs = configuredTimeoutMs(debugSource);
-  if (timeoutMs) requestHeaders.set("x-maestro-query-timeout-ms", String(timeoutMs));
-  // Apply per-widget timeout before computing the cache key; distinct timeouts
-  // must not accidentally reuse a completed response for another setting.
+  // Resolve the FCT view override before computing the cache key. Both
+  // browser fetch paths use the same resolver and preserve the owner signal.
   if (init && typeof init.body === "string" && urlStr.includes("/proxy/api/fct")) {
-    const body = init.body.trimStart().startsWith("{")
-      ? (() => {
-          try {
-            const object = JSON.parse(init.body as string) as Record<string, unknown>;
-            if (typeof object.queryXml === "string") object.queryXml = applyFctQueryTimeout(debugSource, object.queryXml);
-            return JSON.stringify(object);
-          } catch { return init.body as string; }
-        })()
-      : applyFctQueryTimeout(debugSource, init.body);
-    init = { ...init, body, headers: requestHeaders };
+    const resolved = resolveFctRequestTimeout(debugSource, init.body);
+    if (resolved.timeoutMs !== undefined) requestHeaders.set("x-maestro-query-timeout-ms", String(resolved.timeoutMs));
+    init = { ...init, body: resolved.body, headers: requestHeaders };
   } else {
+    const timeoutMs = configuredTimeoutMs(debugSource);
+    if (timeoutMs) requestHeaders.set("x-maestro-query-timeout-ms", String(timeoutMs));
     init = { ...init, headers: requestHeaders };
   }
   // Component identity is distinct from the operation/source. Several widgets

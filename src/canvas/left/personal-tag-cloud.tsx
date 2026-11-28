@@ -1,4 +1,5 @@
 "use client";
+import { useFacetProviderRendered } from "@/canvas/diagnostics/facet-provider-progress";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { useEffect, useMemo, useState } from "react";
 import { cachedFetchFct } from "@/lib/client-query-cache";
@@ -51,6 +52,7 @@ export function PersonalTagCloud({ property, values, tree, selected, enabled, bu
   }, [cooccurrenceKey]);
   const cooccurring = cooccurrence.key === cooccurrenceKey ? cooccurrence.values : null;
   const cooccurringError = cooccurrence.key === cooccurrenceKey ? cooccurrence.error : "";
+  useFacetProviderRendered(!busy && (!cooccurrenceKey || cooccurring !== null || Boolean(cooccurringError)));
   // A co-occurrence query with no projected values must not erase the normal
   // facet. The selected term is still actionable and should remain visible
   // when a server cannot project additional tags for this query scope.

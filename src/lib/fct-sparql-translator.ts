@@ -1,4 +1,4 @@
-import { FCT_VIEW_TYPES, isFctViewType, MAX_PREDICATE_ANALYSIS_CANDIDATES, DEFAULT_PREDICATE_ANALYSIS_CANDIDATES, MAX_PREDICATE_ANALYSIS_INCIDENCE_ROWS, DEFAULT_PREDICATE_ANALYSIS_INCIDENCE_ROWS, type FctViewType, predicateRankAlgorithm, type PredicateRankAlgorithm } from "./fct-view-types";
+import { FCT_VIEW_TYPES, isFctViewType, MAX_PREDICATE_ANALYSIS_CANDIDATES, DEFAULT_PREDICATE_ANALYSIS_CANDIDATES, MAX_PREDICATE_ANALYSIS_INCIDENCE_ROWS, DEFAULT_PREDICATE_ANALYSIS_INCIDENCE_ROWS, type FctViewType, predicateRankAlgorithm, type PredicateRankAlgorithm, predicateSynsetAlgorithm, type PredicateSynsetAlgorithm, parseFctViewTimeout } from "./fct-view-types";
 import { isBlankNodeTerm, bnodeDescribeBounds, RDF_REST_IRI } from "./bnode";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { normalizeFctValue } from "./fct-value-policy";
@@ -33,6 +33,7 @@ export type CompiledFctQuery = {
   maxPredicateCandidates?: number;
   maxPredicateIncidenceRows?: number;
   predicateRankAlgorithm?: PredicateRankAlgorithm;
+  predicateSynset?: { algorithm: PredicateSynsetAlgorithm; carrier: string; confidenceN: number; budgetQuery: string; ruleBudgetQuery?: string };
   target: string;
   focusRelationship?: { predicate: string; direction: "forward" | "reverse" };
   graphOnly: boolean;
@@ -757,6 +758,117 @@ function buildAskQuery(directives: SparqlDirective[], where: SparqlPattern[]): s
   return new SparqlQueryDocument({ kind: "ask", directives, projections: [], where }).toString();
 }
 
+/** Server-side synset plans. No rules or RDF instance bindings are returned to
+ * Maestro. Every nested projection carries the original FCT scope. The finite
+ * rule language is one- and two-edge closed paths, in either direction. */
+function compilePredicateSynset(input: {
+  algorithm: PredicateSynsetAlgorithm; carrier: string; forward: boolean; parent: SparqlTerm;
+  directives: SparqlDirective[]; scope: (patterns: SparqlPattern[]) => SparqlPattern[];
+  maxCandidates: number; attributes: Record<string,string>;
+}) {
+  const {algorithm,carrier,forward,parent,directives,scope,maxCandidates,attributes}=input;
+  const numeric=(key:string,fallback:number,min:number,max:number,integer=false)=>{
+    const n=Number(attributes[key]??fallback);
+    if (!Number.isFinite(n)||n<min||n>max||integer&&!Number.isSafeInteger(n)) throw new Error(`Invalid properties-synset ${key}.`);
+    return n;
+  };
+  const confidenceN=numeric("confidence-n",15,1,1000,true);
+  const minSupport=numeric("min-support",2,1,500000,true);
+  const minHeadCoverage=numeric("min-head-coverage",0.005,0,1);
+  const minConfidence=numeric("min-confidence",0.05,0,1);
+  const ruleLength=numeric("max-rule-length",2,1,2,true);
+  const c1=variable("synHead"), y=variable("synObject"), z=variable("synIntermediate");
+  const ref=iriTerm(carrier), p1=variable("synBodyP1"), p2=variable("synBodyP2"), key=variable("synBodyKey");
+  const v=variable, e=termExpr;
+  const num=(n:number):SparqlExpression=>e({kind:"raw-term",value:String(n)});
+  const fn=(name:string,...args:SparqlExpression[]):SparqlExpression=>({kind:"function",name,args});
+  const triple=(subject:SparqlTerm,predicate:SparqlTerm,object:SparqlTerm):SparqlPattern=>({kind:"triple",subject,predicate,object});
+  const edge=(p:SparqlTerm,o=y)=>forward?triple(parent,p,o):triple(o,p,parent);
+  const filter=(expression:SparqlExpression):SparqlPattern=>({kind:"filter",expression});
+  const not=(a:SparqlTerm,b:SparqlTerm)=>filter(binary("!=",e(a),e(b)));
+  const bind=(expression:SparqlExpression,as:SparqlTerm):SparqlPattern=>({kind:"bind",expression,as});
+  const project=(term:SparqlTerm):SparqlProjection=>({expression:e(term)});
+  const as=(expression:SparqlExpression,name:string):SparqlProjection=>({expression,as:v(name)});
+  const count=(name:string,term?:SparqlTerm):SparqlProjection=>as({kind:"aggregate",name:"COUNT",distinct:!!term,expression:term?e(term):e({kind:"raw-term",value:"*"})},name);
+  const sub=(projections:SparqlProjection[],where:SparqlPattern[],groupBy?:SparqlExpression[],distinct=false):SparqlPattern=>({kind:"subquery",query:{kind:"select",directives:[],projections,where,groupBy,distinct}});
+  const distinct=(terms:SparqlTerm[],where:SparqlPattern[])=>sub(terms.map(project),where,undefined,true);
+  const headPairs=(p:SparqlTerm,extra:SparqlPattern[]=[],restrict:SparqlPattern[]=[])=>distinct([...(p.kind==="variable"?[p]:[]),parent,y],[...restrict,...scope([edge(p),...extra])]);
+  const headSizes=(p:SparqlTerm,pairs:string,subjects?:string,restrict:SparqlPattern[]=[])=>sub([
+    ...(p.kind==="variable"?[project(p)]:[]),count(pairs),...(subjects?[count(subjects,parent)]:[])],
+    [headPairs(p,[],restrict)],p.kind==="variable"?[e(p)]:undefined);
+  // Candidate counts exclude the carrier. The pair budget includes complete
+  // argument-pair sets of the carrier and every qualifying candidate, not
+  // only their overlap. No LIMIT/sample is used for the budget evidence.
+  const budgetFor=(candidates:SparqlPattern)=>buildSelectQuery({directives,
+    projections:[project(v("candidates")),as(binary("+",e(v("candidatePairs")),e(v("referencePairs"))),"pairs")],
+    where:[sub([count("candidatePairs"),count("candidates",c1)],[headPairs(c1,[],[candidates])]),headSizes(ref,"referencePairs")]});
+  const resultProjection=[{expression:e(c1),as:v("c1")}];
+  if (algorithm==="relation-agreement") {
+    // Only predicates with a shared ordered argument pair can score > 0.
+    const commonPairs=headPairs(c1,[edge(ref),not(c1,ref)]);
+    const candidates=distinct([c1],[commonPairs]);
+    const budgetQuery=budgetFor(candidates);
+    const common=sub([project(c1),count("common"),count("agreeingSubjects",parent)],
+      [commonPairs],[e(c1)]);
+    const refSubjects=distinct([parent],scope([edge(ref)]));
+    const candidateSubjects=distinct([c1,parent],[candidates,...scope([edge(c1)])]);
+    const intersectSubjects=sub([project(c1),count("sharedSubjects",parent)],
+      [refSubjects,candidateSubjects],[e(c1)]);
+    const query=buildSelectQuery({directives,projections:[...resultProjection,...["reference","candidate","common","agreeingSubjects"].map(n=>project(v(n))),
+      as(binary("-",binary("+",e(v("refSubjects")),e(v("candidateSubjects"))),e(v("sharedSubjects"))),"subjectsUnion")],
+      where:[common,headSizes(ref,"reference","refSubjects"),headSizes(c1,"candidate","candidateSubjects",[candidates]),intersectSubjects],
+      orderBy:[{direction:"ASC",expression:e(c1)}],limit:maxCandidates+1});
+    return {query,budgetQuery,algorithm,carrier,confidenceN};
+  }
+  // Keys encode the oriented predicate sequence injectively, not labels or
+  // arbitrary intermediate node IDs. Every body denotes the same ordered
+  // head arguments. Exclude head recursion in both one- and two-hop paths.
+  const bodyBranches=():SparqlPattern[][]=>{
+    const makeEdge=(a:SparqlTerm,p:SparqlTerm,b:SparqlTerm,reverse:boolean)=>reverse?triple(b,p,a):triple(a,p,b);
+    const component=(p:SparqlTerm)=>fn("ENCODE_FOR_URI",fn("STR",e(p)));
+    const marker=(s:string)=>e(literalTerm(s));
+    const branches:SparqlPattern[][]=[];
+    for (const reverse of [false,true]) branches.push([makeEdge(parent,p1,y,reverse),
+      bind(fn("CONCAT",marker(reverse?"r:":"f:"),component(p1)),key)]);
+    if (ruleLength===2) for (const a of [false,true]) for (const b of [false,true]) branches.push([
+      makeEdge(parent,p1,z,a),makeEdge(z,p2,y,b),
+      bind(fn("CONCAT",marker(a?"r:":"f:"),component(p1),marker(b?"|r:":"|f:"),component(p2)),key)]);
+    return branches;
+  };
+  const supports=(head:SparqlTerm,restrict:SparqlPattern[]=[])=>{
+    const terms=[...(head.kind==="variable"?[head]:[]),key];
+    return sub([...terms.map(project),count("support")],
+      [distinct([...terms,parent,y],[...restrict,...scope([edge(head),{kind:"union",branches:bodyBranches()},not(p1,head),
+        filter(binary("||",fn("!BOUND",e(p2)),binary("!=",e(p2),e(head))))])])],terms.map(e));
+  };
+  const bodies=(restrict:SparqlPattern[]=[])=>sub([project(key),count("bodySize")],[distinct([key,parent,y],[...restrict,...scope([{kind:"union",branches:bodyBranches()}])])],[e(key)]);
+  const definitions=(head:SparqlTerm,headRestriction:SparqlPattern[]=[],keyRestriction:SparqlPattern[]=[])=>{
+    const terms=[...(head.kind==="variable"?[head]:[]),key];
+    return distinct(terms,[supports(head,[...headRestriction,...keyRestriction]),headSizes(head,"headSize",undefined,headRestriction),bodies(keyRestriction),
+      filter(binary(">=",e(v("support")),num(minSupport))),
+      filter(binary(">=",binary("/",e(v("support")),e(v("headSize"))),num(minHeadCoverage))),
+      filter(binary(">=",binary("/",e(v("support")),e(v("bodySize"))),num(minConfidence)))]);
+  };
+  // A candidate must have at least one qualifying definition of the carrier.
+  // This is a join on canonical rule keys, not on the head argument pairs.
+  // Do not restrict the candidate's final definition set to those shared keys:
+  // all its qualifying rules are required for the exact Jaccard denominator.
+  const referenceRules=definitions(ref);
+  const sharedRules=definitions(c1,[],[referenceRules]);
+  const candidates=distinct([c1],[sharedRules,not(c1,ref)]);
+  const budgetQuery=budgetFor(candidates);
+  const ruleBudgetQuery=buildSelectQuery({directives,projections:[as(binary("+",e(v("referenceRules")),e(v("candidateRules"))),"rules")],where:[
+    sub([count("referenceRules")],[supports(ref)]),sub([count("candidateRules")],[supports(c1,[candidates])])]});
+  const referenceDefinitions=sub([count("referenceDefinitions")],[referenceRules]);
+  const candidateDefinitions=sub([project(c1),count("candidateDefinitions")],[definitions(c1,[candidates])],[e(c1)]);
+  const commonDefinitions=sub([project(c1),count("commonDefinitions")],[sharedRules,not(c1,ref)],[e(c1)]);
+  const similarity=binary("/",fn("<http://www.w3.org/2001/XMLSchema#double>",e(v("commonDefinitions"))),binary("-",binary("+",e(v("referenceDefinitions")),e(v("candidateDefinitions"))),e(v("commonDefinitions"))));
+  const query=buildSelectQuery({directives,projections:[...resultProjection,as(similarity,"similarity")],
+    where:[commonDefinitions,referenceDefinitions,candidateDefinitions],
+    orderBy:[{direction:"DESC",expression:e(v("similarity"))},{direction:"ASC",expression:e(c1)}],limit:maxCandidates+1});
+  return {query,budgetQuery,ruleBudgetQuery,algorithm,carrier,confidenceN};
+}
+
 function buildSelectQuery(args: {
   directives: SparqlDirective[];
   projections: SparqlProjection[];
@@ -889,6 +1001,36 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   const view: FctSparqlView = rawView;
   const predicateAnalysisView = view === FCT_VIEW_TYPES.PROPERTIES_RANK ||
     view === FCT_VIEW_TYPES.PROPERTIES_CLUSTER || view === FCT_VIEW_TYPES.CLUSTERS;
+  const synset = view === FCT_VIEW_TYPES.PROPERTIES_SYNSET;
+  const synsetAlgorithm = synset ? predicateSynsetAlgorithm(viewNode?.attributes.algorithm) : undefined;
+  let synsetDetached = false;
+  if (synset) {
+    if (graphOnly || countOnly || discoverGraph || !viewNode || !viewParent ||
+        !["property", "property-of"].includes(viewParent.name) || !iri(viewParent.attributes.iri ?? "") || viewParent.attributes.derive)
+      throw new Error("properties-synset requires a concrete property or property-of view carrier.");
+    const views = (node: XmlNode): number => Number(node.name === "view") + node.children.reduce((n,c)=>n+views(c),0);
+    if (views(root)!==1) throw new Error("properties-synset requires exactly one view.");
+    if (viewNode.children.length || viewNode.attributes.kindFilter || viewNode.attributes.kind && viewNode.attributes.kind!=="all")
+      throw new Error("properties-synset does not support view-local value projections or Kind filters; express constraints in the FCT tree.");
+    // The carrier is a projection, not an implicit existential constraint.
+    // If it carries explicit constraints, OR membership or references, retain
+    // its original semantics and project its parent instead.
+    const refs = inspectFctValueReferences(root as ReferenceNode);
+    const id = viewParent.attributes.id ?? "";
+    const rid = viewParent.attributes.rid;
+    const usesRelation = (node:XmlNode):boolean => Boolean(rid && node.attributes.pid === rid) || node.children.some(usesRelation);
+    const referenced = refs.references.some(edge => edge.targetId === id) || usesRelation(root);
+    const canDetach = viewParent.children.every(c=>c===viewNode) && !viewParent.attributes.uid &&
+      !viewParent.attributes.exclude && !viewParent.attributes.group && !viewParent.attributes.inference && !viewParent.attributes.same_as && !referenced;
+    if (canDetach) {
+      const relocate = (node:XmlNode):boolean => {
+        const at=node.children.indexOf(viewParent);
+        if (at>=0) {node.children.splice(at,1,viewNode);return true;}
+        return node.children.some(relocate);
+      };
+      synsetDetached=relocate(root);
+    }
+  }
   const rankingAlgorithm = view === FCT_VIEW_TYPES.PROPERTIES_RANK
     ? predicateRankAlgorithm(viewNode?.attributes.algorithm) : undefined;
   if (predicateAnalysisStage && !predicateAnalysisView)
@@ -970,20 +1112,21 @@ export function compileFctXmlToSparql(xml: string, requestedView?: string, graph
   // The view's candidate ceiling is independent of output paging and is
   // supplied by its provider through FCT XML, never by a server IndexedDB read.
   const requestedCandidateLimit = viewNode?.attributes["max-candidates"];
-  const maxPredicateCandidates = predicateAnalysisView
+  const maxPredicateCandidates = predicateAnalysisView || synset
     ? Number(requestedCandidateLimit ?? DEFAULT_PREDICATE_ANALYSIS_CANDIDATES)
     : undefined;
-  if (predicateAnalysisView && (!Number.isSafeInteger(maxPredicateCandidates) ||
+  if ((predicateAnalysisView || synset) && (!Number.isSafeInteger(maxPredicateCandidates) ||
     maxPredicateCandidates! < 1 || maxPredicateCandidates! > MAX_PREDICATE_ANALYSIS_CANDIDATES))
     throw new Error(`Predicate analytics max-candidates must be an integer from 1 to ${MAX_PREDICATE_ANALYSIS_CANDIDATES}.`);
-  const maxPredicateIncidenceRows = predicateAnalysisView
+  const maxPredicateIncidenceRows = predicateAnalysisView || synset
     ? Number(viewNode?.attributes["max-incidence-rows"] ?? DEFAULT_PREDICATE_ANALYSIS_INCIDENCE_ROWS)
     : undefined;
-  if (predicateAnalysisView && (!Number.isSafeInteger(maxPredicateIncidenceRows) ||
+  if ((predicateAnalysisView || synset) && (!Number.isSafeInteger(maxPredicateIncidenceRows) ||
     maxPredicateIncidenceRows! < 1 || maxPredicateIncidenceRows! > MAX_PREDICATE_ANALYSIS_INCIDENCE_ROWS))
     throw new Error(`Predicate analytics max-incidence-rows must be an integer from 1 to ${MAX_PREDICATE_ANALYSIS_INCIDENCE_ROWS}.`);
-  const timeoutRaw = Number(root.attributes.timeout ?? 0);
+  const timeoutRaw = parseFctViewTimeout(viewNode?.attributes.timeout) ?? Number(root.attributes.timeout ?? 0);
   const timeoutMs = Number.isSafeInteger(timeoutRaw) && timeoutRaw >= 0 ? timeoutRaw : 0;
+  if (synset && (timeoutRaw !== timeoutMs || timeoutMs > 2147483647)) throw new Error("Invalid property synset timeout.");
   const orderAttr = (root.attributes.order ?? root.attributes["order-results"] ?? viewNode?.attributes.order ?? "").trim().toLowerCase();
   const shouldOrder = ["yes", "true", "1", "on"].includes(orderAttr);
   const badgesAttr = (viewNode?.attributes.badges ?? root.attributes.badges ?? "").trim().toLowerCase();
@@ -1107,7 +1250,7 @@ const viewSuppliesTriple =
   view === FCT_VIEW_TYPES.PROPERTIES ||
   view === FCT_VIEW_TYPES.PROPERTIES_IN ||
   view === FCT_VIEW_TYPES.CLASSES ||
-  predicateAnalysisView;
+  predicateAnalysisView || synset;
 
 if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
   // A root-bound URI may have *only incoming* links. A triple pattern in
@@ -1270,6 +1413,7 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
         : [...indexedPatterns, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)];
     return indexedWhere;
   };
+  let synsetPlan: ReturnType<typeof compilePredicateSynset> | undefined;
   let query: string;
   let datatypeEvidenceQuery: string | undefined;
   let datatypeLiteralProbeQuery: string | undefined;
@@ -1563,6 +1707,16 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
           : [...where, ...preferredValueLanguageFilter(target, viewNode, viewParent, preferredLanguage)];
     }
     query = buildStatusSelect({ directives, projections: [countProjection(counted)], where: countWhere });
+  } else if (synset) {
+    const parent = synsetDetached ? target : state.focusParent?.term;
+    if (!parent || !viewParent || !synsetAlgorithm) throw new Error("Cannot resolve the synset carrier's parent population.");
+    const carrier = viewParent.attributes.iri;
+    const forward = viewParent.name === "property";
+    if (state.statusBindings.length && federation && canonical(federation.liveEndpoint)!==canonical(federation.executionEndpoint))
+      throw new Error("Property synset requires mining on the selected graph server; cross-server Status constraints are not supported.");
+    synsetPlan = compilePredicateSynset({algorithm:synsetAlgorithm,carrier,forward,parent,directives,
+      scope: patterns=>statusScope(scopeWith(patterns)), maxCandidates:maxPredicateCandidates!, attributes:viewNode!.attributes});
+    query = synsetPlan.query;
   } else if (predicateAnalysisView) {
     // Keep the original incidence projection for structural ranking and AHC.
     // FUR needs the full focus population and exact value-count frequencies.
@@ -2091,7 +2245,8 @@ if (!hasBindingPattern && !viewSuppliesTriple && !xmlValuePage) {
     limit,
     offset,
     timeoutMs,
-    ...(predicateAnalysisView ? { maxPredicateCandidates, maxPredicateIncidenceRows } : {}),
+    ...((predicateAnalysisView || synset) ? { maxPredicateCandidates, maxPredicateIncidenceRows } : {}),
+    ...(synsetPlan ? { predicateSynset: { algorithm:synsetPlan.algorithm, carrier:synsetPlan.carrier, confidenceN:synsetPlan.confidenceN, budgetQuery:synsetPlan.budgetQuery, ruleBudgetQuery:synsetPlan.ruleBudgetQuery } } : {}),
     ...(rankingAlgorithm ? { predicateRankAlgorithm: rankingAlgorithm } : {}),
     target: serializeTerm(target),
     ...(viewParent && (viewParent.name === "property" || viewParent.name === "property-of") && !viewParent.attributes.derive && iri(viewParent.attributes.iri ?? "") ? {

@@ -93,7 +93,7 @@ test('EURIO derived fields use approved provider-declared RDF label input',()=>{
   const mocks={
     './maestro-language':kinds['./maestro-language'],
     './maestro-kinds':kinds['./maestro-kinds'],
-    './fct-view-types':{FCT_VIEW_TYPES:{TEXT:'text',LIST:'list',LIST_COUNT:'list-count',DESCRIBE:'describe',PROPERTIES:'properties',PROPERTIES_IN:'properties-in',CLASSES:'classes',GRAPHS:'graphs'},isFctViewType:()=>true},
+    './fct-view-types':loadTs('src/lib/fct-view-types.ts'),
     './bnode':{isBlankNodeTerm:()=>false,bnodeDescribeBounds:()=>({}),RDF_REST_IRI:'http://www.w3.org/1999/02/22-rdf-syntax-ns#rest'},
     'fast-xml-parser':{XMLParser:class{parse(){return {query:{'@_addr':base.attributes.addr,value:{'@_datatype':'uri','#text':'http://example.org/project'},property:[{'@_iri':source.attributes.iri,'@_rid':'a'},{'@_iri':field.iri,'@_rid':'b','@_pid':'a','@_derive':'regex','@_pattern':field.pattern,'@_capture':'2','@_sourceValuePredicate':field.sourceValuePredicate,view:{'@_type':'list','@_limit':'30','@_offset':'0'}}]}}}},XMLValidator:{validate:()=>true}},
     './fct-value-references':loadTs('src/lib/fct-value-references.ts'),

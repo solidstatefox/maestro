@@ -18,10 +18,13 @@ test('sunburst bounds resize locally without FCT or XSLT rerun',()=>{
   assert.match(host,/svg\.getBBox\(\)/);
   assert.match(host,/svg\.setAttribute\("viewBox"/);
   assert.match(host,/if\(!select\(event\.target\)\)setResizeActive\(true\)/);
-  assert.match(host,/aria-label="Resize Sunburst"/);
+  assert.match(host,/`Resize Sunburst \$\{handle\} edge`/);
   assert.match(host,/setPointerCapture\(event\.pointerId\)/);
-  assert.match(host,/changeWidth\(Math\.max\(100/);
-  assert.match(host,/width:`\$\{resizeWidth\?\?naturalWidth\}px`/);
+  assert.match(host,/resizeFrameEdge\(base,paint,handle,/);
+  assert.match(host,/resizeFrameCorner\(base,dx,dy\)/);
+  assert.match(host,/cursor-nwse-resize/);
+  assert.match(host,/frameBounds\.right-frameBounds\.left/);
+  assert.match(host,/frameBounds\.bottom-frameBounds\.top/);
   assert.doesNotMatch(host,/Maximum sunburst radius|import \{ Slider \}/);
   assert.match(host,/\[presentation\.active,provider,key,source\]\)/);
 });

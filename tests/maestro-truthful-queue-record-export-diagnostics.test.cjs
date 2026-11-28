@@ -19,6 +19,7 @@ test('browser indexes stay browser-local and proxy lane addresses come only from
   const mocks = {
     "@/lib/sparql-request-attribution":attribution.exports,
     "@/lib/app-lifecycle/query-view-ownership":require('./maestro-view-query-test-shim.cjs'),
+    "./query-queue-observation":require("./query-queue-observation-test-loader.cjs"),
     "./app-lifecycle/actor-query-authority":require("./actor-query-authority-test-loader.cjs"),
     "@/lib/proxy-transport-observation":observation,
     '@/lib/client-personal-request': { withPersonalProxyCredentials: async (_url,init)=>({init,authenticated:false}) },
@@ -29,7 +30,7 @@ test('browser indexes stay browser-local and proxy lane addresses come only from
     './client-query-events': { subscribeMaestroQueryEvents: async (id, scope, signal, notify) => {telemetryCallbacks.push(notify); return {close(){}}} },
     './maestro-incomplete-results': { setMaestroIncompleteResults:()=>{} },
      './virtuoso-anytime': (()=>{const mod={exports:{}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/lib/virtuoso-anytime.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:mod.exports});return mod.exports;})(),
-    './maestro-query-timeouts': { applyFctQueryTimeout:(source,xml)=>xml,configuredTimeoutMs:()=>0 },
+    './maestro-query-timeouts': { resolveFctRequestTimeout:(_source,body)=>({body}),configuredTimeoutMs:()=>0 },
   };
   vm.runInNewContext(code, {
     exports:mod.exports,module:mod,require(id){if(id in mocks)return mocks[id];throw Error(`unexpected mock ${id}`)},

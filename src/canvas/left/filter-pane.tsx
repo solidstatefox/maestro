@@ -4,6 +4,7 @@ import { ErrorDetails } from "@/components/ui/error-details";
 import { retryMaestroComponent } from "@/lib/maestro-component-retry";
 import { ElapsedStatus } from "@/components/ui/elapsed-status";
 
+import { FacetProviderIndicator, FacetProviderProgress } from "@/canvas/diagnostics/facet-provider-progress";
 import { renderPersonalWidgetCards } from "@/canvas/left/personal-widget-cards";
 import { UI_COMPONENT } from "@/lib/maestro-ui-component-ids";
 import { LiveQueryStatusWidget } from "@/canvas/left/status-widget";
@@ -241,11 +242,16 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                       <PropertyUsageWidget tree={queryTree} direction="subject" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
                       <PropertyUsageWidget tree={queryTree} direction="object" limit={leftPanelLimit} endpointReady={endpointReadyForQuery} onNavigate={navigatePropertyUsage} />
                     </>}
+                    <FacetProviderProgress activity={classPresentation.activity}
+                      enabled={workspace.accessCapabilities.canUsePersonalStore && !workspace.queryExecutionCancelled && !classFacetError && classPresentation.phase !== "error" && (classPresentation.activity.discovering || isLoadingClasses || isLoadingCategoryTree || categoriesIncomplete || visibleClassDisplayFacets.length > 0 || selectedClassDisplayFacets.length > 0)}
+                      provider={classPresentation.active ? classPresentation.provider?.uri ?? "" : ""}
+                      waitingForData={isLoadingClasses || (categoriesTreeMode && isLoadingCategoryTree)}>
                     <article id={UI_COMPONENT.categories} ref={categoriesWidgetRef}
                       hidden={!isLoadingClasses && !isLoadingCategoryTree && !classFacetError && !categoriesIncomplete && visibleClassDisplayFacets.length === 0 && selectedClassDisplayFacets.length === 0}
                       className={`flex min-w-0 flex-col ${!isLoadingClasses && !isLoadingCategoryTree && !classFacetError && !categoriesIncomplete && visibleClassDisplayFacets.length === 0 && selectedClassDisplayFacets.length === 0 ? "!hidden" : ""} ${isGroupByCategory ? `rounded-md border ${GROUP_BY_FACET_HIGHLIGHT_CLASSES.split(" ").filter((c) => c.startsWith("border-") || c.startsWith("dark:border-")).join(" ")}` : ""}`}>
                       <header className={`group/header flex items-start justify-between gap-2 border-b px-2 py-2 ${isGroupByCategory ? `rounded-t-md ${GROUP_BY_FACET_HIGHLIGHT_CLASSES}` : ""}`}>
                         <div className="flex min-w-0 items-center gap-1">{isGroupByCategory && <UsersRound className="size-4 shrink-0" aria-label="Group by Category" />}<IncompleteWidgetIndicator source="categories" /><button type="button" className="cursor-pointer text-sm font-semibold hover:underline underline-offset-2" onClick={() => workspace.navigateFacetHeaderToProperty(RDF_TYPE_URI)} title="Navigate to rdf:type of the current focus">Categories</button>
+                          <FacetProviderIndicator />
                           <LeftWidgetButtonTray threshold={4} actions={categoryActions}/></div>
                         <Tooltip><TooltipTrigger render={<span
                           className={`text-xs font-normal tabular-nums ${classFacetError ? "text-destructive" : "text-muted-foreground"}`}
@@ -398,6 +404,7 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                         </>
                       )}
                     </article>
+                    </FacetProviderProgress>
                     {!focusWidgetsSuppressed && personalRoleFacetNodes.map((roleNode) => {
                       const uri = roleNode.attributes.iri ?? "";
                       const roleLabel = `${toLabel(uri, "Role")} of`;
@@ -468,6 +475,10 @@ export function FilterWorkspaceContent({ workspace }: { workspace: FilterPaneWor
                     })}
                     {!focusWidgetsSuppressed && renderPersonalWidgetCards(workspace, "column", {
                       providers: personalFacetProviders.temporal,
+                      activity: personalFacetProviders.activity,
+                      tagsResolved: personalFacetProviders.tagsResolved,
+                      participating: personalFacetProviders.participating,
+                      progressEnabled: workspace.accessCapabilities.canUsePersonalStore && !workspace.queryExecutionCancelled && personalFacetProviders.phase !== "failed",
                       numericProviders: personalFacetProviders.numeric,
                       tagCloudProviders: personalFacetProviders.tags,
                       onNumericRangeChange: setPersonalNumericRange,

@@ -80,10 +80,11 @@ test('ordinary browser reads have no queue-plus-delivery watchdog',async()=>{
   '@/lib/proxy-transport-observation':{observeProxyFetch:async(_input,init)=>{networkSignal=init.signal;return new Promise(r=>release=r);},stopProxyQueryGeneration(){},resumeProxyQueryGeneration(){}},
   '@/lib/sparql-request-attribution':{requireSparqlAttribution(){}},
   '@/lib/app-lifecycle/query-view-ownership':require('./maestro-view-query-test-shim.cjs'),
+    "./query-queue-observation":require("./query-queue-observation-test-loader.cjs"),
     "./app-lifecycle/actor-query-authority":require("./actor-query-authority-test-loader.cjs"), './maestro-language':{maestroLanguageHeader:()=> 'en'},
   './maestro-concurrency':{readMaestroConcurrency:()=>({proxyConnections:1})},'./maestro-query-execution-clock':{maestroQueryClockScope:()=>null},
   './client-query-events':{subscribeMaestroQueryEvents:async(_id,_scope,_signal,notify)=>{queued=notify;return {close(){}}}},
-  './maestro-incomplete-results':{setMaestroIncompleteResults(){}},'./maestro-query-timeouts':{configuredTimeoutMs:()=>1000,applyFctQueryTimeout:(_s,x)=>x}
+  './maestro-incomplete-results':{setMaestroIncompleteResults(){}},'./maestro-query-timeouts':{configuredTimeoutMs:()=>1000,resolveFctRequestTimeout:(_source,body)=>({body})}
  },{crypto:require('node:crypto').webcrypto,AbortSignal:{any:AbortSignal.any,timeout(){throw Error('local read watchdog armed');}}});
  const workspace=require('./maestro-view-query-test-shim.cjs').createMaestroQueryViewCoordinator();
  workspace.start();m.registerMaestroQueryWorkspace('test-workspace',workspace);

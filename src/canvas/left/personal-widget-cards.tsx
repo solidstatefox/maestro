@@ -7,6 +7,8 @@ import { retryMaestroComponent } from "@/lib/maestro-component-retry";
 import { OrUidLabel } from "@/components/ui/or-uid-label";
 import { NumericFacetContent } from "@/canvas/left/personal-numeric-facet";
 import { NamedRegexCreateButton, NamedRegexList } from "@/canvas/left/named-regex-facet";
+import { FacetProviderIndicator, FacetProviderProgress } from "@/canvas/diagnostics/facet-provider-progress";
+import type { FacetProviderActivity } from "@/lib/app-lifecycle/facet-provider-progress";
 import { PersonalFacetButtonTray } from "@/canvas/left/derived-facet-button";
 import { PersonalTagCloud } from "@/canvas/left/personal-tag-cloud";
 import { formatNumericFacetLabels } from "@/lib/numeric-facet-format";
@@ -108,6 +110,10 @@ const TEXT_SEARCH_NAME_PROPERTIES = [
 import type { PersonalWidgetCardsWorkspace } from "@/canvas/controllers/workspace-interfaces";
 export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspace, layout: "column" | "grid", temporal?: {
   providers: Map<string, TemporalFacetProvider>;
+  activity?: FacetProviderActivity;
+  tagsResolved?: boolean;
+  participating?: ReadonlySet<string>;
+  progressEnabled?: boolean;
   scopeNodes: FctQueryNode[];
   queryXml: string;
   onRangeChange: (property: string, start: string, end: string, selection?: { resolution: "years" | "months" | "weeks" | "days"; cell: string }) => void;
@@ -160,7 +166,17 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
           const canGroupByFacet = workspaceTab === "browse" && groupByOptions.some((option) => option.key === groupOptionKey);
           const inspectorXml = widget.valuesQueryXml ?? serializeFctQuery(createPersonalFacetValuesQuery(queryTree, widget.uri, valueRelationship.direction,
             { limit: workspace.leftWidgetLimits.personalFacets, offset: 0 }, undefined, valueRelationship.href));
+          const numericProvider = temporal?.numericProviders?.find(provider =>
+            provider.eligibleProperties?.includes(widget.uri) &&
+            provider.projections.some(p => p.alias === "min") &&
+            provider.projections.some(p => p.alias === "max"));
+          const provider = temporal?.tagCloudProviders?.get(widget.uri)?.uri ?? temporal?.providers.get(widget.uri)?.uri ??
+            (!widget.error && temporal?.onNumericRangeChange ? numericProvider?.uri : undefined) ?? "";
           return (
+          <FacetProviderProgress key={widgetKey} activity={temporal?.activity && { ...temporal.activity,
+            discovering: temporal.activity.discovering && !(temporal.tagsResolved && temporal.tagCloudProviders?.has(widget.uri)) }}
+            enabled={Boolean(temporal?.progressEnabled && temporal.participating?.has(widget.uri) && !widget.error)}
+            provider={provider} waitingForData={widget.loading}>
           <article
             id={componentId}
             key={widgetKey}
@@ -194,6 +210,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                     {(boundNode?.attributes.derive === "regex" || boundNode?.attributes.derive === "split") && <Pickaxe className="inline size-3.5 shrink-0" aria-label="Derived facet" />}
                     {alias ? widget.label : <OrUidLabel uid={boundNode?.attributes.uid}>{boundNode?.attributes.label || facetPropertyLabel(widget.uri)}</OrUidLabel>}
                   </button>} /><TooltipContent>{`Navigate to ${widget.excluded ? `Excluded: ${facetPropertyLabel(widget.uri)}` : facetPropertyLabel(widget.uri)} scope`}</TooltipContent></Tooltip>
+                  <FacetProviderIndicator />
                   {autoConfiguredFacetKeys.has(`property::${widget.uri}`) && (
                     <Bot className="size-3.5 text-muted-foreground" aria-label="Auto-configured" />
                   )}
@@ -327,10 +344,6 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
                   // Provider discovery already validated SHACL per property.
                   // Do not infer eligibility from the current paged checkbox list
                   // or from the View/Providers navigation state.
-                  const numericProvider = temporal?.numericProviders?.find(provider =>
-                    provider.eligibleProperties?.includes(widget.uri) &&
-                    provider.projections.some(p => p.alias === "min") &&
-                    provider.projections.some(p => p.alias === "max"));
                   // Only an approved numeric provider may turn a literal into a
                   // numeric presentation choice. Mirror the FCT/SPARQL coercion
                   // guard: a syntactically numeric but non-finite lexical value
@@ -474,6 +487,7 @@ export function renderPersonalWidgetCards(workspace: PersonalWidgetCardsWorkspac
               )}
             </div>
           </article>
+          </FacetProviderProgress>
           );
         })}
       </div>

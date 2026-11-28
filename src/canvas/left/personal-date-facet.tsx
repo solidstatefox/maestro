@@ -1,5 +1,7 @@
 "use client";
-import { discoverClientFacetProviders } from "@/lib/client-facet-providers";
+import { useFacetProviderQueue, useFacetProviderRendered } from "@/canvas/diagnostics/facet-provider-progress";
+import type { FacetProviderActivity } from "@/lib/app-lifecycle/facet-provider-progress";
+import { discoverClientFacetProviders, facetProviderDiscoveryProperties } from "@/lib/client-facet-providers";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { useProviderWidgetLifecycle } from "@/canvas/diagnostics/use-provider-widget-lifecycle";
 import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
@@ -136,10 +138,11 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
     setWeekStart(restoredCalendarWeekStart(focus));
   }, [provider.property, savedStart, savedEnd, savedResolution, savedCell]);
   const domainRequest = useMemo(() => temporalDomainQuery(queryXml, provider.property), [queryXml, provider.property]);
+  const [settledDomain, setSettledDomain] = useState<{ request: typeof domainRequest } | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    setDomainLoading(true); setDomainError("");
-    if (!domainRequest) { setDomain(null); setDomainError("Temporal domain query is unavailable."); setDomainLoading(false); return () => controller.abort(); }
+    setDomainLoading(true); setDomainError(""); setSettledDomain(null);
+    if (!domainRequest) { setDomain(null); setDomainError("Temporal domain query is unavailable."); setDomainLoading(false); setSettledDomain({request:domainRequest}); return () => controller.abort(); }
     void (async () => {
       try {
         const response = await maestroQueryFetch("/proxy/api/sparql", {
@@ -156,7 +159,7 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
         if (!controller.signal.aborted) setDomain({ min, max });
       } catch (cause) {
         if (!controller.signal.aborted) { setDomainError(cause instanceof Error ? cause.message : "Date domain unavailable"); setDomain(null); }
-      } finally { if (!controller.signal.aborted) setDomainLoading(false); }
+      } finally { if (!controller.signal.aborted) { setDomainLoading(false); setSettledDomain({request:domainRequest}); } }
     })();
     return () => controller.abort();
   }, [domainRequest, provider.property]);
@@ -185,9 +188,11 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
   // zoom show individual day counts. These are bucket views on one property.
   const bucketView: Resolution = "days";
   const query = useMemo(() => calendarQuery(queryXml, provider.property, bucketView), [queryXml, provider.property, bucketView]);
+  const [settledBuckets, setSettledBuckets] = useState<{ query: typeof query } | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    if (!query) { setCounts(new Map()); setFetching(false); setCountsLoaded(false); return () => controller.abort(); }
+    setSettledBuckets(null);
+    if (!query) { setCounts(new Map()); setFetching(false); setCountsLoaded(false); setSettledBuckets({query}); return () => controller.abort(); }
     setFetching(true); setCountsLoaded(false); setError("");
     void (async () => {
       try {
@@ -209,7 +214,7 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
         setCountsLoaded(true);
       } catch (cause) {
         if (!controller.signal.aborted) { setCounts(new Map()); setCountsLoaded(false); setError(cause instanceof Error ? cause.message : "Calendar counts unavailable"); }
-      } finally { if (!controller.signal.aborted) setFetching(false); }
+      } finally { if (!controller.signal.aborted) { setFetching(false); setSettledBuckets({query}); } }
     })();
     return () => controller.abort();
   }, [query, bucketView, provider.property]);
@@ -290,6 +295,8 @@ export function TemporalFacetContent({ provider, scopeNodes, queryXml, onRangeCh
   const days = resolution === "weeks"
     ? Array.from({length:7},(_,i)=>new Date(weekStart.getTime()+i*DAY_MS))
     : Array.from({length:new Date(Date.UTC(year,month+1,0)).getUTCDate()},(_,i)=>dateAt(year,month,i+1));
+  useFacetProviderRendered(Boolean(settledDomain && settledDomain.request === domainRequest &&
+    settledBuckets && settledBuckets.query === query && !domainLoading && !fetching));
   return <div data-provider-phase={widgetPhase} className="flex min-w-0 flex-col gap-2" aria-label={`${provider.label} calendar and range`}>
     <div className="flex flex-col gap-2">
       <DateTimePicker label={`From (min: ${effectiveDomain?.min ?? (domainLoading ? "loading…" : "unknown")})`} value={from} minDate={effectiveDomain?.min} maxDate={effectiveDomain?.max} onChange={next => updateRange(next, to)} />
@@ -344,7 +351,7 @@ export type NumericFacetProvider = NumericProviderMatch;
 export function usePersonalFacetProviders(
   properties: string[], queryXml = "", datatypeEvidence: Record<string, string[]> = {},
   options: { enabled?: boolean; approvalRevision?: number; sessionKey?: string } = {},
-): { temporal: Map<string, TemporalFacetProvider>; numeric: NumericFacetProvider[]; tags: Map<string, TagCloudFacetProvider>; phase: string; error: string } {
+): { temporal: Map<string, TemporalFacetProvider>; numeric: NumericFacetProvider[]; tags: Map<string, TagCloudFacetProvider>; phase: string; error: string; activity: FacetProviderActivity; participating: ReadonlySet<string>; tagsResolved: boolean } {
   const key = [...new Set(properties)].sort().join("\n");
   const evidenceKey = JSON.stringify(datatypeEvidence);
   const enabled = options.enabled !== false && Boolean(options.sessionKey ?? "local");
@@ -352,12 +359,15 @@ export function usePersonalFacetProviders(
     ? JSON.stringify([options.sessionKey ?? "", options.approvalRevision ?? 0, key, facetProviderApplicabilityKey(queryXml, key.split("\n"))]) : "";
   const scope = enabled && key
     ? JSON.stringify([applicabilityKey, queryXml, evidenceKey]) : "";
+  const { attempt, queued, watch } = useFacetProviderQueue(scope);
+  const participating = useMemo(() => new Set(facetProviderDiscoveryProperties(key.split("\n"))), [key]);
   const [registry] = useState(createMaestroProviderDiscoveryController);
   const snapshot = useSyncExternalStore(registry.subscribe, registry.getSnapshot, registry.getSnapshot);
   useLayoutEffect(() => { registry.start(); return () => registry.stop(); }, [registry]);
   useEffect(() => {
     if (!scope) { registry.send({ type: "DISCOVERY_INACTIVE" }); return; }
     const controller = new AbortController();
+    const close = watch(controller.signal);
     registry.send({ type: "DISCOVERY_STARTED", requestKey: scope, applicabilityKey, evidenceKey });
     void discoverClientFacetProviders({properties:key.split("\n"),queryXml,datatypeEvidence:JSON.parse(evidenceKey)},controller.signal,
       (tags) => {
@@ -369,8 +379,8 @@ export function usePersonalFacetProviders(
         if(!controller.signal.aborted)registry.send({type:"DISCOVERY_FAILED",requestKey:scope,
           error:cause instanceof Error?cause.message:"Provider discovery failed"});
       });
-    return () => controller.abort();
-  }, [registry, scope, applicabilityKey, key, queryXml, evidenceKey]);
+    return () => { controller.abort(); close(); };
+  }, [registry, scope, applicabilityKey, key, queryXml, evidenceKey, watch]);
   const selected = selectProviderMatches(snapshot, scope, applicabilityKey, evidenceKey);
   // Preserve the precedence of explicit path-bound Calendar policies over
   // generic inferred-datatype matches for the same property. Provider discovery
@@ -381,5 +391,7 @@ export function usePersonalFacetProviders(
     return byProperty;
   }, [selected.temporal]);
   const tags = useMemo(() => new Map(selected.tags.map(item => [item.property, item])), [selected.tags]);
-  return { temporal, numeric: selected.numeric, tags, phase: selected.phase, error: selected.error };
+  return { temporal, numeric: selected.numeric, tags, phase: selected.phase, error: selected.error,
+    activity: { attempt, queued, discovering: selected.phase === "discovering" }, participating,
+    tagsResolved: snapshot.context.requestKey === scope && snapshot.context.tagsResolved };
 }

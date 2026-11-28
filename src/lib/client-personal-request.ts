@@ -1,4 +1,5 @@
 "use client";
+import { inheritQueryQueueObservation } from "./query-queue-observation";
 import { inheritActorQueryAuthority } from "./app-lifecycle/actor-query-authority";
 import { requireSparqlAttribution } from "./sparql-request-attribution";
 import { graphForPrefix, loadPersonalAuthSession, type PersonalAuthSession } from "./personal-auth";
@@ -41,6 +42,7 @@ export async function personalAuthenticatedFetch(session:PersonalAuthSession,inp
   if(input!=="/proxy/api/sparql")throw new Error("Invalid personal request destination.");
   const signal=digestSessionSignal(session,proxyQuerySignal(init.signal));
   inheritActorQueryAuthority(init.signal, signal);
+  inheritQueryQueueObservation(init.signal, signal);
   return withDigestSessionLock(signal,async()=>{
     const record=await reserveDigestRequest(session);
     const scoped=await withPersonalProxyCredentials(input,{...init,signal},record);

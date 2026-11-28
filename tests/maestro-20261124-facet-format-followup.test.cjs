@@ -4,14 +4,14 @@ const fs = require('node:fs');
 const ts = require('typescript');
 const read = file => fs.readFileSync(file, 'utf8');
 
-test('Categories resize uses transformed visible geometry and an invisible keyboard-focusable corner',()=>{
+test('Categories resize uses transformed visible geometry and four keyboard-focusable edges',()=>{
   const source=read('src/canvas/left/facet-presentation.tsx');
   assert.match(source,/svg\.getScreenCTM\(\)\?\.inverse\(\)/);
   assert.match(source,/element\.closest\("defs"\)/);
   assert.match(source,/styleGroup\.getAttribute\("data-facet-label-style"\)!==labelStyle/);
   assert.match(source,/inverse\.multiply\(matrix\)/);
   assert.match(source,/svg\.setAttribute\("preserveAspectRatio","xMidYMid meet"\)/);
-  assert.match(source,/aria-label="Resize Sunburst"[\s\S]*?appearance-none border-0 bg-transparent shadow-none/);
+  assert.match(source,/`Resize Sunburst \$\{handle\} edge`[\s\S]*?appearance-none border-0 bg-transparent shadow-none/);
   assert.match(source,/setPointerCapture/);
 });
 

@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Network, RefreshCw } from "lucide-react";
+import { PredicateQueryTray } from "./predicate-query-inspector";
+import { traceFromFct, analyticalFctError, type QueryTrace } from "@/lib/predicate-query-diagnostics";
+import { PropertySynsetButton } from "./property-synset";
 import { ErrorDetails } from "@/components/ui/error-details";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -93,17 +96,19 @@ async function deriveQueries(liveQuery: string, stylesheet: string, settings: Pr
     views[0].setAttribute("limit", String(settings.maxCandidates));
     views[0].setAttribute("max-candidates", String(settings.maxCandidates));
     views[0].setAttribute("max-incidence-rows", String(settings.maxIncidenceRows));
-    query.setAttribute("timeout", String(settings.timeoutMs));
+    views[0].setAttribute("timeout", String(settings.timeoutMs));
     output.set(kind as PredicateClusterView, new XMLSerializer().serializeToString(query));
   }
   return output;
 }
 
-async function loadPredicateClusterViews(liveQuery: string, stylesheet: string, settings: PredicateClusterSettings, algorithm: PredicateRankAlgorithm, kinds: readonly PredicateClusterView[], retry: number, signal: AbortSignal): Promise<AnalyticPage[]> {
+async function loadPredicateClusterViews(liveQuery: string, stylesheet: string, settings: PredicateClusterSettings, algorithm: PredicateRankAlgorithm, kinds: readonly PredicateClusterView[], retry: number, signal: AbortSignal, record: (kind:PredicateClusterView,entries:QueryTrace)=>void): Promise<AnalyticPage[]> {
   const queries = await deriveQueries(liveQuery, stylesheet, settings, algorithm, signal);
   const views = await Promise.all(kinds.map(async kind => {
     const body = queries.get(kind);
     if (!body) throw new Error(`Missing ${kind} analytical projection.`);
+    const fallback:QueryTrace = [{label:`${kind} FCT (submitted)`,query:body,language:"xml"}];
+    record(kind,fallback);
     const response = await cachedFetchFct("/proxy/api/fct", {
       method: "POST", cache: "no-store", signal,
       headers: {"Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("predicate-clusters", `Analysis:${kind}`),
@@ -116,7 +121,8 @@ async function loadPredicateClusterViews(liveQuery: string, stylesheet: string, 
     // HTTP 206 is technically response.ok, but incomplete analytics must not
     // be accepted. Keep the ENTIRE FCT error document in ErrorDetails/Copy:
     // it contains Virtuoso's original headers, body and executed SPARQL.
-    if (response.status !== 200) throw new Error(`${kind} failed (HTTP ${response.status}):\n${xml}`);
+    record(kind,traceFromFct(xml,fallback).map(entry=>({...entry,label:`${kind}: ${entry.label}`})));
+    if (response.status !== 200) throw analyticalFctError(response.status,xml,kind);
     const parsed = parseFctResponse(xml);
     if (parsed.viewType !== kind || parsed.incomplete || parsed.complete !== "yes")
       throw new Error(`${kind} returned incomplete or unexpected FCT data: ${parsed.error || parsed.warning || "unknown response"}\n${xml}`);
@@ -171,17 +177,26 @@ export function AnalyzePredicateClusters({workspace, definition}:{workspace:Work
     workspace.policyApprovalRevision, workspace.authSession?.userName, workspace.authSession?.graphStore, definition.uri, definition.stylesheet, owner, settings?.timeoutMs, settings?.maxCandidates, settings?.maxIncidenceRows, cutoff, retry]),
     [workspace.queryXml, workspace.queryRefreshRevision, workspace.policyApprovalRevision, workspace.authSession?.userName, workspace.authSession?.graphStore, definition.uri, definition.stylesheet, owner, settings?.timeoutMs, settings?.maxCandidates, settings?.maxIncidenceRows, cutoff, retry]);
   const rankKey = JSON.stringify([key, algorithm]);
+  const [selectedCluster, setSelectedCluster] = useState("");
+  const [highlightedProperty, setHighlightedProperty] = useState("");
+  const synsetKey = JSON.stringify([rankKey, highlightedProperty]);
+  const [traces,setTraces] = useState<Record<string,{key:string;entries:QueryTrace}>>({});
+  const record = (slot:string,traceKey:string,entries:QueryTrace) => setTraces(previous=>({...previous,[slot]:{key:traceKey,entries}}));
+  const analyzerTrace = ["properties-rank","properties-cluster","clusters","synset-capability","synset-search"].flatMap(slot=>{
+    const trace = traces[slot];
+    return trace?.key === (slot.startsWith("synset-") ? synsetKey : slot === "properties-rank" ? rankKey : key) ? trace.entries : [];
+  });
   const ready = settings !== null && workspace.endpointReadyForQuery && !workspace.queryExecutionCancelled;
   useEffect(() => { controller.start(); rankController.start(); return () => { controller.stop(); rankController.stop(); }; }, [controller, rankController]);
   useEffect(() => {
     if (workspace.queryExecutionCancelled) {controller.cancel();return;}
     if (!ready || !settings) {controller.wait(key, settingsError || (settings ? "Waiting for the graph server" : "Loading provider settings"));return;}
-    controller.discover(key, signal => loadPredicateClusterViews(workspace.queryXml,definition.stylesheet,settings,"structural",["properties-cluster", "clusters"],retry,signal));
+    controller.discover(key, signal => loadPredicateClusterViews(workspace.queryXml,definition.stylesheet,settings,"structural",["properties-cluster", "clusters"],retry,signal,(kind,entries)=>{if(!signal.aborted)record(kind,key,entries);} ));
   }, [controller, key, ready, workspace.queryExecutionCancelled,workspace.queryXml, definition.stylesheet, settings, settingsError, retry]);
   useEffect(() => {
     if (workspace.queryExecutionCancelled) {rankController.cancel();return;}
     if (!ready || !settings) {rankController.wait(rankKey, settingsError || (settings ? "Waiting for the graph server" : "Loading provider settings"));return;}
-    rankController.discover(rankKey, signal => loadPredicateClusterViews(workspace.queryXml,definition.stylesheet,settings,algorithm,["properties-rank"],retry,signal));
+    rankController.discover(rankKey, signal => loadPredicateClusterViews(workspace.queryXml,definition.stylesheet,settings,algorithm,["properties-rank"],retry,signal,(kind,entries)=>{if(!signal.aborted)record(kind,rankKey,entries);} ));
   }, [rankController, rankKey, algorithm, ready, workspace.queryExecutionCancelled,workspace.queryXml, definition.stylesheet, settings, settingsError, retry]);
   const current = snapshot.context.key === key && rankSnapshot.context.key === rankKey;
   const phases = [snapshot.value, rankSnapshot.value].map(String);
@@ -197,14 +212,12 @@ export function AnalyzePredicateClusters({workspace, definition}:{workspace:Work
   const result = joined.result;
   const error = (snapshot.context.key === key ? snapshot.context.error : "") ||
     (rankSnapshot.context.key === rankKey ? rankSnapshot.context.error : "") || joined.error;
-  const [selectedCluster, setSelectedCluster] = useState("");
-  const [highlightedProperty, setHighlightedProperty] = useState("");
   const active = result?.clusters.find(cluster => cluster.id === selectedCluster) ?? result?.clusters[0];
   const onRetry = () => retryMaestroComponent(RETRY_ID);
   return <section className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Predicate Clusters analysis">
-    <header className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
+    <header className="group/header flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
       <div className="flex items-center gap-2"><Network className="size-5 text-muted-foreground" aria-hidden="true"/><div>
-        <h2 className="font-semibold">Predicate Clusters</h2>
+        <div className="flex items-center gap-2"><h2 className="font-semibold">Predicate Clusters</h2><PredicateQueryTray entries={analyzerTrace}/></div>
         <p className="text-xs text-muted-foreground">Properties ranked globally and grouped by shared-subject similarity</p>
         {settings && <p className="text-xs text-muted-foreground" title="Edit provider cubby values in Sheet → Provider properties">Timeout {settings.timeoutMs / 1000}s · Candidate ceiling {settings.maxCandidates} · Incidence / value-group budget {settings.maxIncidenceRows.toLocaleString()} · Sheet → Provider properties</p>}
       </div></div>
@@ -225,6 +238,8 @@ export function AnalyzePredicateClusters({workspace, definition}:{workspace:Work
         onPointerUp={() => applyCutoff(cutoffDraft)} onKeyUp={() => applyCutoff(cutoffDraft)} onBlur={() => applyCutoff(cutoffDraft)}
         className="w-36 accent-primary"/>
       <span className="tabular-nums">{cutoffDraft.toFixed(2)}</span>
+      <PropertySynsetButton tree={workspace.queryTree} predicate={result?.ranks.some(property=>property.uri===highlightedProperty)?highlightedProperty:""}
+        ready={ready} cancelled={workspace.queryExecutionCancelled} revision={workspace.queryRefreshRevision} accountScope={accountScope} onTrace={(slot,entries)=>record(slot,synsetKey,entries)}/>
       {cutoffDraft !== cutoff && <button type="button" className="underline" onClick={() => applyCutoff(cutoffDraft)}>Apply</button>}
     </div>
     {settingsError && <div role="alert" className="p-4 text-sm text-destructive">{settingsError}</div>}

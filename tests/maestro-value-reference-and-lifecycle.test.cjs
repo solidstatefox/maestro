@@ -27,9 +27,8 @@ function asParsed(item){
  return out;
 }
 function compile(sample,countOnly=false){
- const kinds={TEXT:'text',LIST:'list',LIST_COUNT:'list-count',DESCRIBE:'describe',PROPERTIES:'properties',PROPERTIES_IN:'properties-in',CLASSES:'classes',GRAPHS:'graphs',COUNT_DISTINCT:'count-distinct',LIST_VALUES:'list-values',MERGE_VALUES:'merge-values'};
  const mocks={
-  './fct-view-types':{FCT_VIEW_TYPES:kinds,isFctViewType:v=>Object.values(kinds).includes(v)},
+  './fct-view-types':loadTs('src/lib/fct-view-types.ts'),
   './bnode':{isBlankNodeTerm:()=>false,bnodeDescribeBounds:()=>null,RDF_REST_IRI:'http://www.w3.org/1999/02/22-rdf-syntax-ns#rest'},
   'fast-xml-parser':{XMLValidator:{validate:()=>true},XMLParser:class{parse(){return {query:asParsed(sample)}}}},
   './fct-value-policy':{normalizeFctValue:s=>s.trim()},

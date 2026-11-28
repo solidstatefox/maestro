@@ -685,6 +685,6 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "viewProvider"
 >;
 
-export type FilterPaneWorkspace = FilterPaneDirectWorkspace & PersonalWidgetCardsWorkspace & Pick<WorkspaceController, "setPersonalDateRange" | "setPersonalNumericRange" | "propertyFacets" | "activePropertyFilters" | "viewProvider" | "policyApprovalRevision" | "togglePolicyStatusFilter" | "toggleLiveStatusFilter" | "isQueryBookmarked" | "accessCapabilities" | "accessController" | "reportProviderLifecycle" | "queryXml" | "authSession">;
+export type FilterPaneWorkspace = FilterPaneDirectWorkspace & PersonalWidgetCardsWorkspace & Pick<WorkspaceController, "sharedExecutionReady" | "queryExecutionCancelled" | "setPersonalDateRange" | "setPersonalNumericRange" | "propertyFacets" | "activePropertyFilters" | "viewProvider" | "policyApprovalRevision" | "togglePolicyStatusFilter" | "toggleLiveStatusFilter" | "isQueryBookmarked" | "accessCapabilities" | "accessController" | "reportProviderLifecycle" | "queryXml" | "authSession">;
 export type LeftPaneWorkspace = LeftPaneDirectWorkspace & FilterPaneWorkspace & ConfigurePaneWorkspace;
 export type AppBarWorkspace = AppBarDirectWorkspace & SettingsPaneWorkspace;

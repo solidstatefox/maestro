@@ -15,6 +15,9 @@ import { getPersonalStatusGraph, getQueryObservationGraph } from "@/lib/personal
 import { unscopedGraph, ALL_GRAPHS } from "@/lib/graph-address-mode";
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
 import { predicateAnalysisPage, DEFAULT_PREDICATE_CLUSTER_CUTOFF, type PredicateAnalysis } from "@/lib/fct-predicate-analytics";
+import { appendPredicateQueryTrace, tracePredicateResponse, type PredicateQueryTraceEntry } from "@/lib/predicate-query-trace";
+import { SYNSET_VERSION_QUERY, SYNSET_BI_PROBE } from "@/lib/predicate-synset";
+import { executePredicateSynset, SynsetExecutionError } from "@/lib/predicate-synset-execution";
 import { PredicateIncidenceAccumulator } from "@/lib/predicate-incidence";
 import { collectFacetUtilityRanking, FacetUtilityStatisticsError } from "@/lib/facet-utility-ranking";
 import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
@@ -93,20 +96,22 @@ class PredicateAnalyticsQueryError extends Error {
   constructor(message: string, readonly status = 502) { super(message); }
 }
 
+type TracedPredicateAnalysis = PredicateAnalysis & { queryTrace: PredicateQueryTraceEntry[] };
+const predicateFailureTraces = new WeakMap<object, PredicateQueryTraceEntry[]>();
 const pendingPredicateAnalytics = new Map<string, {
-  promise: Promise<PredicateAnalysis>; controller: AbortController; waiters: number;
+  promise: Promise<TracedPredicateAnalysis>; controller: AbortController; waiters: number;
 }>();
 
 /** Single-flight without coupling one browser request's cancellation to another.
  * Abort upstream only when every waiting request has abandoned the calculation. */
 function awaitPredicateAnalysis(
-  key: string, signal: AbortSignal, run: (signal: AbortSignal) => Promise<PredicateAnalysis>,
-): Promise<PredicateAnalysis> {
+  key: string, signal: AbortSignal, run: (signal: AbortSignal) => Promise<TracedPredicateAnalysis>,
+): Promise<TracedPredicateAnalysis> {
   if (signal.aborted) return Promise.reject(signal.reason ?? new Error("Cancelled"));
   let pending = pendingPredicateAnalytics.get(key);
   if (!pending) {
     const controller = new AbortController();
-    const job = { controller, waiters: 0, promise: Promise.resolve(null) as unknown as Promise<PredicateAnalysis> };
+    const job = { controller, waiters: 0, promise: Promise.resolve(null) as unknown as Promise<TracedPredicateAnalysis> };
     job.promise = Promise.resolve().then(() => run(controller.signal)).finally(() => {
       if (pendingPredicateAnalytics.get(key) === job) pendingPredicateAnalytics.delete(key);
     });
@@ -117,7 +122,7 @@ function awaitPredicateAnalysis(
   }
   const job = pending;
   job.waiters++;
-  return new Promise<PredicateAnalysis>((resolve, reject) => {
+  return new Promise<TracedPredicateAnalysis>((resolve, reject) => {
     let settled = false;
     const finish = () => {
       if (settled) return false;
@@ -181,6 +186,7 @@ async function resolveFctLabels(
   acceptLanguage: string | null,
   timeoutMs: number,
   requestSignal?: AbortSignal,
+  queryTrace?: PredicateQueryTraceEntry[],
 ): Promise<Map<string, string>> {
   // Resolve every URI term in the result rows, not just the primary list-view
   // column. Properties, Roles, Classes, Graphs and DESCRIBE all need labels too.
@@ -218,6 +224,7 @@ async function resolveFctLabels(
     "ORDER BY STR(?s)",
   ].join("\n");
   try {
+    queryTrace?.push({label:"Labels",query,language:"sparql",endpoint});
     const result = await executeSparql(endpoint, query, undefined, timeoutMs, requestSignal);
     if (!result.response.ok) return labels;
     const parsed = parseResults(result.text);
@@ -1071,7 +1078,7 @@ async function handlePost(request: Request) {
       // A Graphs response from an older query compiler must never survive
       // into the current grouped, rank-ordered Graphs pagination format.
       // Counted LIST also changes its projection without changing FCT XML.
-      compiled.view === FCT_VIEW_TYPES.PROPERTIES_RANK ? "fct-response-predicate-rank-fur-v1" :
+      [FCT_VIEW_TYPES.PROPERTIES_RANK, FCT_VIEW_TYPES.PROPERTIES_CLUSTER, FCT_VIEW_TYPES.CLUSTERS].some(kind => kind === compiled.view) ? "fct-response-predicate-query-trace-v1" :
       compiled.graphOnly ? "fct-response-graphs-v2" : "fct-response-page-labels-v2-anytime-v1-counted-population-v1",
       endpoint.url,
       JSON.stringify([queryXml, view ?? null, graphOnly, countOnly, valueColumns, labelAcceptLanguage ?? ""]),
@@ -1082,7 +1089,7 @@ async function handlePost(request: Request) {
     // Personal-status selections can change without changing the live FCT XML.
     // Never serve an old state-constrained response from the proxy cache.
     const componentRetry = request.headers.get("x-maestro-component-retry") === "1";
-    const cachedResponse = (hasStatusConstraints || isValidate || componentRetry) ? null : getQueryCache<{ body: string; contentType: string; status: number }>(responseCacheKey);
+    const cachedResponse = (hasStatusConstraints || isValidate || componentRetry || compiled.view === FCT_VIEW_TYPES.PROPERTIES_SYNSET) ? null : getQueryCache<{ body: string; contentType: string; status: number }>(responseCacheKey);
     if (cachedResponse) {
       return new Response(cachedResponse.body, {
         status: cachedResponse.status,
@@ -1090,24 +1097,71 @@ async function handlePost(request: Request) {
       });
     }
     stage = "execute";
+    if (compiled.view === FCT_VIEW_TYPES.PROPERTIES_SYNSET) {
+      if (hasStatusConstraints && !graphServerUrlMatches(executionEndpoint, endpoint.url))
+        return fctError("Property synset must execute on the selected graph server; cross-server Status constraints are unsupported.", 422);
+      const startedAt = Date.now();
+      // One bounded operation, including capability and budget checks. The
+      // existing scheduler owns dispatch, and the request signal cancels all stages.
+      const timeout = compiled.timeoutMs || 120000;
+      const deadline = AbortSignal.timeout(timeout);
+      const signal = AbortSignal.any([request.signal, deadline]);
+      const queryTrace: PredicateQueryTraceEntry[] = [];
+      const trace = (response: Response) => tracePredicateResponse(response, queryXml, queryTrace);
+      try {
+        const read = async (query: string): Promise<SparqlJsonResults> => {
+          signal.throwIfAborted();
+          const remaining = Math.max(1, timeout - (Date.now() - startedAt));
+          const address = predicateAnalyticsEndpointWithTimeout(executionEndpoint, remaining);
+          const phase: PredicateUpstreamPhase = query === SYNSET_VERSION_QUERY ? "synset-version" : query === SYNSET_BI_PROBE ? "synset-bi-probe" : query === compiled.predicateSynset?.budgetQuery ? "synset-candidate-budget" : query === compiled.predicateSynset?.ruleBudgetQuery ? "synset-rule-budget" : "synset-scoring";
+          queryTrace.push({label:phase,query,language:"sparql",endpoint:address});
+          const upstream = await executeSparql(address, query, undefined, remaining, signal, true);
+          const data = parseResults(upstream.text);
+          const markedIncomplete = (data as (SparqlJsonResults & {incomplete?: boolean}) | null)?.incomplete === true;
+          if (upstream.response.status !== 200 || isVirtuosoAnytime(upstream.response, upstream.text) || !data || markedIncomplete)
+            throw predicateAnalyticsUpstreamFailure({phase,response:upstream.response,body:upstream.text,query,endpoint:address,
+              ...((!data || markedIncomplete) && upstream.response.status===200 ? {proxyStatus:502,explanation:markedIncomplete ? "Incomplete SPARQL Results JSON" : "Invalid SPARQL Results JSON"} : {})});
+          return data;
+        };
+        const rows = await executePredicateSynset(compiled, read, signal, {
+          get: version => componentRetry ? undefined : getQueryCache<boolean>(queryCacheKey("synset-bi-v1",executionEndpoint,version)),
+          set: (version,value) => setQueryCache(queryCacheKey("synset-bi-v1",executionEndpoint,version),value),
+        });
+        signal.throwIfAborted();
+        const labels = await resolveFctLabels(endpoint.url, rows, labelAcceptLanguage, Math.min(timeout,5000), signal, queryTrace);
+        signal.throwIfAborted();
+        return trace(new Response(fctResponseXml({query:compiled.query,view:compiled.view,limit:compiled.limit,offset:compiled.offset,
+          bindings:rows,vars:["c1","similarity"],labels,executionAddr:address,elapsedMs:Date.now()-startedAt,complete:true,timeoutMs:timeout}),
+          {status:200,headers:{"Content-Type":"application/xml; charset=utf-8","Cache-Control":"no-store"}}));
+      } catch (error) {
+        request.signal.throwIfAborted();
+        if (error instanceof PredicateAnalyticsUpstreamError) return trace(error.toResponse());
+        const lastPhase = queryTrace.at(-1)?.label ?? "initialization";
+        const elapsed = Date.now() - startedAt;
+        if (deadline.aborted) return trace(fctError(`Maestro property synset deadline expired during ${lastPhase} (${elapsed} ms elapsed; ${timeout} ms configured). No upstream HTTP response was received for this unfinished operation; no partial statistics returned.`,504,undefined,"upstream-transport"));
+        if (error instanceof SynsetExecutionError) return trace(fctError(error.message,error.status));
+        const detail = describeUpstreamError(error);
+        return trace(fctError(`Property synset failed during ${lastPhase} (${elapsed} ms elapsed)`, /timed? out|timeout/i.test(detail) ? 504 : 502,detail,"upstream-transport"));
+      }
+    }
     if ([FCT_VIEW_TYPES.PROPERTIES_RANK, FCT_VIEW_TYPES.PROPERTIES_CLUSTER, FCT_VIEW_TYPES.CLUSTERS].includes(compiled.view as typeof FCT_VIEW_TYPES.PROPERTIES_RANK | typeof FCT_VIEW_TYPES.PROPERTIES_CLUSTER | typeof FCT_VIEW_TYPES.CLUSTERS)) {
       if (countOnly || graphOnly) return fctError("Predicate analytics requires a normal FCT view request.", 400);
       const startedAt = Date.now();
       const { key: normalizedScope, cutoff } = predicateAnalysisScope(queryXml);
       const fur = compiled.view === FCT_VIEW_TYPES.PROPERTIES_RANK && compiled.predicateRankAlgorithm === "fur";
       const analyticsKey = queryCacheKey(fur ? "fct-predicate-fur-v1" : "fct-predicate-analytics-v2", executionEndpoint,
-        JSON.stringify([normalizedScope, effectiveLanguage, labelAcceptLanguage, compiled.timeoutMs,
+        JSON.stringify(["query-trace-v1", normalizedScope, effectiveLanguage, labelAcceptLanguage, compiled.timeoutMs,
           compiled.maxPredicateCandidates, compiled.maxPredicateIncidenceRows,
           hasStatusConstraints ? clientFromRequest(request) : "public"]));
       const bypass = hasStatusConstraints || componentRetry;
-      const cached = bypass ? undefined : getQueryCache<PredicateAnalysis>(analyticsKey);
+      const cached = bypass ? undefined : getQueryCache<TracedPredicateAnalysis>(analyticsKey);
       // If a complete structural cluster run is cached or already in flight,
       // structural ranks are free. On a cache miss, rank alone never runs AHC.
       // A rank-only result must never be cached as a full cluster analysis.
       const structuralRankOnly = !fur && compiled.view === FCT_VIEW_TYPES.PROPERTIES_RANK &&
         (bypass || (!cached && !pendingPredicateAnalytics.has(analyticsKey)));
       const workKey = structuralRankOnly ? queryCacheKey("fct-predicate-structural-rank-v1", executionEndpoint, analyticsKey) : analyticsKey;
-      const cachedWork = cached ?? (bypass || !structuralRankOnly ? undefined : getQueryCache<PredicateAnalysis>(workKey));
+      const cachedWork = cached ?? (bypass || !structuralRankOnly ? undefined : getQueryCache<TracedPredicateAnalysis>(workKey));
       const federationContext = hasStatusConstraints ? {
         liveEndpoint: endpoint.url, executionEndpoint,
         defaultStatusAddr: `${getPersonalStatusGraph(request)}@${executionEndpoint}`,
@@ -1116,9 +1170,12 @@ async function handlePost(request: Request) {
       // not only in the POST form, so public front-ends do not silently
       // execute the default 10-second budget. Scope this to predicate analytics.
       const analyticsSparqlEndpoint = predicateAnalyticsEndpointWithTimeout(executionEndpoint, compiled.timeoutMs);
-      const build = async (signal: AbortSignal): Promise<PredicateAnalysis> => {
+      const build = async (signal: AbortSignal): Promise<TracedPredicateAnalysis> => {
+        const queryTrace: PredicateQueryTraceEntry[] = [];
+        try {
         const requireIncidencePage = async (query: string, phase: PredicateUpstreamPhase = "incidence"): Promise<SparqlJsonResults> => {
           signal.throwIfAborted();
+          queryTrace.push({label:phase,query,language:"sparql",endpoint:analyticsSparqlEndpoint});
           let upstream: Awaited<ReturnType<typeof executeSparql>>;
           // Do not interleave cached pages from separate source snapshots.
           try { upstream = await executeSparql(analyticsSparqlEndpoint, query, undefined, compiled.timeoutMs, signal, true); }
@@ -1150,7 +1207,7 @@ async function handlePost(request: Request) {
                 statisticsStage.kind === "coverage" ? "counts" : statisticsStage.kind);
               return data.results?.bindings ?? [];
             }, compiled.maxPredicateCandidates ?? 200, compiled.maxPredicateIncidenceRows ?? 50000, signal, pageSize);
-            return { ranks, assignments: [], clusters: [] };
+            return { ranks, assignments: [], clusters: [], queryTrace };
           } catch (error) {
             if (error instanceof FacetUtilityStatisticsError)
               throw new PredicateAnalyticsQueryError(error.message, error.status);
@@ -1179,9 +1236,13 @@ async function handlePost(request: Request) {
               /exceeds the configured|population exceeds/.test(String(error)) ? 422 : 502);
           }
         }
-        try { return accum.result(cutoff, structuralRankOnly); }
+        try { return {...accum.result(cutoff, structuralRankOnly), queryTrace}; }
         catch (err) { throw new PredicateAnalyticsQueryError(err instanceof Error ? err.message : "Invalid predicate incidence statistics."); }
 
+        } catch (error) {
+          if (typeof error === "object" && error !== null) predicateFailureTraces.set(error, queryTrace);
+          throw error;
+        }
       };
       try {
         const analysis = cachedWork ?? (bypass ? await build(request.signal)
@@ -1200,27 +1261,29 @@ async function handlePost(request: Request) {
             : (page as PredicateAnalysis["clusters"]).map(row => ({
                 c1: { type: "literal", value: row.cluster }, n: nTerm(row.count), sample: { type: "uri", value: row.sample },
               }));
-        const labels = await resolveFctLabels(endpoint.url, rows, labelAcceptLanguage, Math.min(compiled.timeoutMs || 5000, 5000), request.signal);
+        const queryTrace = [...analysis.queryTrace];
+        const labels = await resolveFctLabels(endpoint.url, rows, labelAcceptLanguage, Math.min(compiled.timeoutMs || 5000, 5000), request.signal, queryTrace);
         if (compiled.view === FCT_VIEW_TYPES.CLUSTERS) {
           for (const row of rows) row.sampleLabel = { type: "literal", value: labels.get(row.sample.value) ?? uriFallbackLabel(row.sample.value) };
         }
         const vars = compiled.view === FCT_VIEW_TYPES.PROPERTIES_RANK ? ["c1", "rank"] :
           compiled.view === FCT_VIEW_TYPES.PROPERTIES_CLUSTER ? ["c1", "cluster"] : ["c1", "n", "sample", "sampleLabel"];
-        const xml = fctResponseXml({ query: compiled.query, view: compiled.view,
+        const xml = appendPredicateQueryTrace(fctResponseXml({ query: compiled.query, view: compiled.view,
           limit: compiled.limit, offset: compiled.offset, bindings: rows, vars, labels,
           executionAddr: updateFctExecutionAddress(address, { endpoint: executionEndpoint,
             ...(hasStatusConstraints ? { graph: getPersonalStatusGraph(request) } : {}) }),
           elapsedMs: Date.now() - startedAt, complete: true, timeoutMs: compiled.timeoutMs,
-        });
+        }), queryXml, queryTrace);
         if (!bypass) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
         return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
       } catch (error) {
         request.signal.throwIfAborted();
+        const queryTrace = typeof error === "object" && error !== null ? predicateFailureTraces.get(error) ?? [] : [];
         if (error instanceof PredicateAnalyticsQueryError)
-          return fctError(error.message, error.status);
+          return tracePredicateResponse(fctError(error.message, error.status), queryXml, queryTrace);
         if (error instanceof PredicateAnalyticsUpstreamError)
-          return error.toResponse();
-        throw error;
+          return tracePredicateResponse(error.toResponse(), queryXml, queryTrace);
+        return tracePredicateResponse(fctError(describeUpstreamError(error), 502), queryXml, queryTrace);
       }
     }
     const startedAt = Date.now();

@@ -47,8 +47,10 @@ test("waiting splash removed; existing Results skeleton does not mount inactive 
  const controller=read("src/canvas/utils/workspace-controller.tsx");
  assert.doesNotMatch(shell,/RestoredViewWaitPage|Preparing Analyze/);
  assert.equal(fs.existsSync("src/canvas/restored-view-wait-page.tsx"),false);
- assert.match(shell,/waitingForSelectedView \? <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4"/);
- assert.match(shell,/<ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1"><ResultsLoadingSkeleton wide \/><\/ResizablePanelGroup>/);
+ assert.match(shell,/waitingForSelectedView \? <div className="flex min-h-0 flex-1 justify-end p-4"/);
+ assert.doesNotMatch(shell,/<ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1"><ResultsLoadingSkeleton wide \/><\/ResizablePanelGroup>/);
+ assert.match(shell,/onClick=\{\(\) => setWorkspaceTab\("browse"\)\}>Browse<\/Button>/);
+ assert.equal((shell.match(/<ResizablePanelGroup\b/g)||[]).length,1);
  assert.match(controller,/arrivalRequestedTabRef\.current/);
  assert.match(controller,/arrivalViewCheckedRef\.current/);
  assert.match(controller,/authRestored: authRestoreComplete/);

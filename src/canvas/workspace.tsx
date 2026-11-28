@@ -956,9 +956,8 @@ export function MaestroWorkspace() {
 
       </div>
 
-      {waitingForSelectedView ? <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4" role="status" aria-label="Restoring saved query">
-        <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1"><ResultsLoadingSkeleton wide /></ResizablePanelGroup>
-        <div className="flex justify-end"><Button type="button" variant="outline" onClick={() => setWorkspaceTab("browse")}>Browse</Button></div>
+      {waitingForSelectedView ? <div className="flex min-h-0 flex-1 justify-end p-4">
+        <Button type="button" variant="outline" onClick={() => setWorkspaceTab("browse")}>Browse</Button>
       </div> : <div className="flex min-h-0 flex-1 flex-col overflow-hidden" onKeyUpCapture={event => { if (event.target instanceof HTMLElement && event.target.hasAttribute("data-panel-resize-handle-id")) saveBrowseLayout(); }}>
 
           <BrowsePanePositionContext.Provider value={activePaneOrder}>

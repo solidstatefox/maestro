@@ -44,12 +44,20 @@ export function useBrowsePaneDefaultSize(pane: BrowsePane, fallback: number): nu
   const order = useContext(BrowsePanePositionContext);
   const preference = useContext(BrowsePanePreferenceContext);
   const index = order.indexOf(pane);
-  return order.length === 3 && index >= 0
-    ? (preference.loaded ? preference.sizes : DEFAULT_BROWSE_PANE_SIZES)[index] : fallback;
+  const widths = preference.loaded ? preference.sizes : DEFAULT_BROWSE_PANE_SIZES;
+  if (order.length === 2 && index >= 0) {
+    const filterIndex = preference.order.indexOf("filters");
+    return pane === "filters" ? widths[filterIndex] : 100 - widths[filterIndex];
+  }
+  return order.length === 3 && index >= 0 ? widths[index] : fallback;
 }
 
 export function useBrowsePaneMinSize(pane: BrowsePane, fallback: number): number {
   const order = useContext(BrowsePanePositionContext);
   const index = order.indexOf(pane);
+  const preference = useContext(BrowsePanePreferenceContext);
+  if (order.length === 2 && index >= 0) {
+    return pane === "filters" ? MIN_BROWSE_PANE_SIZES[preference.order.indexOf("filters")] : 25;
+  }
   return order.length === 3 && index >= 0 ? MIN_BROWSE_PANE_SIZES[index] : fallback;
 }

@@ -10,7 +10,7 @@ import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import { BrowsePanePositionContext, BrowsePanePreferenceContext, useBrowsePanePreference } from "@/canvas/browse-pane-layout";
 import type { ImperativePanelGroupHandle } from "react-resizable-panels";
-import { activeBrowsePaneOrder, browseSizesInOrder, browseSizesFromLayout } from "@/canvas/browse-pane-order";
+import { activeBrowsePaneOrder, compactBrowsePaneSizes, browseSizesInOrder, browseSizesFromLayout } from "@/canvas/browse-pane-order";
 
 import maestroLanguages from "@/data/maestro-languages.json";
 
@@ -27,7 +27,7 @@ import { selectMaestroCapabilities } from "@/lib/app-lifecycle/access";
 import { clearMaestroStorage } from "@/lib/maestro-storage";
 import { Progress } from "@/components/ui/progress";
 import { FacetsLoadingSkeleton, ResultsLoadingSkeleton } from "@/canvas/workspace-skeleton";
-import { CenterPaneFrame, CenterPaneBody } from "@/canvas/workspace-pane-shells";
+import { LeftPaneFrame, CenterPaneFrame, CenterPaneBody } from "@/canvas/workspace-pane-shells";
 import { GraphUnavailableFacets, GraphUnavailableResults, GraphUnavailableRecord } from "@/canvas/workspace-unavailable";
 import { selectWorkspaceSkeletonBoundaries, selectLeftPaneSkeletonWidgets } from "@/lib/app-lifecycle/skeleton-boundaries";
 import { activeTransportedFacets, sameTransportedFacetIdentity } from "@/lib/fct-facet-alias";
@@ -703,17 +703,30 @@ export function MaestroWorkspace() {
     }
   };
   collectQueryClasses(queryTree.children);
+  // An arriving inaccessible View/Analyze is redirected once by the URL
+  // admission check; normal navigation remains XState-authoritative.
+  // The XState foreground state, not a URL tab flag, grants the view UI.
+  // Inactive View/Analyze do not mount their ribbon, provider or pane subtree.
+  const waitingForSelectedView = workspaceTab !== "browse" && !workspace.viewExecutionReady;
+  const pausedSideShell = (side: "facets" | "record") => <aside className="flex h-full flex-col gap-3 p-4" role="status" aria-label={`${side} paused`}>
+    <div className="text-xs text-muted-foreground">Browse {side} are paused while this view is active</div>
+  </aside>;
   // Use the identical live ribbon in both ready and loading layouts.
-  const workspaceRibbon = !urlStateInitialized ? <div role={urlRestoreError ? "alert" : "status"} aria-live="polite" className="flex min-h-12 shrink-0 items-center gap-3 border-b px-4 py-2"><span className="text-sm font-semibold">Browse</span><span className="text-xs text-muted-foreground">{urlRestoreError ? "Share URL restoration failed" : "Restoring query…"}</span></div> : ((workspaceTab === "view" && !workspace.accessCapabilities.canUsePersonalStore) || workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewProvider={viewProvider} setViewProvider={setViewProvider} onSelectProvider={workspace.selectViewProvider} onFeaturesEntered={workspace.enterViewFeatures} selectedViewUri={selectedViewUri} onSelectView={workspace.selectPerspective} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} queryClassUris={queryClassUris} queryMatchedProviders={workspace.queryMatchedProviders} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <MaestroHoverExpand active={analyzeRibbonPanel} onChange={(panel) => {
+  const workspaceRibbon = !urlStateInitialized ? <div role={urlRestoreError ? "alert" : "status"} aria-live="polite" className="flex min-h-12 shrink-0 items-center gap-3 border-b px-4 py-2"><span className="text-sm font-semibold">{workspaceTab === "view" ? "View" : workspaceTab === "analyze" ? "Analyze" : "Browse"}</span><span className="text-xs text-muted-foreground">{urlRestoreError ? "Share URL restoration failed" : "Restoring query…"}</span></div> : (workspaceTab === "browse" ? <BrowseRibbon breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} /> : waitingForSelectedView ? <div className="min-h-12 border-b bg-background" aria-hidden="true" /> : workspaceTab === "view" ? <ViewRibbon viewPanel={viewPanel} setViewPanel={setViewPanel} breadcrumbs={<>{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb, index) => renderPathBreadcrumb(crumb, index))}</>} discoveredViews={discoveredViews} viewProvider={viewProvider} setViewProvider={setViewProvider} onSelectProvider={workspace.selectViewProvider} onFeaturesEntered={workspace.enterViewFeatures} selectedViewUri={selectedViewUri} onSelectView={workspace.selectPerspective} viewDiscoveryLoading={viewDiscoveryLoading} viewDiscoveryError={viewDiscoveryError} queryClassUris={queryClassUris} queryMatchedProviders={workspace.queryMatchedProviders} queryXml={queryXml} triggerUri={selectedUri || matchingBookmarkId || ""} historyUri={historyVisitQueryRef.current === queryXml ? (historyVisitIdRef.current || historyBookmarkId) : undefined} /> : <MaestroHoverExpand active={analyzeRibbonPanel} onChange={(panel) => {
     if (panel === "analytics" || panel === "trail") setAnalyzeRibbonPanel(panel);
   }} panels={[{ id: "trail", label: "Trail", content: <nav aria-label="Analyze breadcrumbs" className="flex w-max min-w-full flex-nowrap items-start gap-2">{renderRootBreadcrumb()}{tutorialBreadcrumbPath.map((crumb,index)=>renderPathBreadcrumb(crumb,index))}</nav> }, { id: "analytics", label: "Analytics", content: <AnalyzeRibbon discoveryPhase={workspace.analysisDiscoveryPhase} discoveryError={workspace.analysisDiscoveryError} discoveryWaiting={workspace.analysisDiscoveryWaiting} onRetryDiscovery={workspace.retryAnalysisDiscovery} analysisDefinitions={analysisDefinitions} selectedAnalysisUri={selectedAnalysisUri} analyzeHistogram={analyzeHistogram} isCompareAnalysis={isCompareAnalysis} firstBreadcrumbLabel={tutorialBreadcrumbPath[0] ? toLabel(tutorialBreadcrumbPath[0].uri, "Property") : undefined} firstResultTitle={visibleResultsPage[0]?.title} onSelectAnalysis={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(false); }} onSelectHistogram={(uri) => { setSelectedAnalysisUri(uri); setAnalyzeHistogram(true); }} /> }]} />);
-  const activePaneOrder = activeBrowsePaneOrder(browsePanePreference.order, !urlStateInitialized || workspaceTab === "browse");
+  const activePaneOrder = activeBrowsePaneOrder(browsePanePreference.order, workspaceTab === "browse");
   const browsePanelGroup = useRef<ImperativePanelGroupHandle>(null);
   const browseLayoutActive = urlStateInitialized && workspaceTab === "browse" && browsePanePreference.loaded;
+  const paneLayoutReady = browsePanePreference.loaded && urlStateInitialized;
   const savedSizes = browsePanePreference.sizes;
   useLayoutEffect(() => {
-    if (browseLayoutActive && browsePanelGroup.current?.getLayout().length === 3) browsePanelGroup.current.setLayout(browseSizesInOrder(savedSizes, browsePanePreference.order));
-  }, [browseLayoutActive, browsePanePreference.order, savedSizes]);
+    if (!paneLayoutReady) return;
+    const desired = workspaceTab === "browse"
+      ? browseSizesInOrder(savedSizes, browsePanePreference.order)
+      : [...compactBrowsePaneSizes(savedSizes, browsePanePreference.order)];
+    if (browsePanelGroup.current?.getLayout().length === desired.length) browsePanelGroup.current.setLayout(desired);
+  }, [paneLayoutReady, workspaceTab, browsePanePreference.order, savedSizes]);
   const saveBrowseLayout = () => {
     if (!browseLayoutActive) return;
     const layout = browsePanelGroup.current?.getLayout();
@@ -778,7 +791,7 @@ export function MaestroWorkspace() {
           <Progress className="h-full rounded-none bg-muted" value={endpointChecksTotal > 0 ? (endpointChecksCompleted / endpointChecksTotal) * 100 : 0} indeterminate={endpointChecksTotal === 0 || endpointChecksCompleted === 0} aria-label="FCT endpoint check progress" />
         </div>
       )}
-      {urlStateInitialized && endpointReadyForQuery && personalWidgets.filter((widget) => {
+      {urlStateInitialized && workspaceTab === "browse" && workspace.viewExecutionReady && endpointReadyForQuery && personalWidgets.filter((widget) => {
         if (!widget.anchor) return true;
         // The previous Browse widgets can survive for one render after a ribbon
         // replaces the FCT tree. Never mount an alias listener for a stale path.
@@ -917,17 +930,41 @@ export function MaestroWorkspace() {
 
 
 
+      <AlertDialog open={Boolean(workspace.restoredViewFallback)} onOpenChange={open => { if (!open) workspace.dismissRestoredViewFallback(); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Saved View unavailable — opened Browse</AlertDialogTitle>
+            <AlertDialogDescription>
+              {workspace.restoredViewFallback?.reason} Maestro has opened Browse instead, keeping the FCT query and filters.{" "}
+              Finish login and initialization, then reload the original saved URL to try again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button type="button" variant="outline" onClick={() => {
+              const originalUrl = workspace.restoredViewFallback?.originalUrl;
+              if (originalUrl) void navigator.clipboard.writeText(originalUrl).then(
+                () => toast.add({ title: "Saved URL copied", type: "success" }),
+                () => toast.add({ title: "Could not copy the saved URL", type: "error" }),
+              );
+            }}>Copy original URL</Button>
+            <AlertDialogAction onClick={workspace.dismissRestoredViewFallback}>Continue browsing</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="shrink-0">
         {workspaceRibbon}
 
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden" onKeyUpCapture={event => { if (event.target instanceof HTMLElement && event.target.hasAttribute("data-panel-resize-handle-id")) saveBrowseLayout(); }}>
+      {waitingForSelectedView ? <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4" role="status" aria-label="Restoring saved query">
+        <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1"><ResultsLoadingSkeleton wide /></ResizablePanelGroup>
+        <div className="flex justify-end"><Button type="button" variant="outline" onClick={() => setWorkspaceTab("browse")}>Browse</Button></div>
+      </div> : <div className="flex min-h-0 flex-1 flex-col overflow-hidden" onKeyUpCapture={event => { if (event.target instanceof HTMLElement && event.target.hasAttribute("data-panel-resize-handle-id")) saveBrowseLayout(); }}>
 
           <BrowsePanePositionContext.Provider value={activePaneOrder}>
-          <ResizablePanelGroup ref={browsePanelGroup} direction="horizontal" className="min-h-0 flex-1">
+          {paneLayoutReady ? <ResizablePanelGroup key={workspaceTab === "browse" ? "browse-3" : "compact-2"} ref={browsePanelGroup} direction="horizontal" className="min-h-0 flex-1">
             {activePaneOrder.map((pane, index) => <Fragment key={pane}>
-              {pane === "filters" ? (skeletons.facets === "loading" ? <FacetsLoadingSkeleton
+              {pane === "filters" ? (workspaceTab !== "browse" ? <LeftPaneFrame>{pausedSideShell("facets")}</LeftPaneFrame> : skeletons.facets === "loading" ? <FacetsLoadingSkeleton
               pane={restoringLeftPane}
               widgets={leftSkeletonWidgets}
               workspace={workspace}
@@ -958,13 +995,13 @@ export function MaestroWorkspace() {
               </CenterPaneBody></CenterPaneFrame>
             ) : skeletons.results === "loading" ? <ResultsLoadingSkeleton wide={urlStateInitialized && workspaceTab !== "browse"} />
               : skeletons.results === "degraded" ? <GraphUnavailableResults wide={urlStateInitialized && workspaceTab !== "browse"} />
-              : <CenterCanvasPanel workspace={workspace} />) : (skeletons.record === "degraded" ? <GraphUnavailableRecord /> : <RightCanvasPanel workspace={workspace} />)}
+              : <CenterCanvasPanel workspace={workspace} />) : (workspaceTab !== "browse" ? pausedSideShell("record") : skeletons.record === "degraded" ? <GraphUnavailableRecord /> : <RightCanvasPanel workspace={workspace} />)}
               {index < activePaneOrder.length - 1 && <ResizableHandle withHandle className="shrink-0" onDragging={dragging => { if (!dragging) saveBrowseLayout(); }} />}
             </Fragment>)}
-          </ResizablePanelGroup>
+          </ResizablePanelGroup> : <div role="status" aria-live="polite" className="flex min-h-0 flex-1 flex-col gap-4 p-5"><div className="text-sm text-muted-foreground">Restoring saved pane layout…</div><div aria-hidden="true" className="h-20 w-full animate-pulse rounded bg-muted" /></div>}
           </BrowsePanePositionContext.Provider>
 
-      </div>
+      </div>}
       {/* This lives in the durable workspace root, not the hover-unfurled
           breadcrumb editor. Mouse movement cannot unmount the Code Block. */}
       <RootAutocompleteQueryInspector

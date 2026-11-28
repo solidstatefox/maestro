@@ -37,7 +37,6 @@ import { Check, ChevronDown, Network, Link, CirclePlay, AtSign, X, LoaderCircle,
 import { shortenCount } from "@/lib/utils";
 import { canonicalQueryIdentityXml } from "@/lib/query-identity";
 import { AuthType, clearPersonalAuthSession, graphForPrefix } from "@/lib/personal-auth";
-import { cancelPersonalInitialization } from "@/lib/personal-initialization";
 import { ALL_GRAPHS } from "@/lib/graph-address-mode";
 import { graphServerUrlMatches } from "@/lib/graph-server-health";
 
@@ -245,6 +244,7 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
   useEffect(() => subscribePendingMaestroQueries(setPendingQueryCount), []);
   useEffect(() => subscribePendingMaestroQueryDetails(setPendingQueryDetails), []);
   const {
+    cancelPersonalInitialization,
     applyGraphText,
     authRestoreIssue,
     authSession,
@@ -477,7 +477,9 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
     toast.add({title:"Bookmark updated",type:"success"});metadataController.send({type:"CLOSE"});
   },[metadataSnapshot,metadataController]);
   const closeBookmarkDialog=()=>{if(dialogBusy)return;if(editingMetadata)metadataController.send({type:"CLOSE"});else setBookmarkDialogOpen(false);};
-  const showCancel = !queryExecutionCancelled && (pendingQueryCount > 0 || queryActivityPending);
+  // The queue belongs to the selected XState view, not an offstage Results
+  // pipeline. Keep the highest-priority Cancel for its actual pending work.
+  const showCancel = !queryExecutionCancelled && (pendingQueryCount > 0 || (workspaceTab === "browse" && queryActivityPending));
   const liveServer = (queryTree.attributes.addr ?? "").split("@").slice(1).join("@");
   const activeGraphServer = fctEndpoints.find(endpoint => liveServer &&
     (endpoint.id === liveServer || graphServerUrlMatches(endpoint.url, liveServer, endpoint.schemeInferred)));
@@ -977,6 +979,12 @@ export function AppBarSection({ workspace }: { workspace: AppBarWorkspace }) {
                   </span>
                 </div>
               </DropdownMenuLabel>
+              {workspace.accessCapabilities.policyStage === "failed" && <div className="mx-1 mb-2 rounded-md border border-destructive/30 p-2 text-xs" role="status">
+                <p className="font-medium text-destructive">Personal initialization failed</p>
+                <p className="mt-1 break-words text-muted-foreground select-text" title={workspace.accessCapabilities.policyError || "No initialization error details available."}>
+                  {workspace.accessCapabilities.policyError || "No initialization error details available."}
+                </p>
+              </div>}
               {workspace.accessCapabilities.policyStage === "failed" && <DropdownMenuItem
                 onClick={() => void handleRetryPersonalInitialization()}
                 className="cursor-pointer gap-2"

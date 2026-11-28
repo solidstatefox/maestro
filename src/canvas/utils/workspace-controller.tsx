@@ -53,6 +53,7 @@ import { graphServerSoftware, graphServerDescription } from "@/lib/server-metada
 import { createMaestroViewDiscoveryController } from "@/lib/app-lifecycle/view-discovery";
 import { recordGraphServerStatusObservation, retryGraphServerStatusObservations } from "@/lib/client-graph-server-status-history";
 import { createAuthenticationActions, useAuthenticationSessionLifecycle } from "@/canvas/controllers/authentication";
+import { createPersonalInitializationController } from "@/lib/app-lifecycle/personal-initialization-machine";
 
 import { useAuthenticationState } from "@/canvas/controllers/authentication";
 import { useHistoryState } from "@/canvas/controllers/history";
@@ -125,10 +126,14 @@ import { validMaestroLanguage } from "@/lib/maestro-language";
 import maestroLanguages from "@/data/maestro-languages.json";
 import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
 import { listValuesProjectionSparql } from "@/lib/list-values-inspector";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { rememberNamespaceMetadata, rememberShortforms, setNamespacePrefixSource, setObservationQueryAddr, toLabel } from "@/lib/uri-labels";
 import { proxyDebugFingerprint, proxyDebugHeaders } from "@/lib/proxy-debug";
+import { registerMaestroQueryWorkspace } from "@/lib/client-query-cache";
+import { restoredViewReadiness } from "@/lib/app-lifecycle/restored-view-readiness";
+import { decideRestoredViewEntry, type RestoredViewFallback } from "@/lib/app-lifecycle/restored-view-entry";
+import { createMaestroQueryViewCoordinator } from "@/lib/app-lifecycle/query-view-ownership";
 import { buildFctCountSparql } from "@/lib/fct-count-sparql";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
 import { providerFctQuery, hasProviderFctFilters } from "@/lib/provider-fct-query";
@@ -145,6 +150,7 @@ import { renderDiscoveredViewXslt } from "@/lib/discovered-view-xslt";
 import { PROVIDER_CATALOG_XSLT, type ProviderKind, type ProviderCatalogItem } from "@/lib/provider-catalog-xslt";
 import { SANKEY_ANALYSIS_URI } from "@/lib/sankey-coverage";
 import { D3_SANKEY_ANALYSIS_URI } from "@/lib/d3-sankey-id";
+import { PREDICATE_CLUSTERS_ANALYSIS_URI } from "@/lib/predicate-clusters-provider";
 import { MaestroHoverExpand } from "@/components/ui/maestro-hover-expand";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -424,7 +430,7 @@ export function useWorkspaceController() {
     controlsSheetOpen, setControlsSheetOpen, clearCacheDialogOpen, setClearCacheDialogOpen,
     preferredAlphabetLanguage, setPreferredAlphabetLanguage, restoreSheetLanguage, languageOverride, addLanguageToShareUrl, removeLanguageFromShareUrl, prefixSource, setPrefixSource,
     prefixStatus, setPrefixStatus, centralTab, setCentralTab,
-    workspaceTab, setWorkspaceTab, queryTreeOpen, setQueryTreeOpen,
+    workspaceTab: preferenceWorkspaceTab, setWorkspaceTab: setWorkspaceTabState, queryTreeOpen, setQueryTreeOpen,
     queryTreeHeightPercent, setQueryTreeHeightPercent, queryTreeHeightLoaded, setQueryTreeHeightLoaded,
     recordFormatEnabled, setRecordFormatEnabled,
     queryTreeHeightDbRef, showResultBadges, setShowResultBadges, orderResults,
@@ -464,7 +470,8 @@ export function useWorkspaceController() {
     resultListValuesDebug, setResultListValuesDebug, searchError, setSearchError,
     searchPipelineRun, setSearchPipelineRun, initialBrowseTriggered, setInitialBrowseTriggered,
   } = useResultsState();
-  const { controller: accessController, snapshot: accessSnapshot, sessionKey: accessSessionKey } = useMaestroAccess(authSession, authRestoreComplete, personalPoliciesReady, personalPoliciesSeedError);
+  const [personalInitialization] = useState(createPersonalInitializationController);
+  const { controller: accessController, snapshot: accessSnapshot, sessionKey: accessSessionKey } = useMaestroAccess(authSession, authRestoreComplete, personalPoliciesReady, personalPoliciesSeedError, personalInitialization);
   const previousPersonalSession = useRef(authSession);
   useLayoutEffect(() => {
     const previous = previousPersonalSession.current;
@@ -496,8 +503,8 @@ export function useWorkspaceController() {
     setFormatterHasEnrichment, attemptedFormatterEnrichmentRef, recordLifecycle,
   } = useRecordState();
   const {
-    selectedViewUri, setSelectedViewUri, viewPanel, setViewPanel,
-    viewProvider, setViewProvider, providerCatalogController, providerCatalogSnapshot, viewDiscoveryController, viewDiscoverySnapshot,
+    selectedViewUri: viewStateSelectedUri, setSelectedViewUri: setSelectedViewUriState, viewPanel: viewStatePanel, setViewPanel: setViewPanelState,
+    viewProvider: viewStateProvider, setViewProvider: setViewProviderState, providerCatalogController, providerCatalogSnapshot, viewDiscoveryController, viewDiscoverySnapshot,
     viewRenderController, viewRenderSnapshot,
     viewDomainRanks, setViewDomainRanks, viewServerSoftware, setViewServerSoftware,
     viewServerDescriptions, setViewServerDescriptions,
@@ -764,18 +771,90 @@ export function useWorkspaceController() {
   const { selectedFacet, setSelectedFacet, propertiesPage, setPropertiesPage, classesPage, setClassesPage, graphsPage, setGraphsPage, graphSort, setGraphSort, graphSortPickerExpanded, setGraphSortPickerExpanded, graphListSparql, setGraphListSparql, graphText, setGraphText, graphAutoFill, setGraphAutoFill, graphFieldEditing, setGraphFieldEditing, graphNavigationHistory, setGraphNavigationHistory, graphNavigationIndex, setGraphNavigationIndex, findEndpointsEnabled, setFindEndpointsEnabled, lastManualGraphRef, restoredGraphTextRef } = useGraphScopeNavigation();
   
   
-  // The URL's top-level tab takes precedence from the first client paint.
-  // A layout effect runs before the browser paints, avoiding a flash of Browse
-  // while the full query and shareable UI state are still being restored.
+  const { selectedAnalysisUri: analyzeStateSelectedUri, setSelectedAnalysisUri: setSelectedAnalysisUriState, analysisTable, setAnalysisTable, analysisColumnWidths, setAnalysisColumnWidths, analysisSelection, setAnalysisSelection, analysisError, setAnalysisError, analysisLoading, setAnalysisLoading, compareFacet, setCompareFacet, analyzeHistogram: analyzeStateHistogram, setAnalyzeHistogram: setAnalyzeHistogramState, analysisRenderedBaseRef, analysisPresentationStyle, beginAnalysisColumnResize } = useAnalyzeState();
+  // One supervisor per workspace. XState owns the authoritative tab/ribbon
+  // selection; the UI merely renders its snapshot and sends navigation events.
+  const [queryViewController] = useState(createMaestroQueryViewCoordinator);
+  // The original arrival URL is kept only for a one-time, actionable Browse
+  // fallback. Changing tabs later must never repeat the startup decision.
+  const arrivedViewUrlRef = useRef<string | null>(null);
+  const arrivalRequestedTabRef = useRef<"browse" | "view" | "analyze">("browse");
+  const arrivalViewCheckedRef = useRef(false);
+  const [restoredViewFallback, setRestoredViewFallback] = useState<RestoredViewFallback | null>(null);
+  const dismissRestoredViewFallback = () => setRestoredViewFallback(null);
+  // A shared View/Analyze URL is a valid requested destination even when the
+  // UI menu would currently disable that tab. Restore its identity before
+  // query-producing passive effects; the XState worker stays WAITING.
   useLayoutEffect(() => {
-    const requestedTab = new URLSearchParams(window.location.search).get("tab");
-    const decodedTab = decodeAppbarTab(requestedTab);
-    if (decodedTab) setWorkspaceTab(decodedTab);
-  }, []);
-  const { selectedAnalysisUri, setSelectedAnalysisUri, analysisTable, setAnalysisTable, analysisColumnWidths, setAnalysisColumnWidths, analysisSelection, setAnalysisSelection, analysisError, setAnalysisError, analysisLoading, setAnalysisLoading, compareFacet, setCompareFacet, analyzeHistogram, setAnalyzeHistogram, analysisRenderedBaseRef, analysisPresentationStyle, beginAnalysisColumnResize } = useAnalyzeState();
-  
-  
-  
+    arrivedViewUrlRef.current ??= window.location.href;
+    const state = readShareableUiState(window.location.search);
+    const tab = decodeAppbarTab(new URLSearchParams(window.location.search).get("tab"));
+    arrivalRequestedTabRef.current = state?.workspaceTab === "browse" || state?.workspaceTab === "view" || state?.workspaceTab === "analyze"
+      ? state.workspaceTab : tab ?? "browse";
+    if (!tab && !state) return;
+    const selection = queryViewController.getSelection();
+    queryViewController.select({ ...selection,
+      tab: state?.workspaceTab === "browse" || state?.workspaceTab === "view" || state?.workspaceTab === "analyze" ? state.workspaceTab : tab ?? selection.tab,
+      viewPanel: state?.viewPanel === "trail" || state?.viewPanel === "perspectives" || state?.viewPanel === "providers" ? state.viewPanel : selection.viewPanel,
+      viewProvider: state?.viewProvider ?? selection.viewProvider,
+      selectedViewUri: state?.selectedViewUri ?? selection.selectedViewUri,
+      selectedAnalysisUri: state?.selectedAnalysisUri ?? selection.selectedAnalysisUri,
+      histogram: state?.analyzeHistogram ?? selection.histogram,
+    });
+  }, [queryViewController]);
+  const queryWorkspaceId = `workspace:${useId()}`;
+  const viewActorSnapshot = useSyncExternalStore(queryViewController.subscribe,
+    queryViewController.getSnapshot, queryViewController.getSnapshot);
+  const viewSelection = viewActorSnapshot.context.selection;
+  const workspaceTab = viewSelection.tab;
+  const viewPanel = viewSelection.viewPanel;
+  const viewProvider = viewSelection.viewProvider;
+  const selectedViewUri = viewSelection.selectedViewUri;
+  const selectedAnalysisUri = viewSelection.selectedAnalysisUri;
+  const analyzeHistogram = viewSelection.histogram;
+  // Captured in each React render: late async work retains the originating
+  // view/ribbon scope even after navigation. It can never assume the NEXT tab.
+  const activeViewQueryHeaders = {
+    "x-maestro-view-tab": workspaceTab,
+    "x-maestro-view-ribbon": workspaceTab === "browse" ? "browse"
+      : workspaceTab === "view" ? (viewPanel === "providers"
+        ? `providers:${viewProvider ?? "catalog"}`
+        : viewPanel === "perspectives" ? `perspectives:${selectedViewUri || "default"}` : "trail")
+      : `${selectedAnalysisUri || "default"}${analyzeHistogram ? ":histogram" : ""}`,
+  };
+  useLayoutEffect(() => {
+    queryViewController.start();
+    const unregister = registerMaestroQueryWorkspace(queryWorkspaceId, queryViewController);
+    return () => { unregister(); queryViewController.stop(); };
+  }, [queryViewController, queryWorkspaceId]);
+  const navigateQueryView = (change: Partial<typeof viewSelection>) => {
+    queryViewController.select({ ...queryViewController.getSelection(), ...change });
+  };
+  const setWorkspaceTab: typeof setWorkspaceTabState = (value) => {
+    const prior = queryViewController.getSelection().tab;
+    navigateQueryView({ tab: typeof value === "function" ? value(prior) : value });
+  };
+  const setViewPanel: typeof setViewPanelState = (value) => {
+    const prior = queryViewController.getSelection().viewPanel;
+    navigateQueryView({ viewPanel: typeof value === "function" ? value(prior) : value });
+  };
+  const setViewProvider: typeof setViewProviderState = (value) => {
+    const prior = queryViewController.getSelection().viewProvider;
+    navigateQueryView({ viewProvider: typeof value === "function" ? value(prior) : value });
+  };
+  const setSelectedViewUri: typeof setSelectedViewUriState = (value) => {
+    const prior = queryViewController.getSelection().selectedViewUri;
+    navigateQueryView({ selectedViewUri: typeof value === "function" ? value(prior) : value });
+  };
+  const setSelectedAnalysisUri: typeof setSelectedAnalysisUriState = (value) => {
+    const prior = queryViewController.getSelection().selectedAnalysisUri;
+    navigateQueryView({ selectedAnalysisUri: typeof value === "function" ? value(prior) : value });
+  };
+  const setAnalyzeHistogram: typeof setAnalyzeHistogramState = (value) => {
+    const prior = queryViewController.getSelection().histogram;
+    navigateQueryView({ histogram: typeof value === "function" ? value(prior) : value });
+  };
+
   // The Query Tree is its own pane under the results, not a replacement tab.
   
   
@@ -916,7 +995,7 @@ useEffect(() => {
 
   // Restore personal authentication session on load.
   const authenticationLifecycle = { setManagedEndpoints, authSession, setAuthSession, setAuthRestoreIssue, setLoginGraphStore, setPersonalSparqlEndpoint, setLoginGraphPrefix, setLoginTab, setLoginUsername, setLoginPassword, setLoginOauthToken, setLoginOauthProfileUrl, setLoginOauthUserName, setLoginWebIdUri, setFetchedAvatarUrl, setAuthRestoreComplete, setPersonalPoliciesReady, setPersonalPoliciesSeedError, setLoginDialogOpen, setLoginError, setLoginTesting: (pending:boolean|((previous:boolean)=>boolean)) => { const next=typeof pending==="function"?pending(loginTesting):pending;setLoginTesting(next);accessController.send({type:"LOGIN_ACTIVITY",pending:next}); } };
-  useAuthenticationSessionLifecycle(authenticationLifecycle);
+  useAuthenticationSessionLifecycle(authenticationLifecycle,personalInitialization);
 
   
 
@@ -1269,7 +1348,7 @@ useEffect(() => {
   
 
   const { handleFetchProfile, handleTestConnection, handleLoginSubmit, handleRetryPersonalInitialization } = createAuthenticationActions({
-    ...authenticationLifecycle,
+    ...authenticationLifecycle,personalInitialization,
     loginTab, loginGraphStore, loginGraphPrefix, loginUsername, loginPassword,
     onConnectChallengeSent: () => accessController.send({ type: "AUTH_CHALLENGE_SENT" }),
     onConnectHttpStatus: status => {
@@ -1491,7 +1570,7 @@ useEffect(() => {
             const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
             cache: "no-store",
-            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("uri-label-lookup", "UriLabelLookup") },
+            headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("uri-label-lookup", "UriLabelLookup") },
             body: `<?xml version="1.0" encoding="UTF-8"?><query xmlns="http://openlinksw.com/services/facets/1.0" inference="${escapeXmlText(queryTree.attributes.inference ?? "")}" same-as="${escapeXmlText(queryTree.attributes["same-as"] ?? "")}" addr="${escapeXmlText(queryTree.attributes.addr ?? "")}"><value datatype="uri">${escapeXmlText(uriToResolve)}</value><view type="${FCT_VIEW_TYPES.DESCRIBE}" limit="30" offset="0"/></query>`,
             signal: controller.signal,
           });
@@ -2355,11 +2434,14 @@ useEffect(() => {
     }
     if (restored) {
       // Ribbon identity is the SHACL provider resource URI, never its label.
-      if (restored.viewPanel === "trail" || restored.viewPanel === "perspectives" || restored.viewPanel === "providers") setViewPanel(restored.viewPanel);
-      if (restored.selectedViewUri === "" || (typeof restored.selectedViewUri === "string" && restored.selectedViewUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedViewUri))) setSelectedViewUri(restored.selectedViewUri);
-      if (restored.viewProvider === null || restored.viewProvider === "policies" || restored.viewProvider === "formats" || restored.viewProvider === "transcoders" || restored.viewProvider === "facet-widgets" || restored.viewProvider === "curators" || restored.viewProvider === "fsm-providers" || restored.viewProvider === "kinds" || restored.viewProvider === "perspectives" || restored.viewProvider === "analysis-providers") setViewProvider(restored.viewProvider);
-      if (typeof restored.selectedAnalysisUri === "string" && restored.selectedAnalysisUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedAnalysisUri)) setSelectedAnalysisUri(restored.selectedAnalysisUri);
-      if (typeof restored.analyzeHistogram === "boolean") setAnalyzeHistogram(restored.analyzeHistogram);
+      const restoredViewSelection: Partial<typeof viewSelection> = {};
+      if (restored.viewPanel === "trail" || restored.viewPanel === "perspectives" || restored.viewPanel === "providers") restoredViewSelection.viewPanel = restored.viewPanel;
+      if (restored.selectedViewUri === "" || (typeof restored.selectedViewUri === "string" && restored.selectedViewUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedViewUri))) restoredViewSelection.selectedViewUri = restored.selectedViewUri;
+      if (restored.viewProvider === null || restored.viewProvider === "policies" || restored.viewProvider === "formats" || restored.viewProvider === "transcoders" || restored.viewProvider === "facet-widgets" || restored.viewProvider === "curators" || restored.viewProvider === "fsm-providers" || restored.viewProvider === "kinds" || restored.viewProvider === "perspectives" || restored.viewProvider === "analysis-providers") restoredViewSelection.viewProvider = restored.viewProvider;
+      if (typeof restored.selectedAnalysisUri === "string" && restored.selectedAnalysisUri.length <= 2048 && /^(?:https?:|gttp:|gttps:|urn:)/.test(restored.selectedAnalysisUri)) restoredViewSelection.selectedAnalysisUri = restored.selectedAnalysisUri;
+      if (typeof restored.analyzeHistogram === "boolean") restoredViewSelection.histogram = restored.analyzeHistogram;
+      if (restored.workspaceTab === "browse" || restored.workspaceTab === "view" || restored.workspaceTab === "analyze") restoredViewSelection.tab = restored.workspaceTab;
+      navigateQueryView(restoredViewSelection);
       // Endpoint selection is authoritative in the restored query addr.
       if (typeof restored.selectedFacet === "string" && restored.selectedFacet.length < 100) setSelectedFacet(restored.selectedFacet);
       if (typeof restored.propertiesPage === "number" && Number.isFinite(restored.propertiesPage)) setPropertiesPage(Math.max(0, Math.floor(restored.propertiesPage)));
@@ -2372,7 +2454,6 @@ useEffect(() => {
       if (["results", "groups", "query-tree", "view-query", "chat"].includes(restored.centralTab ?? "")) {
         setCentralTab(restored.centralTab === "query-tree" || restored.centralTab === "chat" ? "results" : restored.centralTab!);
       }
-      if (restored.workspaceTab === "browse" || restored.workspaceTab === "view" || restored.workspaceTab === "analyze") setWorkspaceTab(restored.workspaceTab);
       const toolbarToggles = readToolbarToggleState(restored);
       setQueryTreeOpen(toolbarToggles.queryTreeOpen);
       setShowResultBadges(
@@ -3039,7 +3120,7 @@ useEffect(() => {
     queryGraphServer && graphServerUrlMatches(selectedEndpointStatus.testedUrl ?? "", queryGraphServer));
   const graphHealthReady = Boolean(selectedEndpointId && queryServerMatchesSelection && selectedServerProvenHealthy);
   useEffect(() => {
-    if (!urlStateInitialized || !graphHealthReady || graphAlreadySelected || graphFieldEditing || !graphAutoFill) return;
+    if (!urlStateInitialized || !graphHealthReady || !viewActorSnapshot.matches("foreground") || graphAlreadySelected || graphFieldEditing || !graphAutoFill) return;
     // The probe follows the canonical live FCT scope. A changed search or
     // graph address invalidates earlier results; changing pages does not.
     const controller = new AbortController();
@@ -3048,7 +3129,7 @@ useEffect(() => {
       try {
         const response = await maestroQueryFetch("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("graph-preprocess", "GraphPreprocessor") },
+          headers: {...activeViewQueryHeaders,  "Content-Type": "application/json", ...proxyDebugHeaders("graph-preprocess", "GraphPreprocessor") },
           body: JSON.stringify({ queryXml, discoverGraph: true }),
         });
         // Proxy errors outside the discovery branch can be XML. Inspect the
@@ -3090,7 +3171,7 @@ useEffect(() => {
   // The query XML is captured when the canonical identity changes. Paging
   // cannot alter the FCT scope used for graph discovery.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlStateInitialized, graphHealthReady, graphAlreadySelected, graphFieldEditing, graphAutoFill, graphProbeIdentity]);
+  }, [urlStateInitialized, graphHealthReady, graphAlreadySelected, graphFieldEditing, graphAutoFill, graphProbeIdentity, viewActorSnapshot.value, viewActorSnapshot.context.owner.key]);
   // Graph health and auto-fill are observational, not execution gates.
   // A stale green check, an unavailable health probe, or optional discovery
   // must not block Browse or reset its already-running data pipeline. URL
@@ -3203,6 +3284,7 @@ useEffect(() => {
   // count-distinct requests. The server returns one (initial, COUNT(DISTINCT
   // focus)) row per available initial, all using the same query snapshot.
   useEffect(() => {
+    if (workspaceTab !== "browse" || !urlStateInitialized || !viewActorSnapshot.matches("foreground")) return;
     const controller = new AbortController();
     if (alphabetCountsQueryRef.current !== alphabetQueryXml) {
       alphabetCountsQueryRef.current = alphabetQueryXml;
@@ -3220,7 +3302,7 @@ useEffect(() => {
       try {
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("alphabet-counts", "AlphabetGroupedCounts"), ...componentRetryHeaders(retryAlphabet) },
+          headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("alphabet-counts", "AlphabetGroupedCounts"), ...componentRetryHeaders(retryAlphabet) },
           body: alphabetQueryXml,
         });
         if (!response.ok) throw new Error(`Alphabet aggregate returned HTTP ${response.status}`);
@@ -3255,7 +3337,7 @@ useEffect(() => {
       controller.abort();
       setIsLoadingAlphabet(false);
     };
-  }, [alphabetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryAlphabet]);
+  }, [alphabetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryAlphabet, workspaceTab, viewActorSnapshot.value]);
 
   useEffect(() => {
     // Keep the view's persisted index label predicates consistent with changes
@@ -3759,7 +3841,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   const countKey = JSON.stringify([resultsCountRequestIdentity, queryCountXml, queryRefreshRevision, retryResults]);
   useEffect(()=>{countController.start();return()=>countController.stop();},[countController]);
   useEffect(() => {
-    if (!urlStateInitialized || !endpointReadyForQuery || !canExecuteMaestroQuery) return;
+    if (!urlStateInitialized || !endpointReadyForQuery || !canExecuteMaestroQuery || !viewActorSnapshot.matches("foreground")) return;
     if (completeFirstResultsPage) return;
     countController.discover(countKey, async signal => {
       const countQueryXml = serializeFctQuery(setQueryViewAttributes(queryTree, {
@@ -3767,7 +3849,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       }));
       const response = await cachedFetchFct("/proxy/api/fct", {
         method: "POST", cache: "no-store", signal,
-        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("results-total-count", "ResultsTotalCount") },
+        headers: {...activeViewQueryHeaders,  "Content-Type": "application/json", ...proxyDebugHeaders("results-total-count", "ResultsTotalCount") },
         body: JSON.stringify({ queryXml: countQueryXml }),
       });
       const data=await readFctResponse(response);
@@ -3776,7 +3858,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       if(!Number.isSafeInteger(total)||total<0)throw new Error("Virtuoso returned an invalid scalar count.");
       return [total];
     });
-  },[countController,countKey,urlStateInitialized,endpointReadyForQuery,canExecuteMaestroQuery,completeFirstResultsPage]);
+  },[countController,countKey,urlStateInitialized,endpointReadyForQuery,canExecuteMaestroQuery,completeFirstResultsPage, viewActorSnapshot.value, viewActorSnapshot.context.owner.key]);
   useEffect(()=>{
     if(completeFirstResultsPage){setResultsTotalCount(results.length);setIsCountingResults(false);return;}
     if(countSnapshot.context.key!==countKey){setResultsTotalCount(null);setIsCountingResults(false);return;}
@@ -3990,7 +4072,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     // Do not fetch the default tree while a shared query is restoring, or
     // before the selected endpoint has passed the health check. Empty search
     // remains a valid query once both prerequisites are ready.
-    const endpointReady = endpointReadyForQuery && canExecuteMaestroQuery;
+    const endpointReady = endpointReadyForQuery && canExecuteMaestroQuery && viewActorSnapshot.matches("foreground");
     if (!urlStateInitialized || !endpointReady) {
       // A Share URL may have replaced a running query while the controller
       // has not yet observed the new query key. No request owns this spinner.
@@ -4028,11 +4110,11 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         const response = await (resultsQueryHasStatuses
           ? cachedFetchFct("/proxy/api/fct", {
               method: "POST", cache: "no-store", signal: controller.signal,
-              headers: { "Content-Type": "text/xml; charset=utf-8", ...componentRetryHeaders(retryResults) }, body: resultsRequestXml,
+              headers: {...activeViewQueryHeaders,  "Content-Type": "text/xml; charset=utf-8", ...componentRetryHeaders(retryResults) }, body: resultsRequestXml,
             })
           : cachedFetchFct("/proxy/api/fct", {
               method: "POST", cache: "no-store",
-              headers: { "Content-Type": "text/xml; charset=utf-8",
+              headers: {...activeViewQueryHeaders,  "Content-Type": "text/xml; charset=utf-8",
                 ...proxyDebugHeaders("results-search", `ResultsSearch:${proxyDebugFingerprint(resultsRequestXml)}`), ...componentRetryHeaders(retryResults) },
               body: resultsRequestXml, signal: controller.signal,
             }));
@@ -4115,7 +4197,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       setIsSearching(false);
       if (timerFired) operations.controller.send({ type: "RESULTS_CANCELLED", key: operationQueryKey });
     };
-  }, [urlStateInitialized, resultsRequestXml, resultsQueryHasStatuses, resultsBatchSize, queryCountXml, resultsOffset, queryGraphServer, endpointReadyForQuery, canExecuteMaestroQuery, operationQueryKey, operations.controller, searchPipelineRun]);
+  }, [urlStateInitialized, resultsRequestXml, resultsQueryHasStatuses, resultsBatchSize, queryCountXml, resultsOffset, queryGraphServer, endpointReadyForQuery, canExecuteMaestroQuery, operationQueryKey, operations.controller, searchPipelineRun, viewActorSnapshot.value, viewActorSnapshot.context.owner.key]);
 
   // Result badges are optional SPARQL enrichment. Keep this separate from the
   // FCT search pipeline so toggling badges never reloads/flickers the result set.
@@ -4171,7 +4253,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       ...(resultBadgePropertiesKey ? resultBadgePropertiesKey.split("\u0000") : []),
     ])];
     const selectedReverse = resultBadgeRolesKey ? resultBadgeRolesKey.split("\u0000") : [];
-    if (!showResultBadges || !endpointReadyForQuery || !results.length || !resultsListValuesXml) {
+    if (!viewActorSnapshot.matches("foreground") || !showResultBadges || !endpointReadyForQuery || !results.length || !resultsListValuesXml) {
       // Enrichment is presentation data. Transient endpoint readiness and badge
       // visibility must not erase FCT-projected Record identity or cached badges.
       return () => controller.abort();
@@ -4212,7 +4294,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           const queryXml = mergeValuesQueryClone(serializeFctQuery(queryTree), projectionColumns, batch);
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store",
-            headers: {
+            headers: {...activeViewQueryHeaders, 
               "Content-Type": "text/xml; charset=utf-8",
               ...proxyDebugHeaders("results-enrichment", `ResultsListValues:${proxyDebugFingerprint(`${resultBadgeUrisKey}:${resultBadgePropertiesKey}:${resultBadgeRolesKey}`)}:${start / maxResourcesPerRequest + 1}`),
             },
@@ -4252,7 +4334,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       }
     })();
     return () => { cancelled = true; controller.abort(); };
-  }, [showResultBadges, resultBadgeUrisKey, resultBadgePropertiesKey, resultBadgeRolesKey, queryGraphServer, endpointReadyForQuery, resultsListValuesXml]);
+  }, [showResultBadges, resultBadgeUrisKey, resultBadgePropertiesKey, resultBadgeRolesKey, queryGraphServer, endpointReadyForQuery, resultsListValuesXml, viewActorSnapshot.value, viewActorSnapshot.context.owner.key]);
 
   // Some Virtuoso endpoints return a successful grouped A-Z response while
   // omitting an initial visibly represented in the Results list. Verify such
@@ -4280,6 +4362,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   // Load group values through FCT itself. This query is a clone of the current
   // tree with the selected relationship used to enumerate its values.
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     let cancelled = false;
     if (centralTab !== "groups" || !selectedGroupByOption) {
       setGroupValuesLoading(false);
@@ -4298,7 +4381,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         });
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("group-values-fct", "GroupsValues"), ...componentRetryHeaders(retryGroups) },
+          headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("group-values-fct", "GroupsValues"), ...componentRetryHeaders(retryGroups) },
           body: serializeFctQuery(groupTree),
           signal: controller.signal,
         });
@@ -4359,7 +4442,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       }
     })();
     return () => { cancelled = true; controller.abort(); };
-  }, [centralTab, search, queryCountXml, groupByPropertyUri, selectedGroupByOption?.key, effectiveGroupBatchSize, effectiveGroupBatchOffset, queryRefreshRevision, retryGroups, classFacets, effectiveResultsTotalCount, getPropertyPath]);
+  }, [centralTab, search, queryCountXml, groupByPropertyUri, selectedGroupByOption?.key, effectiveGroupBatchSize, effectiveGroupBatchOffset, queryRefreshRevision, retryGroups, classFacets, effectiveResultsTotalCount, getPropertyPath, workspaceTab, viewActorSnapshot.value]);
 
   // Member lists are independently keyed by the committed group scope. A
   // Categories / provider refresh can clear the presentation state without
@@ -4384,7 +4467,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       groupMemberRequestControllers.current.clear();
       groupMemberRequestStates.current.clear();
     };
-  }, [groupMemberScope]);
+  }, [groupMemberScope, workspaceTab, viewActorSnapshot.value]);
 
   const groupMemberPageKey = pageGroupValues.map(groupValueKey).join("|");
   // A vanished member state is itself a reason to start a request, even if the
@@ -4397,7 +4480,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       .join("|")
     : "";
   useEffect(() => {
-    if (centralTab !== "groups" || !selectedGroupByOption || !pageGroupValues.length) return;
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground") || centralTab !== "groups" || !selectedGroupByOption || !pageGroupValues.length) return;
     const requestScope = groupMemberScope;
     for (const groupValue of pageGroupValues) {
       const key = `${selectedGroupByOption.key}::${groupValueKey(groupValue)}`;
@@ -4420,7 +4503,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           }));
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store",
-            headers: { "Content-Type": "text/xml; charset=utf-8",
+            headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8",
               ...proxyDebugHeaders("group-members-fct", "GroupsMembers") },
             body: memberXml, signal: requestController.signal,
           });
@@ -4455,7 +4538,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
     // No cleanup on groupValues / UI-state changes: request controllers are
     // cancelled only when the authoritative query scope changes or unmounts.
   }, [centralTab, groupMemberScope, selectedGroupByOption?.key,
-    selectedGroupByOption?.nodeId, groupMemberPageKey, missingGroupMemberKeys]);
+    selectedGroupByOption?.nodeId, groupMemberPageKey, missingGroupMemberKeys, workspaceTab, viewActorSnapshot.value]);
 
   // Scope-wide side effects are separate from facet fetching. A facet request
   // must never cancel, wait for, or determine another facet's request lifecycle.
@@ -4488,6 +4571,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
   // Categories owns its own request, debounce, cancellation, data, error and
   // loading state. It does not wait for Properties or Roles.
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     if (!search.trim() && !endpointReadyForQuery) {
       setClassFacets([]); setClassTreeEdges([]);
       setClassFacetError("");
@@ -4507,7 +4591,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
           const loadCategories = async (xml: string, source: string) => {
             const response = await cachedFetchFct("/proxy/api/fct", {
               method: "POST",
-              headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", source), ...componentRetryHeaders(retryCategories) },
+              headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", source), ...componentRetryHeaders(retryCategories) },
               body: xml,
               signal: controller.signal,
             });
@@ -4583,11 +4667,12 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       // loading indicator during cleanup. A replacement effect sets it true.
       setIsLoadingClasses(false);
     };
-  }, [search, classFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryCategories, facetRequests]);
+  }, [search, classFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryCategories, facetRequests, workspaceTab, viewActorSnapshot.value]);
 
   // The tree request supplies relationships only, never additional category items or counts.
   // Its output is intersected with the authoritative flat class list at render time.
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     if (!categoriesTreeMode || (!search.trim() && !endpointReadyForQuery)) {
       setIsLoadingCategoryTree(false);
       setClassTreeEdges([]);
@@ -4601,7 +4686,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         try {
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
-            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:classes-hierarchy"), ...componentRetryHeaders(retryCategories) },
+            headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:classes-hierarchy"), ...componentRetryHeaders(retryCategories) },
             body: queryWithoutPagingXml(FCT_VIEW_TYPES.CLASSES, false, true),
             signal: controller.signal,
           });
@@ -4629,10 +4714,11 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       })();
     }, 250);
     return () => { cancelled = true; window.clearTimeout(timer); controller.abort(); setIsLoadingCategoryTree(false); };
-  }, [categoriesTreeMode, classFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryCategories]);
+  }, [categoriesTreeMode, classFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryCategories, workspaceTab, viewActorSnapshot.value]);
 
   // Properties has a completely separate request lifecycle from Categories and Roles.
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     if(configurePropertyKind!=="all" && !propertyKindFilter){
       setIsLoadingProperties(false);
       setPropertyFacetError(`Kind ${configurePropertyKind} requires its complete RDF provider definitions.`);
@@ -4652,7 +4738,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         try {
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
-            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:properties"), ...componentRetryHeaders(retryProperties) },
+            headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:properties"), ...componentRetryHeaders(retryProperties) },
             body: propertyFacetQueryXml,
             signal: controller.signal,
           });
@@ -4682,10 +4768,11 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       facetRequests.cancel("properties", facetScopeKey);
       // The replacement request owns the loading flag; do not clear it on cancellation.
     };
-  }, [search, propertyFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryProperties, facetRequests, propertyKindRevision, configurePropertyKind, propertyKindFilter]);
+  }, [search, propertyFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryProperties, facetRequests, propertyKindRevision, configurePropertyKind, propertyKindFilter, workspaceTab, viewActorSnapshot.value]);
 
   // Roles has a completely separate request lifecycle from Categories and Properties.
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     if(configureRoleKind!=="all" && !roleKindFilter){
       setIsLoadingRoles(false);
       setRoleFacetError(`Kind ${configureRoleKind} requires its complete RDF provider definitions.`);
@@ -4706,7 +4793,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         try {
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST",
-            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:roles"), ...componentRetryHeaders(retryRoles) },
+            headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("facet-load", "FacetLoader:roles"), ...componentRetryHeaders(retryRoles) },
             body: roleFacetQueryXml,
             signal: controller.signal,
           });
@@ -4736,7 +4823,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
       facetRequests.cancel("roles", facetScopeKey);
       // The replacement request owns the loading flag; do not clear it on cancellation.
     };
-  }, [search, roleFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryRoles, facetRequests, roleKindRevision, configureRoleKind, roleKindFilter]);
+  }, [search, roleFacetQueryXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryRoles, facetRequests, roleKindRevision, configureRoleKind, roleKindFilter, workspaceTab, viewActorSnapshot.value]);
 
   // Graphs is a bounded discovery widget, not an aggregate/count workload.
   // Display the graph URIs returned within the Sheet limit. If there are more
@@ -4746,6 +4833,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
 
   // Fetch only the graph page the user requested; never scan the entire result set.
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     if (!endpointReadyForQuery || !queryGraphServer) {
       setGraphFacets([]);
       setGraphListSparql("");
@@ -4783,7 +4871,7 @@ const describedRoleCount = describedProperties.filter((item) => item.direction =
         });
         const response = await maestroQueryFetch("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("graph-list", "GraphList"), ...componentRetryHeaders(retryGraphs) },
+          headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("graph-list", "GraphList"), ...componentRetryHeaders(retryGraphs) },
           body: graphQueryXml,
           signal: controller.signal,
         });
@@ -4841,7 +4929,7 @@ setGraphFacets(graphs);
     }
     void loadGraphPage();
     return () => { cancelled = true; facetRequests.cancel("graphs", facetScopeKey); };
-  }, [leftWidgetLimits.graphs, queryCountXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryGraphs, facetRequests]);
+  }, [leftWidgetLimits.graphs, queryCountXml, queryGraphServer, endpointReadyForQuery, queryRefreshRevision, retryGraphs, facetRequests, workspaceTab, viewActorSnapshot.value]);
 
 
   // Defensively merge duplicate resource rows by URI. The API normally groups
@@ -4989,6 +5077,7 @@ setGraphFacets(graphs);
     bookmarkQueryKey, queryTree.attributes.addr ?? "", blankNodeGraphQueryXml ?? ""].join("\u0000");
   const lastRecordGraphIdentityRef = useRef("");
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     if (lastRecordGraphIdentityRef.current !== recordGraphIdentity) {
       lastRecordGraphIdentityRef.current = recordGraphIdentity;
       setRecordGraphs([]);
@@ -5023,7 +5112,7 @@ setGraphFacets(graphs);
         const graphs = await loadCompleteRecordGraphList(projection, async (pageXml) => {
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store", signal: controller.signal,
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-fct", "RecordGraphs") },
+            headers: {...activeViewQueryHeaders,  "Content-Type": "application/json", ...proxyDebugHeaders("record-graph-fct", "RecordGraphs") },
             body: JSON.stringify({ queryXml: pageXml }),
           });
           const raw = await response.text();
@@ -5063,7 +5152,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedRecordTermType, blankNodeGraphQueryXml, queryGraphServer, endpointReadyForQuery, recordIdentityPending, awaitingRecordIdentity, queryTree.attributes.addr, queryRefreshRevision, recordGraphIdentity]);
+  }, [selectedUri, selectedRecordTermType, blankNodeGraphQueryXml, queryGraphServer, endpointReadyForQuery, recordIdentityPending, awaitingRecordIdentity, queryTree.attributes.addr, queryRefreshRevision, recordGraphIdentity, workspaceTab, viewActorSnapshot.value]);
 
   // A graph proved by the executed FCT Record selection is displayed as a
   // fixed label, not a dropdown. It still has graph-authorship metadata.
@@ -5075,6 +5164,7 @@ setGraphFacets(graphs);
   const authorScopeIdentity = `${recordGraphIdentity}\u0000${selectedRecordGraph || boundRecordGraph}`;
   const lastAuthorScopeRef = useRef("");
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     if (lastAuthorScopeRef.current !== authorScopeIdentity) {
       lastAuthorScopeRef.current = authorScopeIdentity;
       setRecordGraphAuthors([]);
@@ -5101,7 +5191,7 @@ setGraphFacets(graphs);
       }
     })();
     return () => controller.abort();
-  }, [selectedUri, selectedRecordGraph, boundRecordGraph, recordGraphs, blankNodeGraphQueryXml, recordIdentityPending, awaitingRecordIdentity, queryTree.attributes.addr, queryRefreshRevision, authorScopeIdentity]);
+  }, [selectedUri, selectedRecordGraph, boundRecordGraph, recordGraphs, blankNodeGraphQueryXml, recordIdentityPending, awaitingRecordIdentity, queryTree.attributes.addr, queryRefreshRevision, authorScopeIdentity, workspaceTab, viewActorSnapshot.value]);
 
   // Membership discovery does not change an unfiltered DESCRIBE. Only selected
   // graph/author filters need the discovered list, avoiding a second record load.
@@ -5110,6 +5200,7 @@ setGraphFacets(graphs);
   // Load the selected resource once through Record SELECT; pagination is local to
   // the returned property/value pairs and does not trigger another server query.
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     const virtualCommon = recordSelectionCleared && !selectedUri;
     if (operations.controller.getSnapshot().query.globallyCancelled) { setIsDescribing(false); return; }
     blankNodeContext.select(selectedUri ? currentRecordDescriptionKey : "",
@@ -5249,12 +5340,13 @@ setGraphFacets(graphs);
     }
     void loadDescription();
     return () => { cancelled = true; controller.abort(); recordLifecycle.releaseAbort(currentRecordDescriptionKey, "description", controller); };
-  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, blankNodeAnchor?.parent, blankNodeAnchor?.predicate, blankNodeAnchor?.depth, queryGraphServer, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, preferredAlphabetLanguage, queryRefreshRevision, resultsRequestXml, blankNodeGraphQueryXml, recordIdentityPending, awaitingRecordIdentity, recordSelectionCleared, queryXml]);
+  }, [selectedUri, selectedRecordTermType, selectedRecordDatatype, selectedRecordLanguage, recordFocusPredicate, blankNodeAnchor?.parent, blankNodeAnchor?.predicate, blankNodeAnchor?.depth, queryGraphServer, selectedRecordGraph, selectedRecordAuthor, filteredDescriptionGraphs, queryTree.attributes.addr, queryTree.attributes.graph, queryTree.attributes.inference, queryTree.attributes["same-as"], currentRecordDescriptionKey, recordDescriptionQueryLimit, preferredAlphabetLanguage, queryRefreshRevision, resultsRequestXml, blankNodeGraphQueryXml, recordIdentityPending, awaitingRecordIdentity, recordSelectionCleared, queryXml, workspaceTab, viewActorSnapshot.value]);
 
   // The separate Record graph dropdown loader already knows which named graphs
   // contain this resource. Reuse that list for optional bounded background
   // label queries; never enumerate named graphs in the initial Record SELECT.
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     if (!selectedUri || describedRecordUri !== selectedUri || isDescribing ||
         !describedRecord.length || !queryGraphServer ||
         !endpointReadyForQuery) return;
@@ -5304,7 +5396,7 @@ setGraphFacets(graphs);
           if (controller.signal.aborted) return;
           const response = await cachedFetchFct("/proxy/api/sparql", {
             method: "POST", cache: "no-store", signal: controller.signal,
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-value-labels", "RecordValueLabels") },
+            headers: {...activeViewQueryHeaders,  "Content-Type": "application/json", ...proxyDebugHeaders("record-value-labels", "RecordValueLabels") },
             body: JSON.stringify({ recordValueLabels: { addr, uris, graphs, preferredLanguage: preferredAlphabetLanguage, version: 2 } }),
           });
           if (response.status === 504) {
@@ -5359,7 +5451,7 @@ setGraphFacets(graphs);
     return () => controller.abort();
   }, [selectedUri, describedRecordUri, describedRecord, isDescribing, recordGraphs,
       selectedRecordGraph, selectedRecordAuthor, queryGraphServer, endpointReadyForQuery,
-      queryTree.attributes.addr, queryTree.attributes.graph, preferredAlphabetLanguage]);
+      queryTree.attributes.addr, queryTree.attributes.graph, preferredAlphabetLanguage, workspaceTab, viewActorSnapshot.value]);
 
   // The formatted card may already be on screen when named-graph labels arrive.
   // Update only its URI link text; do not rerun SHACL, XSLT, or the Record SELECT.
@@ -5385,6 +5477,7 @@ setGraphFacets(graphs);
   }, [selectedUri, queryXml]);
   // Discover a record's class policy from the personal SPARQL server after its DESCRIBE data identifies rdf:type values.
   useEffect(() => {
+    if (workspaceTab !== "browse" || !viewActorSnapshot.matches("foreground")) return;
     if (!recordFormatPreferenceLoaded) return;
     if (!personalStoreReady) { setRecordPolicy(null); setRecordPolicies([]); setSelectedRecordTemplateUri(""); setRecordPolicyError(""); setIsLoadingRecordPolicy(false); setRecordPolicyCheckedUri(selectedUri); return; }
     // Never discover against a partially reloaded policy graph.
@@ -5538,7 +5631,7 @@ setGraphFacets(graphs);
       if (!controller.signal.aborted) { setIsLoadingRecordPolicy(false); setRecordPolicyCheckedUri(selectedUri); }
     });
     return () => { controller.abort(); recordLifecycle.releaseAbort(currentRecordDescriptionKey, "policy", controller); };
-  }, [selectedUri, selectedRecordTermType, personalSparqlEndpoint, describedRecord, describedRecordUri, isDescribing, recordFormatPreferenceLoaded, authSession, personalPoliciesReady, personalPoliciesSeedError, selectedResult?.uri, selectedGroupRecord?.uri, queryXml, historyBookmarkId]);
+  }, [selectedUri, selectedRecordTermType, personalSparqlEndpoint, describedRecord, describedRecordUri, isDescribing, recordFormatPreferenceLoaded, authSession, personalPoliciesReady, personalPoliciesSeedError, selectedResult?.uri, selectedGroupRecord?.uri, queryXml, historyBookmarkId, workspaceTab, viewActorSnapshot.value]);
 
 
   const browseValidationRequestRef = useRef<AbortController | null>(null);
@@ -5579,7 +5672,7 @@ setGraphFacets(graphs);
         const validateQueryXml = serializeFctQuery(validateTree);
         const facetResponse = await maestroQueryFetch("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/xml", ...proxyDebugHeaders("record-shacl-fct-validate", "RecordShaclFacets") },
+          headers: {...activeViewQueryHeaders,  "Content-Type": "application/xml", ...proxyDebugHeaders("record-shacl-fct-validate", "RecordShaclFacets") },
           body: validateQueryXml,
         });
         const facetXml = await facetResponse.text();
@@ -5795,7 +5888,7 @@ setGraphFacets(graphs);
         if (activeGraph && delimiter >= 0) enrichmentRoot.setAttribute("addr", `${activeGraph}@${originalAddr.slice(delimiter + 1)}`);
         const enrichmentResponse = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-enrichment", "RecordTemplateEnrichment") },
+          headers: {...activeViewQueryHeaders,  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-enrichment", "RecordTemplateEnrichment") },
           body: new XMLSerializer().serializeToString(enrichmentQueryDocument),
         });
         const enrichmentXml = await enrichmentResponse.text();
@@ -6155,7 +6248,7 @@ setGraphFacets(graphs);
         }
         const queryResponse = await cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          signal: controller.signal, headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-query", "RecordTemplateQuery") },
+          signal: controller.signal, headers: {...activeViewQueryHeaders,  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-template-query", "RecordTemplateQuery") },
           body: queryXml,
         });
         const queryData = await readFctResponse(queryResponse);
@@ -6213,9 +6306,9 @@ setGraphFacets(graphs);
         }));
         const [queryResponse, countResponse] = await Promise.all([
           cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal: controller.signal,
-            headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("bookmark-history-query-results", "BookmarkHistoryQueryResults") }, body: boundedQuery }),
+            headers: {...activeViewQueryHeaders,  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("bookmark-history-query-results", "BookmarkHistoryQueryResults") }, body: boundedQuery }),
           cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal: controller.signal,
-            headers: { "Content-Type": "application/json", ...proxyDebugHeaders("bookmark-history-query-count", "BookmarkHistoryQueryCount") },
+            headers: {...activeViewQueryHeaders,  "Content-Type": "application/json", ...proxyDebugHeaders("bookmark-history-query-count", "BookmarkHistoryQueryCount") },
             body: JSON.stringify({ queryXml: countXml }) }),
         ]);
         const [queryResponseText, countResponseText] = await Promise.all([queryResponse.clone().text(), countResponse?.clone().text() ?? Promise.resolve("Count unavailable")]);
@@ -6351,7 +6444,7 @@ setGraphFacets(graphs);
           if (!preview) {
             const response = await cachedFetchFct("/proxy/api/fct", {
               method: "POST", cache: "no-store",
-              signal: controller.signal, headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-xslt-sandbox", "RecordXsltSandbox") },
+              signal: controller.signal, headers: {...activeViewQueryHeaders,  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("record-xslt-sandbox", "RecordXsltSandbox") },
               body: queryXml,
             });
             const results = (await readFctResponse(response)).results.slice(0, 100);
@@ -7084,7 +7177,7 @@ useEffect(() => {
 }, [activeLeafId, effectiveResultsTotalCount, endpointReadyForQuery, isCountingResults, isSearching, queryCountXml, queryTree, results, queryGraphServer]);
 
 useEffect(() => {
-  if (!endpointReadyForQuery) {
+  if (!endpointReadyForQuery || !viewActorSnapshot.matches("foreground")) {
     setBreadcrumbPreviewSummaries(current => reconcileBreadcrumbSummaries(current, {}));
     setBreadcrumbPreviewPendingIds(current => reconcileBreadcrumbPendingIds(current, new Set()));
     return;
@@ -7099,7 +7192,7 @@ useEffect(() => {
     const response = await cachedFetchFct("/proxy/api/fct", {
       method: "POST",
       cache: "no-store",
-      headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("breadcrumb-preview", component) },
+      headers: {...activeViewQueryHeaders,  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("breadcrumb-preview", component) },
       body: xml,
       signal: controller.signal,
     });
@@ -7136,7 +7229,7 @@ useEffect(() => {
         request(serializeFctQuery(tree), `BreadcrumbPreview:${crumbId}:text`),
         cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-preview-count", `BreadcrumbPreview:${crumbId}:count`) },
+          headers: {...activeViewQueryHeaders,  "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-preview-count", `BreadcrumbPreview:${crumbId}:count`) },
           body: JSON.stringify({ queryXml: countXml }),
         }),
       ]);
@@ -7884,9 +7977,7 @@ useEffect(() => {
       if (hasProviderFctFilters(queryTree, providerKind, payload.graph, payload.personalEndpointUrl)) {
         // This changes the ribbon only, not the authoritative live query.
         operations.controller.send({ type: "PROVIDERS_ENTRY_CANCELLED" });
-        setWorkspaceTab("view");
-        setViewProvider(providerKind);
-        setViewPanel("providers");
+        navigateQueryView({ tab: "view", viewProvider: providerKind, viewPanel: "providers" });
         setCentralTab("results");
         return;
       }
@@ -7920,9 +8011,7 @@ useEffect(() => {
       operations.controller.send({ type: "BROWSE_QUERY_DISPLACED", sourceKey: displacedQueryKey });
       // Switching the ribbon is a live-query navigation, even when the
       // preceding tab was Bookmarks or another personal perspective.
-      setWorkspaceTab("view");
-      setViewProvider(providerKind);
-      setViewPanel("providers");
+      navigateQueryView({ tab: "view", viewProvider: providerKind, viewPanel: "providers" });
       setSearchDraft("");
       setSavedSearchDraft("");
       setCentralTab("results");
@@ -8003,9 +8092,7 @@ useEffect(() => {
     // Keep the source tab/ribbon, including a displaced Bookmarks Perspective.
     // restoreQueryAndUiState above owns the original endpoint and controls.
     if (!restored || restored.workspaceTab === "browse") {
-      setWorkspaceTab("browse");
-      setViewProvider(null);
-      setViewPanel("trail");
+      navigateQueryView({ tab: "browse", viewProvider: null, viewPanel: "trail" });
       setCentralTab("results");
     }
     operations.controller.send({ type: "CONTEXT_RETURNED" });
@@ -8037,11 +8124,8 @@ useEffect(() => {
     }
     // Entering View defaults to the Perspectives ribbon. A restored URL is
     // handled by restoreQueryAndUiState(), not by this user navigation action.
-    if (tab === "view" && workspaceTab !== "view") {
-      setViewPanel("perspectives");
-      setViewProvider(null);
-    }
-    setWorkspaceTab(tab);
+    navigateQueryView(tab === "view" && workspaceTab !== "view"
+      ? { tab, viewPanel: "perspectives", viewProvider: null } : { tab });
   }
 
   function selectPerspective(uri: string, explicit = true) {
@@ -8050,7 +8134,7 @@ useEffect(() => {
       if (!personalPerspectiveMatchesQuery(uri, queryTree)) { void loadHistoryQuery(kind === "bookmarks"); return; }
       operations.controller.send({ type: "PERSONAL_PERSPECTIVE_ENTERED", fromUrl: buildCurrentShareUrl() });
     }
-    setViewPanel("perspectives"); setSelectedViewUri(uri); setViewProvider(null);
+    navigateQueryView({ viewPanel: "perspectives", selectedViewUri: uri, viewProvider: null });
   }
 
   async function loadHistoryQuery(includeFavorites = false) {
@@ -8133,10 +8217,8 @@ useEffect(() => {
       // The current History/Bookmarks FCT query remains authoritative; only
       // the presentation changes from Browse Results to its matching View
       // Perspective. Reuse the exact provider URIs used by the ribbon/URL.
-      setWorkspaceTab("view");
-      setViewProvider(null);
-      setViewPanel("perspectives");
-      setSelectedViewUri(includeFavorites ? PERSONAL_PERSPECTIVE_URI.bookmarks : PERSONAL_PERSPECTIVE_URI.history);
+      navigateQueryView({ tab: "view", viewProvider: null, viewPanel: "perspectives",
+        selectedViewUri: includeFavorites ? PERSONAL_PERSPECTIVE_URI.bookmarks : PERSONAL_PERSPECTIVE_URI.history });
 
       setSearchDraft("");
       setSavedSearchDraft("");
@@ -8615,7 +8697,7 @@ useEffect(() => {
   async function loadBreadcrumbMenuPreview(nodeId: string) {
     if (breadcrumbPreviewSummaries[nodeId] || breadcrumbMenuPreviewSummaries[nodeId] || breadcrumbMenuPreviewPendingRef.current.has(nodeId)) return;
     const scoped = makeBreadcrumbScopedTree(nodeId);
-    if (!scoped || !endpointReadyForQuery) return;
+    if (!scoped || !endpointReadyForQuery || !viewActorSnapshot.matches("foreground")) return;
     breadcrumbMenuPreviewPendingRef.current.add(nodeId);
     try {
       const countXml = serializeFctQuery(setQueryViewAttributes(scoped, {
@@ -8624,12 +8706,12 @@ useEffect(() => {
       const [response, countResponse] = await Promise.all([
         cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("breadcrumb-menu-preview", `BreadcrumbMenu:${nodeId}`) },
+          headers: {...activeViewQueryHeaders,  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("breadcrumb-menu-preview", `BreadcrumbMenu:${nodeId}`) },
           body: serializeFctQuery(scoped),
         }),
         cachedFetchFct("/proxy/api/fct", {
           method: "POST", cache: "no-store",
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-menu-count", `BreadcrumbMenu:${nodeId}:count`) },
+          headers: {...activeViewQueryHeaders,  "Content-Type": "application/json", ...proxyDebugHeaders("breadcrumb-menu-count", `BreadcrumbMenu:${nodeId}:count`) },
           body: JSON.stringify({ queryXml: countXml }),
         }),
       ]);
@@ -9820,7 +9902,7 @@ useEffect(() => {
                   [{ property: option.uri, direction: alias?.path[0]?.direction ?? option.direction,
                     ...(alias ? { hops: alias.path.map(hop => ({ iri: hop.iri, direction: hop.direction })) } : {}) }], resources);
                 const response = await cachedFetchFct("/proxy/api/fct", {
-                  method: "POST", cache: "no-store", headers: { "Content-Type": "text/xml; charset=utf-8" },
+                  method: "POST", cache: "no-store", headers: {...activeViewQueryHeaders,  "Content-Type": "text/xml; charset=utf-8" },
                   body: projectionXml, signal: renderSignal,
                 });
                 if (!response.ok) throw new Error(`Kanban facet projection HTTP ${response.status}`);
@@ -9917,6 +9999,64 @@ useEffect(() => {
   const discoveryItems = discoveryCurrent ? analyzeDiscoverySnapshot.context.items : undefined;
   const contextDiscoveryItems = contextDiscoveryCurrent ? analyzeContextDiscoverySnapshot.context.items : undefined;
   const analysisDefinitions = useMemo(() => [...BUILTIN_ANALYSES, ...mergeAnalysisDiscoveryItems(discoveryItems ?? [], contextDiscoveryItems ?? [])], [discoveryItems, contextDiscoveryItems]);
+  // Restored URLs select their destination immediately. XState keeps that
+  // destination's request actor WAITING until its independent prerequisites
+  // are met; unrelated personal seeding never blocks a public built-in Analysis.
+  const viewReadiness = restoredViewReadiness({
+    tab: workspaceTab, hydrated: urlStateInitialized && !urlRestoreError,
+    queryReady: canExecuteMaestroQuery, personalReady: personalStoreReady,
+    personalSessionPresent: accessSnapshot.value === "signedIn" && Boolean(accessSnapshot.context.sessionKey),
+    personalPolicyStage: accessSnapshot.context.policyStage,
+    selectedAnalysisUri,
+    analysisBuiltIn: !selectedAnalysisUri || BUILTIN_ANALYSES.some(item => item.uri === selectedAnalysisUri)
+      || selectedAnalysisUri === OVERVIEW_PERSPECTIVE_URI || selectedAnalysisUri === NODE_ANALYTICS_ANALYSIS_URI,
+    analysisEligible: analysisDefinitions.some(item => item.uri === selectedAnalysisUri),
+  });
+  // Exactly one decision for the ARRIVING URL, after authentication restoration
+  // has resolved. A missing login, failed/pending seeding, unavailable graph or
+  // ineligible Analysis goes to Browse immediately with a recoverable alert.
+  // Never revisit this decision on subsequent Connect, tab or query changes.
+  useLayoutEffect(() => {
+    if (arrivalViewCheckedRef.current || !urlStateInitialized || Boolean(urlRestoreError)) return;
+    // Never redirect a Browse URL or a tab explicitly selected after arrival.
+    if (arrivalRequestedTabRef.current === "browse" || workspaceTab !== arrivalRequestedTabRef.current) {
+      arrivalViewCheckedRef.current = true;
+      return;
+    }
+    const decision = decideRestoredViewEntry({
+      tab: workspaceTab,
+      authRestored: authRestoreComplete,
+      accessRestoring: accessSnapshot.value === "restoring",
+      personalSessionPresent: accessSnapshot.value === "signedIn" && Boolean(accessSnapshot.context.sessionKey),
+      personalReady: personalStoreReady,
+      personalPolicyStage: accessSnapshot.context.policyStage,
+      queryReady: canExecuteMaestroQuery,
+      cancelled: viewActorSnapshot.matches("cancelled") || operations.snapshot.query.globallyCancelled,
+      selectedAnalysisUri,
+      analysisBuiltIn: !selectedAnalysisUri || BUILTIN_ANALYSES.some(item => item.uri === selectedAnalysisUri)
+        || selectedAnalysisUri === OVERVIEW_PERSPECTIVE_URI || selectedAnalysisUri === NODE_ANALYTICS_ANALYSIS_URI,
+      analysisEligible: analysisDefinitions.some(item => item.uri === selectedAnalysisUri),
+    });
+    if (decision.status === "pending") return;
+    arrivalViewCheckedRef.current = true;
+    if (decision.status === "browse") {
+      const originalUrl = arrivedViewUrlRef.current ?? window.location.href;
+      // One authoritative XState NAVIGATE event. No implicit resume, retry,
+      // fabricated eligibility, or provider mounting while inactive.
+      queryViewController.select({ ...queryViewController.getSelection(), tab: "browse" });
+      setRestoredViewFallback({ reason: decision.reason, originalUrl });
+    }
+  }, [urlStateInitialized, urlRestoreError, authRestoreComplete, accessSnapshot.value,
+    accessSnapshot.context.sessionKey, accessSnapshot.context.policyStage, personalStoreReady,
+    canExecuteMaestroQuery, workspaceTab, selectedAnalysisUri, analysisDefinitions,
+    viewActorSnapshot.value, operations.snapshot.query.globallyCancelled, queryViewController]);
+  useLayoutEffect(() => {
+    queryViewController.setReady(viewReadiness.ready);
+  }, [queryViewController, viewReadiness.ready, viewSelection.tab, viewSelection.viewPanel,
+    viewSelection.viewProvider, viewSelection.selectedViewUri, viewSelection.selectedAnalysisUri,
+    viewSelection.histogram]);
+  const viewExecutionReady = viewActorSnapshot.matches("foreground") && viewReadiness.ready;
+
   const classPhase = discoveryCurrent ? String(analyzeDiscoverySnapshot.value) : "waiting";
   const contextPhase = contextDiscoveryCurrent ? String(analyzeContextDiscoverySnapshot.value) : queryContext.loading || !currentHistoryQueryId ? "waiting" : queryContext.phase === "timedOut" ? "timedOut" : queryContext.phase === "failed" || queryContext.phase === "blocked" ? "failed" : "ready";
   const analysisDiscoveryError = [discoveryCurrent ? analyzeDiscoverySnapshot.context.error : "", contextDiscoveryCurrent ? analyzeContextDiscoverySnapshot.context.error : "", queryContext.error, ...queryContext.providerErrors, queryContext.phase === "blocked" ? queryContext.report?.message ?? "Query context does not conform." : ""].filter(Boolean).join("\n");
@@ -9932,9 +10072,9 @@ useEffect(() => {
   // publication. Neither transient readiness changes nor other provider
   // discoveries invalidate a completed same-key projection.
   useEffect(() => {
-    if (workspaceTab !== "analyze") { analysisProjectionController.inactive(); return; }
+    if (workspaceTab !== "analyze" || !viewActorSnapshot.matches("foreground")) { analysisProjectionController.inactive(); return; }
     if (operations.snapshot.query.globallyCancelled) { analysisProjectionController.cancel(); return; }
-    if (!selectedAnalysisUri || selectedAnalysisUri === OVERVIEW_PERSPECTIVE_URI || selectedAnalysisUri === NODE_ANALYTICS_ANALYSIS_URI || !analysisDefinitions.some(definition=>definition.uri===selectedAnalysisUri)) {
+    if (!selectedAnalysisUri || selectedAnalysisUri === OVERVIEW_PERSPECTIVE_URI || selectedAnalysisUri === NODE_ANALYTICS_ANALYSIS_URI || selectedAnalysisUri === PREDICATE_CLUSTERS_ANALYSIS_URI || !analysisDefinitions.some(definition=>definition.uri===selectedAnalysisUri)) {
       // Preserve a complete page if the user simply switches presentations;
       // abort unfinished work that the active presentation does not consume.
       if (analysisProjectionController.getSnapshot().matches("loading")) analysisProjectionController.inactive();
@@ -9983,7 +10123,7 @@ useEffect(() => {
           ]));
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store", signal,
-            headers: {"Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("analyze-values", `AnalyzeListValues:${proxyDebugFingerprint(analysisRequestKey)}:${start / maxResourcesPerRequest + 1}`), ...componentRetryHeaders(analysisProjectionRetry)},
+            headers: {"Content-Type": "text/xml; charset=utf-8", "x-maestro-view-tab": "analyze", "x-maestro-view-ribbon": `${selectedAnalysisUri}${analyzeHistogram ? ":histogram" : ""}`, ...proxyDebugHeaders("analyze-values", `AnalyzeListValues:${proxyDebugFingerprint(analysisRequestKey)}:${start / maxResourcesPerRequest + 1}`), ...componentRetryHeaders(analysisProjectionRetry)},
             body: projectionQueryXml,
           });
           const xml = await response.text();
@@ -9998,7 +10138,7 @@ useEffect(() => {
       signal.throwIfAborted();
       return [{requestKey: analysisRequestKey, byUri}];
     });
-  }, [analysisProjectionController, workspaceTab, selectedAnalysisUri, analysisDefinitions, endpointReadyForQuery, projectionOperationKey, analysisRequestKey, analysisFacetKey, analysisResourceKey, queryXml, perspectivePageReady, operations.snapshot.query.globallyCancelled]);
+  }, [analysisProjectionController, workspaceTab, selectedAnalysisUri, analysisDefinitions, endpointReadyForQuery, projectionOperationKey, analysisRequestKey, analysisFacetKey, analysisResourceKey, queryXml, perspectivePageReady, operations.snapshot.query.globallyCancelled, viewActorSnapshot.value, viewActorSnapshot.context.owner.key]);
 
   useEffect(() => {
     if (workspaceTab !== "analyze") return;
@@ -10008,7 +10148,7 @@ useEffect(() => {
 
   useEffect(() => {
     if (workspaceTab !== "analyze") return;
-    if (selectedAnalysisUri === NODE_ANALYTICS_ANALYSIS_URI || selectedAnalysisUri === OVERVIEW_PERSPECTIVE_URI || analysisDefinitions.some(item => item.uri === selectedAnalysisUri && item.pageValidationShape) || selectedAnalysisUri === SANKEY_ANALYSIS_URI || selectedAnalysisUri === D3_SANKEY_ANALYSIS_URI || selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-activity" ||
+    if (selectedAnalysisUri === NODE_ANALYTICS_ANALYSIS_URI || selectedAnalysisUri === OVERVIEW_PERSPECTIVE_URI || selectedAnalysisUri === PREDICATE_CLUSTERS_ANALYSIS_URI || analysisDefinitions.some(item => item.uri === selectedAnalysisUri && item.pageValidationShape) || selectedAnalysisUri === SANKEY_ANALYSIS_URI || selectedAnalysisUri === D3_SANKEY_ANALYSIS_URI || selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-activity" ||
         selectedAnalysisUri === "gttp://ggg.maestro.ecosys/analyze/bookmark-tags") {
       setAnalysisTable(null);
       setAnalysisLoading(false);
@@ -10373,6 +10513,7 @@ useEffect(() => {
     handleFacetShiftClick,
     handleFetchProfile,
     handleRetryPersonalInitialization,
+    cancelPersonalInitialization: personalInitialization.cancel,
     handleLoginSubmit,
     handlePropertyCheckboxChange,
     configureSelectedProperties,
@@ -10734,6 +10875,9 @@ useEffect(() => {
     uriNode,
     urlStateInitialized,
     urlRestoreError,
+    viewExecutionReady,
+    restoredViewFallback,
+    dismissRestoredViewFallback,
     validateSelectedRecord,
     viewDiscoveryError,
     viewDiscoveryLoading,

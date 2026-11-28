@@ -4,6 +4,7 @@ import { executeProviderDerivedQuery, type ProviderQueryRequest } from "@/lib/ma
 import { transformWithMaestroSaxon } from "@/lib/maestro-browser-xslt";
 import { compileProviderXsltQuery } from "@/lib/provider-xslt-query";
 import { cachedFetchFct } from "@/lib/client-query-cache";
+import type { MaestroQueryScope } from "@/lib/app-lifecycle/query-view-ownership";
 import { fctProjectPage } from "@/lib/fct-client";
 import { mergeValuesQueryClone } from "@/canvas/utils/fct-response";
 import { publishXsltFacetDecorations, resetFacetDecorations, type DecorationFacet } from "@/lib/facet-decoration-contract";
@@ -51,7 +52,16 @@ export async function loadMaestroUiLibrary(name: "maplibre-gl") {
 }
 
 const mountedSignals = new Map<string, AbortSignal>();
-export function registerMaestroProviderMount(urn: string, signal: AbortSignal): void { mountedSignals.set(urn, signal); }
+const mountScopes = new WeakMap<AbortSignal, MaestroQueryScope>();
+export function registerMaestroProviderMount(urn: string, signal: AbortSignal, scope: MaestroQueryScope): void {
+  mountedSignals.set(urn, signal);
+  mountScopes.set(signal, scope);
+}
+function requireMountScope(signal?: AbortSignal): MaestroQueryScope {
+  const scope = signal && mountScopes.get(signal);
+  if (!scope || signal?.aborted) throw new DOMException("Inactive provider mount cannot execute queries", "AbortError");
+  return scope;
+}
 export function unregisterMaestroProviderMount(urn: string, signal: AbortSignal): void {
   if (mountedSignals.get(urn) === signal) mountedSignals.delete(urn);
 }
@@ -76,17 +86,19 @@ export function installMaestroProviderBridge(): MaestroProviderBrowserApi {
   if (!window.MaestroProvider) window.MaestroProvider = {
     getComponent: resolveMaestroComponent,
     getMountSignal: urn => mountedSignals.get(urn),
-    executeQuery: executeProviderDerivedQuery,
+    executeQuery: (query, signal) => executeProviderDerivedQuery(query, signal, requireMountScope(signal)),
     compileQuery: compileProviderXsltQuery,
     transformXml: (stylesheet, xml, signal) => transformWithMaestroSaxon(stylesheet, xml, { signal }),
-    projectPage: fctProjectPage,
+    projectPage: (xml, resources, columns, signal, bookmarked, fresh) =>
+      fctProjectPage(xml, resources, columns, signal, bookmarked, fresh, requireMountScope(signal)),
     projectValues: async (queryXml, resources, projections, signal) => {
+      const scope = requireMountScope(signal);
       const xml = mergeValuesQueryClone(queryXml,
         projections.map(({property,direction,hops}) => ({property, direction: direction === "reverse" ? "reverse" as const : "forward" as const, ...(hops?.length ? { hops } : {})})),
         resources.map(({type,value}) => ({type: type === "literal" ? "literal" as const : "uri" as const, value})));
       const response = await cachedFetchFct("/proxy/api/fct", {
         method: "POST", cache: "no-store", signal,
-        headers: { "Content-Type": "text/xml; charset=utf-8" },
+        headers: {"x-maestro-view-tab": scope.tab, "x-maestro-view-ribbon": scope.ribbon, "Content-Type": "text/xml; charset=utf-8" },
         body: xml,
       });
       const result = await response.text();

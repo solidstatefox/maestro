@@ -234,7 +234,7 @@ export function DistinctCount({
         const countXml = serializeFctQuery(countTree);
         const fctResponse = await maestroQueryFetch("/proxy/api/fct", {
           method: "POST", cache: "no-store", signal: controller.signal,
-          headers: { "Content-Type": "application/json", ...proxyDebugHeaders("distinct-count-fct", `DistinctCount:${kind}:${propertyUri ?? ""}:${uri}`) },
+          headers: {"x-maestro-view-tab": "browse",  "Content-Type": "application/json", ...proxyDebugHeaders("distinct-count-fct", `DistinctCount:${kind}:${propertyUri ?? ""}:${uri}`) },
           body: JSON.stringify({ queryXml: countXml, countOnly: true }),
         });
         const fctData = await readFctResponse(fctResponse);
@@ -495,7 +495,7 @@ export function PersonalWidgetQueryListener({
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...attribution,
+          headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8", ...attribution,
             "X-Maestro-Clock-Component": `component:personal:${identity}`, ...componentRetryHeaders(retryRevision) },
           body: widgetQueryXml,
           signal: controller.signal,
@@ -658,7 +658,7 @@ export function PersonalRoleWidget({
         const response = await cachedFetchFct("/proxy/api/fct", {
           method: "POST",
           cache: "no-store",
-          headers: { "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("personal-role-widget-values", `PersonalRoleWidget:${uri}`),
+          headers: {"x-maestro-view-tab": "browse",  "Content-Type": "text/xml; charset=utf-8", ...proxyDebugHeaders("personal-role-widget-values", `PersonalRoleWidget:${uri}`),
             "X-Maestro-Clock-Component": `component:personal-role:${uri}`, ...componentRetryHeaders(retryRevision) },
           body: widgetQueryXml,
           signal: controller.signal,

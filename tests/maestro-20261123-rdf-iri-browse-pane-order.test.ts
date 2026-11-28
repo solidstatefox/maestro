@@ -29,7 +29,7 @@ test("all possible pane moves are unique permutations with the target index occu
     assert.ok(isBrowsePaneOrder(next));
     assert.deepEqual(next.filter(p => p !== pane), order.filter(p => p !== pane));
     assert.deepEqual(readBrowsePaneOrder(JSON.stringify(next)), next);
-    assert.deepEqual(activeBrowsePaneOrder(next, false), ["filters", "results"]);
+    assert.deepEqual(activeBrowsePaneOrder(next, false), next[0] === "filters" ? ["filters", "results"] : ["results", "filters"]);
     assert.equal(activeBrowsePaneOrder(next, true), next);
   }
   assert.deepEqual(moveBrowsePane(DEFAULT_BROWSE_PANE_ORDER, "filters", 2), ["results", "record", "filters"]);

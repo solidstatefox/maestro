@@ -72,7 +72,7 @@ export function BookmarkCharts({ queryXml, providerUri, stylesheet, onBrowse }: 
           }, { limit:size, offset });
           const response = await cachedFetchFct("/proxy/api/fct", {
             method:"POST", cache:"no-store", signal:controller.signal,
-            headers:{"Content-Type":"text/xml; charset=utf-8"}, body:serializeFctQuery(query),
+            headers:{"Content-Type":"text/xml; charset=utf-8", "x-maestro-view-tab":"analyze", "x-maestro-view-ribbon":providerUri}, body:serializeFctQuery(query),
           });
           const raw = await response.text();
           if (!response.ok) throw new Error(`Bookmark transported facet HTTP ${response.status}: ${raw.slice(0,250)}`);
@@ -120,7 +120,7 @@ export function BookmarkCharts({ queryXml, providerUri, stylesheet, onBrowse }: 
           view.setAttribute("limit", String(pageLimit));
           const response = await cachedFetchFct("/proxy/api/fct", {
             method: "POST", cache: "no-store", signal: controller.signal,
-            headers: { "Content-Type": "text/xml; charset=utf-8" },
+            headers: { "Content-Type": "text/xml; charset=utf-8", "x-maestro-view-tab": "analyze", "x-maestro-view-ribbon":providerUri },
             body: new XMLSerializer().serializeToString(root),
           });
           const xml = await response.text();

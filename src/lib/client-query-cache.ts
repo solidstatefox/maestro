@@ -1,5 +1,6 @@
 import { observeProxyFetch, stopProxyQueryGeneration, resumeProxyQueryGeneration } from "@/lib/proxy-transport-observation";
 import { requireSparqlAttribution } from "@/lib/sparql-request-attribution";
+import { maestroOffstageError, type MaestroQueryScope, type MaestroQueryViewCoordinator } from "@/lib/app-lifecycle/query-view-ownership";
 import { maestroLanguageHeader } from "./maestro-language";
 import { readMaestroConcurrency } from "./maestro-concurrency";
 import { maestroQueryClockScope } from "./maestro-query-execution-clock";
@@ -235,8 +236,40 @@ export async function clearClientQueryCache(): Promise<void> {
 /** In-flight Maestro query operations, shared by query listeners and the Refresh/Abort control. */
 const pendingQueryControllers = new Set<AbortController>();
 export type PendingMaestroQuery = { id: number; label: string; state: "preparing" | "queued" | "active";
-  queueIndex: number; serverQueueIndex?: number; queueServer?: string; serverQueueLane?: "light" | "heavy"; serverQueueLaneIndex?: number; serverQueueLaneNumber?: number; serverQueueLanePosition?: number; proxyDispatchConfirmed?: boolean };
+  queueIndex: number; workspaceId: string; viewOwnerKey: string; serverQueueIndex?: number; queueServer?: string; serverQueueLane?: "light" | "heavy"; serverQueueLaneIndex?: number; serverQueueLaneNumber?: number; serverQueueLanePosition?: number; proxyDispatchConfirmed?: boolean };
 const pendingQueryDetails = new Map<AbortController, PendingMaestroQuery>();
+/** The scheduler is shared, but authority belongs to one XState supervisor
+ * per mounted workspace. A query MUST name its view and ribbon explicitly.
+ * Debug labels are diagnostics only: they confer no ability to execute. */
+const queryWorkspaces = new Map<string, MaestroQueryViewCoordinator>();
+export function registerMaestroQueryWorkspace(workspaceId: string, controller: MaestroQueryViewCoordinator): () => void {
+  if (!workspaceId || queryWorkspaces.has(workspaceId)) throw new Error("Duplicate or missing Maestro query workspace");
+  queryWorkspaces.set(workspaceId, controller);
+  const unsubscribe = controller.subscribe(() => notifyPendingQueries());
+  notifyPendingQueries();
+  return () => {
+    unsubscribe();
+    if (queryWorkspaces.get(workspaceId) === controller) queryWorkspaces.delete(workspaceId);
+    notifyPendingQueries();
+  };
+}
+function queryWorkspace(headers?: HeadersInit): { workspaceId: string; controller: MaestroQueryViewCoordinator } | null {
+  const id = new Headers(headers).get("x-maestro-workspace-id") ?? "";
+  if (id) { const controller = queryWorkspaces.get(id); return controller ? { workspaceId: id, controller } : null; }
+  // A single rendered Maestro workspace is the ordinary SPA case. If several
+  // workspaces coexist, callers MUST supply their explicit workspace ID.
+  if (queryWorkspaces.size !== 1) return null;
+  const [workspaceId, controller] = queryWorkspaces.entries().next().value!;
+  return { workspaceId, controller };
+}
+function declaredViewScope(headers?: HeadersInit): MaestroQueryScope | null {
+  const values = new Headers(headers);
+  const tab = values.get("x-maestro-view-tab");
+  const ribbon = values.get("x-maestro-view-ribbon");
+  if (tab === "browse" && (ribbon === null || ribbon === "browse")) return { tab, ribbon: "browse" };
+  if ((tab === "view" || tab === "analyze") && ribbon) return { tab, ribbon };
+  return null;
+}
 // Link the public request signal to its tracked controller so dispatch status
 // reflects the existing browser scheduler without creating a second queue.
 const pendingQueryOwnerBySignal = new WeakMap<AbortSignal, AbortController>();
@@ -247,7 +280,7 @@ const pendingQueryDetailListeners = new Set<(queries: PendingMaestroQuery[]) => 
 let lastPendingDetails: PendingMaestroQuery[] = [];
 function pendingDetailsEqual(a: readonly PendingMaestroQuery[], b: readonly PendingMaestroQuery[]): boolean {
   return a.length === b.length && a.every((item, index) =>
-    item.id === b[index].id && item.label === b[index].label && item.state === b[index].state && item.queueIndex === b[index].queueIndex && item.serverQueueIndex === b[index].serverQueueIndex && item.queueServer === b[index].queueServer &&
+    item.id === b[index].id && item.label === b[index].label && item.workspaceId === b[index].workspaceId && item.viewOwnerKey === b[index].viewOwnerKey && item.state === b[index].state && item.queueIndex === b[index].queueIndex && item.serverQueueIndex === b[index].serverQueueIndex && item.queueServer === b[index].queueServer &&
     item.serverQueueLane === b[index].serverQueueLane && item.serverQueueLaneIndex === b[index].serverQueueLaneIndex &&
     item.serverQueueLaneNumber === b[index].serverQueueLaneNumber && item.serverQueueLanePosition === b[index].serverQueueLanePosition &&
     item.proxyDispatchConfirmed === b[index].proxyDispatchConfirmed);
@@ -255,7 +288,10 @@ function pendingDetailsEqual(a: readonly PendingMaestroQuery[], b: readonly Pend
 /** Render the authoritative scheduler's waiting order, not registration order.
  * Active/pre-dispatch entries have no queue position and follow the queued rows. */
 function orderedPendingQueryDetails(): PendingMaestroQuery[] {
-  return [...pendingQueryDetails.values()].sort((a, b) => {
+  return [...pendingQueryDetails.values()].filter(query => {
+    const workspace = queryWorkspaces.get(query.workspaceId);
+    return workspace && query.viewOwnerKey === workspace.getActive().key && !workspace.getSnapshot().context.cancelled;
+  }).sort((a, b) => {
     // Sort by *reported* stage then its own reported index; do not turn this
     // presentation order into a fictitious combined queue position.
     const stage = (item: PendingMaestroQuery) => item.serverQueueIndex && item.serverQueueIndex > 0 ? 0
@@ -300,7 +336,7 @@ let queryPipelineStopped = false;
 const pendingQueryListeners = new Set<(count: number) => void>();
 let lastPendingQueryCount = 0;
 function notifyPendingQueries() {
-  const count = pendingQueryControllers.size;
+  const count = orderedPendingQueryDetails().length;
   if (count !== lastPendingQueryCount) {
     lastPendingQueryCount = count;
     for (const listener of pendingQueryListeners) listener(count);
@@ -309,7 +345,7 @@ function notifyPendingQueries() {
 }
 export function subscribePendingMaestroQueries(listener: (count: number) => void): () => void {
   pendingQueryListeners.add(listener);
-  listener(pendingQueryControllers.size);
+  listener(orderedPendingQueryDetails().length);
   return () => { pendingQueryListeners.delete(listener); };
 }
 export function abortPendingMaestroQueries(): void {
@@ -335,34 +371,47 @@ export function abortPendingMaestroQueries(): void {
 /** Cancel without altering loaded results; do not allow delayed effect timers to restart queries. */
 export function stopPendingMaestroQueries(): void {
   queryPipelineStopped = true;
+  for (const workspace of queryWorkspaces.values()) workspace.cancel();
   stopProxyQueryGeneration();
   abortPendingMaestroQueries();
 }
 /** Called at the beginning of a genuinely new query pipeline. */
 export function resumePendingMaestroQueries(): void {
   queryPipelineStopped = false;
+  for (const workspace of queryWorkspaces.values()) workspace.resume();
   resumeProxyQueryGeneration();
 }
+/** A caller proposes work; only the foreground XState child can invoke it.
+ * Pending registration, scheduler admission and network fetch occur INSIDE
+ * that child. Exiting the view stops the child and its AbortSignals. */
 async function trackMaestroQuery<T>(signal: AbortSignal | null | undefined,
-  operation: (signal: AbortSignal) => Promise<T>, label = "Query"): Promise<T> {
-  if (queryPipelineStopped) throw new DOMException("Query execution stopped", "AbortError");
-  const controller = new AbortController();
-  const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-  pendingQueryControllers.add(controller);
-  pendingQueryOwnerBySignal.set(combinedSignal, controller);
-  pendingQueryDetails.set(controller, { id: ++nextPendingQueryId, label, state: "preparing", queueIndex: 0 });
-  notifyPendingQueries();
-  try {
-    const result = await operation(combinedSignal);
-    if (combinedSignal.aborted) throw new DOMException("Maestro query aborted", "AbortError");
-    return result;
-  } finally {
-    pendingQueryOwnerBySignal.delete(combinedSignal);
-    pendingQueryControllers.delete(controller);
-    pendingQueryDetails.delete(controller);
-    refreshPendingQueueIndexes();
+  operation: (signal: AbortSignal) => Promise<T>, label = "Query", headers?: HeadersInit): Promise<T> {
+  if (queryPipelineStopped) throw maestroOffstageError();
+  const workspace = queryWorkspace(headers);
+  const scope = declaredViewScope(headers);
+  if (!workspace || !scope) throw new DOMException("Query has no explicit active XState workspace/view authority", "AbortError");
+  return workspace.controller.execute(scope, async actorSignal => {
+    if (queryPipelineStopped) throw maestroOffstageError();
+    const controller = new AbortController();
+    const combinedSignal = AbortSignal.any([actorSignal, controller.signal]);
+    const active = workspace.controller.getActive();
+    pendingQueryControllers.add(controller);
+    pendingQueryOwnerBySignal.set(combinedSignal, controller);
+    pendingQueryDetails.set(controller, { id: ++nextPendingQueryId, label, workspaceId: workspace.workspaceId,
+      viewOwnerKey: active.key, state: "preparing", queueIndex: 0 });
     notifyPendingQueries();
-  }
+    try {
+      const result = await operation(combinedSignal);
+      combinedSignal.throwIfAborted();
+      return result;
+    } finally {
+      pendingQueryOwnerBySignal.delete(combinedSignal);
+      pendingQueryControllers.delete(controller);
+      pendingQueryDetails.delete(controller);
+      refreshPendingQueueIndexes();
+      notifyPendingQueries();
+    }
+  }, signal);
 }
 
 /**
@@ -725,7 +774,7 @@ async function cachedFetchFctImpl(input: RequestInfo | URL, init?: RequestInit):
 /** Track query requests so a live FCT change or user Abort cancels outstanding work. */
 export function maestroQueryFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   requireSparqlAttribution(input, init);
-  return trackMaestroQuery(init?.signal, (signal) => maestroQueryFetchImpl(input, { ...init, signal }), labelMaestroRequest(input, init));
+  return trackMaestroQuery(init?.signal, (signal) => maestroQueryFetchImpl(input, { ...init, signal }), labelMaestroRequest(input, init), init?.headers);
 }
 export function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   requireSparqlAttribution(input, init);
@@ -741,5 +790,5 @@ export function cachedFetchFct(input: RequestInfo | URL, init?: RequestInit): Pr
       body.includes('"selectEndpointId"') || body.includes('"selectEndpointUrl"') || body.includes('"health"')) {
     return cachedFetchFctImpl(input, init);
   }
-  return trackMaestroQuery(init?.signal, (signal) => cachedFetchFctImpl(input, { ...init, signal }), labelMaestroRequest(input, init));
+  return trackMaestroQuery(init?.signal, (signal) => cachedFetchFctImpl(input, { ...init, signal }), labelMaestroRequest(input, init), init?.headers);
 }

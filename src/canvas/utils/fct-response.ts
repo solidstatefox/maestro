@@ -270,7 +270,7 @@ const dbActivity = getText("db-activity");
     // replace the title of the actual c1 value in a property-focused list.
     const isDisplayLabel = (column: FctResponseColumn) =>
       !isCountColumn(column) && column.termType === "literal" &&
-      !/^(sampleSubject|recordAncestor\d*|bestRank|score)$/i.test(column.attributes?.var ?? "");
+      !/^(sampleSubject|recordAncestor\d*|bestRank|score|rank|cluster|sampleLabel)$/i.test(column.attributes?.var ?? "");
     const labelColumn = isText ? undefined : (
       columns.slice(1).find((column) => column.attributes?.var === "c2" && isDisplayLabel(column))
       ?? columns.slice(1).find(isDisplayLabel)

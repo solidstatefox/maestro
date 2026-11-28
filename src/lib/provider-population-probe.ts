@@ -31,7 +31,7 @@ export async function probeProviderPopulation(
     if (!isBoundedReadOnlySparql(sparql, 100000)) return false;
     const response = await maestroQueryFetch("/proxy/api/sparql", {
       method: "POST", cache: "no-store", signal,
-      headers: { "Content-Type": "application/json", ...proxyDebugHeaders("view-discover", `PerspectiveEligibility:${providerUri}`),
+      headers: {"x-maestro-view-tab": "view", "x-maestro-view-ribbon": `perspectives:${providerUri}`,  "Content-Type": "application/json", ...proxyDebugHeaders("view-discover", `PerspectiveEligibility:${providerUri}`),
         "X-Maestro-Query-Timeout-Ms": String(Math.min(5000, Math.max(1000, compiled.timeoutMs || 5000))) },
       body: JSON.stringify({ addr, resultsQuery: { sparql } }),
     });

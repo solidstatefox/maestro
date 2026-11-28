@@ -184,66 +184,65 @@ export function managedSeedDeletes(plan:SeedPlan,graph:string):string[] {
   }
   return updates;
 }
-const seedInFlight=new Map<string,Promise<SeedResult>>();
+/** Initialization is already serialized by withSessionInitializationLock.
+ * Never reuse another attempt's Promise: its AbortSignal belongs to a
+ * different login/restore generation and may already be cancelled. */
 export async function seedPersonalGraphs(signal?:AbortSignal,prepared?:SeedPlan,initialRows?:PersonalRows):Promise<SeedResult> {
-  const ctx=await personalContext(),key=ctx.addr+"|"+ctx.session.username;
-  const pending=seedInFlight.get(key);if(pending)return pending;
-  const task=(async()=>{
-    const plan=prepared??await preparePersonalSeed(ctx.session.graphPrefix,signal);
-    if(plan.base!==ctx.base)throw new Error("Seed plan belongs to another personal graph.");
-    const graphs=[...plan.desired.keys()];
-    const rows=initialRows??await selectPersonal(plan.query,ctx,signal,seedSource);
-    const existing=parseSeedDigests(rows,graphs);
-    const changed=new Set(graphs.filter(graph=>existing.get(graph)!==plan.desired.get(graph)));
-    const operations=[...changed].map(graph=>({graph,deletes:managedSeedDeletes(plan,graph),inserts:plan.documents.filter(doc=>doc.graph===graph&&doc.triples.length).map(doc=>buildInsertData(graph,doc.triples,ctx.base))}));
-    // Validate provider declarations and literal template content from the actual
-    // graph, not merely the marker written by this client. No downloads of
-    // unrelated personal resources, and no count-only acceptance of XSLT.
-    const verifyProviderDefinitions=async(graph:string)=>{
-      if(graph!==resolveGraph(GRAPH.SHACL_POLICIES,plan.base))return;
-      const predicates=new Set([`${MUI_NS}accepts`,`${MUI_NS}widget`,`${MUI_NS}endpointDiscoveryQuery`,`${MUI_NS}templateContent`,RDF_TYPE.replace(/type$/,"value"),"http://www.w3.org/ns/shacl#class","http://www.w3.org/ns/shacl#targetClass"]);
-      const slots=new Map<string,{s:string;p:string;values:Set<string>}>();
-      const rdfValue=RDF_TYPE.replace(/type$/,"value"), templateContent=`${MUI_NS}templateContent`;
-      const key=(s:string,p:string)=>JSON.stringify([s,p]);
-      const slot=(s:string,p:string)=>{const k=key(s,p);let result=slots.get(k);if(!result){result={s,p,values:new Set()};slots.set(k,result);}return result;};
-      for(const doc of plan.documents.filter(doc=>doc.graph===graph))for(const t of doc.triples){
-        if(t.subject.termType!=="NamedNode"||!predicates.has(t.predicate.value)||t.object.termType==="BlankNode")continue;
-        const s=resolvedValue(t.subject.value,graph,plan.base),p=t.predicate.value;
-        if((p===rdfValue||p===templateContent)&&t.object.termType==="Literal"&&/xsl:(stylesheet|transform)/.test(t.object.value)){slot(s,rdfValue);slot(s,templateContent);}
-        slot(s,p).values.add(resolvedValue(t.object.value,graph,plan.base));
-      }
-      // Skip slots containing blank nodes: their graph-local identifiers are
-      // not portable. Their original RDF structures are inserted as a unit.
-      for(const doc of plan.documents.filter(doc=>doc.graph===graph))for(const t of doc.triples)
-        if(t.subject.termType==="NamedNode"&&t.object.termType==="BlankNode")slots.delete(key(resolvedValue(t.subject.value,graph,plan.base),t.predicate.value));
-      const items=[...slots.values()];
-      for(let i=0;i<items.length;i+=30){
-        const batch=items.slice(i,i+30);
-        const rows=await selectPersonal(`SELECT ?s ?p ?o WHERE { VALUES (?s ?p) { ${batch.map(t=>`(${iri(t.s)} ${iri(t.p)})`).join(" ")} } GRAPH ${iri(graph)} { ?s ?p ?o } }`,ctx,signal,"GraphSeed:VerifyDefinitions");
-        const actual=new Map<string,Set<string>>();
-        for(const row of rows){const k=key(row.s?.value??"",row.p?.value??"");const values=actual.get(k)??new Set<string>();if(typeof row.o?.value!=="string")throw new Error("Invalid seeded definition response.");values.add(row.o.value);actual.set(k,values);}
-        for(const t of batch){const values=actual.get(key(t.s,t.p))??new Set<string>();if(values.size!==t.values.size||[...t.values].some(value=>!values.has(value)))throw new Error(`Seeded provider definition verification failed: ${t.s} ${t.p}`);}
-      }
-    };
-    const write=(update:string)=>updatePersonal(update,signal,undefined,"GraphSeed:Synchronize",ctx.session);
-    for(const {graph,deletes,inserts} of operations){
-      signal?.throwIfAborted();
-      // Remove the old completion marker first. Failed partial writes cannot
-      // be mistaken for a completed import on the next initialization.
-      await write(`DELETE WHERE { GRAPH ${iri(graph)} { ${iri(graph)} ${iri(seedPredicate)} ?digest } }`);
-      for(const update of deletes)await write(update);
-      for(const update of inserts)await write(update);
-      await verifyProviderDefinitions(graph);
-      await write(`INSERT DATA { GRAPH ${iri(graph)} { ${iri(graph)} ${iri(seedPredicate)} "${plan.desired.get(graph)}" . } }`);
+  signal?.throwIfAborted();
+  const ctx=await personalContext();
+  signal?.throwIfAborted();
+  const plan=prepared??await preparePersonalSeed(ctx.session.graphPrefix,signal);
+  if(plan.base!==ctx.base)throw new Error("Seed plan belongs to another personal graph.");
+  const graphs=[...plan.desired.keys()];
+  const rows=initialRows??await selectPersonal(plan.query,ctx,signal,seedSource);
+  const existing=parseSeedDigests(rows,graphs);
+  const changed=new Set(graphs.filter(graph=>existing.get(graph)!==plan.desired.get(graph)));
+  const operations=[...changed].map(graph=>({graph,deletes:managedSeedDeletes(plan,graph),inserts:plan.documents.filter(doc=>doc.graph===graph&&doc.triples.length).map(doc=>buildInsertData(graph,doc.triples,ctx.base))}));
+  // Validate provider declarations and literal template content from the actual
+  // graph, not merely the marker written by this client. No downloads of
+  // unrelated personal resources, and no count-only acceptance of XSLT.
+  const verifyProviderDefinitions=async(graph:string)=>{
+    if(graph!==resolveGraph(GRAPH.SHACL_POLICIES,plan.base))return;
+    const predicates=new Set([`${MUI_NS}accepts`,`${MUI_NS}widget`,`${MUI_NS}endpointDiscoveryQuery`,`${MUI_NS}templateContent`,RDF_TYPE.replace(/type$/,"value"),"http://www.w3.org/ns/shacl#class","http://www.w3.org/ns/shacl#targetClass"]);
+    const slots=new Map<string,{s:string;p:string;values:Set<string>}>();
+    const rdfValue=RDF_TYPE.replace(/type$/,"value"), templateContent=`${MUI_NS}templateContent`;
+    const key=(s:string,p:string)=>JSON.stringify([s,p]);
+    const slot=(s:string,p:string)=>{const k=key(s,p);let result=slots.get(k);if(!result){result={s,p,values:new Set()};slots.set(k,result);}return result;};
+    for(const doc of plan.documents.filter(doc=>doc.graph===graph))for(const t of doc.triples){
+      if(t.subject.termType!=="NamedNode"||!predicates.has(t.predicate.value)||t.object.termType==="BlankNode")continue;
+      const s=resolvedValue(t.subject.value,graph,plan.base),p=t.predicate.value;
+      if((p===rdfValue||p===templateContent)&&t.object.termType==="Literal"&&/xsl:(stylesheet|transform)/.test(t.object.value)){slot(s,rdfValue);slot(s,templateContent);}
+      slot(s,p).values.add(resolvedValue(t.object.value,graph,plan.base));
     }
-    if(changed.size){
-      const verified=parseSeedDigests(await selectPersonal(plan.query,ctx,signal,"GraphSeed:VerifyDigests"),graphs);
-      if(graphs.some(graph=>verified.get(graph)!==plan.desired.get(graph)))throw new Error("Graph seed digest verification failed.");
-      invalidateClientStatusMachines();
+    // Skip slots containing blank nodes: their graph-local identifiers are
+    // not portable. Their original RDF structures are inserted as a unit.
+    for(const doc of plan.documents.filter(doc=>doc.graph===graph))for(const t of doc.triples)
+      if(t.subject.termType==="NamedNode"&&t.object.termType==="BlankNode")slots.delete(key(resolvedValue(t.subject.value,graph,plan.base),t.predicate.value));
+    const items=[...slots.values()];
+    for(let i=0;i<items.length;i+=30){
+      const batch=items.slice(i,i+30);
+      const rows=await selectPersonal(`SELECT ?s ?p ?o WHERE { VALUES (?s ?p) { ${batch.map(t=>`(${iri(t.s)} ${iri(t.p)})`).join(" ")} } GRAPH ${iri(graph)} { ?s ?p ?o } }`,ctx,signal,"GraphSeed:VerifyDefinitions");
+      const actual=new Map<string,Set<string>>();
+      for(const row of rows){const k=key(row.s?.value??"",row.p?.value??"");const values=actual.get(k)??new Set<string>();if(typeof row.o?.value!=="string")throw new Error("Invalid seeded definition response.");values.add(row.o.value);actual.set(k,values);}
+      for(const t of batch){const values=actual.get(key(t.s,t.p))??new Set<string>();if(values.size!==t.values.size||[...t.values].some(value=>!values.has(value)))throw new Error(`Seeded provider definition verification failed: ${t.s} ${t.p}`);}
     }
+  };
+  const write=(update:string)=>updatePersonal(update,signal,undefined,"GraphSeed:Synchronize",ctx.session);
+  for(const {graph,deletes,inserts} of operations){
     signal?.throwIfAborted();
-    return {revision:plan.revision,changedGraphs:[...changed]};
-  })();
-  seedInFlight.set(key,task);
-  try{return await task;}finally{if(seedInFlight.get(key)===task)seedInFlight.delete(key);}
+    // Remove the old completion marker first. Failed partial writes cannot
+    // be mistaken for a completed import on the next initialization.
+    await write(`DELETE WHERE { GRAPH ${iri(graph)} { ${iri(graph)} ${iri(seedPredicate)} ?digest } }`);
+    for(const update of deletes)await write(update);
+    for(const update of inserts)await write(update);
+    await verifyProviderDefinitions(graph);
+    await write(`INSERT DATA { GRAPH ${iri(graph)} { ${iri(graph)} ${iri(seedPredicate)} "${plan.desired.get(graph)}" . } }`);
+  }
+  if(changed.size){
+    const verified=parseSeedDigests(await selectPersonal(plan.query,ctx,signal,"GraphSeed:VerifyDigests"),graphs);
+    if(graphs.some(graph=>verified.get(graph)!==plan.desired.get(graph)))throw new Error("Graph seed digest verification failed.");
+    invalidateClientStatusMachines();
+  }
+  signal?.throwIfAborted();
+  return {revision:plan.revision,changedGraphs:[...changed]};
 }

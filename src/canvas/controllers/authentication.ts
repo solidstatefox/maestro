@@ -2,7 +2,9 @@
 import { useEffect, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { restoreDigestSession, disconnectDigestSession, ensureDigestSession, subscribeDigestSessionChanges, requestDigestPersistence, withSessionInitializationLock, readSessionHydration, commitSessionSnapshot, restoredDigestSession } from "@/lib/client-digest-session";
-import { beginPersonalInitialization, cancelPersonalInitialization, isCurrentPersonalInitialization } from "@/lib/personal-initialization";
+import { type PersonalInitialization, type PersonalInitializationController } from "@/lib/app-lifecycle/personal-initialization-machine";
+import { invalidateClientStatusMachines, loadClientStatusMachines } from "@/lib/status-machine-client";
+import { machineForTarget } from "@/lib/status-machine-runtime";
 import { refreshAuthBootstrap, hydrateAuthBootstrap } from "@/lib/client-auth-bootstrap";
 import { loadMaestroKinds, resetMaestroKinds, restoreSessionKinds, currentSessionKinds } from "@/lib/client-kinds";
 import { listPersonalGraphServers, asEndpointOption, PERSONAL_SERVERS_CHANGED } from "@/lib/client-personal-graph-servers";
@@ -85,7 +87,7 @@ export function useAuthenticationState() {
 
 type AuthenticationActionDependencies = AuthenticationLifecycleDependencies & Pick<ReturnType<typeof useAuthenticationState>,
   "loginTab" | "loginGraphStore" | "loginGraphPrefix" | "loginUsername" | "loginPassword" | "setLoginTesting"
-> & {onConnectHttpStatus:(status:number)=>void;onConnectChallengeSent:()=>void};
+> & {onConnectHttpStatus:(status:number)=>void;onConnectChallengeSent:()=>void;personalInitialization:PersonalInitializationController};
 export function createAuthenticationActions(deps: AuthenticationActionDependencies) {
   return {
     handleFetchProfile: async (): Promise<void> => {},
@@ -93,40 +95,47 @@ export function createAuthenticationActions(deps: AuthenticationActionDependenci
     handleLoginSubmit: async (event: FormEvent<HTMLFormElement>): Promise<void> => {
       event.preventDefault();
       requestDigestPersistence();
-      const attempt=beginPersonalInitialization();
       deps.setLoginTesting(true);
       deps.setLoginError("");
-      try {
-        if(deps.loginTab!=="sparql-auth")throw new Error("Only SPARQL Digest is supported.");
-        const restored=await withSessionInitializationLock(attempt.signal,async()=>{
-        const plan=await preparePersonalSeed(deps.loginGraphPrefix.trim(),attempt.signal);
-        const bindings=await ensureDigestSession({username:deps.loginUsername,graphStore:deps.loginGraphStore,
-          graphPrefix:deps.loginGraphPrefix,password:deps.loginPassword},attempt.signal,status=>{
-          if(isCurrentPersonalInitialization(attempt))deps.onConnectHttpStatus(status);
-        },plan.query,()=>{
-          if(isCurrentPersonalInitialization(attempt))deps.onConnectChallengeSent();
-        });
-        if(!isCurrentPersonalInitialization(attempt))return false;
-        deps.setLoginPassword("");
-        return initializeUserSession(deps,attempt,bindings ? plan : undefined,bindings);
-        });
-        if(!isCurrentPersonalInitialization(attempt))return;
-        if(!restored && !restoredDigestSession())throw new Error("The saved personal user session could not be restored.");
-        deps.setLoginDialogOpen(false);
-      }catch(error){
-        if(isCurrentPersonalInitialization(attempt)){
-          deps.setAuthRestoreComplete(true);
-          const message=await loginConnectionMessage(error,attempt.signal);
-          if(isCurrentPersonalInitialization(attempt))deps.setLoginError(message);
-        }
-      }finally{if(isCurrentPersonalInitialization(attempt))deps.setLoginTesting(false);}
+      await deps.personalInitialization.run(`connect|${deps.loginGraphStore}|${deps.loginGraphPrefix}|${deps.loginUsername}`, async attempt => {
+        try {
+          if(deps.loginTab!=="sparql-auth")throw new Error("Only SPARQL Digest is supported.");
+          const restored=await withSessionInitializationLock(attempt.signal,async()=>{
+            const plan=await preparePersonalSeed(deps.loginGraphPrefix.trim(),attempt.signal);
+            const bindings=await ensureDigestSession({username:deps.loginUsername,graphStore:deps.loginGraphStore,
+              graphPrefix:deps.loginGraphPrefix,password:deps.loginPassword},attempt.signal,status=>{
+                if(!attempt.signal.aborted)deps.onConnectHttpStatus(status);
+              },plan.query,()=>{
+                if(!attempt.signal.aborted)deps.onConnectChallengeSent();
+              });
+            if(attempt.signal.aborted)return false;
+            deps.setLoginPassword("");
+            return initializeUserSession(deps,attempt,bindings ? plan : undefined,bindings);
+          });
+          if(attempt.signal.aborted)return false;
+          if(!restored && !restoredDigestSession())throw new Error("The saved personal user session could not be restored.");
+          if(restored)deps.setLoginDialogOpen(false);
+          return restored;
+        }catch(error){
+          if(!attempt.signal.aborted){
+            deps.setAuthRestoreComplete(true);
+            const message=await loginConnectionMessage(error,attempt.signal);
+            if(!attempt.signal.aborted)deps.setLoginError(message);
+          }
+          return false;
+        }finally{if(!attempt.signal.aborted)deps.setLoginTesting(false);}
+      });
     },
     handleRetryPersonalInitialization: async (): Promise<void> => {
-      const attempt=beginPersonalInitialization();
-      disconnectDigestSession();resetMaestroKinds();
-      deps.setPersonalPoliciesReady(false);deps.setPersonalPoliciesSeedError("");
-      deps.setAuthSession(null);deps.setManagedEndpoints([]);
-      await restoreUserSession(deps,attempt);
+      // A retry never disconnects the healthy Digest carrier, invalidates
+      // nonce state, or clears the authoritative authenticated session.
+      const session=restoredDigestSession();
+      const key=session ? `${session.graphStore}|${session.graphPrefix}|${session.username??""}` : "restore";
+      await deps.personalInitialization.run(`retry|${key}`,async attempt=>{
+        deps.setPersonalPoliciesReady(false);
+        deps.setPersonalPoliciesSeedError("");
+        return restoreUserSession(deps,attempt);
+      });
     },
   };
 }
@@ -140,15 +149,15 @@ type AuthenticationLifecycleDependencies = Pick<ReturnType<typeof useAuthenticat
 
 const verifiedSeedRevisions=new WeakMap<PersonalAuthSession,string>();
 /** One restoration path for URL load and Connect. Existing XState observes the session. */
-export async function restoreUserSession(deps:AuthenticationLifecycleDependencies,attempt:ReturnType<typeof beginPersonalInitialization>):Promise<boolean> {
+export async function restoreUserSession(deps:AuthenticationLifecycleDependencies,attempt:PersonalInitialization):Promise<boolean> {
   try{return await withSessionInitializationLock(attempt.signal,()=>initializeUserSession(deps,attempt));}catch(error){
-    if(isCurrentPersonalInitialization(attempt)){deps.setAuthRestoreComplete(true);deps.setPersonalPoliciesSeedError(error instanceof Error?error.message:"Personal store initialization failed.");}
-    return false;
+    if(!attempt.signal.aborted){deps.setAuthRestoreComplete(true);deps.setPersonalPoliciesSeedError(error instanceof Error?error.message:"Personal store initialization failed.");}
+    throw error;
   }
 }
-async function initializeUserSession(deps:AuthenticationLifecycleDependencies,attempt:ReturnType<typeof beginPersonalInitialization>,plan?:SeedPlan,bindings?:PersonalRows):Promise<boolean> {
+async function initializeUserSession(deps:AuthenticationLifecycleDependencies,attempt:PersonalInitialization,plan?:SeedPlan,bindings?:PersonalRows):Promise<boolean> {
   const session=await restoreDigestSession(attempt.signal);
-  if(!isCurrentPersonalInitialization(attempt))return false;
+  if(attempt.signal.aborted)return false;
   if(!session){deps.setAuthRestoreComplete(true);return false;}
   resetMaestroKinds();
   deps.setPersonalPoliciesReady(false);
@@ -161,13 +170,13 @@ async function initializeUserSession(deps:AuthenticationLifecycleDependencies,at
   deps.setAuthRestoreComplete(true);
   try{
     const saved=await readSessionHydration(session);
-    if(!isCurrentPersonalInitialization(attempt))return false;
+    if(attempt.signal.aborted)return false;
     if(saved.httpOutcome)hydratePersonalHttpOutcome(session,saved.httpOutcome);
     // Directory data is presentation-only; a saved snapshot cannot establish
     // policy readiness. Reuse it while the authenticated seed check runs.
     if(saved.snapshot)deps.setManagedEndpoints(saved.snapshot.servers.map(asEndpointOption));
-    const seed=await seedPersonalGraphs(attempt.signal,plan,bindings);
-    if(!isCurrentPersonalInitialization(attempt))return false;
+    const seed=await seedPersonalGraphs(attempt.signal,plan,bindings).catch(error=>{throw new Error(`Graph seed: ${error instanceof Error?error.message:String(error)}`);});
+    if(attempt.signal.aborted)return false;
     let entries;
     if(saved.snapshot?.seedRevision===seed.revision && !seed.changedGraphs.length){
       const base=graphForPrefix(session.graphPrefix);
@@ -175,31 +184,50 @@ async function initializeUserSession(deps:AuthenticationLifecycleDependencies,at
       restoreSessionKinds(`${base}@${personalWriteEndpoint(session)}`,base,saved.snapshot.kinds);
       entries=saved.snapshot.servers;
     }else{
-      const completeBindings=await refreshAuthBootstrap(session,attempt.signal);
-      if(!isCurrentPersonalInitialization(attempt))return false;
-      await loadMaestroKinds(attempt.signal);
-      if(!isCurrentPersonalInitialization(attempt))return false;
-      entries=await listPersonalGraphServers(attempt.signal);
-      if(!isCurrentPersonalInitialization(attempt))return false;
+      const completeBindings=await refreshAuthBootstrap(session,attempt.signal).catch(error=>{throw new Error(`Bootstrap: ${error instanceof Error?error.message:String(error)}`);});
+      if(attempt.signal.aborted)return false;
+      await loadMaestroKinds(attempt.signal).catch(error=>{throw new Error(`Kinds: ${error instanceof Error?error.message:String(error)}`);});
+      if(attempt.signal.aborted)return false;
+      entries=await listPersonalGraphServers(attempt.signal).catch(error=>{throw new Error(`Personal graph directory: ${error instanceof Error?error.message:String(error)}`);});
+      if(attempt.signal.aborted)return false;
       await commitSessionSnapshot(session,{bindings:completeBindings,kinds:currentSessionKinds(),servers:entries,completedAt:Date.now(),seedRevision:seed.revision},attempt.signal);
     }
-    if(!isCurrentPersonalInitialization(attempt))return false;
+    if(attempt.signal.aborted)return false;
+    // Seed-digest agreement is necessary, not sufficient. Check every required
+    // state-machine target before XState can publish policy readiness.
+    // A restored bootstrap snapshot may prime the runtime cache; readiness
+    // requires fresh evidence from the actual personal RDF graph.
+    invalidateClientStatusMachines();
+    const machines=await loadClientStatusMachines(attempt.signal).catch(error=>{
+      throw new Error(`State machine verification: ${error instanceof Error?error.message:String(error)}`);
+    });
+    for(const target of [
+      "http://www.w3.org/2000/01/rdf-schema#Resource",
+      "gttp://ggg.maestro.ecosys/ns/ui#Provider",
+      "gttp://ggg.maestro.ecosys/ns/ui#ClassPolicy",
+      "gttp://ggg.maestro.ecosys/ns/ui#CurationProvider",
+    ]) {
+      try { machineForTarget(machines,target); }
+      catch(error) { throw new Error(`State machine verification (${target}): ${error instanceof Error?error.message:String(error)}`); }
+    }
+    if(attempt.signal.aborted)return false;
     const projected=entries.map(asEndpointOption);
     deps.setManagedEndpoints(projected);
     rememberPersonalGraphServers(session.graphStore,session.username??"",projected);
     verifiedSeedRevisions.set(session,seed.revision);
     deps.setPersonalPoliciesReady(true);
   }catch(error){
-    if(!isCurrentPersonalInitialization(attempt))return false;
+    if(attempt.signal.aborted)return false;
     deps.setPersonalPoliciesSeedError(error instanceof Error?error.message:"Personal store initialization failed.");
     deps.setPersonalPoliciesReady(false);
-    return false;
+    throw error;
   }
-  return isCurrentPersonalInitialization(attempt);
+  return !attempt.signal.aborted;
 }
-export function useAuthenticationSessionLifecycle(deps:AuthenticationLifecycleDependencies):void {
+export function useAuthenticationSessionLifecycle(deps:AuthenticationLifecycleDependencies,controller:PersonalInitializationController):void {
   useEffect(()=>{
     let mounted=true;
+    controller.start();
     const synchronize=(kind:"changed"|"snapshot")=>{
       if(!mounted)return;
       const current=restoredDigestSession();
@@ -216,18 +244,25 @@ export function useAuthenticationSessionLifecycle(deps:AuthenticationLifecycleDe
         }).catch(()=>{/* A concurrent Disconnect owns the session reset. */});
         return;
       }
-      const attempt=beginPersonalInitialization();
-      disconnectDigestSession();resetMaestroKinds();
-      deps.setLoginTesting(false);deps.setAuthSession(null);
-      deps.setPersonalPoliciesReady(false);deps.setPersonalPoliciesSeedError("");
-      deps.setManagedEndpoints([]);deps.setPersonalSparqlEndpoint("");
-      void restoreUserSession(deps,attempt).then(restored=>{
-        if(restored && isCurrentPersonalInitialization(attempt))deps.setLoginDialogOpen(false);
-      }).catch(()=>{});
+      // A changed notification comes from another tab, not Retry. Only a
+      // genuine session change may withdraw the old Digest carrier here.
+      const scope=current ? `${current.graphStore}|${current.graphPrefix}|${current.username??""}` : "restore";
+      void controller.run(`changed|${scope}`,async attempt=>{
+        disconnectDigestSession();resetMaestroKinds();
+        if(attempt.signal.aborted)return false;
+        deps.setLoginTesting(false);deps.setAuthSession(null);
+        deps.setPersonalPoliciesReady(false);deps.setPersonalPoliciesSeedError("");
+        deps.setManagedEndpoints([]);deps.setPersonalSparqlEndpoint("");
+        const restored=await restoreUserSession(deps,attempt);
+        if(restored && !attempt.signal.aborted)deps.setLoginDialogOpen(false);
+        return restored;
+      });
     };
     const unsubscribe=subscribeDigestSessionChanges(synchronize);
-    const attempt=beginPersonalInitialization();
-    void restoreUserSession(deps,attempt).catch(()=>{});
-    return()=>{mounted=false;unsubscribe();cancelPersonalInitialization();disconnectDigestSession();};
-  },[]);
+    void controller.run("restore",attempt=>restoreUserSession(deps,attempt));
+    return()=>{
+      mounted=false;unsubscribe();controller.stop();
+      // Strict Mode remount is not logout. The Digest carrier must survive.
+    };
+  },[controller]);
 }

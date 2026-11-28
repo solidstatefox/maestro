@@ -20,7 +20,7 @@ test("two matching shadcn resizable handles are siblings of the three workspace 
   assert.equal((workspace.match(/<ResizableHandle\b/g) || []).length, 1);
   assert.match(workspace, /<ResizableHandle withHandle className="shrink-0" onDragging=\{dragging => \{ if \(!dragging\) saveBrowseLayout\(\); \}\} \/>/);
   assert.match(workspace, /onKeyUpCapture=\{event => \{ if \(event\.target instanceof HTMLElement && event\.target\.hasAttribute\("data-panel-resize-handle-id"\)\) saveBrowseLayout\(\); \}\}/);
-  assert.match(workspace, /activeBrowsePaneOrder\(browsePanePreference\.order, !urlStateInitialized \|\| workspaceTab === "browse"\)/);
+  assert.match(workspace, /activeBrowsePaneOrder\(browsePanePreference\.order, workspaceTab === "browse"\)/);
   assert.match(workspace, /activePaneOrder\.map\(\(pane, index\) => <Fragment key=\{pane\}>/);
   assert.match(workspace, /index < activePaneOrder\.length - 1 && <ResizableHandle/);
   assert.match(workspace, /skeletons\.record === "degraded"/);

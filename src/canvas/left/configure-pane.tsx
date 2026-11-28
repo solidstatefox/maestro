@@ -285,7 +285,7 @@ export function ConfigureWorkspaceContent({ workspace }: { workspace: ConfigureP
       async function run(query: string): Promise<{results?:{bindings?:Array<{maestroKind?:{value?:string}}>}; boolean?:boolean; incomplete?:boolean}> {
         const response = await maestroQueryFetch("/proxy/api/sparql", {
           method: "POST", signal, cache: "no-store",
-          headers: { "Content-Type":"application/json", "X-Maestro-Query-Label":`Configure:Kinds:${direction}`, ...proxyDebugHeaders("Configure:Kinds",`ConfigureKind:${direction}`),
+          headers: {"x-maestro-view-tab": "browse",  "Content-Type":"application/json", "X-Maestro-Query-Label":`Configure:Kinds:${direction}`, ...proxyDebugHeaders("Configure:Kinds",`ConfigureKind:${direction}`),
             "X-Maestro-Clock-Component":clockScope, ...(retry ? {"X-Maestro-Component-Retry":"1"} : {}),
             ...(timeoutMs ? {"X-Maestro-Query-Timeout-Ms":String(timeoutMs)} : {}) },
           body:JSON.stringify({addr:address,query}),

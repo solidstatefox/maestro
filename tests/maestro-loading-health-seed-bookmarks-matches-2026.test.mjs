@@ -33,7 +33,16 @@ test('transport evidence enters isolated XState health actor with stale-probe gu
 
 test('graph seeding preflights immutable manifest assets and only writes changed destination graphs', () => {
   const seed=read('src/lib/client-graph-seed.ts');
-  assert.match(seed,/seedInFlight=new Map/);
+  // The XState supervisor owns each initialization attempt and its abort
+  // signal. There must be no server-scoped pending seeding Promise that a
+  // replacement attempt can accidentally inherit after cancellation.
+  const personalMachine=read('src/lib/app-lifecycle/personal-initialization-machine.ts');
+  const authentication=read('src/canvas/controllers/authentication.ts');
+  assert.doesNotMatch(seed,/seedInFlight/);
+  assert.match(personalMachine,/initialize: fromPromise\(/);
+  assert.match(personalMachine,/reenter: true/);
+  assert.match(authentication,/deps\.personalInitialization\.run\(/);
+  assert.match(authentication,/seedPersonalGraphs\(attempt\.signal/);
   assert.match(seed,/const documents:Array/);
   assert.match(seed,/staticJson<Asset>/);
   // The login seeder reuses the content SHA-256 already calculated for

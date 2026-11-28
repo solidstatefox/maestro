@@ -23,6 +23,8 @@ import { OVERVIEW_PERSPECTIVE_URI } from "@/lib/overview-metrics";
 import { OverviewPerspective } from "@/canvas/tab/view/overview";
 import { AnalyzePageProvider } from "@/canvas/tab/analyze/page-provider";
 import { AnalyzeSankey } from "@/canvas/tab/analyze/sankey";
+import { AnalyzePredicateClusters } from "@/canvas/tab/analyze/predicate-clusters";
+import { PREDICATE_CLUSTERS_ANALYSIS_URI } from "@/lib/predicate-clusters-provider";
 import { D3_SANKEY_ANALYSIS_URI } from "@/lib/d3-sankey-id";
 import { SANKEY_ANALYSIS_URI } from "@/lib/sankey-coverage";
 import { formatPagePosition } from "@/canvas/utils/pagination";
@@ -39,6 +41,7 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
  const overviewSelected = selectedAnalysisUri===OVERVIEW_PERSPECTIVE_URI;
  const pageProvider = workspace.analysisDefinitions.find(item => item.uri === selectedAnalysisUri && item.pageValidationShape);
  const eligibleSelected = workspace.analysisDefinitions.some(item => item.uri === selectedAnalysisUri);
+ const predicateClustersProvider = workspace.analysisDefinitions.find(item => item.uri === PREDICATE_CLUSTERS_ANALYSIS_URI && item.uri === selectedAnalysisUri);
  const sankeySelected = eligibleSelected && selectedAnalysisUri===SANKEY_ANALYSIS_URI;
  const d3SankeySelected = eligibleSelected && selectedAnalysisUri===D3_SANKEY_ANALYSIS_URI;
  const [populationState,setPopulationState]=useState<{key:string;items:OverviewPopulation[];error:string}|null>(null);
@@ -64,6 +67,7 @@ export function AnalyzeTabCanvas({ workspace }: { workspace: WorkspaceController
  const populationCurrent=populationState?.key===populationKey?populationState:null;
  if(workspaceTab === "analyze" && overviewSelected) return <OverviewPerspective workspace={workspace}/>;
  if(workspaceTab === "analyze" && pageProvider) return <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{pagePagination}<AnalyzePageProvider workspace={workspace} definition={pageProvider}/></div>;
+ if(workspaceTab === "analyze" && predicateClustersProvider) return <AnalyzePredicateClusters workspace={workspace} definition={predicateClustersProvider}/>;
  if(workspaceTab === "analyze" && sankeySelected) return <AnalyzeSankey workspace={workspace}/>;
  if(workspaceTab === "analyze" && d3SankeySelected) return <AnalyzeSankey workspace={workspace} renderer="d3"/>;
  if(workspaceTab === "analyze" && nodeAnalyticsSelected) return <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Analyze Node Analytics canvas">

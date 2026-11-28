@@ -54,7 +54,7 @@ export async function executeRecordXsltSandboxQueries(
     const response = await maestroQueryFetch("/proxy/api/sparql", {
       method: "POST", cache: "no-store", credentials: "same-origin",
       signal,
-      headers: {"x-maestro-debug-component":"record-xslt-sparql-sandbox:execute", "Content-Type": "application/json", "Accept": "application/json",
+      headers: {"x-maestro-view-tab": "browse", "x-maestro-debug-component":"record-xslt-sparql-sandbox:execute", "Content-Type": "application/json", "Accept": "application/json",
         "x-maestro-debug-source": "urn:maestro:component:record-xslt-sandbox" },
       body: JSON.stringify({ addr: `@${inspected.endpoint}`, query }),
     });

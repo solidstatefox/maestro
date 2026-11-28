@@ -53,8 +53,8 @@ export function ViewRibbon({ viewPanel, setViewPanel, breadcrumbs, discoveredVie
     if (!hasPersonalPerspective) { personalDiscovery.inactive(); return; }
     personalDiscovery.discover(discoveryKey, signal => discoverMatchedClientPerspectives(
       classKey ? classKey.split("\n") : [], queryXml, triggerUri, historyUri, signal,
-      contextualKey ? contextualKey.split("\n") : []));
-  }, [personalDiscovery, classKey, contextualKey, queryXml, triggerUri, historyUri, discoveryKey, viewPanel, viewDiscoveryLoading, hasPersonalPerspective]);
+      contextualKey ? contextualKey.split("\n") : [], selectedViewUri));
+  }, [personalDiscovery, classKey, contextualKey, queryXml, triggerUri, historyUri, discoveryKey, viewPanel, viewDiscoveryLoading, hasPersonalPerspective, selectedViewUri]);
   const personalDiscoveryError = personalSnapshot.context.key === discoveryKey && personalSnapshot.matches("failed") ? personalSnapshot.context.error : "";
   // Render only providers supplied by the exact-scope eligibility gate.
   const visibleViews = [...new Map(discoveredViews.map(view => [view.uri, view])).values()];

@@ -27,7 +27,7 @@ test('startup and Connect use one IndexedDB user-session restoration path; dialo
   assert.ok(controller.indexOf('await listPersonalGraphServers(attempt.signal)')<controller.indexOf('deps.setPersonalPoliciesReady(true)'));
   assert.match(controller,/handleLoginSubmit: async[\s\S]*?event\.preventDefault\(\)/);
   assert.match(controller,/await preparePersonalSeed\([\s\S]*?await ensureDigestSession\([\s\S]*?initializeUserSession\(deps,attempt,bindings \? plan : undefined,bindings\)/);
-  assert.match(controller,/void restoreUserSession\(deps,attempt\)/);
+  assert.match(controller,/controller\.run\("restore",attempt=>restoreUserSession\(deps,attempt\)\)/);
   assert.doesNotMatch(controller,/setLoginDialogOpen\(true\)/);
   assert.ok(controller.indexOf("await seedPersonalGraphs(")<controller.indexOf("await refreshAuthBootstrap("));
   const ui=source('src/canvas/top/appbar-pane.tsx');
@@ -202,14 +202,17 @@ test('URL load and Connect invoke the same restoration and graph hydration routi
   const calls=[];
   let stored=false, snapshot, changed=false, failed=false;
   const session={authType:'sparql-auth',graphStore:fixture.graphStore,graphPrefix:fixture.graphPrefix,username:fixture.username,rememberMe:true};
-  const init=moduleFrom('src/lib/personal-initialization.ts');
+  const initialization={start(){},stop(){},cancel(){},run:async(_scope,execute)=>{
+    try{return await execute({signal:new AbortController().signal});}catch{return false;}
+  }};
   const controller=moduleFrom('src/canvas/controllers/authentication.ts',{
     react:{useEffect(fn){fn();},useState(){throw Error('not used');}},
     '@/lib/client-digest-session':{
       restoreDigestSession:async()=>{calls.push('restore');return stored?session:null;},
       withSessionInitializationLock:(_signal,fn)=>fn(),readSessionHydration:async()=>({snapshot,bootstrapBindings}),commitSessionSnapshot:async(_session,value)=>{calls.push('commit');snapshot=value;},restoredDigestSession:()=>stored?session:null,
       ensureDigestSession:async(_input,_signal,_status,query)=>{assert.equal(query,seedQuery);calls.push('ensure');stored=true;return seedBindings;},disconnectDigestSession:()=>{},subscribeDigestSessionChanges:()=>()=>{},requestDigestPersistence:()=>{}},
-    '@/lib/personal-initialization':init,
+    '@/lib/status-machine-client':{invalidateClientStatusMachines:()=>{},loadClientStatusMachines:async()=>[]},
+    '@/lib/status-machine-runtime':{machineForTarget:()=>({})},
     '@/lib/login-connection-error':moduleFrom('src/lib/login-connection-error.ts'),
     '@/lib/client-graph-seed':{preparePersonalSeed:async()=>{calls.push('prepare');return {query:seedQuery};},seedPersonalGraphs:async(_signal,plan,rows)=>{calls.push('seed');if(plan)assert.equal(rows,seedBindings);if(failed)throw Error('seed failed');return {revision:'seed1',changedGraphs:changed?['policies']:[]};}},
     '@/lib/client-auth-bootstrap':{authBootstrapSelect:()=>bootstrapQuery,hydrateAuthBootstrap:(_session,bindings)=>{assert.equal(bindings,bootstrapBindings);calls.push('hydrate');},refreshAuthBootstrap:async()=>{calls.push('bootstrap');return bootstrapBindings;}},
@@ -224,22 +227,22 @@ test('URL load and Connect invoke the same restoration and graph hydration routi
   deps.setAuthSession=value=>{assert.equal(value,session);calls.push('session');};
   deps.setPersonalPoliciesReady=value=>calls.push(value?'ready':'loading');
   // Start empty, then use the form action and finally simulate a URL reload.
-  controller.useAuthenticationSessionLifecycle(deps);
+  controller.useAuthenticationSessionLifecycle(deps,initialization);
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(calls,['restore']);
   calls.length=0;
-  const action=controller.createAuthenticationActions(deps);
+  const action=controller.createAuthenticationActions({...deps,personalInitialization:initialization});
   await action.handleLoginSubmit({preventDefault(){calls.push('preventDefault');}});
   assert.deepEqual(calls,['preventDefault','prepare','ensure','restore','loading','session','seed','bootstrap','kinds','directory','commit','ready']);
   calls.length=0;
-  controller.useAuthenticationSessionLifecycle(deps);
+  controller.useAuthenticationSessionLifecycle(deps,initialization);
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(calls,['restore','loading','session','seed','hydrate','restore kinds','ready']);
   calls.length=0;changed=true;
-  await controller.restoreUserSession(deps,init.beginPersonalInitialization());
+  await controller.restoreUserSession(deps,{signal:new AbortController().signal});
   assert.deepEqual(calls,['restore','loading','session','seed','bootstrap','kinds','directory','commit','ready']);
   calls.length=0;failed=true;
-  assert.equal(await controller.restoreUserSession(deps,init.beginPersonalInitialization()),false);
+  await assert.rejects(controller.restoreUserSession(deps,{signal:new AbortController().signal}),/seed failed/);
   assert.deepEqual(calls,['restore','loading','session','seed','loading']);
 });
 test('installed devfans acquires the initial Digest challenge and generates the first verified nonce count',async()=>{

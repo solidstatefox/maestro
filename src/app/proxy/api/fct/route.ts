@@ -14,6 +14,8 @@ import { verifyApprovalBookmark, readPolicyApprovals } from "@/lib/policy-approv
 import { getPersonalStatusGraph, getQueryObservationGraph } from "@/lib/personal-status-graph";
 import { unscopedGraph, ALL_GRAPHS } from "@/lib/graph-address-mode";
 import { FCT_VIEW_TYPES } from "@/lib/fct-view-types";
+import { predicateAnalysisPage, DEFAULT_PREDICATE_CLUSTER_CUTOFF, type PredicateAnalysis } from "@/lib/fct-predicate-analytics";
+import { PredicateIncidenceAccumulator } from "@/lib/predicate-incidence";
 import { LIST_VALUES_MAX_RESOURCES } from "@/lib/list-values-transport";
 import { logProxyCaller } from "@/lib/proxy-debug-server";
 import { NextResponse } from "next/server";
@@ -32,6 +34,7 @@ import { withGraphServerSlot } from "@/lib/server-query-scheduler";
 import { virtuosoRankFailure, virtuosoAggregateFailure } from "@/lib/virtuoso-query-fallbacks";
 import { isVirtuosoAnytime, virtuosoAnytimeMessage, anytimeResponseHeaders } from "@/lib/virtuoso-anytime";
 import { fetchVirtuosoRead } from "@/lib/virtuoso-read-transport";
+import { predicateAnalyticsUpstreamFailure, predicateAnalyticsEndpointWithTimeout, PredicateAnalyticsUpstreamError, type PredicateUpstreamPhase } from "@/lib/predicate-analytics-upstream";
 
 
 function parseResults(text: string): SparqlJsonResults | null {
@@ -43,6 +46,94 @@ function parseResults(text: string): SparqlJsonResults | null {
   } catch {
     return null;
   }
+}
+
+/** Same population key for the three derived projections; paging and view IDs
+ * do not alter the statistical universe. All other filters remain significant. */
+function predicateAnalysisScope(xml: string): { key: string; cutoff: number } {
+  const doc = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", removeNSPrefix: true }).parse(xml) as Record<string, unknown>;
+  let viewFound = false;
+  let cutoff = DEFAULT_PREDICATE_CLUSTER_CUTOFF;
+  const normalize = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(normalize);
+    if (!node || typeof node !== "object") return node;
+    const row = node as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(row)) {
+      if (name === "view" && value && typeof value === "object" && !Array.isArray(value)) {
+        if (viewFound) throw new Error("Predicate analysis requires exactly one FCT view.");
+        viewFound = true;
+        const attributes = value as Record<string, unknown>;
+        if (attributes["@_cutoff"] !== undefined) {
+          cutoff = Number(attributes["@_cutoff"]);
+          if (!Number.isFinite(cutoff) || cutoff < 0 || cutoff > 1)
+            throw new Error("Predicate cluster cutoff must be a number between 0 and 1.");
+        }
+        const normalized = normalize(value) as Record<string, unknown>;
+        delete normalized["@_type"];
+        delete normalized["@_limit"];
+        delete normalized["@_offset"];
+        delete normalized["@_id"];
+        result[name] = normalized;
+      } else result[name] = normalize(value);
+    }
+    return result;
+  };
+  const key = JSON.stringify(normalize(doc));
+  if (!viewFound) throw new Error("Predicate analytics view is missing.");
+  return { key, cutoff };
+}
+
+/** Incomplete or inconsistent incidence pages cannot publish exact clusters. */
+class PredicateAnalyticsQueryError extends Error {
+  constructor(message: string, readonly status = 502) { super(message); }
+}
+
+const pendingPredicateAnalytics = new Map<string, {
+  promise: Promise<PredicateAnalysis>; controller: AbortController; waiters: number;
+}>();
+
+/** Single-flight without coupling one browser request's cancellation to another.
+ * Abort upstream only when every waiting request has abandoned the calculation. */
+function awaitPredicateAnalysis(
+  key: string, signal: AbortSignal, run: (signal: AbortSignal) => Promise<PredicateAnalysis>,
+): Promise<PredicateAnalysis> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("Cancelled"));
+  let pending = pendingPredicateAnalytics.get(key);
+  if (!pending) {
+    const controller = new AbortController();
+    const job = { controller, waiters: 0, promise: Promise.resolve(null) as unknown as Promise<PredicateAnalysis> };
+    job.promise = Promise.resolve().then(() => run(controller.signal)).finally(() => {
+      if (pendingPredicateAnalytics.get(key) === job) pendingPredicateAnalytics.delete(key);
+    });
+    // A request can abort before all consumers attach to the shared promise.
+    void job.promise.catch(() => {});
+    pendingPredicateAnalytics.set(key, job);
+    pending = job;
+  }
+  const job = pending;
+  job.waiters++;
+  return new Promise<PredicateAnalysis>((resolve, reject) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return false;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      job.waiters--;
+      return true;
+    };
+    const onAbort = () => {
+      if (!finish()) return;
+      if (job.waiters === 0) {
+        if (pendingPredicateAnalytics.get(key) === job) pendingPredicateAnalytics.delete(key);
+        job.controller.abort();
+      }
+      reject(signal.reason ?? new Error("Cancelled"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) { onAbort(); return; }
+    job.promise.then(value => { if (finish()) resolve(value); }, error => { if (finish()) reject(error); });
+  });
 }
 
 const VIRTRDF_LABEL = "http://www.openlinksw.com/schemas/virtrdf#label";
@@ -247,6 +338,14 @@ function xmlText(value: unknown): string {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|\p{Surrogate}/gu, "\uFFFD")
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+/** Produce the same transparent upstream diagnostic for ordinary FCT failures.
+ * A usable HTTP 206 SELECT remains a partial FCT result with complete=no. */
+function fctUpstreamFailure(phase: PredicateUpstreamPhase, response: Response, body: string, query: string,
+  endpoint: string, proxyStatus?: number, explanation?: string): Response {
+  return predicateAnalyticsUpstreamFailure({ phase, response, body, query, endpoint,
+    proxyStatus, explanation }).toResponse();
 }
 
 function fctError(message: string, status: number, details?: string, origin = "proxy"): Response {
@@ -701,7 +800,7 @@ async function handlePost(request: Request) {
   const labelAcceptLanguage = effectiveLanguage === "all"
     ? request.headers.get("accept-language") : effectiveLanguage;
   const compileFctXmlToSparql = (...args: Parameters<typeof compileFctXmlBase>) =>
-    compileFctXmlBase(args[0], args[1], args[2], args[3], args[4], args[5], args[6], effectiveLanguage, args[8]);
+    compileFctXmlBase(args[0], args[1], args[2], args[3], args[4], args[5], args[6], effectiveLanguage, args[8], args[9]);
   logProxyCaller(request, "fct.POST");
   let stage: "compile" | "execute" = "compile";
   try {
@@ -986,6 +1085,113 @@ async function handlePost(request: Request) {
       });
     }
     stage = "execute";
+    if ([FCT_VIEW_TYPES.PROPERTIES_RANK, FCT_VIEW_TYPES.PROPERTIES_CLUSTER, FCT_VIEW_TYPES.CLUSTERS].includes(compiled.view as typeof FCT_VIEW_TYPES.PROPERTIES_RANK | typeof FCT_VIEW_TYPES.PROPERTIES_CLUSTER | typeof FCT_VIEW_TYPES.CLUSTERS)) {
+      if (countOnly || graphOnly) return fctError("Predicate analytics requires a normal FCT view request.", 400);
+      const startedAt = Date.now();
+      const { key: normalizedScope, cutoff } = predicateAnalysisScope(queryXml);
+      const analyticsKey = queryCacheKey("fct-predicate-analytics-v2", executionEndpoint,
+        JSON.stringify([normalizedScope, effectiveLanguage, labelAcceptLanguage, compiled.timeoutMs,
+          compiled.maxPredicateCandidates, compiled.maxPredicateIncidenceRows,
+          hasStatusConstraints ? clientFromRequest(request) : "public"]));
+      const bypass = hasStatusConstraints || componentRetry;
+      const cached = bypass ? undefined : getQueryCache<PredicateAnalysis>(analyticsKey);
+      const federationContext = hasStatusConstraints ? {
+        liveEndpoint: endpoint.url, executionEndpoint,
+        defaultStatusAddr: `${getPersonalStatusGraph(request)}@${executionEndpoint}`,
+      } : undefined;
+      // Keep the provider's timeout on the actual Virtuoso request URL,
+      // not only in the POST form, so public front-ends do not silently
+      // execute the default 10-second budget. Scope this to predicate analytics.
+      const analyticsSparqlEndpoint = predicateAnalyticsEndpointWithTimeout(executionEndpoint, compiled.timeoutMs);
+      const build = async (signal: AbortSignal): Promise<PredicateAnalysis> => {
+        const requireIncidencePage = async (query: string): Promise<SparqlJsonResults> => {
+          const phase = "incidence" as const;
+          let upstream: Awaited<ReturnType<typeof executeSparql>>;
+          // Do not interleave cached pages from separate source snapshots.
+          try { upstream = await executeSparql(analyticsSparqlEndpoint, query, undefined, compiled.timeoutMs, signal, true); }
+          catch (cause) {
+            if (signal.aborted) throw cause;
+            const detail = describeUpstreamError(cause);
+            throw new PredicateAnalyticsQueryError(`Predicate analysis ${phase} transport failed before Virtuoso returned an HTTP response: ${detail}`,
+              /timed? out|timeout|abort/i.test(detail) ? 504 : 502);
+          }
+          const interrupted = upstream.response.status === 206 || isVirtuosoAnytime(upstream.response, upstream.text);
+          if (interrupted || !upstream.response.ok)
+            throw predicateAnalyticsUpstreamFailure({phase, response: upstream.response,
+              body: upstream.text, query, endpoint: analyticsSparqlEndpoint});
+          const data = parseResults(upstream.text);
+          if (!data) throw predicateAnalyticsUpstreamFailure({phase, response: upstream.response,
+            body: upstream.text, query, endpoint: analyticsSparqlEndpoint,
+            proxyStatus: 502, explanation: "Invalid SPARQL Results JSON returned by Virtuoso"});
+          return data;
+        };
+        const pageSize = 500;
+        const accum = new PredicateIncidenceAccumulator(compiled.maxPredicateCandidates ?? 200,
+          compiled.maxPredicateIncidenceRows ?? 50000);
+        // Pages are sorted by focus URI and predicate URI. A full page does
+        // not prove completeness; fetch one more (possibly empty) page.
+        for (let offset = 0; ; offset += pageSize) {
+          signal.throwIfAborted();
+          const incidenceQuery = compileFctXmlToSparql(
+            queryXml, view, false, false, false, false, federationContext, undefined, undefined,
+            {kind:"incidence", offset, limit:pageSize},
+          );
+          const data = await requireIncidencePage(incidenceQuery.query);
+          const focusName = incidenceQuery.target.replace(/^\?/, "");
+          const rows = (data.results?.bindings ?? []).map(row => ({
+            subject: row[focusName], predicate: row.maestroPredicate,
+          }));
+          try {
+            if (accum.addPage(rows, pageSize)) break;
+          } catch (error) {
+            throw new PredicateAnalyticsQueryError(error instanceof Error ? error.message : "Invalid predicate incidence page.",
+              /exceeds the configured|population exceeds/.test(String(error)) ? 422 : 502);
+          }
+        }
+        try { return accum.result(cutoff); }
+        catch (err) { throw new PredicateAnalyticsQueryError(err instanceof Error ? err.message : "Invalid predicate incidence statistics."); }
+
+      };
+      try {
+        const analysis = cached ?? (bypass ? await build(request.signal)
+          : await awaitPredicateAnalysis(analyticsKey, request.signal, async signal => {
+              const computed = await build(signal);
+              if (!signal.aborted) setQueryCache(analyticsKey, computed);
+              return computed;
+            }));
+        request.signal.throwIfAborted();
+        const page = predicateAnalysisPage(analysis, compiled.view as "properties-rank" | "properties-cluster" | "clusters", compiled.offset, compiled.limit);
+        const nTerm = (n: number): SparqlBindingTerm => ({ type: "literal", value: String(n), datatype: "http://www.w3.org/2001/XMLSchema#integer" });
+        const rows: Array<Record<string, SparqlBindingTerm>> = compiled.view === FCT_VIEW_TYPES.PROPERTIES_RANK
+          ? (page as PredicateAnalysis["ranks"]).map(row => ({ c1: { type: "uri", value: row.property }, rank: nTerm(row.rank) }))
+          : compiled.view === FCT_VIEW_TYPES.PROPERTIES_CLUSTER
+            ? (page as PredicateAnalysis["assignments"]).map(row => ({ c1: { type: "uri", value: row.property }, cluster: { type: "literal", value: row.cluster } }))
+            : (page as PredicateAnalysis["clusters"]).map(row => ({
+                c1: { type: "literal", value: row.cluster }, n: nTerm(row.count), sample: { type: "uri", value: row.sample },
+              }));
+        const labels = await resolveFctLabels(endpoint.url, rows, labelAcceptLanguage, Math.min(compiled.timeoutMs || 5000, 5000), request.signal);
+        if (compiled.view === FCT_VIEW_TYPES.CLUSTERS) {
+          for (const row of rows) row.sampleLabel = { type: "literal", value: labels.get(row.sample.value) ?? uriFallbackLabel(row.sample.value) };
+        }
+        const vars = compiled.view === FCT_VIEW_TYPES.PROPERTIES_RANK ? ["c1", "rank"] :
+          compiled.view === FCT_VIEW_TYPES.PROPERTIES_CLUSTER ? ["c1", "cluster"] : ["c1", "n", "sample", "sampleLabel"];
+        const xml = fctResponseXml({ query: compiled.query, view: compiled.view,
+          limit: compiled.limit, offset: compiled.offset, bindings: rows, vars, labels,
+          executionAddr: updateFctExecutionAddress(address, { endpoint: executionEndpoint,
+            ...(hasStatusConstraints ? { graph: getPersonalStatusGraph(request) } : {}) }),
+          elapsedMs: Date.now() - startedAt, complete: true, timeoutMs: compiled.timeoutMs,
+        });
+        if (!bypass) setQueryCache(responseCacheKey, { body: xml, contentType: "application/xml; charset=utf-8", status: 200 });
+        return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
+      } catch (error) {
+        request.signal.throwIfAborted();
+        if (error instanceof PredicateAnalyticsQueryError)
+          return fctError(error.message, error.status);
+        if (error instanceof PredicateAnalyticsUpstreamError)
+          return error.toResponse();
+        throw error;
+      }
+    }
     const startedAt = Date.now();
     let activeQuery = compiled.query;
     let queryResult = await executeSparql(executionEndpoint, activeQuery, isDescribe && !compiled.describeLiteral && !compiled.describeExpanded ? "application/rdf+xml, application/xml;q=0.9" : undefined, compiled.timeoutMs, request.signal, hasStatusConstraints || isValidate || componentRetry);
@@ -1031,7 +1237,7 @@ async function handlePost(request: Request) {
     // cause Maestro to discard the valid rows in the response body.
     if (!response.ok && !anytime) {
       proxyLog("error", "fct.upstream", { status: response.status, sqlState, sqlMessage, responseBody: text.slice(0, 16000) });
-      return fctError(`SPARQL endpoint returned HTTP ${response.status}${sqlState ? ` (${sqlState})` : ""}`, response.status, sanitizeUpstreamDiagnostic([sqlMessage, text, `SPARQL query:\n${activeQuery}`].filter(Boolean).join("\n\n"), Infinity), executionEndpoint === endpoint.url ? "upstream-http" : "federated-upstream-http");
+      return fctUpstreamFailure("fct", response, text, activeQuery, executionEndpoint);
     }
 
     if (anytime) proxyLog("warn", "fct.anytime", { endpoint: endpoint.url, view: compiled.view, status: response.status, sqlState, message: virtuosoAnytimeMessage(response, text) });
@@ -1051,12 +1257,14 @@ async function handlePost(request: Request) {
       }
       catch (error) {
         // An error-only S1TAT response is not an RDF result document.
-        return fctError(error instanceof Error ? error.message : "Invalid DESCRIBE response", 502, sanitizeUpstreamDiagnostic(text, Infinity));
+        return fctUpstreamFailure("describe", response, text, activeQuery, executionEndpoint, 502,
+          error instanceof Error ? error.message : "Invalid DESCRIBE response");
       }
       // Do not mistake a size-capped subgraph for a complete SHACL document.
       // No partial answer or cache entry is allowed to masquerade as source.
       if (compiled.describeExpanded && (partial || bindings.length > (compiled.describeMaxTriples ?? 0)))
-        return fctError(`Expanded RDF subgraph is incomplete; increase the limit (maximum 5000 triples), reduce the FCT scope, or simplify the shape.`, 422);
+        return fctUpstreamFailure("describe-expanded", response, text, activeQuery, executionEndpoint,
+          partial ? undefined : 422, "Expanded RDF subgraph is incomplete or exceeds the configured bound");
       if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);
       // A literal Record can be returned promptly without a second network
       // query merely to decorate the subjects of its incoming Roles.
@@ -1081,7 +1289,8 @@ async function handlePost(request: Request) {
       // A timeout/error must not be interpreted as a negative existence test.
       let askBoolean: boolean | undefined;
       try { const result = JSON.parse(text) as { boolean?: unknown }; if (typeof result.boolean === "boolean") askBoolean = result.boolean; } catch { /* invalid upstream result */ }
-      if (partial || askBoolean === undefined) return fctError("Virtuoso did not complete the ASK preflight.", 502, sanitizeUpstreamDiagnostic(text, Infinity));
+      if (partial || askBoolean === undefined) return fctUpstreamFailure("ask", response, text, activeQuery, executionEndpoint,
+        partial ? undefined : 502, "Virtuoso did not complete the ASK preflight");
       const metadata = fctExecutionMetadataXml({
         query: compiled.query, elapsedMs, complete: true, timeoutMs: compiled.timeoutMs,
         processed: 1, limit: compiled.limit, offset: compiled.offset,
@@ -1092,7 +1301,8 @@ async function handlePost(request: Request) {
       return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store", ...incompleteHeaders } });
     }
     const parsed = parseResults(text);
-    if (!parsed) return fctError(partial ? "No usable result set was delivered by the graph server." : "Virtuoso SPARQL endpoint returned an invalid SPARQL Results JSON document", 502, sanitizeUpstreamDiagnostic(text, Infinity));
+    if (!parsed) return fctUpstreamFailure("fct-json", response, text, activeQuery, executionEndpoint,
+      partial ? undefined : 502, partial ? "No usable result set delivered by Virtuoso" : "Invalid SPARQL Results JSON returned by Virtuoso");
     let bindings = parsed?.results?.bindings ?? [];
     let vars = parsed?.head?.vars ?? [];
     if (!hasStatusConstraints && !isValidate && response.status === 200 && !partial) setQueryCache(key, text);

@@ -67,7 +67,8 @@ test('XState Return preserves the Browse source when Sheet opens a History/Bookm
   assert.doesNotMatch(w, /if \(tab === "browse" && operations.controller.getSnapshot\(\).navigation.returnUrl\)/);
   assert.match(w, /Sheet's Show actions enter an actual, SHACL-discovered Perspective/);
   assert.match(w, /type: "RIBBON_ENTRY_FROM_BROWSE", sourceKey: queryXml/);
-  assert.match(w, /setSelectedViewUri\(includeFavorites \? PERSONAL_PERSPECTIVE_URI\.bookmarks : PERSONAL_PERSPECTIVE_URI\.history\)/);
+  // An XState navigation event commits the Perspective and tab together.
+  assert.match(w, /navigateQueryView\(\{ tab: "view", viewProvider: null, viewPanel: "perspectives",\s*selectedViewUri: includeFavorites \? PERSONAL_PERSPECTIVE_URI\.bookmarks : PERSONAL_PERSPECTIVE_URI\.history \}\)/);
   assert.match(w, /setWorkspaceTab\("browse"\);\s*setViewProvider\(null\)/);
   assert.match(w, /if \(tab !== "view"\) \{\s*\+\+providerNavigationSequenceRef\.current;\s*navigationTransactions\.cancel\(\)/);
   assert.match(w, /A ribbon click alone does not displace Browse/);

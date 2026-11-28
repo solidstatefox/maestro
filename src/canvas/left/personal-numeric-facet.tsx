@@ -79,7 +79,7 @@ export function NumericFacetContent({ provider, tree, property, selected, onRang
       try {
         const response = await maestroQueryFetch("/proxy/api/sparql", {
           method: "POST", signal: controller.signal, cache: "no-store",
-          headers: { "Content-Type": "application/json", "X-Maestro-Query-Label": "NumericFacet:count-projection",
+          headers: {"x-maestro-view-tab": "browse",  "Content-Type": "application/json", "X-Maestro-Query-Label": "NumericFacet:count-projection",
             ...proxyDebugHeaders("facet:count:numeric-domain", `NumericFacet:${provider.uri}:${property}`),
             "X-Maestro-Clock-Component": `component:numeric:${property}` },
           body: JSON.stringify({ facetValueCount: { addr: tree.attributes.addr, sparql: query, numericDomain: true } }),

@@ -545,6 +545,7 @@ export type AppBarDirectWorkspace = Pick<WorkspaceController,
   | "graphText"
   | "groupBatchSize"
   | "handleFetchProfile"
+  | "cancelPersonalInitialization"
   | "handleRetryPersonalInitialization"
   | "handleLoginSubmit"
   | "handleTestConnection"

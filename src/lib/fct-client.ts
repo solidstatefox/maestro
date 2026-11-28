@@ -2,6 +2,7 @@
 import { GRAPH, resolveGraph } from "@/lib/constants/graphs";
 
 import { cachedFetchFct } from "@/lib/client-query-cache";
+import type { MaestroQueryScope } from "@/lib/app-lifecycle/query-view-ownership";
 import { personalContext, selectPersonal } from "@/lib/client-personal-sparql";
 import { cloneFctListStatusView } from "@/lib/fct-status-projection";
 import { compileFctXmlToSparql } from "@/lib/fct-sparql-translator";
@@ -15,16 +16,16 @@ export type ProjectedRecord = { uri: string; label: string; properties: Map<stri
 const validIri = (iri: string) => /^[a-z][a-z\d+.-]*:[^\s<>"{}|^`\\]+$/i.test(iri);
 
 /** Reuse the ordinary FCT XML pipeline and its client cache; never call a provider-specific API. */
-export async function fctRead(xml: string, signal?: AbortSignal) {
+export async function fctRead(xml: string, signal?: AbortSignal, scope: MaestroQueryScope = { tab: "browse", ribbon: "browse" }) {
   const response = await cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal,
-    headers: { "Content-Type": "text/xml; charset=utf-8" }, body: xml });
+    headers: {"x-maestro-view-tab": scope.tab, "x-maestro-view-ribbon": scope.ribbon, "Content-Type": "text/xml; charset=utf-8" }, body: xml });
   const result = parseFctResponse(await response.text());
   if (!response.ok || result.error) throw new Error(result.error || `FCT returned HTTP ${response.status}`);
   return result;
 }
 
 /** Read the selected page with a self-contained FCT XML merge-values query. */
-export async function fctProjectPage(liveXml: string, resources: string[], columns: Projection[], signal?: AbortSignal, _isBookmarked = false, fresh = false): Promise<ProjectedRecord[]> {
+export async function fctProjectPage(liveXml: string, resources: string[], columns: Projection[], signal?: AbortSignal, _isBookmarked = false, fresh = false, scope: MaestroQueryScope = { tab:"browse", ribbon:"browse" }): Promise<ProjectedRecord[]> {
   const unique = [...new Set(resources.filter(validIri))];
   if (!unique.length) return [];
   const records = new Map<string, ProjectedRecord>();
@@ -33,7 +34,7 @@ export async function fctProjectPage(liveXml: string, resources: string[], colum
     const projectionIds: string[] = [];
     const queryXml = mergeValuesQueryClone(liveXml, columns, batch.map(value => ({ type: "uri", value })), projectionIds);
     const response = await cachedFetchFct("/proxy/api/fct", { method: "POST", cache: "no-store", signal,
-      headers: { "Content-Type": "text/xml; charset=utf-8", ...(fresh ? {"X-Maestro-Component-Retry":"1"} : {}) }, body: queryXml });
+      headers: {"x-maestro-view-tab": scope.tab, "x-maestro-view-ribbon": scope.ribbon, "Content-Type": "text/xml; charset=utf-8", ...(fresh ? {"X-Maestro-Component-Retry":"1"} : {}) }, body: queryXml });
     const xml = await response.text();
     if (!response.ok) {
       const parsed = parseFctResponse(xml);
@@ -134,7 +135,7 @@ export async function fctStatusFacet(liveXml: string, signal?: AbortSignal) {
     if (!firstRemoteQuery) firstRemoteQuery = compiled.query;
     const response = await cachedFetchFct("/proxy/api/sparql", {
       method: "POST", credentials: "same-origin", cache: "no-store", signal,
-      headers: { "Content-Type": "application/json", "Accept": "application/json",
+      headers: {"x-maestro-view-tab": "browse",  "Content-Type": "application/json", "Accept": "application/json",
         "x-maestro-debug-source": "urn:maestro:component:status-facet-remote", "x-maestro-debug-component": "StatusFacet" },
       body: JSON.stringify({ addr: sourceAddr, query: compiled.query }),
     });

@@ -41,7 +41,7 @@ check('if (signal?.aborted) throw error' in providers and 'approvals = new Map' 
       'optional approval failure cannot erase the provider cards')
 check('hasSavedProviderQuery' not in fct,
       'generic FCT transport does not choose a bookmark-sensitive Providers path')
-check('machineForTarget(machines, target)' in readiness and 'personalExists(' not in readiness,
+check('machineForTarget(machines,target)' in auth and 'personalExists(' not in readiness,
       'personal policy readiness requires actual RDF state machine definitions')
 check('openPinnedShareUrl' in controller and 'workspace.openPinnedShareUrl(destination.href)' in appbar,
       'pinned Providers share URLs restore through the in-app query transaction')

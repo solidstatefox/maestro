@@ -64,7 +64,7 @@ export async function loadRecordDescription(request: RecordDescriptionRequest): 
     try {
       const response = await cachedFetchFct("/proxy/api/sparql", {
         method: "POST", cache: "no-store", signal,
-        headers: { "Content-Type": "application/json", ...proxyDebugHeaders("record-select-language", "RecordDescription"), ...componentRetryHeaders(request.retryRevision ?? 0) },
+        headers: {"x-maestro-view-tab": "browse",  "Content-Type": "application/json", ...proxyDebugHeaders("record-select-language", "RecordDescription"), ...componentRetryHeaders(request.retryRevision ?? 0) },
         body: requestBody,
       });
       data = await response.json() as Result;
